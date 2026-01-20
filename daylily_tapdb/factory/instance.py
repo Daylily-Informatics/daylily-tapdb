@@ -18,7 +18,7 @@ def materialize_actions(
     Materialize action_imports into action_groups for an instance.
 
     Reads action template definitions and expands them into the format
-    expected by ActionDispatcher. Uses canonical group naming: {btype}_actions.
+    expected by ActionDispatcher. Uses canonical group naming: {type}_actions.
 
     Args:
         template: The template to materialize actions from.
@@ -32,8 +32,8 @@ def materialize_actions(
     for action_key, template_code in template.json_addl.get("action_imports", {}).items():
         action_tmpl = template_manager.get_template(template_code)
         if action_tmpl:
-            # Canonical group naming: {btype}_actions
-            group_name = f"{action_tmpl.btype}_actions"
+            # Canonical group naming: {type}_actions
+            group_name = f"{action_tmpl.type}_actions"
             if group_name not in action_groups:
                 action_groups[group_name] = {}
 
@@ -131,9 +131,9 @@ class InstanceFactory:
         instance = generic_instance(
             name=name,
             polymorphic_discriminator=template.instance_polymorphic_identity or template.polymorphic_discriminator.replace("_template", "_instance"),
-            super_type=template.super_type,
-            btype=template.btype,
-            b_sub_type=template.b_sub_type,
+            category=template.category,
+            type=template.type,
+            subtype=template.subtype,
             version=template.version,
             template_uuid=template.uuid,
             json_addl=json_addl,
@@ -141,9 +141,9 @@ class InstanceFactory:
             is_singleton=template.json_addl.get("singleton", False)
         )
 
-        session = self.db.get_session()
-        session.add(instance)
-        session.flush()  # Get UUID/EUID assigned
+        # Use the connection's session (not get_session() which creates a new one)
+        self.db.session.add(instance)
+        self.db.session.flush()  # Get UUID/EUID assigned
 
         # Create children if requested
         if create_children:
@@ -199,6 +199,16 @@ class InstanceFactory:
         """
         layouts = template.json_addl.get("instantiation_layouts", {})
 
+        # Handle both dict and list formats (empty list means no layouts)
+        if isinstance(layouts, list):
+            if not layouts:
+                return  # Empty list, no children to create
+            # Convert list to dict format: use index as key
+            layouts = {str(i): item for i, item in enumerate(layouts)}
+
+        if not isinstance(layouts, dict):
+            return  # Invalid format, skip
+
         for layout_name, layout_def in layouts.items():
             child_template_code = layout_def.get("template_code")
             if not child_template_code:
@@ -247,6 +257,11 @@ class InstanceFactory:
         lineage = generic_instance_lineage(
             name=f"{parent.euid}->{child.euid}",
             polymorphic_discriminator="generic_instance_lineage",
+            category="generic",
+            type="lineage",
+            subtype="instance_lineage",
+            version="1.0.0",
+            bstatus="active",
             parent_instance_uuid=parent.uuid,
             child_instance_uuid=child.uuid,
             relationship_type=relationship_type,
@@ -254,9 +269,9 @@ class InstanceFactory:
             child_type=child.polymorphic_discriminator
         )
 
-        session = self.db.get_session()
-        session.add(lineage)
-        session.flush()
+        # Use the connection's session (not get_session() which creates a new one)
+        self.db.session.add(lineage)
+        self.db.session.flush()
 
         return lineage
 

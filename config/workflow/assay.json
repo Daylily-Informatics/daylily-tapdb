@@ -1,0 +1,148 @@
+{
+  "$comment": "TAPDB v2 Template: Workflow assays",
+  "templates": [
+    {
+      "name": "HLA Typing",
+      "polymorphic_discriminator": "workflow_template",
+      "category": "workflow",
+      "type": "assay",
+      "subtype": "hla-typing",
+      "version": "1.2",
+      "instance_prefix": "AY",
+      "is_singleton": true,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "HLA Typing v1.2 Assay Workflow",
+        "properties": {
+          "name": "HLA Typing v1.2",
+          "comments": ""
+        },
+        "assay_type": "assay",
+        "expected_inputs": ["content/specimen/blood-whole/1.0"],
+        "expected_outputs": ["content/nucleic-acid/gdna/1.0"],
+        "instantiation_layouts": [
+          {
+            "child_templates": [
+              "workflow_step/queue/available/1.0",
+              "workflow_step/queue/in-progress/1.0",
+              "workflow_step/queue/completed/1.0",
+              "workflow_step/queue/exception/1.0"
+            ]
+          }
+        ],
+        "cogs": {
+          "state": "active",
+          "cost": "250.00",
+          "allocation_type": "per-sample"
+        }
+      }
+    },
+    {
+      "name": "Carrier Screen",
+      "polymorphic_discriminator": "workflow_template",
+      "category": "workflow",
+      "type": "assay",
+      "subtype": "carrier-screen",
+      "version": "3.9",
+      "instance_prefix": "AY",
+      "is_singleton": true,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Carrier Screen v3.9 Assay Workflow",
+        "properties": {
+          "name": "Carrier Screen v3.9",
+          "comments": ""
+        },
+        "assay_type": "assay",
+        "expected_inputs": ["content/specimen/blood-whole/1.0"],
+        "expected_outputs": ["content/nucleic-acid/gdna/1.0"],
+        "instantiation_layouts": [
+          {
+            "child_templates": [
+              "workflow_step/queue/available/1.0",
+              "workflow_step/queue/in-progress/1.0",
+              "workflow_step/queue/completed/1.0",
+              "workflow_step/queue/exception/1.0"
+            ]
+          }
+        ],
+        "cogs": {
+          "state": "active",
+          "cost": "350.00",
+          "allocation_type": "per-sample"
+        }
+      }
+    },
+    {
+      "name": "Accessioning - Clinical",
+      "polymorphic_discriminator": "workflow_template",
+      "category": "workflow",
+      "type": "assay",
+      "subtype": "accessioning-clinical",
+      "version": "1.0",
+      "instance_prefix": "AY",
+      "is_singleton": true,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Clinical specimen accessioning workflow",
+        "properties": {
+          "name": "Accessioning - Clinical",
+          "comments": ""
+        },
+        "assay_type": "accessioning",
+        "expected_inputs": [],
+        "expected_outputs": [],
+        "instantiation_layouts": [
+          {
+            "child_templates": [
+              "workflow_step/queue/in-progress/1.0",
+              "workflow_step/queue/completed/1.0",
+              "workflow_step/queue/exception/1.0"
+            ]
+          }
+        ],
+        "cogs": {
+          "state": "active",
+          "cost": "15.00",
+          "allocation_type": "per-sample"
+        }
+      }
+    },
+    {
+      "name": "Accessioning - RnD",
+      "polymorphic_discriminator": "workflow_template",
+      "category": "workflow",
+      "type": "assay",
+      "subtype": "accessioning-rnd",
+      "version": "1.0",
+      "instance_prefix": "AY",
+      "is_singleton": true,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "R&D specimen accessioning workflow",
+        "properties": {
+          "name": "Accessioning - R&D",
+          "comments": ""
+        },
+        "assay_type": "accessioning",
+        "expected_inputs": [],
+        "expected_outputs": [],
+        "instantiation_layouts": [
+          {
+            "child_templates": [
+              "workflow_step/queue/in-progress/1.0",
+              "workflow_step/queue/completed/1.0",
+              "workflow_step/queue/exception/1.0"
+            ]
+          }
+        ],
+        "cogs": {
+          "state": "active",
+          "cost": "10.00",
+          "allocation_type": "per-sample"
+        }
+      }
+    }
+  ]
+}
+

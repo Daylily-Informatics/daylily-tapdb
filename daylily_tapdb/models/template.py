@@ -28,6 +28,7 @@ class generic_template(tapdb_core):
     }
 
     instance_prefix = Column(Text, nullable=True)
+    instance_polymorphic_identity = Column(Text, nullable=True)
     json_addl_schema = Column(JSON, nullable=True)
 
     # Relationship to child instances

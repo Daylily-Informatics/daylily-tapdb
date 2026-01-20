@@ -132,9 +132,9 @@ class ActionDispatcher(ABC):
         action_record = action_instance(
             name=f"{action_key}@{instance.euid}",
             polymorphic_discriminator="action_instance",
-            super_type="action",
-            btype="action",
-            b_sub_type=action_key,
+            category="action",
+            type="action",
+            subtype=action_key,
             version="1.0",
             template_uuid=instance.template_uuid,
             json_addl={

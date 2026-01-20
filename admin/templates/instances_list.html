@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}TAPDB Admin - Instances{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Instances</h1>
+<p style="color: var(--text-muted); margin-bottom: 1.5rem;">Total: {{ total }} instances</p>
+
+<div class="card">
+    <div class="filter-bar">
+        <label>Filter by Category:</label>
+        <select onchange="window.location.href='?category=' + this.value">
+            <option value="">All Categories</option>
+            {% for cat in categories %}
+            <option value="{{ cat }}" {% if cat == current_category %}selected{% endif %}>{{ cat }}</option>
+            {% endfor %}
+        </select>
+        <a href="/graph" class="btn">🔗 View as Graph</a>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>EUID</th>
+                <th>Name</th>
+                <th>Category</th>
+                <th>Type</th>
+                <th>Subtype</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items %}
+            <tr>
+                <td><a href="/object/{{ item.euid }}">{{ item.euid }}</a></td>
+                <td>{{ item.name or '-' }}</td>
+                <td><span class="badge badge-{{ item.category }}">{{ item.category }}</span></td>
+                <td>{{ item.type }}</td>
+                <td>{{ item.subtype }}</td>
+                <td>{{ item.bstatus or '-' }}</td>
+                <td>
+                    <a href="/object/{{ item.euid }}" class="btn" style="padding: 0.25rem 0.5rem;">View</a>
+                    <a href="/graph?start_euid={{ item.euid }}" class="btn" style="padding: 0.25rem 0.5rem;">Graph</a>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="7" style="text-align: center; color: var(--text-muted);">No instances found</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if pages > 1 %}
+    <div class="pagination">
+        {% if page > 1 %}
+        <a href="?page={{ page - 1 }}{% if current_category %}&category={{ current_category }}{% endif %}">&laquo; Prev</a>
+        {% endif %}
+
+        {% for p in range(1, pages + 1) %}
+            {% if p == page %}
+            <span class="current">{{ p }}</span>
+            {% elif p <= 3 or p > pages - 2 or (p >= page - 1 and p <= page + 1) %}
+            <a href="?page={{ p }}{% if current_category %}&category={{ current_category }}{% endif %}">{{ p }}</a>
+            {% elif p == 4 or p == pages - 2 %}
+            <span>...</span>
+            {% endif %}
+        {% endfor %}
+
+        {% if page < pages %}
+        <a href="?page={{ page + 1 }}{% if current_category %}&category={{ current_category }}{% endif %}">Next &raquo;</a>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+

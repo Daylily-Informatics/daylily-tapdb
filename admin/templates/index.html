@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}TAPDB Admin - Dashboard{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 2rem;">Dashboard</h1>
+
+<div class="stats-grid">
+    <div class="card stat-card">
+        <div class="stat-value">{{ template_count }}</div>
+        <div class="stat-label">Templates</div>
+        <a href="/templates" class="btn" style="margin-top: 1rem;">View All</a>
+    </div>
+    <div class="card stat-card">
+        <div class="stat-value">{{ instance_count }}</div>
+        <div class="stat-label">Instances</div>
+        <a href="/instances" class="btn" style="margin-top: 1rem;">View All</a>
+    </div>
+    <div class="card stat-card">
+        <div class="stat-value">{{ lineage_count }}</div>
+        <div class="stat-label">Lineages</div>
+        <a href="/lineages" class="btn" style="margin-top: 1rem;">View All</a>
+    </div>
+</div>
+
+<div class="card" style="margin-top: 2rem;">
+    <h2 class="card-title">Quick Actions</h2>
+    <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+        <a href="/graph" class="btn">🔗 View Object Graph</a>
+        <a href="/templates" class="btn">📋 Browse Templates</a>
+        <a href="/instances" class="btn">📦 Browse Instances</a>
+    </div>
+</div>
+
+<div class="card" style="margin-top: 2rem;">
+    <h2 class="card-title">Search by EUID</h2>
+    <form action="/object/" method="get" style="display: flex; gap: 1rem;" onsubmit="this.action='/object/' + this.euid.value; return true;">
+        <input type="text" name="euid" placeholder="Enter EUID (e.g., GX123)" style="flex: 1; padding: 0.75rem;">
+        <button type="submit" class="btn">Search</button>
+    </form>
+</div>
+
+<div class="card" style="margin-top: 2rem;">
+    <h2 class="card-title">About TAPDB</h2>
+    <p style="color: var(--text-muted);">
+        TAPDB (Templated Abstract Polymorphic Database) is a flexible object model for building 
+        database applications. It provides:
+    </p>
+    <ul style="margin-top: 1rem; margin-left: 1.5rem; color: var(--text-muted);">
+        <li><strong>Templates</strong> - Blueprints defining object structure and behavior</li>
+        <li><strong>Instances</strong> - Concrete objects created from templates</li>
+        <li><strong>Lineages</strong> - Directed relationships forming a DAG (Directed Acyclic Graph)</li>
+        <li><strong>EUIDs</strong> - Enterprise Unique Identifiers for easy reference</li>
+    </ul>
+</div>
+{% endblock %}
+
