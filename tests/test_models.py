@@ -22,8 +22,8 @@ class TestTapdbCore:
         # Check column names exist on a concrete subclass
         columns = [c.name for c in generic_template.__table__.columns]
         expected = ["uuid", "euid", "name", "created_dt", "modified_dt",
-                    "polymorphic_discriminator", "super_type", "btype",
-                    "b_sub_type", "version", "bstatus", "json_addl",
+                    "polymorphic_discriminator", "category", "type",
+                    "subtype", "version", "bstatus", "json_addl",
                     "is_singleton", "is_deleted"]
         for col in expected:
             assert col in columns, f"Missing column: {col}"

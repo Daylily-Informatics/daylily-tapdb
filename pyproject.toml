@@ -40,7 +40,7 @@ dev = [
 ]
 
 [project.scripts]
-daylily-tapdb = "daylily_tapdb.cli:main"
+tapdb = "daylily_tapdb.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Daylily-Informatics/daylily-tapdb"

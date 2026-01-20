@@ -25,9 +25,9 @@ class tapdb_core(Base):
         created_dt: Creation timestamp (DB-managed)
         modified_dt: Last modification timestamp (DB-managed)
         polymorphic_discriminator: SQLAlchemy single-table inheritance discriminator
-        super_type: High-level category (template, instance, lineage)
-        btype: Business type (workflow, container, content, etc.)
-        b_sub_type: Business sub-type for finer categorization
+        category: Top-level category (workflow, container, content, etc.)
+        type: Type within category (assay, plate, specimen, etc.)
+        subtype: Specific variant (hla-typing, fixed-plate-96, etc.)
         version: Version string for templates
         bstatus: Business status (active, archived, etc.)
         json_addl: Flexible JSON storage for domain-specific data
@@ -45,9 +45,9 @@ class tapdb_core(Base):
 
     polymorphic_discriminator = Column(Text, nullable=True)
 
-    super_type = Column(Text, nullable=True)
-    btype = Column(Text, nullable=True)
-    b_sub_type = Column(Text, nullable=True)
+    category = Column(Text, nullable=True)
+    type = Column(Text, nullable=True)
+    subtype = Column(Text, nullable=True)
     version = Column(Text, nullable=True)
 
     bstatus = Column(Text, nullable=True)

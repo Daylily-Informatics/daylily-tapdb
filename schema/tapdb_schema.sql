@@ -1,9 +1,6 @@
 -- TAPDB Schema v0.1.0
 -- Templated Abstract Polymorphic Database
--- PostgreSQL 14+ required (for gen_random_uuid())
-
--- Enable required extensions
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- PostgreSQL 13+ required (gen_random_uuid() is built-in)
 
 --------------------------------------------------------------------------------
 -- SEQUENCES
@@ -31,11 +28,11 @@ CREATE TABLE IF NOT EXISTS generic_template (
     euid TEXT UNIQUE NOT NULL DEFAULT ('GT' || nextval('generic_template_seq')),
     name TEXT NOT NULL,
 
-    -- Type hierarchy
+    -- Type hierarchy (category/type/subtype/version)
     polymorphic_discriminator TEXT NOT NULL,
-    super_type TEXT NOT NULL,
-    btype TEXT NOT NULL,
-    b_sub_type TEXT NOT NULL,
+    category TEXT NOT NULL,
+    type TEXT NOT NULL,
+    subtype TEXT NOT NULL,
     version TEXT NOT NULL,
 
     -- Instance configuration
@@ -63,11 +60,11 @@ CREATE TABLE IF NOT EXISTS generic_instance (
     euid TEXT UNIQUE,
     name TEXT NOT NULL,
 
-    -- Type hierarchy (copied from template)
+    -- Type hierarchy (copied from template: category/type/subtype/version)
     polymorphic_discriminator TEXT NOT NULL,
-    super_type TEXT NOT NULL,
-    btype TEXT NOT NULL,
-    b_sub_type TEXT NOT NULL,
+    category TEXT NOT NULL,
+    type TEXT NOT NULL,
+    subtype TEXT NOT NULL,
     version TEXT NOT NULL,
 
     -- Template reference
@@ -93,11 +90,11 @@ CREATE TABLE IF NOT EXISTS generic_instance_lineage (
     euid TEXT UNIQUE NOT NULL DEFAULT ('GL' || nextval('generic_instance_lineage_seq')),
     name TEXT NOT NULL,
 
-    -- Type hierarchy
+    -- Type hierarchy (category/type/subtype/version)
     polymorphic_discriminator TEXT NOT NULL,
-    super_type TEXT NOT NULL DEFAULT 'lineage',
-    btype TEXT NOT NULL DEFAULT 'lineage',
-    b_sub_type TEXT NOT NULL DEFAULT 'generic',
+    category TEXT NOT NULL DEFAULT 'lineage',
+    type TEXT NOT NULL DEFAULT 'lineage',
+    subtype TEXT NOT NULL DEFAULT 'generic',
     version TEXT NOT NULL DEFAULT '1.0',
 
     -- Relationship definition
@@ -133,10 +130,26 @@ CREATE TABLE IF NOT EXISTS audit_log (
     changed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     operation_type TEXT CHECK (operation_type IN ('INSERT', 'UPDATE', 'DELETE')),
     json_addl JSONB,
-    super_type TEXT,
+    category TEXT,
     deleted_record_json JSONB,
     is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
     is_singleton BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- tapdb_user: Application user management
+CREATE TABLE IF NOT EXISTS tapdb_user (
+    uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE,
+    display_name TEXT,
+    role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    require_password_change BOOLEAN NOT NULL DEFAULT FALSE,
+    password_hash TEXT,
+    created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_login_dt TIMESTAMP WITH TIME ZONE,
+    json_addl JSONB DEFAULT '{}'::jsonb
 );
 
 --------------------------------------------------------------------------------
@@ -145,20 +158,20 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 -- generic_template indexes
 CREATE INDEX IF NOT EXISTS idx_generic_template_polymorphic_discriminator ON generic_template(polymorphic_discriminator);
-CREATE INDEX IF NOT EXISTS idx_generic_template_btype ON generic_template(btype);
+CREATE INDEX IF NOT EXISTS idx_generic_template_type ON generic_template(type);
 CREATE INDEX IF NOT EXISTS idx_generic_template_is_deleted ON generic_template(is_deleted);
 
 -- generic_instance indexes
 CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_unique_singleton_key
-    ON generic_instance (super_type, btype, b_sub_type, version)
+    ON generic_instance (category, type, subtype, version)
     WHERE is_singleton = TRUE;
 CREATE INDEX IF NOT EXISTS idx_generic_instance_polymorphic_discriminator ON generic_instance(polymorphic_discriminator);
-CREATE INDEX IF NOT EXISTS idx_generic_instance_type ON generic_instance(btype);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_type ON generic_instance(type);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_euid ON generic_instance(euid);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_is_deleted ON generic_instance(is_deleted);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_template_uuid ON generic_instance(template_uuid);
-CREATE INDEX IF NOT EXISTS idx_generic_instance_super_type ON generic_instance(super_type);
-CREATE INDEX IF NOT EXISTS idx_generic_instance_b_sub_type ON generic_instance(b_sub_type);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_category ON generic_instance(category);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_subtype ON generic_instance(subtype);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_version ON generic_instance(version);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_mod_dt ON generic_instance(modified_dt);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_singleton ON generic_instance(is_singleton);
@@ -181,6 +194,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_operation_type ON audit_log(operation_t
 CREATE INDEX IF NOT EXISTS idx_audit_log_changed_at ON audit_log(changed_at);
 CREATE INDEX IF NOT EXISTS idx_audit_log_changed_by ON audit_log(changed_by);
 CREATE INDEX IF NOT EXISTS idx_audit_log_json_addl_gin ON audit_log USING GIN (json_addl);
+
+-- tapdb_user indexes
+CREATE INDEX IF NOT EXISTS idx_tapdb_user_role ON tapdb_user(role);
+CREATE INDEX IF NOT EXISTS idx_tapdb_user_is_active ON tapdb_user(is_active);
 
 
 --------------------------------------------------------------------------------

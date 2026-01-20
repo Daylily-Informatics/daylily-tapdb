@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}TAPDB Admin{% endblock %}</title>
+    <link rel="stylesheet" type="text/css" href="{{ style.skin_css }}">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    {% block head %}{% endblock %}
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #3498db;
+            --accent-color: #e74c3c;
+            --bg-color: #1a1a2e;
+            --card-bg: #16213e;
+            --text-color: #eee;
+            --text-muted: #888;
+            --border-color: #333;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+        }
+        .navbar {
+            background: var(--primary-color);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+        .navbar-brand {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--secondary-color);
+            text-decoration: none;
+        }
+        .navbar-nav {
+            display: flex;
+            gap: 1.5rem;
+            list-style: none;
+        }
+        .navbar-nav a {
+            color: var(--text-color);
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .navbar-nav a:hover, .navbar-nav a.active {
+            background: var(--secondary-color);
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .card {
+            background: var(--card-bg);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        }
+        .card-title {
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+            color: var(--secondary-color);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        th {
+            background: var(--primary-color);
+            color: var(--secondary-color);
+            font-weight: 600;
+        }
+        tr:hover { background: rgba(52, 152, 219, 0.1); }
+        a { color: var(--secondary-color); }
+        a:hover { color: #5dade2; }
+        .btn {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background: var(--secondary-color);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+        .btn:hover { background: #2980b9; color: white; }
+        .btn-danger { background: var(--accent-color); }
+        .btn-danger:hover { background: #c0392b; }
+        .btn-success { background: #27ae60; }
+        .btn-success:hover { background: #1e8449; color: white; }
+        .pagination {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            justify-content: center;
+        }
+        .pagination a, .pagination span {
+            padding: 0.5rem 1rem;
+            background: var(--card-bg);
+            border-radius: 4px;
+            text-decoration: none;
+        }
+        .pagination a:hover { background: var(--secondary-color); color: white; }
+        .pagination .current { background: var(--secondary-color); color: white; }
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-workflow { background: #00FF7F; color: #000; }
+        .badge-container { background: #8B00FF; color: #fff; }
+        .badge-content { background: #00BFFF; color: #000; }
+        .badge-equipment { background: #FF4500; color: #fff; }
+        .badge-data { background: #FFD700; color: #000; }
+        .badge-actor { background: #FF69B4; color: #000; }
+        .filter-bar {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .filter-bar select, .filter-bar input {
+            padding: 0.5rem;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-color);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        .stat-card {
+            text-align: center;
+            padding: 2rem;
+        }
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: var(--secondary-color);
+        }
+        .stat-label { color: var(--text-muted); }
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .user-info .username {
+            color: var(--text-muted);
+        }
+        .user-info .role-badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .role-badge.admin { background: #27ae60; color: white; }
+        .role-badge.user { background: #7f8c8d; color: white; }
+        .user-menu a {
+            color: var(--text-muted);
+            text-decoration: none;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+        }
+        .user-menu a:hover {
+            background: rgba(255,255,255,0.1);
+            color: var(--text-color);
+        }
+        .admin-only { display: none; }
+        .is-admin .admin-only { display: inline-block; }
+    </style>
+</head>
+<body class="{% if user and user.role == 'admin' %}is-admin{% endif %}">
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">🗄️ TAPDB Admin</a>
+        <ul class="navbar-nav">
+            <li><a href="/">Home</a></li>
+            <li><a href="/templates">Templates</a></li>
+            <li><a href="/instances">Instances</a></li>
+            <li><a href="/lineages">Lineages</a></li>
+            <li><a href="/graph">Graph</a></li>
+        </ul>
+        {% if user %}
+        <div class="user-info">
+            <span class="username">{{ user.display_name or user.username }}</span>
+            <span class="role-badge {{ user.role }}">{{ user.role }}</span>
+            <div class="user-menu">
+                <a href="/change-password">🔐</a>
+                <a href="/logout">Logout</a>
+            </div>
+        </div>
+        {% endif %}
+    </nav>
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
+

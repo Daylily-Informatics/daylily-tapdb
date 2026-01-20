@@ -1,0 +1,32 @@
+{
+  "$comment": "TAPDB v2 Template: Generic base object",
+  "templates": [
+    {
+      "name": "Generic Object",
+      "polymorphic_discriminator": "generic_template",
+      "category": "generic",
+      "type": "generic",
+      "subtype": "generic",
+      "version": "1.0",
+      "instance_prefix": "GX",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Base generic object template",
+        "properties": {
+          "name": "Generic Object",
+          "comments": ""
+        },
+        "expected_inputs": [],
+        "expected_outputs": [],
+        "instantiation_layouts": [],
+        "cogs": {
+          "state": "active",
+          "cost": "0.00",
+          "allocation_type": ""
+        }
+      }
+    }
+  ]
+}
+

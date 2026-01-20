@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}TAPDB Admin - Create Instance{% endblock %}
+
+{% block content %}
+<nav style="margin-bottom: 1rem; color: var(--text-muted);">
+    <a href="/">Home</a> &gt; <a href="/templates">Templates</a> &gt; <a href="/object/{{ template.euid }}">{{ template.euid }}</a> &gt; Create Instance
+</nav>
+
+<h1 style="margin-bottom: 1rem;">Create Instance from Template</h1>
+
+{% if error %}
+<div class="card" style="background: rgba(231, 76, 60, 0.2); border: 1px solid var(--accent-color);">
+    <p style="color: var(--accent-color);">⚠️ {{ error }}</p>
+</div>
+{% endif %}
+
+{% if success %}
+<div class="card" style="background: rgba(39, 174, 96, 0.2); border: 1px solid #27ae60;">
+    <p style="color: #27ae60;">✅ {{ success }}</p>
+    {% if created_instance %}
+    <p style="margin-top: 0.5rem;"><a href="/object/{{ created_instance.euid }}" class="btn btn-success">View Created Instance: {{ created_instance.euid }}</a></p>
+    {% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+    <h2 class="card-title">Template Information</h2>
+    <table>
+        <tr><th style="width: 200px;">EUID</th><td><a href="/object/{{ template.euid }}">{{ template.euid }}</a></td></tr>
+        <tr><th>Name</th><td>{{ template.name or '-' }}</td></tr>
+        <tr><th>Type Hierarchy</th><td><span class="badge badge-{{ template.category }}">{{ template.category }}</span> / {{ template.type }} / {{ template.subtype }}</td></tr>
+        <tr><th>Version</th><td>{{ template.version }}</td></tr>
+        {% if template.json_addl and template.json_addl.description %}
+        <tr><th>Description</th><td>{{ template.json_addl.description }}</td></tr>
+        {% endif %}
+    </table>
+</div>
+
+<div class="card">
+    <h2 class="card-title">Instance Details</h2>
+    <form method="POST" action="/create-instance/{{ template.euid }}" id="create-instance-form">
+        <div style="margin-bottom: 1rem;">
+            <label for="instance_name" style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Instance Name <span style="color: var(--accent-color);">*</span></label>
+            <input type="text" id="instance_name" name="instance_name" required 
+                   style="width: 100%; padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);"
+                   placeholder="Enter a name for this instance" value="{{ form_data.instance_name if form_data else '' }}">
+        </div>
+
+        {% if has_instantiation_layouts %}
+        <div style="margin-bottom: 1rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                <input type="checkbox" name="create_children" value="true" {% if form_data is none or form_data.create_children %}checked{% endif %}>
+                <span>Create child objects (from instantiation_layouts)</span>
+            </label>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;">
+                This template defines child objects that will be automatically created.
+            </p>
+        </div>
+        {% endif %}
+
+        <div style="margin-top: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+            <h3 style="margin-bottom: 1rem; color: var(--secondary-color);">🔗 Instance Relationships (Optional)</h3>
+            <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
+                Link this instance to existing instances. Enter EUIDs separated by commas (e.g., GX1, GX2).
+            </p>
+
+            <div style="margin-bottom: 1rem;">
+                <label for="parent_euids" style="display: block; margin-bottom: 0.5rem;">Parent Instance(s)</label>
+                <input type="text" id="parent_euids" name="parent_euids"
+                       style="width: 100%; padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);"
+                       placeholder="e.g., GX1, GX2" value="{{ form_data.parent_euids if form_data else '' }}">
+                <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;">
+                    The new instance will be a child of these parent instances.
+                </p>
+            </div>
+
+            <div style="margin-bottom: 1rem;">
+                <label for="child_euids" style="display: block; margin-bottom: 0.5rem;">Child Instance(s)</label>
+                <input type="text" id="child_euids" name="child_euids"
+                       style="width: 100%; padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);"
+                       placeholder="e.g., GX3, GX4" value="{{ form_data.child_euids if form_data else '' }}">
+                <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;">
+                    The new instance will be a parent of these child instances.
+                </p>
+            </div>
+
+            <div style="margin-bottom: 1rem;">
+                <label for="relationship_type" style="display: block; margin-bottom: 0.5rem;">Relationship Type</label>
+                <select id="relationship_type" name="relationship_type"
+                        style="padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);">
+                    <option value="contains" {% if form_data and form_data.relationship_type == 'contains' %}selected{% endif %}>contains</option>
+                    <option value="derived_from" {% if form_data and form_data.relationship_type == 'derived_from' %}selected{% endif %}>derived_from</option>
+                    <option value="references" {% if form_data and form_data.relationship_type == 'references' %}selected{% endif %}>references</option>
+                    <option value="depends_on" {% if form_data and form_data.relationship_type == 'depends_on' %}selected{% endif %}>depends_on</option>
+                    <option value="produces" {% if form_data and form_data.relationship_type == 'produces' %}selected{% endif %}>produces</option>
+                    <option value="consumes" {% if form_data and form_data.relationship_type == 'consumes' %}selected{% endif %}>consumes</option>
+                    <option value="generic" {% if form_data and form_data.relationship_type == 'generic' %}selected{% endif %}>generic</option>
+                </select>
+            </div>
+        </div>
+
+        {% if default_properties %}
+        <div style="margin-top: 1.5rem;">
+            <h3 style="margin-bottom: 1rem; color: var(--secondary-color);">Custom Properties</h3>
+            <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
+                These properties are defined by the template. Modify values as needed.
+            </p>
+            {% for key, value in default_properties.items() %}
+            {% if key not in ['instantiation_layouts', 'action_imports', 'action_groups', 'default_status', 'singleton', 'description'] %}
+            <div style="margin-bottom: 1rem;">
+                <label for="prop_{{ key }}" style="display: block; margin-bottom: 0.5rem;">{{ key }}</label>
+                {% if value is mapping %}
+                <textarea id="prop_{{ key }}" name="prop_{{ key }}" rows="3"
+                          style="width: 100%; padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); font-family: monospace;">{{ value | tojson }}</textarea>
+                {% elif value is iterable and value is not string %}
+                <textarea id="prop_{{ key }}" name="prop_{{ key }}" rows="2"
+                          style="width: 100%; padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); font-family: monospace;">{{ value | tojson }}</textarea>
+                {% elif value is sameas true or value is sameas false %}
+                <select id="prop_{{ key }}" name="prop_{{ key }}"
+                        style="padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);">
+                    <option value="true" {% if value %}selected{% endif %}>true</option>
+                    <option value="false" {% if not value %}selected{% endif %}>false</option>
+                </select>
+                {% elif value is number %}
+                <input type="number" id="prop_{{ key }}" name="prop_{{ key }}" value="{{ value }}"
+                       style="width: 100%; padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);">
+                {% else %}
+                <input type="text" id="prop_{{ key }}" name="prop_{{ key }}" value="{{ value }}"
+                       style="width: 100%; padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);">
+                {% endif %}
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div style="margin-top: 1.5rem; display: flex; gap: 1rem;">
+            <button type="submit" class="btn btn-success" id="submit-btn">➕ Create Instance</button>
+            <a href="/object/{{ template.euid }}" class="btn">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('create-instance-form').addEventListener('submit', function(e) {
+    var btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Creating...';
+});
+</script>
+{% endblock %}
+

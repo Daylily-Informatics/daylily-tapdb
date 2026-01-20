@@ -60,26 +60,41 @@ TAPDB uses SQLAlchemy single-table inheritance. Each table has typed subclasses:
 
 ## Installation
 
-### Using conda (recommended)
+### Quick Start (recommended)
 
 ```bash
-conda env create -n TAPDB -f tapdb_env.yaml
-conda activate TAPDB
+source tapdb_activate.sh
 ```
 
-### Using pip
+This single command:
+- Creates the TAPDB conda environment (if needed)
+- Activates the environment
+- Installs the package (if needed)
+- Enables tab completion for the current session
+- Shows available CLI commands and server status
+
+### Manual Setup
+
+```bash
+# Create and activate environment
+conda env create -n TAPDB -f tapdb_env.yaml
+conda activate TAPDB
+
+# Or create manually
+conda create -n TAPDB python=3.10
+conda activate TAPDB
+conda install sqlalchemy psycopg2 fastapi uvicorn jinja2 python-multipart
+conda install pytest pytest-cov pytest-asyncio black ruff mypy httpx typer rich
+pip install -e .
+
+# Enable tab completion (optional, persists across sessions)
+tapdb --install-completion
+```
+
+### Using pip (without conda)
 
 ```bash
 pip install daylily-tapdb
-```
-
-### Manual setup (without environment file)
-
-```bash
-conda create -n TAPDB python=3.10
-conda activate TAPDB
-conda install sqlalchemy psycopg2 pytest pytest-cov pytest-asyncio black ruff mypy
-pip install -e .
 ```
 
 ## Quick Start
@@ -126,7 +141,7 @@ with db.session_scope(commit=True) as session:
 
 Templates are blueprints stored in `generic_template`. They define:
 
-- **Type hierarchy:** `super_type`, `btype`, `b_sub_type`, `version`
+- **Type hierarchy:** `category`, `type`, `subtype`, `version`
 - **Instance prefix:** EUID prefix for created instances (e.g., `CX` for containers)
 - **JSON schema:** Optional validation for instance `json_addl`
 - **Default properties:** Merged into instance `json_addl` at creation
@@ -134,7 +149,7 @@ Templates are blueprints stored in `generic_template`. They define:
 - **Instantiation layouts:** Child objects to create automatically
 
 ```python
-# Template code format: {super_type}/{btype}/{b_sub_type}/{version}/
+# Template code format: {category}/{type}/{subtype}/{version}/
 template = templates.get_template('container/plate/fixed-plate-96/1.0/')
 
 # Or by EUID
@@ -184,7 +199,7 @@ for lineage in plate.parent_of_lineages:
 samples = plate.filter_lineage_members(
     of_lineage_type='parent_of_lineages',
     lineage_member_type='child_instance',
-    filter_criteria={'btype': 'sample'}
+    filter_criteria={'type': 'sample'}
 )
 ```
 
@@ -353,7 +368,7 @@ db = TAPDBConnection(
 |--------|-------------|
 | `get_template(template_code)` | Get template by code string |
 | `get_template_by_euid(euid)` | Get template by EUID |
-| `list_templates(super_type, btype, include_deleted)` | List templates with filters |
+| `list_templates(category, type_, include_deleted)` | List templates with filters |
 | `template_code_from_template(template)` | Generate code string from template |
 | `clear_cache()` | Clear template cache |
 
@@ -388,6 +403,168 @@ mypy daylily_tapdb/
 ruff check daylily_tapdb/
 ```
 
+## Admin Web Interface
+
+TAPDB includes a FastAPI-based admin interface for browsing and managing objects.
+
+### Running the Admin App
+
+```bash
+# Activate environment
+conda activate TAPDB
+
+# Start the server (background)
+tapdb ui start
+
+# Check status
+tapdb ui status
+
+# View logs
+tapdb ui logs -f
+
+# Stop the server
+tapdb ui stop
+```
+
+Or run in foreground with auto-reload for development:
+
+```bash
+tapdb ui start --reload --foreground
+# Or directly:
+uvicorn admin.main:app --reload --port 8000
+```
+
+### CLI Quickstart
+
+The fastest way to get a local TAPDB instance running:
+
+```bash
+# 1. Activate environment (creates conda env if needed)
+source tapdb_activate.sh
+
+# 2. Initialize and start local PostgreSQL
+tapdb pg init dev           # Creates ./postgres_data/dev/
+tapdb pg start-local dev    # Starts PostgreSQL on port 5432
+
+# 3. Create database, apply schema, and seed templates
+tapdb db setup dev
+
+# 4. Verify everything is working
+tapdb db status dev
+
+# 5. Start the admin UI (optional)
+tapdb ui start
+# Open http://localhost:8000 in your browser
+```
+
+To stop everything:
+
+```bash
+source tapdb_deactivate.sh  # Stops PostgreSQL and deactivates conda
+```
+
+### CLI Command Reference
+
+```bash
+# General
+tapdb --help              # Show all commands
+tapdb version             # Show version
+tapdb info                # Show config and status
+
+# Local PostgreSQL (conda-based, recommended for dev/test)
+tapdb pg init <env>       # Initialize data directory (dev/test only)
+tapdb pg start-local <env> # Start local PostgreSQL instance
+tapdb pg stop-local <env>  # Stop local PostgreSQL instance
+
+# System PostgreSQL (Homebrew/systemd, for existing installations)
+tapdb pg start            # Start system PostgreSQL service
+tapdb pg stop             # Stop system PostgreSQL service
+tapdb pg status           # Check if PostgreSQL is running
+tapdb pg logs             # View logs (--follow/-f to tail)
+tapdb pg restart          # Restart system PostgreSQL
+
+# Database management (env: dev | test | prod)
+tapdb pg create <env>     # Create empty database (e.g., tapdb_dev)
+tapdb pg delete <env>     # Delete database (⚠️ destructive)
+tapdb db create <env>     # Apply TAPDB schema to existing database
+tapdb db seed <env>       # Seed templates from config/ directory
+tapdb db setup <env>      # Full setup: create db + schema + seed (recommended)
+tapdb db status <env>     # Check schema status and row counts
+tapdb db nuke <env>       # Drop all tables (⚠️ destructive)
+tapdb db backup <env>     # Backup database (--output/-o FILE)
+tapdb db restore <env>    # Restore from backup (--input/-i FILE)
+tapdb db migrate <env>    # Apply schema migrations
+
+# Admin UI
+tapdb ui start            # Start admin UI (background)
+tapdb ui stop             # Stop admin UI
+tapdb ui status           # Check if running
+tapdb ui logs             # View logs (--follow/-f to tail)
+tapdb ui restart          # Restart server
+```
+
+### Environments
+
+TAPDB supports three environments: `dev`, `test`, and `prod`.
+
+| Environment | Default Port | Database Name | Data Directory |
+|-------------|--------------|---------------|----------------|
+| `dev` | 5432 | `tapdb_dev` | `./postgres_data/dev/` |
+| `test` | 5433 | `tapdb_test` | `./postgres_data/test/` |
+| `prod` | 5432 | `tapdb_prod` | System PostgreSQL |
+
+**Local vs Remote:**
+- `dev` and `test` can use local conda-based PostgreSQL (`tapdb pg init/start-local`)
+- `prod` requires an external PostgreSQL instance (AWS RDS, system install, etc.)
+
+For remote/AWS databases, configure via environment variables:
+
+```bash
+export TAPDB_PROD_HOST=my-rds.us-west-2.rds.amazonaws.com
+export TAPDB_PROD_PORT=5432
+export TAPDB_PROD_USER=tapdb_admin
+export TAPDB_PROD_PASSWORD=your-password
+export TAPDB_PROD_DATABASE=tapdb_prod
+
+tapdb db setup prod
+```
+
+### Environment Configuration
+
+Database connections are configured via environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TAPDB_DEV_HOST` | Dev database host | `localhost` |
+| `TAPDB_DEV_PORT` | Dev database port | `5432` |
+| `TAPDB_DEV_USER` | Dev database user | `$USER` |
+| `TAPDB_DEV_PASSWORD` | Dev database password | — |
+| `TAPDB_DEV_DATABASE` | Dev database name | `tapdb_dev` |
+
+Replace `DEV` with `TEST` or `PROD` for other environments. Falls back to `PGHOST`, `PGPORT`, etc. if environment-specific vars are not set.
+
+### Admin Features
+
+- **Dashboard** — Overview of templates, instances, and lineages
+- **Browse** — List views with filtering and pagination
+- **Object Details** — View any object by EUID with relationships
+- **Graph Visualization** — Interactive Cytoscape.js DAG explorer
+  - Dagre hierarchical layout
+  - Click nodes to see details
+  - Double-click to navigate
+  - Multiple layout options
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/templates` | GET | List templates with pagination |
+| `/api/instances` | GET | List instances with pagination |
+| `/api/object/{euid}` | GET | Get object details by EUID |
+| `/api/graph/data` | GET | Get Cytoscape-compatible graph data |
+| `/api/lineage` | POST | Create a new lineage relationship |
+| `/api/object/{euid}` | DELETE | Soft-delete an object |
+
 ## Project Structure
 
 ```
@@ -410,12 +587,18 @@ daylily-tapdb/
 │   │   └── dispatcher.py    # ActionDispatcher
 │   └── cli/
 │       └── __init__.py      # CLI entry point (placeholder)
+├── admin/                   # FastAPI admin interface
+│   ├── main.py              # App entry point
+│   ├── api/                 # API endpoints
+│   ├── templates/           # Jinja2 HTML templates
+│   └── static/              # CSS and JavaScript
 ├── schema/
 │   └── tapdb_schema.sql     # PostgreSQL schema
 ├── tests/
 │   ├── conftest.py
 │   ├── test_euid.py
 │   └── test_models.py
+├── tapdb_env.yaml           # Conda environment
 ├── pyproject.toml
 └── README.md
 ```
@@ -423,7 +606,7 @@ daylily-tapdb/
 ## Requirements
 
 - **Python:** 3.10+
-- **PostgreSQL:** 14+ (for `gen_random_uuid()`)
+- **PostgreSQL:** 13+ (for built-in `gen_random_uuid()`)
 - **SQLAlchemy:** 2.0+
 - **psycopg2-binary:** 2.9+
 

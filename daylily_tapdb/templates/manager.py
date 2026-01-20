@@ -35,7 +35,7 @@ class TemplateManager:
         """
         Get a template by its code string.
 
-        Template code format: {super_type}/{btype}/{b_sub_type}/{version}/
+        Template code format: {category}/{type}/{subtype}/{version}/
         Example: container/plate/fixed-plate-96/1.0/
 
         Args:
@@ -54,14 +54,14 @@ class TemplateManager:
             logger.warning(f"Invalid template code format: {template_code}")
             return None
 
-        super_type, btype, b_sub_type, version = parts
+        category, type_, subtype, version = parts
 
         # Query database
         session = self.db.get_session()
         template = session.query(generic_template).filter(
-            generic_template.super_type == super_type,
-            generic_template.btype == btype,
-            generic_template.b_sub_type == b_sub_type,
+            generic_template.category == category,
+            generic_template.type == type_,
+            generic_template.subtype == subtype,
             generic_template.version == version,
             generic_template.is_deleted == False
         ).first()
@@ -93,16 +93,16 @@ class TemplateManager:
 
     def list_templates(
         self,
-        super_type: Optional[str] = None,
-        btype: Optional[str] = None,
+        category: Optional[str] = None,
+        type_: Optional[str] = None,
         include_deleted: bool = False
     ) -> List[generic_template]:
         """
         List templates with optional filtering.
 
         Args:
-            super_type: Filter by super_type.
-            btype: Filter by btype.
+            category: Filter by category.
+            type_: Filter by type.
             include_deleted: Include soft-deleted templates.
 
         Returns:
@@ -113,10 +113,10 @@ class TemplateManager:
 
         if not include_deleted:
             query = query.filter(generic_template.is_deleted == False)
-        if super_type:
-            query = query.filter(generic_template.super_type == super_type)
-        if btype:
-            query = query.filter(generic_template.btype == btype)
+        if category:
+            query = query.filter(generic_template.category == category)
+        if type_:
+            query = query.filter(generic_template.type == type_)
 
         return query.all()
 
@@ -130,4 +130,4 @@ class TemplateManager:
         Returns:
             Template code string.
         """
-        return f"{template.super_type}/{template.btype}/{template.b_sub_type}/{template.version}/"
+        return f"{template.category}/{template.type}/{template.subtype}/{template.version}/"
