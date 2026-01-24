@@ -28,8 +28,6 @@ keywords = ["database", "orm", "polymorphic", "templates", "sqlalchemy", "lims"]
 dependencies = [
     "sqlalchemy>=2.0",
     "psycopg2-binary>=2.9",
-    "typer",
-    "rich",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +37,14 @@ dev = [
     "black>=23.0",
     "ruff>=0.1",
     "mypy>=1.0",
+    "httpx",
+]
+
+# CLI dependencies (Typer + Rich UI, and YAML config support)
+cli = [
+    "typer",
+    "rich",
+    "pyyaml",
 ]
 
 # Optional Admin UI (FastAPI). Keep out of core installs.
@@ -48,6 +54,7 @@ admin = [
     "jinja2",
     "python-multipart",
     "itsdangerous",
+    "passlib[bcrypt]",
 ]
 
 [project.scripts]
@@ -60,7 +67,15 @@ Documentation = "https://daylily-tapdb.readthedocs.io"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["daylily_tapdb*"]
+include = ["daylily_tapdb*", "admin*"]
+
+[tool.setuptools.package-data]
+# Admin UI ships HTML templates + static assets.
+admin = [
+    "templates/*.html",
+    "static/css/*.css",
+    "static/js/*.js",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

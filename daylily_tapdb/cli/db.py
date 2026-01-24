@@ -15,6 +15,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
 
+from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+
 console = Console()
 
 
@@ -151,8 +153,8 @@ class Environment(str, Enum):
     prod = "prod"
 
 
-# Config directory
-CONFIG_DIR = Path.home() / ".tapdb"
+# Config directory (Phase 3: ~/.config/tapdb/*)
+CONFIG_DIR = get_config_path().parent
 LOG_DIR = CONFIG_DIR / "logs"
 
 
@@ -174,25 +176,17 @@ def _log_operation(env: str, operation: str, details: str = ""):
 
 def _get_db_config(env: Environment) -> dict:
     """Get database configuration for environment."""
-    env_prefix = f"TAPDB_{env.value.upper()}_"
-    
-    # Check for environment-specific vars first, then fall back to defaults
-    config = {
-        "host": os.environ.get(f"{env_prefix}HOST", os.environ.get("PGHOST", "localhost")),
-        "port": os.environ.get(f"{env_prefix}PORT", os.environ.get("PGPORT", "5432")),
-        "user": os.environ.get(f"{env_prefix}USER", os.environ.get("PGUSER", os.environ.get("USER", "postgres"))),
-        "password": os.environ.get(f"{env_prefix}PASSWORD", os.environ.get("PGPASSWORD", "")),
-        "database": os.environ.get(f"{env_prefix}DATABASE", f"tapdb_{env.value}"),
-    }
-    return config
+    return get_db_config_for_env(env.value)
 
 
 def _get_connection_string(env: Environment, database: Optional[str] = None) -> str:
-    """Build PostgreSQL connection string."""
+    """Build PostgreSQL connection string for display.
+
+    Intentionally omits any password. Commands use PGPASSWORD/.pgpass for auth.
+    """
     cfg = _get_db_config(env)
     db = database or cfg["database"]
-    password = f":{cfg['password']}" if cfg['password'] else ""
-    return f"postgresql://{cfg['user']}{password}@{cfg['host']}:{cfg['port']}/{db}"
+    return f"postgresql://{cfg['user']}@{cfg['host']}:{cfg['port']}/{db}"
 
 
 def _find_schema_file() -> Path:
@@ -220,6 +214,10 @@ def _run_psql(env: Environment, sql: str = None, file: Path = None, database: st
     
     cmd = [
         "psql",
+        "-X",  # do not read ~/.psqlrc
+        "-q",  # quiet
+        "-t",  # tuples only
+        "-A",  # unaligned
         "-h", cfg["host"],
         "-p", cfg["port"],
         "-U", cfg["user"],
@@ -243,8 +241,9 @@ def _run_psql(env: Environment, sql: str = None, file: Path = None, database: st
             text=True,
             env=env_vars,
         )
-        output = result.stdout + result.stderr
-        return result.returncode == 0, output
+        if result.returncode == 0:
+            return True, (result.stdout or "").strip()
+        return False, (result.stdout + result.stderr).strip()
     except FileNotFoundError:
         return False, "psql not found. Please install PostgreSQL client."
     except Exception as e:
@@ -259,7 +258,20 @@ def _check_db_exists(env: Environment, database: str) -> bool:
         sql=f"SELECT 1 FROM pg_database WHERE datname = '{database}'",
         database="postgres"
     )
-    return success and "1" in output
+    return success and output.strip() == "1"
+
+
+def _parse_single_int(output: str) -> int:
+    """Parse a single integer value from machine-formatted psql output."""
+    for ln in (output or "").splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        try:
+            return int(s)
+        except ValueError:
+            continue
+    raise ValueError(f"Could not parse int from output: {output!r}")
 
 
 def _get_table_counts(env: Environment) -> dict:
@@ -270,10 +282,8 @@ def _get_table_counts(env: Environment) -> dict:
         success, output = _run_psql(env, sql=f"SELECT COUNT(*) FROM {table}")
         if success:
             try:
-                # Parse count from psql output
-                lines = [l.strip() for l in output.strip().split("\n") if l.strip() and not l.startswith("-")]
-                counts[table] = int(lines[-1]) if lines else 0
-            except (ValueError, IndexError):
+                counts[table] = _parse_single_int(output)
+            except ValueError:
                 counts[table] = "?"
         else:
             counts[table] = None
@@ -286,7 +296,12 @@ def _schema_exists(env: Environment) -> bool:
         env,
         sql="SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'generic_template'"
     )
-    return success and "1" in output
+    if not success:
+        return False
+    try:
+        return _parse_single_int(output) > 0
+    except ValueError:
+        return False
 
 
 # ============================================================================
@@ -780,57 +795,143 @@ def _load_template_configs(config_dir: Path, include_optional: bool = False) -> 
     return templates
 
 
-def _template_exists(env: Environment, polymorphic_discriminator: str) -> bool:
-    """Check if a template with the given discriminator already exists."""
-    sql = f"SELECT 1 FROM generic_template WHERE polymorphic_discriminator = '{polymorphic_discriminator}'"
+def _sql_escape_literal(val: str) -> str:
+    return str(val).replace("'", "''")
+
+
+def _template_code(template: dict) -> str:
+    return f"{template.get('category')}/{template.get('type')}/{template.get('subtype')}/{template.get('version')}/"
+
+
+def _template_key(template: dict) -> tuple[str, str, str, str]:
+    return (
+        str(template.get("category", "")),
+        str(template.get("type", "")),
+        str(template.get("subtype", "")),
+        str(template.get("version", "")),
+    )
+
+
+def _template_exists(env: Environment, category: str, type_: str, subtype: str, version: str) -> bool:
+    """Check if a template exists by canonical uniqueness key."""
+    sql = (
+        "SELECT 1 FROM generic_template "
+        f"WHERE category = '{_sql_escape_literal(category)}' "
+        f"AND type = '{_sql_escape_literal(type_)}' "
+        f"AND subtype = '{_sql_escape_literal(subtype)}' "
+        f"AND version = '{_sql_escape_literal(version)}'"
+    )
     success, output = _run_psql(env, sql=sql)
-    return success and "1" in output
+    return success and output.strip() == "1"
 
 
-def _insert_template(env: Environment, template: dict) -> tuple[bool, str]:
-    """Insert a template into the database. Returns (success, message)."""
-    # Escape single quotes in JSON
-    json_addl = json.dumps(template.get("json_addl", {})).replace("'", "''")
-    json_addl_schema = json.dumps(template.get("json_addl_schema")).replace("'", "''") if template.get("json_addl_schema") else "NULL"
+def _upsert_template(env: Environment, template: dict, overwrite: bool) -> tuple[bool, str]:
+    """Upsert a template. If overwrite=False, existing rows are left untouched."""
 
-    # Build INSERT statement
+    name = _sql_escape_literal(template.get("name", ""))
+    pd = _sql_escape_literal(template.get("polymorphic_discriminator", ""))
+    category = _sql_escape_literal(template.get("category", ""))
+    type_ = _sql_escape_literal(template.get("type", ""))
+    subtype = _sql_escape_literal(template.get("subtype", ""))
+    version = _sql_escape_literal(template.get("version", ""))
+    instance_prefix = _sql_escape_literal(template.get("instance_prefix", "GX"))
+    bstatus = _sql_escape_literal(template.get("bstatus", "active"))
+
+    instance_pi = template.get("instance_polymorphic_identity")
+    instance_pi_sql = f"'{_sql_escape_literal(instance_pi)}'" if instance_pi else "NULL"
+
+    json_addl = _sql_escape_literal(json.dumps(template.get("json_addl", {})))
+    if template.get("json_addl_schema") is None:
+        json_addl_schema_sql = "NULL"
+    else:
+        json_addl_schema_sql = f"'{_sql_escape_literal(json.dumps(template.get('json_addl_schema')))}'::jsonb"
+
+    is_singleton = str(bool(template.get("is_singleton", False))).upper()
+
+    if overwrite:
+        # Report whether we inserted (t) or updated (f)
+        sql = f"""
+        INSERT INTO generic_template (
+            name, polymorphic_discriminator, category, type, subtype, version,
+            instance_prefix, instance_polymorphic_identity, json_addl, json_addl_schema,
+            bstatus, is_singleton, is_deleted
+        ) VALUES (
+            '{name}',
+            '{pd}',
+            '{category}',
+            '{type_}',
+            '{subtype}',
+            '{version}',
+            '{instance_prefix}',
+            {instance_pi_sql},
+            '{json_addl}'::jsonb,
+            {json_addl_schema_sql},
+            '{bstatus}',
+            {is_singleton},
+            FALSE
+        )
+        ON CONFLICT (category, type, subtype, version)
+        DO UPDATE SET
+            name = EXCLUDED.name,
+            polymorphic_discriminator = EXCLUDED.polymorphic_discriminator,
+            instance_prefix = EXCLUDED.instance_prefix,
+            instance_polymorphic_identity = EXCLUDED.instance_polymorphic_identity,
+            json_addl = EXCLUDED.json_addl,
+            json_addl_schema = EXCLUDED.json_addl_schema,
+            bstatus = EXCLUDED.bstatus,
+            is_singleton = EXCLUDED.is_singleton,
+            is_deleted = FALSE
+        RETURNING (xmax = 0) AS inserted;
+        """
+        return _run_psql(env, sql=sql)
+
+    # overwrite=False: do not touch existing templates; return 1 iff inserted
     sql = f"""
     INSERT INTO generic_template (
         name, polymorphic_discriminator, category, type, subtype, version,
         instance_prefix, instance_polymorphic_identity, json_addl, json_addl_schema,
         bstatus, is_singleton, is_deleted
     ) VALUES (
-        '{template["name"].replace("'", "''")}',
-        '{template["polymorphic_discriminator"]}',
-        '{template["category"]}',
-        '{template["type"]}',
-        '{template["subtype"]}',
-        '{template["version"]}',
-        '{template.get("instance_prefix", "GX")}',
-        {f"'{template['instance_polymorphic_identity']}'" if template.get("instance_polymorphic_identity") else "NULL"},
+        '{name}',
+        '{pd}',
+        '{category}',
+        '{type_}',
+        '{subtype}',
+        '{version}',
+        '{instance_prefix}',
+        {instance_pi_sql},
         '{json_addl}'::jsonb,
-        {f"'{json_addl_schema}'::jsonb" if json_addl_schema != "NULL" else "NULL"},
-        '{template.get("bstatus", "active")}',
-        {str(template.get("is_singleton", False)).upper()},
+        {json_addl_schema_sql},
+        '{bstatus}',
+        {is_singleton},
         FALSE
     )
+    ON CONFLICT (category, type, subtype, version)
+    DO NOTHING
+    RETURNING 1;
     """
-
     return _run_psql(env, sql=sql)
 
 
-def _create_default_admin(env: Environment) -> bool:
+def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool:
     """Create default tapdb_admin user with password requiring change on first login.
 
     Returns True if user was created, False if already exists.
     """
+    if not insecure_dev_defaults:
+        console.print("  [dim]○[/dim] Skipping default admin creation (use --insecure-dev-defaults)")
+        return False
+    if env == Environment.prod:
+        console.print("  [red]✗[/red] Refusing to create default admin in prod")
+        return False
+
     from daylily_tapdb.cli.user import _hash_password
 
     # Check if user already exists
     check_sql = "SELECT 1 FROM tapdb_user WHERE username = 'tapdb_admin'"
     success, output = _run_psql(env, sql=check_sql)
 
-    if success and "1" in output:
+    if success and output.strip() == "1":
         console.print(f"  [green]✓[/green] Admin user already exists")
         return False
 
@@ -856,7 +957,7 @@ def db_seed(
     env: Environment = typer.Argument(..., help="Target environment"),
     config_path: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to config directory"),
     include_workflow: bool = typer.Option(False, "--include-workflow", "-w", help="Include workflow/action templates (optional)"),
-    skip_existing: bool = typer.Option(True, "--skip-existing/--overwrite", help="Skip existing templates"),
+    skip_existing: bool = typer.Option(True, "--skip-existing/--overwrite", help="Skip existing templates (overwrite uses upsert)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be seeded without making changes"),
 ):
     """Seed TAPDB with template definitions from config files.
@@ -924,7 +1025,7 @@ def db_seed(
     if dry_run:
         console.print(f"\n[bold]Templates to seed:[/bold]")
         for t in templates:
-            console.print(f"  • {t['polymorphic_discriminator']} ({t['name']})")
+            console.print(f"  • {_template_code(t)} ({t.get('name','')})")
         console.print(f"\n[dim]Dry run - no changes made.[/dim]")
         return
 
@@ -932,41 +1033,47 @@ def db_seed(
     console.print(f"\n[yellow]►[/yellow] Seeding templates...")
 
     inserted = 0
+    updated = 0
     skipped = 0
     failed = 0
 
     for template in templates:
-        pd = template["polymorphic_discriminator"]
-
-        # Check if exists
-        if _template_exists(env, pd):
-            if skip_existing:
-                console.print(f"  [dim]○[/dim] {pd} [dim](exists, skipped)[/dim]")
-                skipped += 1
-                continue
-            else:
-                # Delete existing
-                _run_psql(env, sql=f"DELETE FROM generic_template WHERE polymorphic_discriminator = '{pd}'")
-
-        # Insert template
-        success, output = _insert_template(env, template)
+        code = _template_code(template)
+        overwrite = not skip_existing
+        success, output = _upsert_template(env, template, overwrite=overwrite)
 
         if success:
-            console.print(f"  [green]✓[/green] {pd}")
-            inserted += 1
+            out = (output or "").strip().lower()
+            if overwrite:
+                # returns 't' if inserted, 'f' if updated
+                if out == "t":
+                    console.print(f"  [green]✓[/green] {code} [dim](inserted)[/dim]")
+                    inserted += 1
+                else:
+                    console.print(f"  [green]✓[/green] {code} [dim](updated)[/dim]")
+                    updated += 1
+            else:
+                if out == "1":
+                    console.print(f"  [green]✓[/green] {code} [dim](inserted)[/dim]")
+                    inserted += 1
+                else:
+                    console.print(f"  [dim]○[/dim] {code} [dim](exists, skipped)[/dim]")
+                    skipped += 1
         else:
-            console.print(f"  [red]✗[/red] {pd}")
+            console.print(f"  [red]✗[/red] {code}")
             console.print(f"      Error: {output[:100]}")
             failed += 1
 
     # Summary
     console.print(f"\n[bold]Seed Summary:[/bold]")
     console.print(f"  [green]Inserted:[/green] {inserted}")
+    if updated:
+        console.print(f"  [yellow]Updated:[/yellow]  {updated}")
     console.print(f"  [dim]Skipped:[/dim]  {skipped}")
     if failed > 0:
         console.print(f"  [red]Failed:[/red]   {failed}")
 
-    _log_operation(env.value, "SEED", f"Inserted {inserted}, skipped {skipped}, failed {failed}")
+    _log_operation(env.value, "SEED", f"Inserted {inserted}, updated {updated}, skipped {skipped}, failed {failed}")
 
     if failed > 0:
         raise typer.Exit(1)
@@ -977,6 +1084,11 @@ def db_setup(
     env: Environment = typer.Argument(..., help="Target environment"),
     force: bool = typer.Option(False, "--force", "-f", help="Reinitialize if exists"),
     include_workflow: bool = typer.Option(False, "--include-workflow", "-w", help="Include workflow/action templates"),
+    insecure_dev_defaults: bool = typer.Option(
+        False,
+        "--insecure-dev-defaults",
+        help="DEV ONLY: create default admin user (tapdb_admin/passw0rd)",
+    ),
 ):
     """Full database setup: create database, apply schema, seed templates.
 
@@ -1049,28 +1161,30 @@ def db_setup(
             _ensure_instance_prefix_sequence(env, p)
 
         inserted = 0
+        skipped = 0
         for template in templates:
-            pd = template["polymorphic_discriminator"]
-            if not _template_exists(env, pd):
-                success, _ = _insert_template(env, template)
-                if success:
-                    inserted += 1
+            ok, out = _upsert_template(env, template, overwrite=False)
+            if ok and (out or "").strip() == "1":
+                inserted += 1
+            elif ok:
+                skipped += 1
 
-        console.print(f"  [green]✓[/green] Seeded {inserted} templates")
+        console.print(f"  [green]✓[/green] Seeded {inserted} templates (skipped {skipped})")
     except FileNotFoundError:
         console.print(f"  [yellow]⚠[/yellow] No config directory found, skipping seed")
 
     # Step 4: Create default admin user
     console.print(f"\n[bold]Step 4/4: Create Admin User[/bold]")
-    _create_default_admin(env)
+    created_admin = _create_default_admin(env, insecure_dev_defaults=insecure_dev_defaults)
 
     # Summary
     console.print(f"\n[bold green]✓ TAPDB setup complete![/bold green]")
     console.print(f"\n[bold]Connection string:[/bold]")
     console.print(f"  {_get_connection_string(env)}")
-    console.print(f"\n[bold yellow]⚠ Default admin credentials:[/bold yellow]")
-    console.print(f"  Username: [cyan]tapdb_admin[/cyan]")
-    console.print(f"  Password: [cyan]passw0rd[/cyan]")
-    console.print(f"  [dim](Password change required on first login)[/dim]")
+    if created_admin:
+        console.print(f"\n[bold yellow]⚠ Default admin credentials:[/bold yellow]")
+        console.print(f"  Username: [cyan]tapdb_admin[/cyan]")
+        console.print(f"  Password: [cyan]passw0rd[/cyan]")
+        console.print(f"  [dim](Password change required on first login)[/dim]")
 
     _log_operation(env.value, "SETUP", "Full setup completed")

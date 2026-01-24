@@ -1,5 +1,6 @@
 """Integration tests for TAPDB CLI commands."""
 
+import json
 import os
 import subprocess
 import tempfile
@@ -10,6 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 from daylily_tapdb.cli import app
+import daylily_tapdb.cli as cli_mod
 from daylily_tapdb.cli.db import (
     Environment,
     _get_db_config,
@@ -21,6 +23,20 @@ from daylily_tapdb.cli.db import (
 )
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Keep CLI tests hermetic.
+
+    - Avoid touching the user's real ~/.tapdb PID/log files.
+    - Avoid probing unexpected environments (e.g. TAPDB_ENV=prod in a dev shell).
+    """
+    monkeypatch.setenv("TAPDB_ENV", "dev")
+    monkeypatch.delenv("TAPDB_TEST_DSN", raising=False)
+    monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
+    monkeypatch.setattr(cli_mod, "PID_FILE", tmp_path / "ui.pid")
+    monkeypatch.setattr(cli_mod, "LOG_FILE", tmp_path / "ui.log")
 
 
 class TestCLIMain:
@@ -43,10 +59,38 @@ class TestCLIMain:
 
     def test_info(self):
         """Test info command."""
-        result = runner.invoke(app, ["info"])
+        # Ensure we don't attempt real psql connections during unit tests.
+        with patch("shutil.which", return_value=None):
+            result = runner.invoke(app, ["info"])
         assert result.exit_code == 0
         assert "Version" in result.output
         assert "Python" in result.output
+        assert "DB probes" in result.output
+
+    def test_info_json(self):
+        """Test info --json output is valid JSON and has stable keys."""
+        # Ensure we don't attempt real psql connections during unit tests.
+        with patch("shutil.which", return_value=None):
+            result = runner.invoke(app, ["info", "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert "version" in payload
+        assert "python" in payload
+        assert "tapdb_env" in payload
+        assert "paths" in payload
+        assert "postgres" in payload
+
+    def test_info_check_all_envs_json(self):
+        """Test info --check-all-envs --json shape."""
+        with patch("shutil.which", return_value=None):
+            result = runner.invoke(app, ["info", "--check-all-envs", "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload.get("check_all_envs") is True
+        pg = payload.get("postgres")
+        assert isinstance(pg, dict)
+        for env_name in ["dev", "test", "prod"]:
+            assert env_name in pg
 
 
 class TestCLIUI:
@@ -75,19 +119,9 @@ class TestCLIUI:
 
     def test_ui_logs_no_file(self):
         """Test ui logs when no log file exists."""
-        # Remove log file if exists
-        log_file = Path.home() / ".tapdb" / "ui.log"
-        if log_file.exists():
-            log_file.rename(log_file.with_suffix(".log.bak"))
-        try:
-            result = runner.invoke(app, ["ui", "logs"])
-            assert result.exit_code == 0
-            assert "No log file" in result.output or "not found" in result.output.lower()
-        finally:
-            # Restore if we backed it up
-            bak = log_file.with_suffix(".log.bak")
-            if bak.exists():
-                bak.rename(log_file)
+        result = runner.invoke(app, ["ui", "logs"])
+        assert result.exit_code == 0
+        assert "No log file" in result.output or "not found" in result.output.lower()
 
 
 class TestCLIDB:

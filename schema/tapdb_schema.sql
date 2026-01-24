@@ -3,7 +3,7 @@
 -- PostgreSQL 13+ required
 
 -- Optional pgcrypto (provides gen_random_uuid()). Some minimal Postgres builds
--- (e.g. certain conda distributions) may not ship with contrib extensions.
+-- may not ship with contrib extensions.
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pgcrypto') THEN

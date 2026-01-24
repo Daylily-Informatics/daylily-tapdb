@@ -29,6 +29,7 @@ from admin.auth import (
     get_current_user, require_auth, require_admin,
     get_user_by_username, verify_password, update_last_login,
     update_password, get_user_permissions,
+    SESSION_COOKIE_NAME,
 )
 
 # Logging setup
@@ -43,7 +44,12 @@ STATIC_DIR = BASE_DIR / "static"
 # Jinja2 environment
 templates = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
 
-# Session secret key (use env var in production)
+APP_ENV = os.environ.get("TAPDB_ENV", "dev").lower()
+IS_PROD = APP_ENV == "prod"
+
+# Session secret key
+if IS_PROD and not os.environ.get("TAPDB_SESSION_SECRET"):
+    raise RuntimeError("Refusing to start in prod without TAPDB_SESSION_SECRET")
 SESSION_SECRET = os.environ.get("TAPDB_SESSION_SECRET", secrets.token_hex(32))
 
 # FastAPI app
@@ -54,17 +60,42 @@ app = FastAPI(
 )
 
 # Session middleware (must be added before CORS)
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=86400)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    session_cookie=SESSION_COOKIE_NAME,
+    max_age=86400,
+    same_site="lax",
+    https_only=IS_PROD,
+)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# CORS middleware
+def _parse_allowed_origins(raw: str) -> List[str]:
+    return [v.strip() for v in (raw or "").split(",") if v.strip()]
+
+
+allowed_origins_raw = os.environ.get("TAPDB_ADMIN_ALLOWED_ORIGINS", "")
+allowed_origins = _parse_allowed_origins(allowed_origins_raw)
+
+if IS_PROD:
+    # In prod we refuse to start unless CORS is explicitly configured.
+    # (Also reject common foot-gun values like whitespace-only or '*'.)
+    if not allowed_origins:
+        raise RuntimeError("Refusing to start in prod without TAPDB_ADMIN_ALLOWED_ORIGINS")
+    if any(o == "*" for o in allowed_origins):
+        raise RuntimeError("Refusing to start in prod with wildcard CORS origin '*'")
+else:
+    if not allowed_origins:
+        # Safe local dev defaults
+        allowed_origins = ["http://localhost:8000", "http://127.0.0.1:8000"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 

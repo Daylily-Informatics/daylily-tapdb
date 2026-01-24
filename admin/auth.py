@@ -3,7 +3,6 @@ TAPDB Admin Authentication.
 
 Session-based authentication with role-based access control.
 """
-import hashlib
 import os
 from functools import wraps
 from typing import Optional, Callable, Any
@@ -13,6 +12,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import text
 
 from daylily_tapdb import TAPDBConnection
+from daylily_tapdb.passwords import hash_password, verify_password
 
 
 # Session cookie settings
@@ -37,24 +37,6 @@ def get_db() -> TAPDBConnection:
         db_pass=db_pass,
         db_name=db_name,
     )
-
-
-def verify_password(password: str, stored_hash: str) -> bool:
-    """Verify password against stored hash (salt:hash format)."""
-    if not stored_hash or ":" not in stored_hash:
-        return False
-    salt, hash_val = stored_hash.split(":", 1)
-    hash_obj = hashlib.sha256((salt + password).encode())
-    return hash_obj.hexdigest() == hash_val
-
-
-def hash_password(password: str) -> str:
-    """Hash password with salt using SHA-256."""
-    import secrets
-    salt = secrets.token_hex(16)
-    hash_obj = hashlib.sha256((salt + password).encode())
-    return f"{salt}:{hash_obj.hexdigest()}"
-
 
 def get_user_by_username(username: str) -> Optional[dict]:
     """Fetch user from database by username."""
