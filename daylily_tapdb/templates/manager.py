@@ -1,8 +1,16 @@
-"""Template management for TAPDB."""
+"""Template management for TAPDB.
+
+Phase 2 policy:
+- DB templates are the runtime source-of-truth
+- Core library methods accept an explicit SQLAlchemy Session
+- Do not cache ORM objects across sessions (cache IDs instead)
+"""
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy.orm import Session
 
 from daylily_tapdb.models.template import generic_template
 
@@ -19,19 +27,20 @@ class TemplateManager:
     - Resolve template codes to template objects
     """
 
-    def __init__(self, db, config_path: Optional[Path] = None):
+    def __init__(self, config_path: Optional[Path] = None):
         """
         Initialize template manager.
 
         Args:
-            db: TAPDBConnection instance.
-            config_path: Path to template configuration directory.
+            config_path: Optional path to template configuration directory
+                (used by seeding tooling; DB remains the runtime source-of-truth).
         """
-        self.db = db
         self.config_path = config_path
-        self._template_cache: Dict[str, generic_template] = {}
+        # Cache IDs only to avoid detached ORM objects.
+        self._template_uuid_cache: Dict[str, Any] = {}
+        self._template_euid_cache: Dict[str, Any] = {}
 
-    def get_template(self, template_code: str) -> Optional[generic_template]:
+    def get_template(self, session: Session, template_code: str) -> Optional[generic_template]:
         """
         Get a template by its code string.
 
@@ -44,9 +53,11 @@ class TemplateManager:
         Returns:
             The template object, or None if not found.
         """
-        # Check cache first
-        if template_code in self._template_cache:
-            return self._template_cache[template_code]
+        cached_uuid = self._template_uuid_cache.get(template_code)
+        if cached_uuid is not None:
+            tmpl = session.get(generic_template, cached_uuid)
+            if tmpl is not None and tmpl.is_deleted is False:
+                return tmpl
 
         # Parse template code
         parts = template_code.strip("/").split("/")
@@ -56,8 +67,6 @@ class TemplateManager:
 
         category, type_, subtype, version = parts
 
-        # Query database
-        session = self.db.get_session()
         template = session.query(generic_template).filter(
             generic_template.category == category,
             generic_template.type == type_,
@@ -67,11 +76,12 @@ class TemplateManager:
         ).first()
 
         if template:
-            self._template_cache[template_code] = template
+            self._template_uuid_cache[template_code] = template.uuid
+            self._template_euid_cache[template.euid] = template.uuid
 
         return template
 
-    def get_template_by_euid(self, euid: str) -> Optional[generic_template]:
+    def get_template_by_euid(self, session: Session, euid: str) -> Optional[generic_template]:
         """
         Get a template by its EUID.
 
@@ -81,18 +91,28 @@ class TemplateManager:
         Returns:
             The template object, or None if not found.
         """
-        session = self.db.get_session()
-        return session.query(generic_template).filter(
+        cached_uuid = self._template_euid_cache.get(euid)
+        if cached_uuid is not None:
+            tmpl = session.get(generic_template, cached_uuid)
+            if tmpl is not None and tmpl.is_deleted is False:
+                return tmpl
+
+        tmpl = session.query(generic_template).filter(
             generic_template.euid == euid,
-            generic_template.is_deleted == False
+            generic_template.is_deleted == False,
         ).first()
+        if tmpl is not None:
+            self._template_euid_cache[euid] = tmpl.uuid
+        return tmpl
 
     def clear_cache(self):
         """Clear the template cache."""
-        self._template_cache.clear()
+        self._template_uuid_cache.clear()
+        self._template_euid_cache.clear()
 
     def list_templates(
         self,
+        session: Session,
         category: Optional[str] = None,
         type_: Optional[str] = None,
         include_deleted: bool = False
@@ -108,7 +128,6 @@ class TemplateManager:
         Returns:
             List of matching templates.
         """
-        session = self.db.get_session()
         query = session.query(generic_template)
 
         if not include_deleted:

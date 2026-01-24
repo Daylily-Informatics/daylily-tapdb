@@ -20,6 +20,12 @@
         "assay_type": "assay",
         "expected_inputs": ["content/specimen/blood-whole/1.0"],
         "expected_outputs": ["content/nucleic-acid/gdna/1.0"],
+	        "action_imports": {
+	          "create_note": "action/core/create-note/1.0",
+	          "update_status": "action/core/update-status/1.0",
+	          "link_objects": "action/core/link-objects/1.0",
+	          "soft_delete": "action/core/soft-delete/1.0"
+	        },
         "instantiation_layouts": [
           {
             "child_templates": [
@@ -56,6 +62,12 @@
         "assay_type": "assay",
         "expected_inputs": ["content/specimen/blood-whole/1.0"],
         "expected_outputs": ["content/nucleic-acid/gdna/1.0"],
+	        "action_imports": {
+	          "create_note": "action/core/create-note/1.0",
+	          "update_status": "action/core/update-status/1.0",
+	          "link_objects": "action/core/link-objects/1.0",
+	          "soft_delete": "action/core/soft-delete/1.0"
+	        },
         "instantiation_layouts": [
           {
             "child_templates": [
@@ -92,6 +104,12 @@
         "assay_type": "accessioning",
         "expected_inputs": [],
         "expected_outputs": [],
+	        "action_imports": {
+	          "create_note": "action/core/create-note/1.0",
+	          "update_status": "action/core/update-status/1.0",
+	          "link_objects": "action/core/link-objects/1.0",
+	          "soft_delete": "action/core/soft-delete/1.0"
+	        },
         "instantiation_layouts": [
           {
             "child_templates": [
@@ -127,6 +145,12 @@
         "assay_type": "accessioning",
         "expected_inputs": [],
         "expected_outputs": [],
+	        "action_imports": {
+	          "create_note": "action/core/create-note/1.0",
+	          "update_status": "action/core/update-status/1.0",
+	          "link_objects": "action/core/link-objects/1.0",
+	          "soft_delete": "action/core/soft-delete/1.0"
+	        },
         "instantiation_layouts": [
           {
             "child_templates": [

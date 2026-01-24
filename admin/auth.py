@@ -59,15 +59,18 @@ def hash_password(password: str) -> str:
 def get_user_by_username(username: str) -> Optional[dict]:
     """Fetch user from database by username."""
     with get_db() as conn:
-        result = conn.session.execute(
-            text("""
-                SELECT uuid, username, email, display_name, role, is_active,
-                       require_password_change, password_hash
-                FROM tapdb_user
-                WHERE username = :username AND is_active = TRUE
-            """),
-            {"username": username}
-        ).fetchone()
+        # Best-effort attribution for audit triggers.
+        conn.app_username = username
+        with conn.session_scope() as session:
+            result = session.execute(
+                text("""
+                    SELECT uuid, username, email, display_name, role, is_active,
+                           require_password_change, password_hash
+                    FROM tapdb_user
+                    WHERE username = :username AND is_active = TRUE
+                """),
+                {"username": username}
+            ).fetchone()
         
         if result:
             return {
@@ -86,15 +89,17 @@ def get_user_by_username(username: str) -> Optional[dict]:
 def get_user_by_uuid(user_uuid: str) -> Optional[dict]:
     """Fetch user from database by UUID."""
     with get_db() as conn:
-        result = conn.session.execute(
-            text("""
-                SELECT uuid, username, email, display_name, role, is_active,
-                       require_password_change
-                FROM tapdb_user
-                WHERE uuid = :uuid AND is_active = TRUE
-            """),
-            {"uuid": user_uuid}
-        ).fetchone()
+        conn.app_username = "system"
+        with conn.session_scope() as session:
+            result = session.execute(
+                text("""
+                    SELECT uuid, username, email, display_name, role, is_active,
+                           require_password_change
+                    FROM tapdb_user
+                    WHERE uuid = :uuid AND is_active = TRUE
+                """),
+                {"uuid": user_uuid}
+            ).fetchone()
         
         if result:
             return {
@@ -112,26 +117,28 @@ def get_user_by_uuid(user_uuid: str) -> Optional[dict]:
 def update_last_login(user_uuid: str) -> None:
     """Update user's last login timestamp."""
     with get_db() as conn:
-        conn.session.execute(
-            text("UPDATE tapdb_user SET last_login_dt = NOW() WHERE uuid = :uuid"),
-            {"uuid": user_uuid}
-        )
-        conn.session.commit()
+        conn.app_username = "system"
+        with conn.session_scope(commit=True) as session:
+            session.execute(
+                text("UPDATE tapdb_user SET last_login_dt = NOW() WHERE uuid = :uuid"),
+                {"uuid": user_uuid}
+            )
 
 
 def update_password(user_uuid: str, new_password: str) -> None:
     """Update user's password and clear require_password_change flag."""
     pw_hash = hash_password(new_password)
     with get_db() as conn:
-        conn.session.execute(
-            text("""
-                UPDATE tapdb_user 
-                SET password_hash = :hash, require_password_change = FALSE, modified_dt = NOW()
-                WHERE uuid = :uuid
-            """),
-            {"hash": pw_hash, "uuid": user_uuid}
-        )
-        conn.session.commit()
+        conn.app_username = "system"
+        with conn.session_scope(commit=True) as session:
+            session.execute(
+                text("""
+                    UPDATE tapdb_user 
+                    SET password_hash = :hash, require_password_change = FALSE, modified_dt = NOW()
+                    WHERE uuid = :uuid
+                """),
+                {"hash": pw_hash, "uuid": user_uuid}
+            )
 
 
 async def get_current_user(request: Request) -> Optional[dict]:

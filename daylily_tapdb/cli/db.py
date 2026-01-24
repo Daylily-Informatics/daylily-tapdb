@@ -18,6 +18,101 @@ from rich.prompt import Prompt, Confirm
 console = Console()
 
 
+def _normalize_instance_prefix(prefix: str) -> str:
+    """Normalize/validate an instance_prefix.
+
+    Phase 1 rule: prefixes drive per-prefix sequences; missing/invalid prefixes should fail early.
+    """
+    if prefix is None:
+        raise ValueError("instance_prefix cannot be None")
+    normalized = str(prefix).strip().upper()
+    if not normalized:
+        raise ValueError("instance_prefix cannot be empty")
+    if not normalized.isalpha():
+        raise ValueError(f"instance_prefix must be letters only (A-Z), got: {prefix!r}")
+    return normalized
+
+
+def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
+    """Create + initialize the per-prefix instance sequence.
+
+    Sequence init algorithm (REFACTOR_TAPDB.md Phase 1):
+    next nextval() should yield max(existing numeric suffix) + 1.
+    """
+    prefix = _normalize_instance_prefix(prefix)
+    seq_name = f"{prefix.lower()}_instance_seq"
+
+    sql = f"""
+    CREATE SEQUENCE IF NOT EXISTS {seq_name};
+
+    -- Initialize sequence so next nextval() yields max(existing numeric suffix) + 1.
+    -- Also: never move the sequence backwards (avoid reusing previously-issued EUIs).
+    WITH
+      desired AS (
+        SELECT
+          COALESCE(
+            (
+              SELECT max(NULLIF(regexp_replace(euid, '[^0-9]', '', 'g'), '')::bigint)
+              FROM generic_instance
+              WHERE euid LIKE '{prefix}%'
+            ),
+            0
+          ) + 1 AS next_val
+      ),
+      seq_state AS (
+        SELECT last_value, is_called FROM {seq_name}
+      ),
+      seq_next AS (
+        SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END AS next_val
+        FROM seq_state
+      ),
+      final_next AS (
+        SELECT GREATEST((SELECT next_val FROM desired), (SELECT next_val FROM seq_next)) AS next_val
+      )
+    SELECT setval('{seq_name}', (SELECT next_val FROM final_next), false);
+    """
+
+    success, output = _run_psql(env, sql=sql)
+    if not success:
+        raise RuntimeError(f"Failed to ensure sequence for prefix {prefix}: {output[:200]}")
+
+
+def _write_migration_baseline(env: "Environment") -> None:
+    """Write a migration baseline so fresh installs never apply legacy migrations."""
+    migrations_dir = Path(__file__).parent.parent.parent / "schema" / "migrations"
+    if not migrations_dir.exists():
+        return
+
+    migration_files = sorted(migrations_dir.glob("*.sql"))
+    if not migration_files:
+        return
+
+    # Ensure tracking table exists (also created by base schema on fresh installs)
+    ok, out = _run_psql(
+        env,
+        sql="""
+        CREATE TABLE IF NOT EXISTS _tapdb_migrations (
+            filename TEXT PRIMARY KEY,
+            applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+    )
+    if not ok:
+        raise RuntimeError(out)
+
+    for mf in migration_files:
+        filename = mf.name.replace("'", "''")
+        ok, out = _run_psql(
+            env,
+            sql=(
+                "INSERT INTO _tapdb_migrations (filename) "
+                f"VALUES ('{filename}') ON CONFLICT (filename) DO NOTHING"
+            ),
+        )
+        if not ok:
+            raise RuntimeError(out)
+
+
 def _get_project_root() -> Path:
     """Get the project root directory."""
     current = Path(__file__).resolve()
@@ -255,6 +350,14 @@ def db_create(
         _log_operation(env.value, "CREATE", f"Schema applied from {schema_file}")
         console.print(f"[green]✓[/green] Schema created successfully")
 
+        # Write migration baseline so fresh installs don't try to re-apply migrations.
+        # (Migrations are only for evolving existing databases.)
+        try:
+            _write_migration_baseline(env)
+        except Exception as e:
+            console.print(f"[red]✗[/red] Failed to write migration baseline: {e}")
+            raise typer.Exit(1)
+
         # Show table status
         console.print("\n[bold]Tables created:[/bold]")
         for table in ["generic_template", "generic_instance", "generic_instance_lineage", "audit_log"]:
@@ -398,7 +501,8 @@ def db_nuke(
 
     -- Drop sequences
     DROP SEQUENCE IF EXISTS generic_template_seq;
-    DROP SEQUENCE IF EXISTS generic_instance_seq;
+	    DROP SEQUENCE IF EXISTS gx_instance_seq;
+	    DROP SEQUENCE IF EXISTS generic_instance_seq;
     DROP SEQUENCE IF EXISTS generic_instance_lineage_seq;
     DROP SEQUENCE IF EXISTS audit_log_seq;
     DROP SEQUENCE IF EXISTS wx_instance_seq;
@@ -456,18 +560,23 @@ def db_migrate(
         console.print("[dim]No migration files found. Schema is up to date.[/dim]")
         return
 
-    # Track applied migrations (store in a migrations table)
-    _run_psql(env, sql="""
+    # Track applied migrations
+    ok, out = _run_psql(
+        env,
+        sql="""
         CREATE TABLE IF NOT EXISTS _tapdb_migrations (
-            id SERIAL PRIMARY KEY,
-            filename TEXT UNIQUE NOT NULL,
-            applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+            filename TEXT PRIMARY KEY,
+            applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+    )
+    if not ok:
+        console.print(f"[red]✗[/red] Failed to ensure migrations table:\n{out}")
+        raise typer.Exit(1)
 
-    # Get already applied migrations
+    # Get already applied migrations (parse conservatively from default psql output)
     success, output = _run_psql(env, sql="SELECT filename FROM _tapdb_migrations")
-    applied = set(output.split()) if success else set()
+    applied = {ln.strip() for ln in output.splitlines() if ln.strip().endswith(".sql")} if success else set()
 
     pending = [f for f in migration_files if f.name not in applied]
 
@@ -489,7 +598,14 @@ def db_migrate(
 
         if success:
             # Record migration
-            _run_psql(env, sql=f"INSERT INTO _tapdb_migrations (filename) VALUES ('{mf.name}')")
+            filename = mf.name.replace("'", "''")
+            _run_psql(
+                env,
+                sql=(
+                    "INSERT INTO _tapdb_migrations (filename) "
+                    f"VALUES ('{filename}') ON CONFLICT (filename) DO NOTHING"
+                ),
+            )
             console.print(f"[green]✓[/green] {mf.name} applied")
             _log_operation(env.value, "MIGRATE", mf.name)
         else:
@@ -786,6 +902,15 @@ def db_seed(
 
     console.print(f"[green]✓[/green] Found {len(templates)} template(s)")
 
+    # Ensure per-prefix sequences exist + are initialized safely (Phase 1)
+    prefixes = sorted({_normalize_instance_prefix(t.get("instance_prefix", "GX")) for t in templates})
+    console.print(f"[yellow]►[/yellow] Ensuring {len(prefixes)} instance-prefix sequence(s)...")
+    for p in prefixes:
+        if dry_run:
+            console.print(f"  [dim]○[/dim] would ensure {p.lower()}_instance_seq")
+        else:
+            _ensure_instance_prefix_sequence(env, p)
+
     # Group by category for display
     by_type = {}
     for t in templates:
@@ -903,6 +1028,8 @@ def db_setup(
         success, output = _run_psql(env, file=schema_file)
         if success:
             console.print(f"  [green]✓[/green] Schema applied")
+            # Ensure fresh installs never attempt to apply legacy migrations.
+            _write_migration_baseline(env)
         else:
             console.print(f"  [red]✗[/red] Failed: {output[:200]}")
             raise typer.Exit(1)
@@ -915,6 +1042,11 @@ def db_setup(
     try:
         config_dir = _find_config_dir()
         templates = _load_template_configs(config_dir, include_optional=include_workflow)
+
+        # Ensure per-prefix instance sequences exist before anything starts inserting instances.
+        prefixes = sorted({_normalize_instance_prefix(t.get("instance_prefix", "GX")) for t in templates})
+        for p in prefixes:
+            _ensure_instance_prefix_sequence(env, p)
 
         inserted = 0
         for template in templates:

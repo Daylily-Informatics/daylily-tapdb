@@ -1,12 +1,16 @@
-"""
-TAPDB Core Base Class.
+"""TAPDB Core Base Class.
 
-Defines the abstract base class for all TAPDB entities with common columns.
-All columns use server_default/server_onupdate - the database owns these values.
+Defines the abstract base class for the TAPDB core tables.
+
+Phase 2 spec: ORM must match schema:
+- TIMESTAMPTZ => DateTime(timezone=True)
+- JSONB => sqlalchemy.dialects.postgresql.JSONB
+- non-nullability should match schema defaults/constraints
 """
-from sqlalchemy import Column, Text, TIMESTAMP, JSON, BOOLEAN, FetchedValue
-from sqlalchemy.dialects.postgresql import UUID
+
 import sqlalchemy.orm as sqla_orm
+from sqlalchemy import Boolean, Column, DateTime, FetchedValue, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 Base = sqla_orm.declarative_base()
 
@@ -36,26 +40,47 @@ class tapdb_core(Base):
     """
     __abstract__ = True
 
-    uuid = Column(UUID, primary_key=True, nullable=True, server_default=FetchedValue())
-    euid = Column(Text, nullable=True, server_default=FetchedValue())
-    name = Column(Text, nullable=True)
+    # DB-owned identifiers
+    uuid = Column(UUID, primary_key=True, nullable=False, server_default=FetchedValue())
+    euid = Column(Text, nullable=False, server_default=FetchedValue())
 
-    created_dt = Column(TIMESTAMP, nullable=True, server_default=FetchedValue())
-    modified_dt = Column(TIMESTAMP, nullable=True, server_default=FetchedValue())
+    # Application-managed display name
+    name = Column(Text, nullable=False)
 
-    polymorphic_discriminator = Column(Text, nullable=True)
+    # DB-owned timestamps
+    created_dt = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=FetchedValue(),
+    )
+    modified_dt = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        server_default=FetchedValue(),
+        server_onupdate=FetchedValue(),
+    )
 
-    category = Column(Text, nullable=True)
-    type = Column(Text, nullable=True)
-    subtype = Column(Text, nullable=True)
-    version = Column(Text, nullable=True)
+    # Type hierarchy
+    polymorphic_discriminator = Column(Text, nullable=False)
+    category = Column(Text, nullable=False)
+    type = Column(Text, nullable=False)
+    subtype = Column(Text, nullable=False)
+    version = Column(Text, nullable=False)
 
-    bstatus = Column(Text, nullable=True)
+    # Business status
+    bstatus = Column(Text, nullable=False)
 
-    json_addl = Column(JSON, nullable=True)
+    # Flexible storage (JSONB)
+    json_addl = Column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=FetchedValue(),
+    )
 
-    is_singleton = Column(BOOLEAN, nullable=False, server_default=FetchedValue())
-    is_deleted = Column(BOOLEAN, nullable=True, server_default=FetchedValue())
+    # Lifecycle flags
+    is_singleton = Column(Boolean, nullable=False, server_default=FetchedValue())
+    is_deleted = Column(Boolean, nullable=False, server_default=FetchedValue())
 
     @staticmethod
     def sort_by_euid(items: list) -> list:

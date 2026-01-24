@@ -2,8 +2,10 @@
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
+from uuid import UUID
 from typing import Dict, Optional, Any
 
+from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from daylily_tapdb.models.instance import generic_instance, action_instance
@@ -26,17 +28,16 @@ class ActionDispatcher(ABC):
                 return {"status": "success", "message": "Status updated"}
     """
 
-    def __init__(self, db):
-        """
-        Initialize action dispatcher.
+    def __init__(self):
+        """Initialize action dispatcher.
 
-        Args:
-            db: TAPDBConnection instance.
+        Phase 2 moonshot: dispatcher does not own DB connections/sessions.
+        Callers pass an explicit Session into execute_action().
         """
-        self.db = db
 
     def execute_action(
         self,
+        session: Session,
         instance: generic_instance,
         action_group: str,
         action_key: str,
@@ -89,7 +90,7 @@ class ActionDispatcher(ABC):
         # Create action record if requested
         if create_action_record and result.get("status") == "success":
             self._create_action_record(
-                instance, action_group, action_key, action_ds,
+                session, instance, action_group, action_key, action_ds,
                 captured_data, result, user
             )
 
@@ -119,6 +120,7 @@ class ActionDispatcher(ABC):
 
     def _create_action_record(
         self,
+        session: Session,
         instance: generic_instance,
         action_group: str,
         action_key: str,
@@ -128,6 +130,19 @@ class ActionDispatcher(ABC):
         user: Optional[str]
     ):
         """Create an action_instance record for audit/scheduling."""
+        action_template_uuid = action_ds.get("action_template_uuid")
+        if not action_template_uuid:
+            raise ValueError(
+                "action_ds is missing required 'action_template_uuid'. "
+                "Instances must be created with Phase 2 action materialization."
+            )
+
+        template_uuid = (
+            UUID(action_template_uuid)
+            if isinstance(action_template_uuid, str)
+            else action_template_uuid
+        )
+
         # This creates a first-class action record (XX prefix)
         action_record = action_instance(
             name=f"{action_key}@{instance.euid}",
@@ -136,7 +151,7 @@ class ActionDispatcher(ABC):
             type="action",
             subtype=action_key,
             version="1.0",
-            template_uuid=instance.template_uuid,
+            template_uuid=template_uuid,
             json_addl={
                 "target_instance_uuid": str(instance.uuid),
                 "target_instance_euid": instance.euid,
@@ -151,5 +166,5 @@ class ActionDispatcher(ABC):
             bstatus="completed"
         )
 
-        session = self.db.get_session()
         session.add(action_record)
+        session.flush()

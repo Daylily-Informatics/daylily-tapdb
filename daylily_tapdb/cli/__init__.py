@@ -5,6 +5,7 @@ import signal
 import subprocess
 import sys
 import time
+import importlib.util
 from pathlib import Path
 from typing import Optional
 
@@ -15,35 +16,13 @@ from rich.table import Table
 console = Console()
 
 
-def _check_aws_env() -> None:
-    """Check required AWS environment variables are set correctly.
-
-    Raises SystemExit if:
-    - AWS_PROFILE is not set, empty, or set to 'default'
-    - AWS_DEFAULT_REGION is not set or empty
-    """
-    errors = []
-
-    # Check AWS_PROFILE
-    aws_profile = os.environ.get("AWS_PROFILE", "")
-    if not aws_profile:
-        errors.append("AWS_PROFILE is not set")
-    elif aws_profile == "default":
-        errors.append("AWS_PROFILE cannot be 'default' — set a specific profile")
-
-    # Check AWS_DEFAULT_REGION
-    aws_default_region = os.environ.get("AWS_DEFAULT_REGION", "")
-    if not aws_default_region:
-        errors.append("AWS_DEFAULT_REGION is not set")
-
-    if errors:
-        console.print("[bold red]✗ AWS environment check failed:[/bold red]")
-        for err in errors:
-            console.print(f"  [red]•[/red] {err}")
-        console.print("\n[dim]Set required variables before running tapdb:[/dim]")
-        console.print("  export AWS_PROFILE=your-profile")
-        console.print("  export AWS_DEFAULT_REGION=us-west-2")
-        raise SystemExit(1)
+def _require_admin_extras() -> None:
+    """Fail fast with a clear message if Admin UI extras aren't installed."""
+    # We only need to ensure uvicorn is present here; FastAPI/etc are imported by admin.main.
+    if importlib.util.find_spec("uvicorn") is None:
+        console.print("[red]✗[/red] Admin UI dependencies are not installed.")
+        console.print("  Install with: [cyan]pip install 'daylily-tapdb[admin]'[/cyan]")
+        raise typer.Exit(1)
 
 
 # Import subcommand modules
@@ -52,16 +31,10 @@ from daylily_tapdb.cli.pg import pg_app
 from daylily_tapdb.cli.user import user_app
 
 
-def _callback() -> None:
-    """Callback that runs before any command."""
-    _check_aws_env()
-
-
 app = typer.Typer(
     name="tapdb",
     help="TAPDB - Templated Abstract Polymorphic Database CLI",
     add_completion=True,
-    callback=_callback,
 )
 ui_app = typer.Typer(help="Admin UI management commands")
 app.add_typer(ui_app, name="ui")
@@ -119,6 +92,8 @@ def ui_start(
 ):
     """Start the TAPDB Admin UI server."""
     _ensure_dir()
+
+    _require_admin_extras()
 
     # Check if already running
     pid = _get_pid()

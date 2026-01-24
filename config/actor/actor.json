@@ -19,6 +19,12 @@
           "external_id": "",
           "comments": ""
         },
+	        "action_imports": {
+	          "create_note": "action/core/create-note/1.0",
+	          "update_status": "action/core/update-status/1.0",
+	          "link_objects": "action/core/link-objects/1.0",
+	          "soft_delete": "action/core/soft-delete/1.0"
+	        },
         "expected_inputs": [],
         "expected_outputs": [],
         "instantiation_layouts": [],

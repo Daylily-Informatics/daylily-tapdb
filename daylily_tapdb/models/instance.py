@@ -7,7 +7,7 @@ Instances are concrete objects created from templates.
 from typing import List, Optional, Dict, Any
 from sqlalchemy import Column, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 
 from daylily_tapdb.models.base import tapdb_core
 
@@ -26,23 +26,32 @@ class generic_instance(tapdb_core):
     __mapper_args__ = {
         "polymorphic_identity": "generic_instance",
         "polymorphic_on": "polymorphic_discriminator",
+        # Soft delete is implemented via BEFORE DELETE trigger that returns NULL,
+        # so PostgreSQL reports 0 rows deleted. Tell SQLAlchemy not to expect
+        # a matched rowcount.
+        "confirm_deleted_rows": False,
     }
 
-    template_uuid = Column(UUID, ForeignKey("generic_template.uuid"), nullable=True)
+    template_uuid = Column(UUID, ForeignKey("generic_template.uuid"), nullable=False)
 
     # Lineage relationships
     parent_of_lineages = relationship(
         "generic_instance_lineage",
         primaryjoin="and_(generic_instance.uuid == foreign(generic_instance_lineage.parent_instance_uuid))",
-        backref="parent_instance",
+        backref=backref("parent_instance", passive_deletes=True),
         lazy="dynamic",
+        # TAPDB uses DB triggers for soft delete; rows are not physically removed.
+        # Prevent SQLAlchemy from trying to NULL out NOT NULL FK columns on delete.
+        passive_deletes=True,
     )
 
     child_of_lineages = relationship(
         "generic_instance_lineage",
         primaryjoin="and_(generic_instance.uuid == foreign(generic_instance_lineage.child_instance_uuid))",
-        backref="child_instance",
+        backref=backref("child_instance", passive_deletes=True),
         lazy="dynamic",
+        # Same rationale as parent_of_lineages.
+        passive_deletes=True,
     )
 
     def get_sorted_parent_of_lineages(
@@ -135,59 +144,59 @@ class generic_instance(tapdb_core):
 # Typed instance subclasses for polymorphic identity
 class workflow_instance(generic_instance):
     """Instance of a workflow."""
-    __mapper_args__ = {"polymorphic_identity": "workflow_instance"}
+    __mapper_args__ = {"polymorphic_identity": "workflow_instance", "confirm_deleted_rows": False}
 
 
 class workflow_step_instance(generic_instance):
     """Instance of a workflow step."""
-    __mapper_args__ = {"polymorphic_identity": "workflow_step_instance"}
+    __mapper_args__ = {"polymorphic_identity": "workflow_step_instance", "confirm_deleted_rows": False}
 
 
 class container_instance(generic_instance):
     """Instance of a container (plate, tube, etc.)."""
-    __mapper_args__ = {"polymorphic_identity": "container_instance"}
+    __mapper_args__ = {"polymorphic_identity": "container_instance", "confirm_deleted_rows": False}
 
 
 class content_instance(generic_instance):
     """Instance of content (sample, reagent, etc.)."""
-    __mapper_args__ = {"polymorphic_identity": "content_instance"}
+    __mapper_args__ = {"polymorphic_identity": "content_instance", "confirm_deleted_rows": False}
 
 
 class equipment_instance(generic_instance):
     """Instance of equipment."""
-    __mapper_args__ = {"polymorphic_identity": "equipment_instance"}
+    __mapper_args__ = {"polymorphic_identity": "equipment_instance", "confirm_deleted_rows": False}
 
 
 class data_instance(generic_instance):
     """Instance of a data object."""
-    __mapper_args__ = {"polymorphic_identity": "data_instance"}
+    __mapper_args__ = {"polymorphic_identity": "data_instance", "confirm_deleted_rows": False}
 
 
 class test_requisition_instance(generic_instance):
     """Instance of a test requisition."""
-    __mapper_args__ = {"polymorphic_identity": "test_requisition_instance"}
+    __mapper_args__ = {"polymorphic_identity": "test_requisition_instance", "confirm_deleted_rows": False}
 
 
 class actor_instance(generic_instance):
     """Instance of an actor (user, system, etc.)."""
-    __mapper_args__ = {"polymorphic_identity": "actor_instance"}
+    __mapper_args__ = {"polymorphic_identity": "actor_instance", "confirm_deleted_rows": False}
 
 
 class action_instance(generic_instance):
     """Instance of an action (audit record)."""
-    __mapper_args__ = {"polymorphic_identity": "action_instance"}
+    __mapper_args__ = {"polymorphic_identity": "action_instance", "confirm_deleted_rows": False}
 
 
 class health_event_instance(generic_instance):
     """Instance of a health event."""
-    __mapper_args__ = {"polymorphic_identity": "health_event_instance"}
+    __mapper_args__ = {"polymorphic_identity": "health_event_instance", "confirm_deleted_rows": False}
 
 
 class file_instance(generic_instance):
     """Instance of a file."""
-    __mapper_args__ = {"polymorphic_identity": "file_instance"}
+    __mapper_args__ = {"polymorphic_identity": "file_instance", "confirm_deleted_rows": False}
 
 
 class subject_instance(generic_instance):
     """Instance of a subject (patient, participant, etc.)."""
-    __mapper_args__ = {"polymorphic_identity": "subject_instance"}
+    __mapper_args__ = {"polymorphic_identity": "subject_instance", "confirm_deleted_rows": False}

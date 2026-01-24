@@ -246,9 +246,11 @@ async def index(request: Request):
     permissions = get_user_permissions(user)
 
     with get_db() as conn:
-        template_count = conn.session.query(generic_template).filter_by(is_deleted=False).count()
-        instance_count = conn.session.query(generic_instance).filter_by(is_deleted=False).count()
-        lineage_count = conn.session.query(generic_instance_lineage).filter_by(is_deleted=False).count()
+        conn.app_username = user.get("username")
+        with conn.session_scope() as session:
+            template_count = session.query(generic_template).filter_by(is_deleted=False).count()
+            instance_count = session.query(generic_instance).filter_by(is_deleted=False).count()
+            lineage_count = session.query(generic_instance_lineage).filter_by(is_deleted=False).count()
 
     content = templates.get_template("index.html").render(
         request=request,
@@ -274,33 +276,36 @@ async def list_templates(
     user = request.state.user
     permissions = get_user_permissions(user)
 
+
     with get_db() as conn:
-        query = conn.session.query(generic_template).filter_by(is_deleted=False)
-        if category:
-            query = query.filter_by(category=category)
-        query = query.order_by(generic_template.category, generic_template.type)
+        conn.app_username = user.get("username")
+        with conn.session_scope() as session:
+            query = session.query(generic_template).filter_by(is_deleted=False)
+            if category:
+                query = query.filter_by(category=category)
+            query = query.order_by(generic_template.category, generic_template.type)
 
-        total = query.count()
-        items = query.offset((page - 1) * page_size).limit(page_size).all()
+            total = query.count()
+            items = query.offset((page - 1) * page_size).limit(page_size).all()
 
-        # Get unique categories for filter
-        categories = conn.session.query(generic_template.category).distinct().all()
-        categories = sorted([s[0] for s in categories if s[0]])
+            # Get unique categories for filter
+            categories = session.query(generic_template.category).distinct().all()
+            categories = sorted([s[0] for s in categories if s[0]])
 
-    content = templates.get_template("templates_list.html").render(
-        request=request,
-        style=get_style(),
-        user=user,
-        permissions=permissions,
-        items=items,
-        total=total,
-        page=page,
-        page_size=page_size,
-        pages=(total + page_size - 1) // page_size,
-        categories=categories,
-        current_category=category,
-    )
-    return HTMLResponse(content=content)
+            content = templates.get_template("templates_list.html").render(
+                request=request,
+                style=get_style(),
+                user=user,
+                permissions=permissions,
+                items=items,
+                total=total,
+                page=page,
+                page_size=page_size,
+                pages=(total + page_size - 1) // page_size,
+                categories=categories,
+                current_category=category,
+            )
+            return HTMLResponse(content=content)
 
 
 @app.get("/instances", response_class=HTMLResponse)
@@ -316,36 +321,39 @@ async def list_instances(
     user = request.state.user
     permissions = get_user_permissions(user)
 
+
     with get_db() as conn:
-        query = conn.session.query(generic_instance).filter_by(is_deleted=False)
-        if category:
-            query = query.filter_by(category=category)
-        if type_:
-            query = query.filter_by(type=type_)
-        query = query.order_by(generic_instance.created_dt.desc())
+        conn.app_username = user.get("username")
+        with conn.session_scope() as session:
+            query = session.query(generic_instance).filter_by(is_deleted=False)
+            if category:
+                query = query.filter_by(category=category)
+            if type_:
+                query = query.filter_by(type=type_)
+            query = query.order_by(generic_instance.created_dt.desc())
 
-        total = query.count()
-        items = query.offset((page - 1) * page_size).limit(page_size).all()
+            total = query.count()
+            items = query.offset((page - 1) * page_size).limit(page_size).all()
 
-        # Get unique categories for filter
-        categories = conn.session.query(generic_instance.category).distinct().all()
-        categories = sorted([s[0] for s in categories if s[0]])
+            # Get unique categories for filter
+            categories = session.query(generic_instance.category).distinct().all()
+            categories = sorted([s[0] for s in categories if s[0]])
 
-    content = templates.get_template("instances_list.html").render(
-        request=request,
-        style=get_style(),
-        user=user,
-        permissions=permissions,
-        items=items,
-        total=total,
-        page=page,
-        page_size=page_size,
-        pages=(total + page_size - 1) // page_size,
-        categories=categories,
-        current_category=category,
-        current_type=type_,
-    )
-    return HTMLResponse(content=content)
+            content = templates.get_template("instances_list.html").render(
+                request=request,
+                style=get_style(),
+                user=user,
+                permissions=permissions,
+                items=items,
+                total=total,
+                page=page,
+                page_size=page_size,
+                pages=(total + page_size - 1) // page_size,
+                categories=categories,
+                current_category=category,
+                current_type=type_,
+            )
+            return HTMLResponse(content=content)
 
 
 @app.get("/lineages", response_class=HTMLResponse)
@@ -360,37 +368,41 @@ async def list_lineages(
     permissions = get_user_permissions(user)
 
     with get_db() as conn:
-        query = conn.session.query(generic_instance_lineage).filter_by(is_deleted=False)
-        query = query.order_by(generic_instance_lineage.created_dt.desc())
+        conn.app_username = user.get("username")
+        with conn.session_scope() as session:
+            query = session.query(generic_instance_lineage).filter_by(is_deleted=False)
+            query = query.order_by(generic_instance_lineage.created_dt.desc())
 
-        total = query.count()
-        lineages = query.offset((page - 1) * page_size).limit(page_size).all()
+            total = query.count()
+            lineages = query.offset((page - 1) * page_size).limit(page_size).all()
 
-        # Pre-extract data while session is open to avoid DetachedInstanceError
-        items = []
-        for lin in lineages:
-            items.append({
-                "euid": lin.euid,
-                "parent_euid": lin.parent_instance.euid if lin.parent_instance else None,
-                "parent_name": lin.parent_instance.name if lin.parent_instance else None,
-                "child_euid": lin.child_instance.euid if lin.child_instance else None,
-                "child_name": lin.child_instance.name if lin.child_instance else None,
-                "relationship_type": lin.relationship_type,
-                "created_dt": lin.created_dt,
-            })
+            # Pre-extract data while session is open to avoid DetachedInstanceError
+            items = []
+            for lin in lineages:
+                items.append(
+                    {
+                        "euid": lin.euid,
+                        "parent_euid": lin.parent_instance.euid if lin.parent_instance else None,
+                        "parent_name": lin.parent_instance.name if lin.parent_instance else None,
+                        "child_euid": lin.child_instance.euid if lin.child_instance else None,
+                        "child_name": lin.child_instance.name if lin.child_instance else None,
+                        "relationship_type": lin.relationship_type,
+                        "created_dt": lin.created_dt,
+                    }
+                )
 
-        content = templates.get_template("lineages_list.html").render(
-            request=request,
-            style=get_style(),
-            user=user,
-            permissions=permissions,
-            items=items,
-            total=total,
-            page=page,
-            page_size=page_size,
-            pages=(total + page_size - 1) // page_size,
-        )
-        return HTMLResponse(content=content)
+            content = templates.get_template("lineages_list.html").render(
+                request=request,
+                style=get_style(),
+                user=user,
+                permissions=permissions,
+                items=items,
+                total=total,
+                page=page,
+                page_size=page_size,
+                pages=(total + page_size - 1) // page_size,
+            )
+            return HTMLResponse(content=content)
 
 
 @app.get("/object/{euid}", response_class=HTMLResponse)
@@ -401,53 +413,55 @@ async def object_detail(request: Request, euid: str):
     permissions = get_user_permissions(user)
 
     with get_db() as conn:
-        # Try to find in templates first
-        obj = conn.session.query(generic_template).filter_by(euid=euid, is_deleted=False).first()
-        obj_type = "template"
+        conn.app_username = user.get("username")
+        with conn.session_scope() as session:
+            # Try to find in templates first
+            obj = session.query(generic_template).filter_by(euid=euid, is_deleted=False).first()
+            obj_type = "template"
 
-        if not obj:
-            obj = conn.session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
-            obj_type = "instance"
+            if not obj:
+                obj = session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
+                obj_type = "instance"
 
-        if not obj:
-            obj = conn.session.query(generic_instance_lineage).filter_by(euid=euid, is_deleted=False).first()
-            obj_type = "lineage"
+            if not obj:
+                obj = session.query(generic_instance_lineage).filter_by(euid=euid, is_deleted=False).first()
+                obj_type = "lineage"
 
-        if not obj:
-            raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
+            if not obj:
+                raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
 
-        # Get relationships for instances - extract data while session is open
-        parent_lineages = []
-        child_lineages = []
-        if obj_type == "instance":
-            # Fetch lineages and eagerly load related instances
-            for lin in obj.parent_of_lineages.filter_by(is_deleted=False).all():
-                parent_lineages.append({
-                    "euid": lin.euid,
-                    "child_euid": lin.child_instance.euid if lin.child_instance else None,
-                    "child_name": lin.child_instance.name if lin.child_instance else None,
-                    "relationship_type": lin.relationship_type,
-                })
-            for lin in obj.child_of_lineages.filter_by(is_deleted=False).all():
-                child_lineages.append({
-                    "euid": lin.euid,
-                    "parent_euid": lin.parent_instance.euid if lin.parent_instance else None,
-                    "parent_name": lin.parent_instance.name if lin.parent_instance else None,
-                    "relationship_type": lin.relationship_type,
-                })
+            # Get relationships for instances - extract data while session is open
+            parent_lineages = []
+            child_lineages = []
+            if obj_type == "instance":
+                # Fetch lineages and eagerly load related instances
+                for lin in obj.parent_of_lineages.filter_by(is_deleted=False).all():
+                    parent_lineages.append({
+                        "euid": lin.euid,
+                        "child_euid": lin.child_instance.euid if lin.child_instance else None,
+                        "child_name": lin.child_instance.name if lin.child_instance else None,
+                        "relationship_type": lin.relationship_type,
+                    })
+                for lin in obj.child_of_lineages.filter_by(is_deleted=False).all():
+                    child_lineages.append({
+                        "euid": lin.euid,
+                        "parent_euid": lin.parent_instance.euid if lin.parent_instance else None,
+                        "parent_name": lin.parent_instance.name if lin.parent_instance else None,
+                        "relationship_type": lin.relationship_type,
+                    })
 
-        # Render template inside session context to avoid detached instance errors
-        content = templates.get_template("object_detail.html").render(
-            request=request,
-            style=get_style(),
-            user=user,
-            permissions=permissions,
-            obj=obj,
-            obj_type=obj_type,
-            parent_lineages=parent_lineages,
-            child_lineages=child_lineages,
-        )
-        return HTMLResponse(content=content)
+            # Render template inside session context to avoid detached instance errors
+            content = templates.get_template("object_detail.html").render(
+                request=request,
+                style=get_style(),
+                user=user,
+                permissions=permissions,
+                obj=obj,
+                obj_type=obj_type,
+                parent_lineages=parent_lineages,
+                child_lineages=child_lineages,
+            )
+            return HTMLResponse(content=content)
 
 
 @app.get("/graph", response_class=HTMLResponse)
@@ -480,31 +494,33 @@ async def create_instance_form(request: Request, template_euid: str):
     permissions = get_user_permissions(user)
 
     with get_db() as conn:
-        template = conn.session.query(generic_template).filter_by(
-            euid=template_euid, is_deleted=False
-        ).first()
+        conn.app_username = user.get("username")
+        with conn.session_scope() as session:
+            template = session.query(generic_template).filter_by(
+                euid=template_euid, is_deleted=False
+            ).first()
 
-        if not template:
-            raise HTTPException(status_code=404, detail=f"Template not found: {template_euid}")
+            if not template:
+                raise HTTPException(status_code=404, detail=f"Template not found: {template_euid}")
 
-        # Get default properties from json_addl
-        default_properties = template.json_addl or {}
-        has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))
+            # Get default properties from json_addl
+            default_properties = template.json_addl or {}
+            has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))
 
-    content = templates.get_template("create_instance.html").render(
-        request=request,
-        style=get_style(),
-        user=user,
-        permissions=permissions,
-        template=template,
-        default_properties=default_properties,
-        has_instantiation_layouts=has_instantiation_layouts,
-        form_data=None,
-        error=None,
-        success=None,
-        created_instance=None,
-    )
-    return HTMLResponse(content=content)
+            content = templates.get_template("create_instance.html").render(
+                request=request,
+                style=get_style(),
+                user=user,
+                permissions=permissions,
+                template=template,
+                default_properties=default_properties,
+                has_instantiation_layouts=has_instantiation_layouts,
+                form_data=None,
+                error=None,
+                success=None,
+                created_instance=None,
+            )
+            return HTMLResponse(content=content)
 
 
 @app.post("/create-instance/{template_euid}", response_class=HTMLResponse)
@@ -554,76 +570,87 @@ async def create_instance_submit(request: Request, template_euid: str):
     }
 
     with get_db() as conn:
-        template = conn.session.query(generic_template).filter_by(
-            euid=template_euid, is_deleted=False
-        ).first()
+        conn.app_username = user.get("username")
 
-        if not template:
-            raise HTTPException(status_code=404, detail=f"Template not found: {template_euid}")
+        with conn.session_scope() as session:
+            template = session.query(generic_template).filter_by(
+                euid=template_euid, is_deleted=False
+            ).first()
 
-        default_properties = template.json_addl or {}
-        has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))
+            if not template:
+                raise HTTPException(status_code=404, detail=f"Template not found: {template_euid}")
 
-        # Validate required fields
-        if not instance_name:
-            content = templates.get_template("create_instance.html").render(
-                request=request,
-                style=get_style(),
-                user=user,
-                permissions=permissions,
-                template=template,
-                default_properties=default_properties,
-                has_instantiation_layouts=has_instantiation_layouts,
-                form_data=form_data,
-                error="Instance name is required.",
-                success=None,
-                created_instance=None,
-            )
-            return HTMLResponse(content=content)
+            default_properties = template.json_addl or {}
+            has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))
+            template_code = f"{template.category}/{template.type}/{template.subtype}/{template.version}/"
+
+            # Validate required fields
+            if not instance_name:
+                content = templates.get_template("create_instance.html").render(
+                    request=request,
+                    style=get_style(),
+                    user=user,
+                    permissions=permissions,
+                    template=template,
+                    default_properties=default_properties,
+                    has_instantiation_layouts=has_instantiation_layouts,
+                    form_data=form_data,
+                    error="Instance name is required.",
+                    success=None,
+                    created_instance=None,
+                )
+                return HTMLResponse(content=content)
 
         # Create instance using InstanceFactory
         try:
-            template_manager = TemplateManager(conn)
-            factory = InstanceFactory(conn, template_manager)
+            with conn.session_scope(commit=True) as session:
+                template_manager = TemplateManager()
+                factory = InstanceFactory(template_manager)
 
-            # Build template code from template
-            template_code = f"{template.category}/{template.type}/{template.subtype}/{template.version}/"
+                instance = factory.create_instance(
+                    session=session,
+                    template_code=template_code,
+                    name=instance_name,
+                    properties=custom_properties if custom_properties else None,
+                    create_children=create_children,
+                )
 
-            instance = factory.create_instance(
-                template_code=template_code,
-                name=instance_name,
-                properties=custom_properties if custom_properties else None,
-                create_children=create_children,
-            )
+                # Create lineage relationships for parent instances
+                linked_parents = []
+                for parent_euid in parent_euids:
+                    parent_instance = session.query(generic_instance).filter_by(
+                        euid=parent_euid, is_deleted=False
+                    ).first()
+                    if parent_instance:
+                        factory.link_instances(
+                            session=session,
+                            parent=parent_instance,
+                            child=instance,
+                            relationship_type=relationship_type,
+                        )
+                        linked_parents.append(parent_euid)
+                    else:
+                        logger.warning(f"Parent instance not found: {parent_euid}")
 
-            # Create lineage relationships for parent instances
-            linked_parents = []
-            for parent_euid in parent_euids:
-                parent_instance = conn.session.query(generic_instance).filter_by(
-                    euid=parent_euid, is_deleted=False
-                ).first()
-                if parent_instance:
-                    factory.link_instances(parent_instance, instance, relationship_type)
-                    linked_parents.append(parent_euid)
-                else:
-                    logger.warning(f"Parent instance not found: {parent_euid}")
+                # Create lineage relationships for child instances
+                linked_children = []
+                for child_euid in child_euids:
+                    child_instance = session.query(generic_instance).filter_by(
+                        euid=child_euid, is_deleted=False
+                    ).first()
+                    if child_instance:
+                        factory.link_instances(
+                            session=session,
+                            parent=instance,
+                            child=child_instance,
+                            relationship_type=relationship_type,
+                        )
+                        linked_children.append(child_euid)
+                    else:
+                        logger.warning(f"Child instance not found: {child_euid}")
 
-            # Create lineage relationships for child instances
-            linked_children = []
-            for child_euid in child_euids:
-                child_instance = conn.session.query(generic_instance).filter_by(
-                    euid=child_euid, is_deleted=False
-                ).first()
-                if child_instance:
-                    factory.link_instances(instance, child_instance, relationship_type)
-                    linked_children.append(child_euid)
-                else:
-                    logger.warning(f"Child instance not found: {child_euid}")
-
-            conn.session.commit()
-
-            # Capture EUID before exiting context (session may close)
-            instance_euid = instance.euid
+                # Capture EUID before exiting context (session may close)
+                instance_euid = instance.euid
 
             # Log creation with relationship info
             log_msg = f"Created instance {instance_euid} from template {template_euid} by user {user['username']}"
@@ -637,39 +664,51 @@ async def create_instance_submit(request: Request, template_euid: str):
             return RedirectResponse(f"/object/{instance_euid}", status_code=302)
 
         except ValueError as e:
-            conn.session.rollback()
-            content = templates.get_template("create_instance.html").render(
-                request=request,
-                style=get_style(),
-                user=user,
-                permissions=permissions,
-                template=template,
-                default_properties=default_properties,
-                has_instantiation_layouts=has_instantiation_layouts,
-                form_data=form_data,
-                error=f"Validation error: {str(e)}",
-                success=None,
-                created_instance=None,
-            )
-            return HTMLResponse(content=content)
+            with conn.session_scope() as session:
+                template = session.query(generic_template).filter_by(
+                    euid=template_euid, is_deleted=False
+                ).first()
+                default_properties = template.json_addl or {} if template else {}
+                has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))
+
+                content = templates.get_template("create_instance.html").render(
+                    request=request,
+                    style=get_style(),
+                    user=user,
+                    permissions=permissions,
+                    template=template,
+                    default_properties=default_properties,
+                    has_instantiation_layouts=has_instantiation_layouts,
+                    form_data=form_data,
+                    error=f"Validation error: {str(e)}",
+                    success=None,
+                    created_instance=None,
+                )
+                return HTMLResponse(content=content)
 
         except Exception as e:
-            conn.session.rollback()
             logger.exception(f"Error creating instance from template {template_euid}")
-            content = templates.get_template("create_instance.html").render(
-                request=request,
-                style=get_style(),
-                user=user,
-                permissions=permissions,
-                template=template,
-                default_properties=default_properties,
-                has_instantiation_layouts=has_instantiation_layouts,
-                form_data=form_data,
-                error=f"Error creating instance: {str(e)}",
-                success=None,
-                created_instance=None,
-            )
-            return HTMLResponse(content=content)
+            with conn.session_scope() as session:
+                template = session.query(generic_template).filter_by(
+                    euid=template_euid, is_deleted=False
+                ).first()
+                default_properties = template.json_addl or {} if template else {}
+                has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))
+
+                content = templates.get_template("create_instance.html").render(
+                    request=request,
+                    style=get_style(),
+                    user=user,
+                    permissions=permissions,
+                    template=template,
+                    default_properties=default_properties,
+                    has_instantiation_layouts=has_instantiation_layouts,
+                    form_data=form_data,
+                    error=f"Error creating instance: {str(e)}",
+                    success=None,
+                    created_instance=None,
+                )
+                return HTMLResponse(content=content)
 
 
 # ============================================================================
@@ -703,95 +742,96 @@ async def get_graph_data(
     }
 
     with get_db() as conn:
-        if start_euid:
-            # Start from specific node and traverse
-            start_obj = conn.session.query(generic_instance).filter_by(
-                euid=start_euid, is_deleted=False
-            ).first()
-            if not start_obj:
-                return {"elements": {"nodes": [], "edges": []}}
+        with conn.session_scope() as session:
+            if start_euid:
+                # Start from specific node and traverse
+                start_obj = session.query(generic_instance).filter_by(
+                    euid=start_euid, is_deleted=False
+                ).first()
+                if not start_obj:
+                    return {"elements": {"nodes": [], "edges": []}}
 
-            def traverse(instance, current_depth):
-                if current_depth > depth or instance.euid in visited_nodes:
-                    return
-                visited_nodes.add(instance.euid)
+                def traverse(instance, current_depth):
+                    if current_depth > depth or instance.euid in visited_nodes:
+                        return
+                    visited_nodes.add(instance.euid)
 
-                nodes.append({
-                    "data": {
-                        "id": instance.euid,
-                        "name": instance.name or instance.euid,
-                        "type": instance.type,
-                        "category": instance.category,
-                        "subtype": instance.subtype,
-                        "color": colors.get(instance.category, "#888888"),
-                    }
-                })
-
-                # Traverse children
-                for lin in instance.parent_of_lineages.filter_by(is_deleted=False):
-                    if lin.euid not in visited_edges:
-                        visited_edges.add(lin.euid)
-                        edges.append({
-                            "data": {
-                                "id": lin.euid,
-                                "source": instance.euid,
-                                "target": lin.child_instance.euid,
-                                "relationship_type": lin.relationship_type or "related",
-                            }
-                        })
-                    traverse(lin.child_instance, current_depth + 1)
-
-                # Traverse parents
-                for lin in instance.child_of_lineages.filter_by(is_deleted=False):
-                    if lin.euid not in visited_edges:
-                        visited_edges.add(lin.euid)
-                        edges.append({
-                            "data": {
-                                "id": lin.euid,
-                                "source": lin.parent_instance.euid,
-                                "target": instance.euid,
-                                "relationship_type": lin.relationship_type or "related",
-                            }
-                        })
-                    traverse(lin.parent_instance, current_depth + 1)
-
-            traverse(start_obj, 0)
-        else:
-            # Get all instances (limited)
-            instances = conn.session.query(generic_instance).filter_by(
-                is_deleted=False
-            ).limit(200).all()
-
-            for inst in instances:
-                nodes.append({
-                    "data": {
-                        "id": inst.euid,
-                        "name": inst.name or inst.euid,
-                        "type": inst.type,
-                        "category": inst.category,
-                        "subtype": inst.subtype,
-                        "color": colors.get(inst.category, "#888888"),
-                    }
-                })
-                visited_nodes.add(inst.euid)
-
-            # Get lineages for these instances
-            lineages = conn.session.query(generic_instance_lineage).filter_by(
-                is_deleted=False
-            ).limit(500).all()
-
-            for lin in lineages:
-                p_euid = lin.parent_instance.euid if lin.parent_instance else None
-                c_euid = lin.child_instance.euid if lin.child_instance else None
-                if p_euid in visited_nodes and c_euid in visited_nodes:
-                    edges.append({
+                    nodes.append({
                         "data": {
-                            "id": lin.euid,
-                            "source": p_euid,
-                            "target": c_euid,
-                            "relationship_type": lin.relationship_type or "related",
+                            "id": instance.euid,
+                            "name": instance.name or instance.euid,
+                            "type": instance.type,
+                            "category": instance.category,
+                            "subtype": instance.subtype,
+                            "color": colors.get(instance.category, "#888888"),
                         }
                     })
+
+                    # Traverse children
+                    for lin in instance.parent_of_lineages.filter_by(is_deleted=False):
+                        if lin.euid not in visited_edges:
+                            visited_edges.add(lin.euid)
+                            edges.append({
+                                "data": {
+                                    "id": lin.euid,
+                                    "source": instance.euid,
+                                    "target": lin.child_instance.euid,
+                                    "relationship_type": lin.relationship_type or "related",
+                                }
+                            })
+                        traverse(lin.child_instance, current_depth + 1)
+
+                    # Traverse parents
+                    for lin in instance.child_of_lineages.filter_by(is_deleted=False):
+                        if lin.euid not in visited_edges:
+                            visited_edges.add(lin.euid)
+                            edges.append({
+                                "data": {
+                                    "id": lin.euid,
+                                    "source": lin.parent_instance.euid,
+                                    "target": instance.euid,
+                                    "relationship_type": lin.relationship_type or "related",
+                                }
+                            })
+                        traverse(lin.parent_instance, current_depth + 1)
+
+                traverse(start_obj, 0)
+            else:
+                # Get all instances (limited)
+                instances = session.query(generic_instance).filter_by(
+                    is_deleted=False
+                ).limit(200).all()
+
+                for inst in instances:
+                    nodes.append({
+                        "data": {
+                            "id": inst.euid,
+                            "name": inst.name or inst.euid,
+                            "type": inst.type,
+                            "category": inst.category,
+                            "subtype": inst.subtype,
+                            "color": colors.get(inst.category, "#888888"),
+                        }
+                    })
+                    visited_nodes.add(inst.euid)
+
+                # Get lineages for these instances
+                lineages = session.query(generic_instance_lineage).filter_by(
+                    is_deleted=False
+                ).limit(500).all()
+
+                for lin in lineages:
+                    p_euid = lin.parent_instance.euid if lin.parent_instance else None
+                    c_euid = lin.child_instance.euid if lin.child_instance else None
+                    if p_euid in visited_nodes and c_euid in visited_nodes:
+                        edges.append({
+                            "data": {
+                                "id": lin.euid,
+                                "source": p_euid,
+                                "target": c_euid,
+                                "relationship_type": lin.relationship_type or "related",
+                            }
+                        })
 
     return {"elements": {"nodes": nodes, "edges": edges}}
 
@@ -804,30 +844,31 @@ async def api_list_templates(
 ):
     """API: List templates."""
     with get_db() as conn:
-        query = conn.session.query(generic_template).filter_by(is_deleted=False)
-        if category:
-            query = query.filter_by(category=category)
+        with conn.session_scope() as session:
+            query = session.query(generic_template).filter_by(is_deleted=False)
+            if category:
+                query = query.filter_by(category=category)
 
-        total = query.count()
-        items = query.offset((page - 1) * page_size).limit(page_size).all()
+            total = query.count()
+            items = query.offset((page - 1) * page_size).limit(page_size).all()
 
-        return {
-            "items": [
-                {
-                    "uuid": str(t.uuid),
-                    "euid": t.euid,
-                    "name": t.name,
-                    "category": t.category,
-                    "type": t.type,
-                    "subtype": t.subtype,
-                    "version": t.version,
-                }
-                for t in items
-            ],
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-        }
+            return {
+                "items": [
+                    {
+                        "uuid": str(t.uuid),
+                        "euid": t.euid,
+                        "name": t.name,
+                        "category": t.category,
+                        "type": t.type,
+                        "subtype": t.subtype,
+                        "version": t.version,
+                    }
+                    for t in items
+                ],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
 
 
 @app.get("/api/instances")
@@ -838,63 +879,65 @@ async def api_list_instances(
 ):
     """API: List instances."""
     with get_db() as conn:
-        query = conn.session.query(generic_instance).filter_by(is_deleted=False)
-        if category:
-            query = query.filter_by(category=category)
+        with conn.session_scope() as session:
+            query = session.query(generic_instance).filter_by(is_deleted=False)
+            if category:
+                query = query.filter_by(category=category)
 
-        total = query.count()
-        items = query.offset((page - 1) * page_size).limit(page_size).all()
+            total = query.count()
+            items = query.offset((page - 1) * page_size).limit(page_size).all()
 
-        return {
-            "items": [
-                {
-                    "uuid": str(i.uuid),
-                    "euid": i.euid,
-                    "name": i.name,
-                    "category": i.category,
-                    "type": i.type,
-                    "subtype": i.subtype,
-                    "bstatus": i.bstatus,
-                }
-                for i in items
-            ],
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-        }
+            return {
+                "items": [
+                    {
+                        "uuid": str(i.uuid),
+                        "euid": i.euid,
+                        "name": i.name,
+                        "category": i.category,
+                        "type": i.type,
+                        "subtype": i.subtype,
+                        "bstatus": i.bstatus,
+                    }
+                    for i in items
+                ],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
 
 
 @app.get("/api/object/{euid}")
 async def api_get_object(euid: str):
     """API: Get object by EUID."""
     with get_db() as conn:
-        obj = conn.session.query(generic_template).filter_by(euid=euid, is_deleted=False).first()
-        obj_type = "template"
+        with conn.session_scope() as session:
+            obj = session.query(generic_template).filter_by(euid=euid, is_deleted=False).first()
+            obj_type = "template"
 
-        if not obj:
-            obj = conn.session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
-            obj_type = "instance"
+            if not obj:
+                obj = session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
+                obj_type = "instance"
 
-        if not obj:
-            obj = conn.session.query(generic_instance_lineage).filter_by(euid=euid, is_deleted=False).first()
-            obj_type = "lineage"
+            if not obj:
+                obj = session.query(generic_instance_lineage).filter_by(euid=euid, is_deleted=False).first()
+                obj_type = "lineage"
 
-        if not obj:
-            raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
+            if not obj:
+                raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
 
-        return {
-            "uuid": str(obj.uuid),
-            "euid": obj.euid,
-            "name": obj.name,
-            "type": obj_type,
-            "category": obj.category,
-            "obj_type": obj.type,
-            "subtype": obj.subtype,
-            "version": obj.version,
-            "bstatus": obj.bstatus,
-            "json_addl": obj.json_addl,
-            "created_dt": obj.created_dt.isoformat() if obj.created_dt else None,
-        }
+            return {
+                "uuid": str(obj.uuid),
+                "euid": obj.euid,
+                "name": obj.name,
+                "type": obj_type,
+                "category": obj.category,
+                "obj_type": obj.type,
+                "subtype": obj.subtype,
+                "version": obj.version,
+                "bstatus": obj.bstatus,
+                "json_addl": obj.json_addl,
+                "created_dt": obj.created_dt.isoformat() if obj.created_dt else None,
+            }
 
 
 @app.post("/api/lineage")
@@ -909,44 +952,50 @@ async def api_create_lineage(request: Request):
     if not parent_euid or not child_euid:
         raise HTTPException(status_code=400, detail="parent_euid and child_euid required")
 
+    user = getattr(request.state, "user", None)
     with get_db() as conn:
-        parent = conn.session.query(generic_instance).filter_by(euid=parent_euid, is_deleted=False).first()
-        child = conn.session.query(generic_instance).filter_by(euid=child_euid, is_deleted=False).first()
+        conn.app_username = (user or {}).get("username")
+        with conn.session_scope(commit=True) as session:
+            parent = session.query(generic_instance).filter_by(euid=parent_euid, is_deleted=False).first()
+            child = session.query(generic_instance).filter_by(euid=child_euid, is_deleted=False).first()
 
-        if not parent:
-            raise HTTPException(status_code=404, detail=f"Parent not found: {parent_euid}")
-        if not child:
-            raise HTTPException(status_code=404, detail=f"Child not found: {child_euid}")
+            if not parent:
+                raise HTTPException(status_code=404, detail=f"Parent not found: {parent_euid}")
+            if not child:
+                raise HTTPException(status_code=404, detail=f"Child not found: {child_euid}")
 
-        lineage = generic_instance_lineage(
-            parent_instance_uuid=parent.uuid,
-            child_instance_uuid=child.uuid,
-            relationship_type=relationship_type,
-            parent_type=parent.polymorphic_discriminator,
-            child_type=child.polymorphic_discriminator,
-        )
-        conn.session.add(lineage)
-        conn.session.commit()
+            lineage = generic_instance_lineage(
+                parent_instance_uuid=parent.uuid,
+                child_instance_uuid=child.uuid,
+                relationship_type=relationship_type,
+                parent_type=parent.polymorphic_discriminator,
+                child_type=child.polymorphic_discriminator,
+            )
+            session.add(lineage)
+            session.flush()
 
-        return {"success": True, "euid": lineage.euid, "uuid": str(lineage.uuid)}
+            return {"success": True, "euid": lineage.euid, "uuid": str(lineage.uuid)}
 
 
 @app.delete("/api/object/{euid}")
 @require_admin
 async def api_delete_object(request: Request, euid: str, hard_delete: bool = False):
     """API: Soft-delete an object by EUID. (Admin only)"""
+    user = getattr(request.state, "user", None)
     with get_db() as conn:
-        obj = conn.session.query(generic_template).filter_by(euid=euid, is_deleted=False).first()
-        if not obj:
-            obj = conn.session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
-        if not obj:
-            obj = conn.session.query(generic_instance_lineage).filter_by(euid=euid, is_deleted=False).first()
+        conn.app_username = (user or {}).get("username")
+        with conn.session_scope(commit=True) as session:
+            obj = session.query(generic_template).filter_by(euid=euid, is_deleted=False).first()
+            if not obj:
+                obj = session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
+            if not obj:
+                obj = session.query(generic_instance_lineage).filter_by(euid=euid, is_deleted=False).first()
 
-        if not obj:
-            raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
+            if not obj:
+                raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
 
-        obj.is_deleted = True
-        conn.session.commit()
+            obj.is_deleted = True
+            session.flush()
 
-        return {"success": True, "message": f"Object {euid} soft-deleted"}
+            return {"success": True, "message": f"Object {euid} soft-deleted"}
 
