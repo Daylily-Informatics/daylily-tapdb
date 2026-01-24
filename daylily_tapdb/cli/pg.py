@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.prompt import Confirm
 from rich.table import Table
 
+from daylily_tapdb.cli.db_config import get_db_config_for_env
 console = Console()
 
 pg_app = typer.Typer(help="PostgreSQL service management commands")
@@ -52,15 +53,7 @@ class Environment(str, Enum):
 
 def _get_db_config(env: Environment) -> dict:
     """Get database configuration for environment."""
-    env_prefix = f"TAPDB_{env.value.upper()}_"
-    config = {
-        "host": os.environ.get(f"{env_prefix}HOST", os.environ.get("PGHOST", "localhost")),
-        "port": os.environ.get(f"{env_prefix}PORT", os.environ.get("PGPORT", "5432")),
-        "user": os.environ.get(f"{env_prefix}USER", os.environ.get("PGUSER", os.environ.get("USER", "postgres"))),
-        "password": os.environ.get(f"{env_prefix}PASSWORD", os.environ.get("PGPASSWORD", "")),
-        "database": os.environ.get(f"{env_prefix}DATABASE", f"tapdb_{env.value}"),
-    }
-    return config
+    return get_db_config_for_env(env.value)
 
 
 def _run_psql(sql: str, database: str = "postgres", config: dict = None) -> tuple[bool, str]:
@@ -74,11 +67,16 @@ def _run_psql(sql: str, database: str = "postgres", config: dict = None) -> tupl
 
     cmd = [
         "psql",
+        "-X",  # do not read ~/.psqlrc
+        "-q",  # quiet
+        "-t",  # tuples only
+        "-A",  # unaligned
         "-h", config["host"],
         "-p", str(config["port"]),
         "-U", config["user"],
         "-d", database,
-        "-t", "-c", sql,
+        "-v", "ON_ERROR_STOP=1",
+        "-c", sql,
     ]
 
     try:
@@ -96,7 +94,7 @@ def _database_exists(db_name: str, config: dict) -> bool:
     """Check if a database exists."""
     sql = f"SELECT 1 FROM pg_database WHERE datname = '{db_name}'"
     success, output = _run_psql(sql, "postgres", config)
-    return success and "1" in output
+    return success and output.strip() == "1"
 
 
 def _get_pg_service_cmd() -> tuple[str, list[str], list[str], Path]:
@@ -207,11 +205,13 @@ def pg_start():
     if method == "unknown":
         console.print("[red]✗[/red] No system PostgreSQL service found")
         console.print("")
-        console.print("[bold]Recommended: Use conda-based local PostgreSQL[/bold]")
-        console.print("  [cyan]tapdb pg init dev[/cyan]        # Initialize data directory")
-        console.print("  [cyan]tapdb pg start-local dev[/cyan] # Start local instance")
+        console.print(
+            "[bold]Recommended: Install PostgreSQL locally and use TAPDB local commands[/bold]"
+        )
+        console.print("  [cyan]tapdb pg init dev[/cyan]         # Initialize data directory")
+        console.print("  [cyan]tapdb pg start-local dev[/cyan]  # Start local instance")
         console.print("")
-        console.print("[dim]Or install system PostgreSQL (not recommended):[/dim]")
+        console.print("[dim]Install PostgreSQL so initdb/pg_ctl are on PATH:[/dim]")
         console.print("  [dim]macOS: brew install postgresql@16[/dim]")
         console.print("  [dim]Linux: sudo apt install postgresql[/dim]")
         raise typer.Exit(1)
@@ -548,12 +548,14 @@ def pg_init(
     console.print(f"\n[bold cyan]━━━ Initialize PostgreSQL ({env.value}) ━━━[/bold cyan]")
     console.print(f"  Data directory: {data_dir}")
 
-    # Check if initdb is available (should be in PATH from conda)
+
+    # Check if initdb is available (must be in PATH)
     initdb_path = shutil.which("initdb")
     if not initdb_path:
         console.print("[red]✗[/red] initdb not found")
-        console.print("  Ensure TAPDB conda environment is active: [cyan]conda activate TAPDB[/cyan]")
-        console.print("  Or recreate environment: [cyan]conda env create -f tapdb_env.yaml[/cyan]")
+        console.print("  Install PostgreSQL and ensure 'initdb' is on PATH")
+        console.print("  macOS: [cyan]brew install postgresql@16[/cyan]")
+        console.print("  Linux: [cyan]sudo apt install postgresql[/cyan]")
         raise typer.Exit(1)
 
     # Check if already initialized
@@ -621,11 +623,13 @@ def pg_start_local(
     if port is None:
         port = 5432 if env == Environment.dev else 5433
 
-    # Find pg_ctl (should be in PATH from conda)
+    # Find pg_ctl (must be in PATH)
     pg_ctl_path = shutil.which("pg_ctl")
     if not pg_ctl_path:
         console.print("[red]✗[/red] pg_ctl not found")
-        console.print("  Ensure TAPDB conda environment is active: [cyan]conda activate TAPDB[/cyan]")
+        console.print("  Install PostgreSQL and ensure 'pg_ctl' is on PATH")
+        console.print("  macOS: [cyan]brew install postgresql@16[/cyan]")
+        console.print("  Linux: [cyan]sudo apt install postgresql[/cyan]")
         raise typer.Exit(1)
 
     # Check if already running
@@ -688,11 +692,13 @@ def pg_stop_local(
         console.print(f"[yellow]⚠[/yellow] Data directory doesn't exist: {data_dir}")
         return
 
-    # Find pg_ctl (should be in PATH from conda)
+    # Find pg_ctl (must be in PATH)
     pg_ctl_path = shutil.which("pg_ctl")
     if not pg_ctl_path:
         console.print("[red]✗[/red] pg_ctl not found")
-        console.print("  Ensure TAPDB conda environment is active: [cyan]conda activate TAPDB[/cyan]")
+        console.print("  Install PostgreSQL and ensure 'pg_ctl' is on PATH")
+        console.print("  macOS: [cyan]brew install postgresql@16[/cyan]")
+        console.print("  Linux: [cyan]sudo apt install postgresql[/cyan]")
         raise typer.Exit(1)
 
     console.print(f"[yellow]►[/yellow] Stopping PostgreSQL ({env.value})...")

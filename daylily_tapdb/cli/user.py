@@ -3,8 +3,6 @@ TAPDB User Management CLI.
 
 Commands for managing TAPDB application users.
 """
-import hashlib
-import secrets
 from typing import Optional
 
 import typer
@@ -12,26 +10,10 @@ from rich.console import Console
 from rich.table import Table
 
 from daylily_tapdb.cli.db import Environment, _get_db_config, _run_psql
+from daylily_tapdb.passwords import hash_password as _hash_password
 
 user_app = typer.Typer(help="User management commands")
 console = Console()
-
-
-def _hash_password(password: str) -> str:
-    """Hash password with salt using SHA-256."""
-    salt = secrets.token_hex(16)
-    hash_obj = hashlib.sha256((salt + password).encode())
-    return f"{salt}:{hash_obj.hexdigest()}"
-
-
-def _verify_password(password: str, stored_hash: str) -> bool:
-    """Verify password against stored hash."""
-    if ":" not in stored_hash:
-        return False
-    salt, hash_val = stored_hash.split(":", 1)
-    hash_obj = hashlib.sha256((salt + password).encode())
-    return hash_obj.hexdigest() == hash_val
-
 
 @user_app.command("list")
 def user_list(
@@ -98,7 +80,14 @@ def user_add(
         raise typer.Exit(1)
     
     # Hash password if provided
-    pw_hash = _hash_password(password) if password else None
+    pw_hash = None
+    if password:
+        try:
+            pw_hash = _hash_password(password)
+        except RuntimeError as e:
+            console.print(f"[red]✗[/red] {e}")
+            console.print("  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]")
+            raise typer.Exit(1)
     pw_sql = f"'{pw_hash}'" if pw_hash else "NULL"
     email_sql = f"'{email}'" if email else "NULL"
     name_sql = f"'{display_name}'" if display_name else "NULL"
@@ -182,7 +171,12 @@ def user_set_password(
                                   confirmation_prompt=True, help="New password"),
 ):
     """Set user password."""
-    pw_hash = _hash_password(password)
+    try:
+        pw_hash = _hash_password(password)
+    except RuntimeError as e:
+        console.print(f"[red]✗[/red] {e}")
+        console.print("  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]")
+        raise typer.Exit(1)
     sql = f"UPDATE tapdb_user SET password_hash = '{pw_hash}', modified_dt = NOW() WHERE username = '{username}' RETURNING username"
     success, output = _run_psql(env, sql=sql)
 

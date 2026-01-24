@@ -60,42 +60,36 @@ TAPDB uses SQLAlchemy single-table inheritance. Each table has typed subclasses:
 
 ## Installation
 
+### Installation modes
+
+- **Core library only** (no CLI, no Admin UI): `pip install daylily-tapdb`
+- **CLI tools**: `pip install "daylily-tapdb[cli]"`
+- **Admin UI**: `pip install "daylily-tapdb[admin]"`
+
+Developer tooling is separate: `pip install "daylily-tapdb[dev]"`.
+
 ### Quick Start (recommended)
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # or .venv\\Scripts\\activate on Windows
+pip install -U pip
+pip install -e ".[cli,admin,dev]"
+```
+
+This workflow:
+- creates and activates a virtual environment
+- installs this repo in editable mode (with CLI/admin/dev extras)
+
+Optional convenience wrapper (macOS/Linux):
 
 ```bash
 source tapdb_activate.sh
 ```
 
-This single command:
-- Creates the TAPDB conda environment (if needed)
-- Activates the environment
-- Installs the package (if needed)
-- Enables tab completion for the current session
-- Shows available CLI commands and server status
+### Notes
 
-### Manual Setup
-
-```bash
-# Create and activate environment
-conda env create -n TAPDB -f tapdb_env.yaml
-conda activate TAPDB
-
-# Or create manually
-conda create -n TAPDB python=3.10
-conda activate TAPDB
-conda install sqlalchemy psycopg2 fastapi uvicorn jinja2 python-multipart
-conda install pytest pytest-cov pytest-asyncio black ruff mypy httpx typer rich
-pip install -e .
-
-# Enable tab completion (optional, persists across sessions)
-tapdb --install-completion
-```
-
-### Using pip (without conda)
-
-```bash
-pip install daylily-tapdb
-```
+- To enable completion persistently: `tapdb --install-completion`
 
 ## Quick Start
 
@@ -109,7 +103,6 @@ psql -d your_database -f schema/tapdb_schema.sql
 
 ```python
 import os
-from pathlib import Path
 from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory
 
 # Connect to database
@@ -123,17 +116,17 @@ db = TAPDBConnection(
 )
 
 # Initialize managers
-templates = TemplateManager(Path('./config'))
+templates = TemplateManager()
 factory = InstanceFactory(templates)
 
 # Create an instance from a template
-with db.session_scope(commit=True) as session:
-with db.session_scope(commit=True) as session:
+with db.session_scope(commit=False) as session:
     plate = factory.create_instance(
         session=session,
         template_code='container/plate/fixed-plate-96/1.0/',
         name='PLATE-001'
     )
+    session.commit()
     print(f"Created: {plate.euid}")  # e.g., CX1234
 ```
 
@@ -152,10 +145,58 @@ Templates are blueprints stored in `generic_template`. They define:
 
 ```python
 # Template code format: {category}/{type}/{subtype}/{version}/
-template = templates.get_template('container/plate/fixed-plate-96/1.0/')
+with db.session_scope(commit=False) as session:
+    template = templates.get_template(session, 'container/plate/fixed-plate-96/1.0/')
+    # Or by EUID
+    template = templates.get_template_by_euid(session, 'GT123')
+```
 
-# Or by EUID
-template = templates.get_template_by_euid('GT123')
+## Template Configuration Schema
+
+TAPDB templates are typically seeded from JSON files under `./config/`. The canonical v2 schema metadata is:
+
+- `config/_metadata.json`
+
+Each JSON file contains a top-level `templates` array:
+
+- `config/generic/generic.json`
+- `config/action/core.json`
+- `config/workflow/assay.json`
+- `config/workflow_step/queue.json`
+
+### Canonical fields (v2)
+
+Each element in `templates` is a template definition with:
+
+- `name` (string)
+- `polymorphic_discriminator` (string; e.g. `generic_template`, `workflow_template`, `action_template`)
+- `category`, `type`, `subtype`, `version` (strings) — used to build the template code:
+  - `{category}/{type}/{subtype}/{version}/`
+- `instance_prefix` (string; EUID prefix for created instances)
+- `is_singleton` (bool)
+- `bstatus` (string; lifecycle status)
+- `json_addl` (object; template-specific data). Common subkeys seen in the repo examples:
+  - `properties` (object)
+  - `action_imports` (object mapping action keys → action template codes)
+  - `expected_inputs` / `expected_outputs` (arrays)
+  - `instantiation_layouts` (array)
+  - `cogs` (object)
+
+```json
+{
+  "templates": [
+    {
+      "name": "Generic Object",
+      "polymorphic_discriminator": "generic_template",
+      "category": "generic",
+      "type": "generic",
+      "subtype": "generic",
+      "version": "1.0",
+      "instance_prefix": "GX",
+      "json_addl": {"properties": {"name": "Generic Object"}}
+    }
+  ]
+}
 ```
 
 ### Instances
@@ -163,21 +204,25 @@ template = templates.get_template_by_euid('GT123')
 Instances are concrete objects created from templates:
 
 ```python
-# Create with default properties
-instance = factory.create_instance(
-    template_code='container/plate/fixed-plate-96/1.0/',
-    name='My Plate'
-)
+with db.session_scope(commit=False) as session:
+    # Create with default properties
+    instance = factory.create_instance(
+        session=session,
+        template_code='container/plate/fixed-plate-96/1.0/',
+        name='My Plate'
+    )
 
-# Create with custom properties
-instance = factory.create_instance(
-    template_code='content/sample/dna/1.0/',
-    name='Sample-001',
-    properties={
-        'concentration': 25.5,
-        'volume_ul': 100
-    }
-)
+    # Create with custom properties
+    instance = factory.create_instance(
+        session=session,
+        template_code='content/sample/dna/1.0/',
+        name='Sample-001',
+        properties={
+            'concentration': 25.5,
+            'volume_ul': 100
+        }
+    )
+    session.commit()
 ```
 
 ### Lineages (Relationships)
@@ -185,24 +230,20 @@ instance = factory.create_instance(
 Lineages connect instances in a directed acyclic graph:
 
 ```python
-# Link two existing instances
-lineage = factory.link_instances(
-    parent=plate,
-    child=sample,
-    relationship_type='contains'
-)
+with db.session_scope(commit=False) as session:
+    # Link two existing instances (plate/sample assumed already loaded)
+    lineage = factory.link_instances(
+        session=session,
+        parent=plate,
+        child=sample,
+        relationship_type='contains'
+    )
+    session.commit()
 
-# Traverse relationships
-for lineage in plate.parent_of_lineages:
-    child = lineage.child_instance
-    print(f"{plate.euid} -> {child.euid}")
-
-# Filter lineage members
-samples = plate.filter_lineage_members(
-    of_lineage_type='parent_of_lineages',
-    lineage_member_type='child_instance',
-    filter_criteria={'type': 'sample'}
-)
+    # Traverse relationships (read-only)
+    for lineage in plate.parent_of_lineages:
+        child = lineage.child_instance
+        print(f"{plate.euid} -> {child.euid}")
 ```
 
 ### Enterprise Unique IDs (EUIDs)
@@ -212,26 +253,14 @@ EUIDs are human-readable identifiers generated by database triggers:
 | Prefix | Type | Example |
 |--------|------|---------|
 | `GT` | Template | `GT123` |
-| `GX` | Generic instance (fallback) | `GX456` |
+| `GX` | Generic instance | `GX456` |
 | `GL` | Lineage | `GL789` |
 | `WX` | Workflow instance | `WX101` |
 | `WSX` | Workflow step instance | `WSX102` |
 | `XX` | Action instance | `XX103` |
 | Custom | Application-defined | `CX104`, `MX105` |
 
-Configure custom prefixes:
-
-```python
-from daylily_tapdb import EUIDConfig
-
-config = EUIDConfig()
-config.register_prefix('CX', 'container_instance')
-config.register_prefix('MX', 'content_instance')
-config.register_prefix('EX', 'equipment_instance')
-
-# Generate SQL for triggers
-print(config.to_sql_case_statement())
-```
+EUIDs are generated by database triggers using **per-prefix sequences** (e.g. `gx_instance_seq`, `wx_instance_seq`).
 
 ### Actions
 
@@ -283,21 +312,12 @@ finally:
     session.close()
 ```
 
-### Scoped sessions with auto-commit
+### Scoped sessions (explicit commit)
 
 ```python
-with db.session_scope(commit=True) as session:
+with db.session_scope(commit=False) as session:
     session.add(instance)
-    # Auto-commits on success, rolls back on exception
-```
-
-### Context manager
-
-```python
-with TAPDBConnection() as db:
-    # Use db.session
-    pass
-# Session automatically closed
+    session.commit()
 ```
 
 ## Database Schema
@@ -329,6 +349,45 @@ psql -d your_database -f schema/tapdb_schema.sql
 | `PGPORT` | PostgreSQL port | `5432` |
 | `USER` | Database user / audit username | System user |
 | `ECHO_SQL` | Log SQL statements (`true`/`1`/`yes`) | `false` |
+
+### CLI config file (recommended)
+
+The CLI can read per-environment DB settings from:
+
+- `~/.config/tapdb/tapdb-config.yaml` (default)
+- `./config/tapdb-config.yaml` (repo-local)
+- or `TAPDB_CONFIG_PATH=/path/to/tapdb-config.yaml`
+
+Resolution order (highest precedence first):
+
+1. `TAPDB_<ENV>_*` environment variables (e.g. `TAPDB_DEV_HOST`)
+2. `PG*` environment variables
+3. `tapdb-config.yaml` (searched in: `~/.config/tapdb/`, then `./config/`)
+
+An example config is included at: `./config/tapdb-config-example.yaml`
+
+Example config:
+
+```yaml
+environments:
+  dev:
+    host: localhost
+    port: 5432
+    user: daylily
+    database: tapdb_dev
+```
+
+Supported file shapes:
+
+- `{"dev": {...}, "test": {...}, "prod": {...}}`
+- or `{"environments": {"dev": {...}}}`
+
+### Admin UI (prod hardening)
+
+If you run the admin UI in production mode (`TAPDB_ENV=prod`), startup will refuse to proceed unless:
+
+- `TAPDB_SESSION_SECRET` is set
+- `TAPDB_ADMIN_ALLOWED_ORIGINS` is set (comma-separated origins)
 
 ### Connection parameters
 
@@ -389,11 +448,36 @@ db = TAPDBConnection(
 
 Implement handlers as `do_action_{action_key}(self, instance, action_ds, captured_data)` methods.
 
+## Integration Testing
+
+TAPDB’s integration tests require a reachable PostgreSQL DSN.
+
+1) Set a DSN:
+
+```bash
+export TAPDB_TEST_DSN='postgresql://user@localhost:5432/postgres'
+```
+
+2) Run the integration tests:
+
+```bash
+pytest tests/test_integration.py -v
+```
+
+### GitHub Actions
+
+CI uses a PostgreSQL service container and sets `TAPDB_TEST_DSN` automatically. See:
+
+- `.github/workflows/ci.yml`
+
 ## Testing
 
 ```bash
 # Run all tests
 pytest tests/ -v
+
+# Run Postgres integration tests (always-on when TAPDB_TEST_DSN is set)
+TAPDB_TEST_DSN='postgresql://user:pass@localhost:5432/dbname' pytest -q
 
 # With coverage
 pytest tests/ --cov=daylily_tapdb --cov-report=term-missing
@@ -413,7 +497,7 @@ TAPDB includes a FastAPI-based admin interface for browsing and managing objects
 
 ```bash
 # Activate environment
-conda activate TAPDB
+source .venv/bin/activate
 
 # Start the server (background)
 tapdb ui start
@@ -441,7 +525,7 @@ uvicorn admin.main:app --reload --port 8000
 The fastest way to get a local TAPDB instance running:
 
 ```bash
-# 1. Activate environment (creates conda env if needed)
+# 1. Activate environment
 source tapdb_activate.sh
 
 # 2. Initialize and start local PostgreSQL
@@ -462,7 +546,7 @@ tapdb ui start
 To stop everything:
 
 ```bash
-source tapdb_deactivate.sh  # Stops PostgreSQL and deactivates conda
+source tapdb_deactivate.sh  # Stops PostgreSQL and deactivates .venv
 ```
 
 ### CLI Command Reference
@@ -473,7 +557,7 @@ tapdb --help              # Show all commands
 tapdb version             # Show version
 tapdb info                # Show config and status
 
-# Local PostgreSQL (conda-based, recommended for dev/test)
+# Local PostgreSQL (data-dir based; requires initdb/pg_ctl on PATH)
 tapdb pg init <env>       # Initialize data directory (dev/test only)
 tapdb pg start-local <env> # Start local PostgreSQL instance
 tapdb pg stop-local <env>  # Stop local PostgreSQL instance
@@ -516,7 +600,7 @@ TAPDB supports three environments: `dev`, `test`, and `prod`.
 | `prod` | 5432 | `tapdb_prod` | System PostgreSQL |
 
 **Local vs Remote:**
-- `dev` and `test` can use local conda-based PostgreSQL (`tapdb pg init/start-local`)
+- `dev` and `test` can use local PostgreSQL (`tapdb pg init/start-local`)
 - `prod` requires an external PostgreSQL instance (AWS RDS, system install, etc.)
 
 For remote/AWS databases, configure via environment variables:
@@ -600,7 +684,8 @@ daylily-tapdb/
 │   ├── conftest.py
 │   ├── test_euid.py
 │   └── test_models.py
-├── tapdb_env.yaml           # Conda environment
+├── tapdb_activate.sh        # Dev helper: create/activate .venv
+├── tapdb_deactivate.sh      # Dev helper: deactivate .venv
 ├── pyproject.toml
 └── README.md
 ```
