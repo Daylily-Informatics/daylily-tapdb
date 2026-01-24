@@ -123,12 +123,14 @@ db = TAPDBConnection(
 )
 
 # Initialize managers
-templates = TemplateManager(db, Path('./config'))
-factory = InstanceFactory(db, templates)
+templates = TemplateManager(Path('./config'))
+factory = InstanceFactory(templates)
 
 # Create an instance from a template
 with db.session_scope(commit=True) as session:
+with db.session_scope(commit=True) as session:
     plate = factory.create_instance(
+        session=session,
         template_code='container/plate/fixed-plate-96/1.0/',
         name='PLATE-001'
     )

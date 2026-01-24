@@ -28,6 +28,8 @@ keywords = ["database", "orm", "polymorphic", "templates", "sqlalchemy", "lims"]
 dependencies = [
     "sqlalchemy>=2.0",
     "psycopg2-binary>=2.9",
+    "typer",
+    "rich",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +39,15 @@ dev = [
     "black>=23.0",
     "ruff>=0.1",
     "mypy>=1.0",
+]
+
+# Optional Admin UI (FastAPI). Keep out of core installs.
+admin = [
+    "fastapi",
+    "uvicorn",
+    "jinja2",
+    "python-multipart",
+    "itsdangerous",
 ]
 
 [project.scripts]

@@ -8,13 +8,15 @@ Example:
     from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory
 
     db = TAPDBConnection(os.environ['DATABASE_URL'])
-    templates = TemplateManager(db, Path('./config'))
-    factory = InstanceFactory(db, templates)
+    templates = TemplateManager(Path('./config'))
+    factory = InstanceFactory(templates)
 
-    plate = factory.create_instance(
-        template_code='container/plate/fixed-plate-96/1.0/',
-        name='PLATE-001'
-    )
+    with db.session_scope(commit=True) as session:
+        plate = factory.create_instance(
+            session=session,
+            template_code='container/plate/fixed-plate-96/1.0/',
+            name='PLATE-001'
+        )
 """
 from daylily_tapdb._version import __version__
 from daylily_tapdb.connection import TAPDBConnection

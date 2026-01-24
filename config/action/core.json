@@ -11,20 +11,22 @@
       "instance_prefix": "XX",
       "is_singleton": false,
       "bstatus": "active",
-      "json_addl": {
-        "description": "Add a note to any object",
-        "properties": {
-          "name": "Create Note",
-          "comments": ""
-        },
-        "action_type": "annotation",
-        "required_fields": ["note_text"],
-        "cogs": {
-          "state": "active",
-          "cost": "0.00",
-          "allocation_type": ""
-        }
-      }
+	      "json_addl": {
+	        "action_definition": {
+	          "description": "Add a note to any object",
+	          "properties": {
+	            "name": "Create Note",
+	            "comments": ""
+	          },
+	          "action_type": "annotation",
+	          "required_fields": ["note_text"],
+	          "cogs": {
+	            "state": "active",
+	            "cost": "0.00",
+	            "allocation_type": ""
+	          }
+	        }
+	      }
     },
     {
       "name": "Update Status",
@@ -36,21 +38,23 @@
       "instance_prefix": "XX",
       "is_singleton": false,
       "bstatus": "active",
-      "json_addl": {
-        "description": "Update object status",
-        "properties": {
-          "name": "Update Status",
-          "comments": ""
-        },
-        "action_type": "lifecycle",
-        "required_fields": ["new_status"],
-        "valid_statuses": ["active", "inactive", "archived", "destroyed"],
-        "cogs": {
-          "state": "active",
-          "cost": "0.00",
-          "allocation_type": ""
-        }
-      }
+	      "json_addl": {
+	        "action_definition": {
+	          "description": "Update object status",
+	          "properties": {
+	            "name": "Update Status",
+	            "comments": ""
+	          },
+	          "action_type": "lifecycle",
+	          "required_fields": ["new_status"],
+	          "valid_statuses": ["active", "inactive", "archived", "destroyed"],
+	          "cogs": {
+	            "state": "active",
+	            "cost": "0.00",
+	            "allocation_type": ""
+	          }
+	        }
+	      }
     },
     {
       "name": "Link Objects",
@@ -62,20 +66,22 @@
       "instance_prefix": "XX",
       "is_singleton": false,
       "bstatus": "active",
-      "json_addl": {
-        "description": "Create lineage relationship between objects",
-        "properties": {
-          "name": "Link Objects",
-          "comments": ""
-        },
-        "action_type": "relationship",
-        "required_fields": ["parent_uuid", "child_uuid"],
-        "cogs": {
-          "state": "active",
-          "cost": "0.00",
-          "allocation_type": ""
-        }
-      }
+	      "json_addl": {
+	        "action_definition": {
+	          "description": "Create lineage relationship between objects",
+	          "properties": {
+	            "name": "Link Objects",
+	            "comments": ""
+	          },
+	          "action_type": "relationship",
+	          "required_fields": ["parent_uuid", "child_uuid"],
+	          "cogs": {
+	            "state": "active",
+	            "cost": "0.00",
+	            "allocation_type": ""
+	          }
+	        }
+	      }
     },
     {
       "name": "Soft Delete",
@@ -87,20 +93,22 @@
       "instance_prefix": "XX",
       "is_singleton": false,
       "bstatus": "active",
-      "json_addl": {
-        "description": "Mark object as deleted (soft delete)",
-        "properties": {
-          "name": "Soft Delete",
-          "comments": ""
-        },
-        "action_type": "lifecycle",
-        "required_fields": [],
-        "cogs": {
-          "state": "active",
-          "cost": "0.00",
-          "allocation_type": ""
-        }
-      }
+	      "json_addl": {
+	        "action_definition": {
+	          "description": "Mark object as deleted (soft delete)",
+	          "properties": {
+	            "name": "Soft Delete",
+	            "comments": ""
+	          },
+	          "action_type": "lifecycle",
+	          "required_fields": [],
+	          "cogs": {
+	            "state": "active",
+	            "cost": "0.00",
+	            "allocation_type": ""
+	          }
+	        }
+	      }
     }
   ]
 }

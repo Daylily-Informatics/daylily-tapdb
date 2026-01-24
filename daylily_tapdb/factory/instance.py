@@ -1,7 +1,9 @@
 """Instance factory for TAPDB."""
 import copy
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, Optional
+
+from sqlalchemy.orm import Session
 
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.template import generic_template
@@ -11,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def materialize_actions(
+    session: Session,
     template: generic_template,
     template_manager
 ) -> Dict[str, Any]:
@@ -27,23 +30,31 @@ def materialize_actions(
     Returns:
         Dictionary of action groups.
     """
-    action_groups = {}
+    action_groups: Dict[str, Any] = {}
 
     for action_key, template_code in template.json_addl.get("action_imports", {}).items():
-        action_tmpl = template_manager.get_template(template_code)
-        if action_tmpl:
-            # Canonical group naming: {type}_actions
-            group_name = f"{action_tmpl.type}_actions"
-            if group_name not in action_groups:
-                action_groups[group_name] = {}
+        action_tmpl = template_manager.get_template(session, template_code)
+        if action_tmpl is None:
+            continue
 
-            # Copy action definition with runtime tracking fields
-            action_groups[group_name][action_key] = {
-                **action_tmpl.json_addl.get("action_definition", {}),
-                "action_executed": "0",
-                "executed_datetime": [],
-                "action_enabled": "1"
-            }
+        # Canonical group naming: {type}_actions
+        group_name = f"{action_tmpl.type}_actions"
+        if group_name not in action_groups:
+            action_groups[group_name] = {}
+
+        # Copy action definition with runtime tracking fields.
+        # Phase 2 moonshot: carry action template identity through materialization
+        # so ActionDispatcher can persist action_instance rows against the action
+        # template (ensuring XX prefix), not against the target instance template.
+        action_groups[group_name][action_key] = {
+            "action_template_uuid": str(action_tmpl.uuid),
+            "action_template_euid": action_tmpl.euid,
+            "action_template_code": template_code,
+            **action_tmpl.json_addl.get("action_definition", {}),
+            "action_executed": "0",
+            "executed_datetime": [],
+            "action_enabled": "1",
+        }
 
     return action_groups
 
@@ -63,19 +74,18 @@ class InstanceFactory:
     # Maximum recursion depth for instantiation_layouts
     MAX_INSTANTIATION_DEPTH = 10
 
-    def __init__(self, db, template_manager):
+    def __init__(self, template_manager):
         """
         Initialize instance factory.
 
         Args:
-            db: TAPDBConnection instance.
             template_manager: TemplateManager for template resolution.
         """
-        self.db = db
         self.template_manager = template_manager
 
     def create_instance(
         self,
+        session: Session,
         template_code: str,
         name: str,
         properties: Optional[Dict[str, Any]] = None,
@@ -120,12 +130,12 @@ class InstanceFactory:
         _visited.add(template_code)
 
         # Get template
-        template = self.template_manager.get_template(template_code)
+        template = self.template_manager.get_template(session, template_code)
         if not template:
             raise ValueError(f"Template not found: {template_code}")
 
         # Build json_addl
-        json_addl = self._build_json_addl(template, properties)
+        json_addl = self._build_json_addl(session, template, properties)
 
         # Create instance
         instance = generic_instance(
@@ -138,24 +148,24 @@ class InstanceFactory:
             template_uuid=template.uuid,
             json_addl=json_addl,
             bstatus=template.json_addl.get("default_status", "created"),
-            is_singleton=template.json_addl.get("singleton", False)
+            is_singleton=bool(template.is_singleton),
         )
 
-        # Use the connection's session (not get_session() which creates a new one)
-        self.db.session.add(instance)
-        self.db.session.flush()  # Get UUID/EUID assigned
+        session.add(instance)
+        session.flush()  # Get UUID/EUID assigned
 
         # Create children if requested
         if create_children:
-            self._create_children(instance, template, _depth, _visited.copy())
+            self._create_children(session, instance, template, _depth, _visited.copy())
 
         return instance
 
 
     def _build_json_addl(
         self,
+        session: Session,
         template: generic_template,
-        properties: Optional[Dict[str, Any]] = None
+        properties: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Build json_addl for a new instance.
@@ -171,7 +181,7 @@ class InstanceFactory:
         """
         json_addl = {
             "properties": copy.deepcopy(template.json_addl.get("properties", {})),
-            "action_groups": materialize_actions(template, self.template_manager),
+            "action_groups": materialize_actions(session, template, self.template_manager),
             "audit_log": []
         }
 
@@ -183,6 +193,7 @@ class InstanceFactory:
 
     def _create_children(
         self,
+        session: Session,
         parent: generic_instance,
         template: generic_template,
         depth: int,
@@ -197,48 +208,76 @@ class InstanceFactory:
             depth: Current recursion depth.
             visited: Set of visited template codes.
         """
-        layouts = template.json_addl.get("instantiation_layouts", {})
+        layouts = template.json_addl.get("instantiation_layouts", [])
 
-        # Handle both dict and list formats (empty list means no layouts)
-        if isinstance(layouts, list):
-            if not layouts:
-                return  # Empty list, no children to create
-            # Convert list to dict format: use index as key
-            layouts = {str(i): item for i, item in enumerate(layouts)}
+        if layouts in (None, [], {}):
+            return
+        if not isinstance(layouts, list):
+            raise ValueError(
+                "instantiation_layouts must be a list of objects with child_templates list"
+            )
 
-        if not isinstance(layouts, dict):
-            return  # Invalid format, skip
+        for layout_index, layout_def in enumerate(layouts):
+            if not isinstance(layout_def, dict):
+                raise ValueError("instantiation_layouts entries must be objects")
 
-        for layout_name, layout_def in layouts.items():
-            child_template_code = layout_def.get("template_code")
-            if not child_template_code:
-                continue
-
-            count = layout_def.get("count", 1)
             relationship_type = layout_def.get("relationship_type", "contains")
-            name_pattern = layout_def.get("name_pattern", "{parent_name}_{index}")
+            layout_name_pattern = layout_def.get("name_pattern")
+            child_templates = layout_def.get("child_templates", [])
 
-            for i in range(count):
-                child_name = name_pattern.format(
-                    parent_name=parent.name,
-                    parent_euid=parent.euid,
-                    index=i + 1,
-                    layout_name=layout_name
-                )
+            if not isinstance(child_templates, list):
+                raise ValueError("child_templates must be a list")
 
-                child = self.create_instance(
-                    template_code=child_template_code,
-                    name=child_name,
-                    create_children=True,
-                    _depth=depth + 1,
-                    _visited=visited.copy()
-                )
+            for child_index, child_def in enumerate(child_templates):
+                # Canonical: strings are allowed (template_code)
+                if isinstance(child_def, str):
+                    child_template_code = child_def
+                    count = 1
+                    name_pattern = layout_name_pattern
+                elif isinstance(child_def, dict):
+                    child_template_code = child_def.get("template_code")
+                    if not child_template_code:
+                        raise ValueError("child_templates objects must include template_code")
+                    count = int(child_def.get("count", 1))
+                    name_pattern = child_def.get("name_pattern") or layout_name_pattern
+                else:
+                    raise ValueError("child_templates entries must be string or object")
 
-                # Create lineage relationship
-                self._create_lineage(parent, child, relationship_type)
+
+                parts = child_template_code.strip("/").split("/")
+                if len(parts) != 4:
+                    raise ValueError(
+                        f"Invalid child template_code format: {child_template_code} "
+                        "(expected {category}/{type}/{subtype}/{version})"
+                    )
+                child_subtype = parts[2]
+                name_pattern = name_pattern or "{parent_name}_{child_subtype}_{index}"
+
+                for i in range(count):
+                    child_name = name_pattern.format(
+                        parent_name=parent.name,
+                        parent_euid=parent.euid,
+                        index=i + 1,
+                        layout_index=layout_index,
+                        child_index=child_index,
+                        child_subtype=child_subtype,
+                        child_template_code=child_template_code,
+                    )
+
+                    child = self.create_instance(
+                        session=session,
+                        template_code=child_template_code,
+                        name=child_name,
+                        create_children=True,
+                        _depth=depth + 1,
+                        _visited=visited.copy(),
+                    )
+
+                    self._create_lineage(session, parent, child, relationship_type)
 
     def _create_lineage(
         self,
+        session: Session,
         parent: generic_instance,
         child: generic_instance,
         relationship_type: str = "contains"
@@ -269,14 +308,14 @@ class InstanceFactory:
             child_type=child.polymorphic_discriminator
         )
 
-        # Use the connection's session (not get_session() which creates a new one)
-        self.db.session.add(lineage)
-        self.db.session.flush()
+        session.add(lineage)
+        session.flush()
 
         return lineage
 
     def link_instances(
         self,
+        session: Session,
         parent: generic_instance,
         child: generic_instance,
         relationship_type: str = "generic"
@@ -292,4 +331,42 @@ class InstanceFactory:
         Returns:
             The created lineage record.
         """
-        return self._create_lineage(parent, child, relationship_type)
+        return self._create_lineage(session, parent, child, relationship_type)
+
+    def get_or_create_singleton_instance(
+        self,
+        session: Session,
+        template_code: str,
+        name: str,
+        properties: Optional[Dict[str, Any]] = None,
+        create_children: bool = True,
+    ) -> generic_instance:
+        """Get or create the singleton instance for a singleton template.
+
+        Semantics (per Major): do not resurrect soft-deleted rows.
+        """
+        template = self.template_manager.get_template(session, template_code)
+        if template is None:
+            raise ValueError(f"Template not found: {template_code}")
+        if not bool(template.is_singleton):
+            raise ValueError(f"Template is not singleton: {template_code}")
+
+        existing = (
+            session.query(generic_instance)
+            .filter(
+                generic_instance.template_uuid == template.uuid,
+                generic_instance.is_deleted == False,
+            )
+            .order_by(generic_instance.created_dt.desc())
+            .first()
+        )
+        if existing is not None:
+            return existing
+
+        return self.create_instance(
+            session=session,
+            template_code=template_code,
+            name=name,
+            properties=properties,
+            create_children=create_children,
+        )

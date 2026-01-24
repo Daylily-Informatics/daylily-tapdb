@@ -1,15 +1,26 @@
-"""
-TAPDB Database Connection Manager.
+"""TAPDB Database Connection Manager.
 
-Provides SQLAlchemy session management with connection pooling.
-Follows the spec's dual transaction pattern:
-- get_session(): Library never commits (caller responsible)
-- session_scope(commit=True/False): Opt-in convenience with auto-commit
+Moonshot Phase 2 policy:
+- No surprise commits inside the library
+- Callers control transaction boundaries
+- Audit username is set per-transaction using `SET LOCAL session.current_username`
+
+Recommended usage:
+
+    with TAPDBConnection() as conn:
+        with conn.session_scope(commit=False) as session:
+            rows = session.query(...).all()
+
+For write operations:
+
+    with TAPDBConnection() as conn:
+        with conn.session_scope(commit=True) as session:
+            session.add(obj)
 """
 import os
 import logging
 from contextlib import contextmanager
-from typing import Optional, Generator
+from typing import Generator, Optional
 
 from sqlalchemy import create_engine, MetaData, text
 from sqlalchemy.ext.automap import automap_base
@@ -24,24 +35,17 @@ class TAPDBConnection:
     """
     TAPDB Database Connection Manager.
 
-    Usage:
-        # Standard usage with context manager (recommended)
+    Usage (Phase 2 moonshot):
+        # Read-only / query usage
         with TAPDBConnection() as conn:
-            result = conn.session.query(...)
-        # Session automatically closed
+            with conn.session_scope(commit=False) as session:
+                rows = session.query(...).all()
 
-        # Get session without auto-commit (caller manages transaction)
-        session = conn.get_session()
-        try:
-            session.add(obj)
-            session.commit()  # Caller commits
-        finally:
-            session.close()
-
-        # Scoped session with optional auto-commit
-        with conn.session_scope(commit=True) as session:
-            session.add(obj)
-            # Commits on success, rolls back on exception
+        # Write usage (explicit opt-in commit)
+        with TAPDBConnection() as conn:
+            with conn.session_scope(commit=True) as session:
+                session.add(obj)
+                # commits on success, rolls back on exception
     """
 
     def __init__(
@@ -112,39 +116,27 @@ class TAPDBConnection:
         metadata = MetaData()
         self.AutomapBase = automap_base(metadata=metadata)
 
-        # Primary session (for backward compatibility)
-        self._session: Optional[Session] = None
-        self._owns_session = True
-
-    @property
-    def session(self) -> Session:
-        """Get or create the primary session."""
-        if self._session is None:
-            self._session = self._Session()
-            self._set_session_username(self._session)
-        return self._session
-
     def _set_session_username(self, session: Session) -> None:
-        """Set the session username for audit logging."""
+        """Set the per-transaction username for audit logging (no commit)."""
         try:
             session.execute(
-                text("SET session.current_username = :username"),
+                text("SET LOCAL session.current_username = :username"),
                 {"username": self.app_username}
             )
-            session.commit()
         except Exception as e:
             self.logger.warning(f"Could not set session username: {e}")
 
     def get_session(self) -> Session:
         """
-        Get a new session. Library never commits - caller is responsible.
+        Get a new session.
+
+        Note: this does NOT set the audit username because Phase 2 requires
+        `SET LOCAL`, which is per-transaction. Prefer `session_scope()`.
 
         Returns:
             New SQLAlchemy Session (caller must close)
         """
-        session = self._Session()
-        self._set_session_username(session)
-        return session
+        return self._Session()
 
     @contextmanager
     def session_scope(self, commit: bool = False) -> Generator[Session, None, None]:
@@ -163,13 +155,17 @@ class TAPDBConnection:
                 # Auto-commits on success, rolls back on exception
         """
         session = self._Session()
-        self._set_session_username(session)
+        trans = session.begin()
         try:
+            # Must happen inside a transaction for SET LOCAL.
+            self._set_session_username(session)
             yield session
             if commit:
-                session.commit()
+                trans.commit()
+            else:
+                trans.rollback()
         except Exception:
-            session.rollback()
+            trans.rollback()
             raise
         finally:
             session.close()
@@ -186,21 +182,12 @@ class TAPDBConnection:
         """Context manager exit - cleanup resources."""
         if exc_type is not None:
             self.logger.warning(f"Exception in context: {exc_type.__name__}: {exc_val}")
-            if self._session:
-                self._session.rollback()
         self.close()
         return False
 
     def close(self) -> None:
-        """Close session and dispose engine."""
-        if self._session:
-            try:
-                self._session.close()
-            except Exception as e:
-                self.logger.warning(f"Error closing session: {e}")
-            self._session = None
-
-        if self.engine and self._owns_session:
+        """Dispose engine resources."""
+        if self.engine:
             try:
                 self.engine.dispose()
             except Exception as e:

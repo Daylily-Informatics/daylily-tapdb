@@ -1,6 +1,36 @@
 -- TAPDB Schema v0.1.0
 -- Templated Abstract Polymorphic Database
--- PostgreSQL 13+ required (gen_random_uuid() is built-in)
+-- PostgreSQL 13+ required
+
+-- Optional pgcrypto (provides gen_random_uuid()). Some minimal Postgres builds
+-- (e.g. certain conda distributions) may not ship with contrib extensions.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pgcrypto') THEN
+        BEGIN
+            EXECUTE 'CREATE EXTENSION IF NOT EXISTS pgcrypto';
+        EXCEPTION WHEN insufficient_privilege THEN
+            -- We'll fall back to tapdb_gen_uuid() when we can't install extensions.
+            NULL;
+        END;
+    END IF;
+END $$;
+
+-- UUID generator that prefers pgcrypto's gen_random_uuid(), but falls back to an
+-- md5-based UUID when pgcrypto isn't available.
+CREATE OR REPLACE FUNCTION tapdb_gen_uuid()
+RETURNS UUID AS $$
+DECLARE
+    v UUID;
+BEGIN
+    BEGIN
+        EXECUTE 'SELECT gen_random_uuid()' INTO v;
+        RETURN v;
+    EXCEPTION WHEN undefined_function OR feature_not_supported THEN
+        RETURN md5(random()::text || clock_timestamp()::text)::uuid;
+    END;
+END;
+$$ LANGUAGE plpgsql;
 
 --------------------------------------------------------------------------------
 -- SEQUENCES
@@ -8,7 +38,8 @@
 
 -- Core sequences (always required)
 CREATE SEQUENCE IF NOT EXISTS generic_template_seq;
-CREATE SEQUENCE IF NOT EXISTS generic_instance_seq;
+-- GX is the default instance prefix
+CREATE SEQUENCE IF NOT EXISTS gx_instance_seq;
 CREATE SEQUENCE IF NOT EXISTS generic_instance_lineage_seq;
 CREATE SEQUENCE IF NOT EXISTS audit_log_seq;
 
@@ -16,6 +47,7 @@ CREATE SEQUENCE IF NOT EXISTS audit_log_seq;
 CREATE SEQUENCE IF NOT EXISTS wx_instance_seq;   -- WX (workflow)
 CREATE SEQUENCE IF NOT EXISTS wsx_instance_seq;  -- WSX (workflow_step)
 CREATE SEQUENCE IF NOT EXISTS xx_instance_seq;   -- XX (action)
+CREATE SEQUENCE IF NOT EXISTS ay_instance_seq;   -- AY (assay)
 
 --------------------------------------------------------------------------------
 -- TABLES
@@ -24,7 +56,7 @@ CREATE SEQUENCE IF NOT EXISTS xx_instance_seq;   -- XX (action)
 -- generic_template: Blueprint definitions
 CREATE TABLE IF NOT EXISTS generic_template (
     -- Primary identification
-    uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    uuid UUID PRIMARY KEY DEFAULT tapdb_gen_uuid(),
     euid TEXT UNIQUE NOT NULL DEFAULT ('GT' || nextval('generic_template_seq')),
     name TEXT NOT NULL,
 
@@ -35,12 +67,14 @@ CREATE TABLE IF NOT EXISTS generic_template (
     subtype TEXT NOT NULL,
     version TEXT NOT NULL,
 
+    CONSTRAINT unique_template_code UNIQUE (category, type, subtype, version),
+
     -- Instance configuration
     instance_prefix TEXT NOT NULL,
     instance_polymorphic_identity TEXT,
 
     -- Flexible data storage
-    json_addl JSONB NOT NULL,
+    json_addl JSONB NOT NULL DEFAULT '{}'::jsonb,
     json_addl_schema JSONB,
 
     -- Status and lifecycle
@@ -56,8 +90,8 @@ CREATE TABLE IF NOT EXISTS generic_template (
 -- generic_instance: Concrete objects created from templates
 CREATE TABLE IF NOT EXISTS generic_instance (
     -- Primary identification
-    uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    euid TEXT UNIQUE,
+    uuid UUID PRIMARY KEY DEFAULT tapdb_gen_uuid(),
+    euid TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
 
     -- Type hierarchy (copied from template: category/type/subtype/version)
@@ -71,7 +105,7 @@ CREATE TABLE IF NOT EXISTS generic_instance (
     template_uuid UUID NOT NULL REFERENCES generic_template(uuid),
 
     -- Flexible data storage
-    json_addl JSONB NOT NULL,
+    json_addl JSONB NOT NULL DEFAULT '{}'::jsonb,
 
     -- Status and lifecycle
     bstatus TEXT NOT NULL,
@@ -86,7 +120,7 @@ CREATE TABLE IF NOT EXISTS generic_instance (
 -- generic_instance_lineage: Directed edges between instances
 CREATE TABLE IF NOT EXISTS generic_instance_lineage (
     -- Primary identification
-    uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    uuid UUID PRIMARY KEY DEFAULT tapdb_gen_uuid(),
     euid TEXT UNIQUE NOT NULL DEFAULT ('GL' || nextval('generic_instance_lineage_seq')),
     name TEXT NOT NULL,
 
@@ -105,7 +139,7 @@ CREATE TABLE IF NOT EXISTS generic_instance_lineage (
     relationship_type TEXT NOT NULL DEFAULT 'generic',
 
     -- Flexible data storage
-    json_addl JSONB NOT NULL DEFAULT '{}',
+    json_addl JSONB NOT NULL DEFAULT '{}'::jsonb,
 
     -- Status and lifecycle
     bstatus TEXT NOT NULL DEFAULT 'active',
@@ -119,7 +153,7 @@ CREATE TABLE IF NOT EXISTS generic_instance_lineage (
 
 -- audit_log: Change tracking
 CREATE TABLE IF NOT EXISTS audit_log (
-    uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    uuid UUID PRIMARY KEY DEFAULT tapdb_gen_uuid(),
     rel_table_name TEXT NOT NULL,
     column_name TEXT,
     rel_table_uuid_fk UUID NOT NULL,
@@ -138,7 +172,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 -- tapdb_user: Application user management
 CREATE TABLE IF NOT EXISTS tapdb_user (
-    uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    uuid UUID PRIMARY KEY DEFAULT tapdb_gen_uuid(),
     username TEXT UNIQUE NOT NULL,
     email TEXT UNIQUE,
     display_name TEXT,
@@ -151,6 +185,34 @@ CREATE TABLE IF NOT EXISTS tapdb_user (
     last_login_dt TIMESTAMP WITH TIME ZONE,
     json_addl JSONB DEFAULT '{}'::jsonb
 );
+
+-- _tapdb_migrations: migration tracking for schema evolution (not used for fresh installs)
+CREATE TABLE IF NOT EXISTS _tapdb_migrations (
+    filename TEXT PRIMARY KEY,
+    applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+--------------------------------------------------------------------------------
+-- HARDENING (idempotent-ish ALTERs for existing installs)
+--------------------------------------------------------------------------------
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'unique_template_code'
+          AND conrelid = 'generic_template'::regclass
+    ) THEN
+        ALTER TABLE generic_template ADD CONSTRAINT unique_template_code
+            UNIQUE (category, type, subtype, version);
+    END IF;
+END $$;
+
+ALTER TABLE generic_instance ALTER COLUMN euid SET NOT NULL;
+
+ALTER TABLE generic_template ALTER COLUMN json_addl SET DEFAULT '{}'::jsonb;
+ALTER TABLE generic_instance ALTER COLUMN json_addl SET DEFAULT '{}'::jsonb;
 
 --------------------------------------------------------------------------------
 -- INDEXES
@@ -226,9 +288,10 @@ BEGIN
     BEGIN
         -- Try to use prefix-specific sequence
         EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
-    EXCEPTION WHEN undefined_table THEN
-        -- Fallback to generic sequence if prefix sequence doesn't exist
-        seq_val := nextval('generic_instance_seq');
+	EXCEPTION WHEN undefined_table OR undefined_object THEN
+	    RAISE EXCEPTION
+	        'Missing EUID sequence % for instance_prefix %. Create and initialize it before inserting instances.',
+	        seq_name, prefix;
     END;
 
     NEW.euid := prefix || seq_val;
