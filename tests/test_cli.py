@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -23,6 +24,19 @@ from daylily_tapdb.cli.db import (
 )
 
 runner = CliRunner()
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(s: str) -> str:
+    """Remove ANSI color/style escape sequences from CLI output.
+
+    CI uses Typer+Rich which may emit ANSI escapes; tests should assert against the
+    semantic text, not terminal formatting.
+    """
+
+    return _ANSI_ESCAPE_RE.sub("", s)
 
 
 @pytest.fixture(autouse=True)
@@ -312,17 +326,19 @@ class TestCLIDBSeed:
         """Test db seed --help."""
         result = runner.invoke(app, ["db", "seed", "--help"])
         assert result.exit_code == 0
-        assert "--config" in result.output or "-c" in result.output
-        assert "--dry-run" in result.output
-        assert "--skip-existing" in result.output or "--overwrite" in result.output
+        out = _strip_ansi(result.output)
+        assert "--config" in out or "-c" in out
+        assert "--dry-run" in out
+        assert "--skip-existing" in out or "--overwrite" in out
 
     def test_db_validate_config_help(self):
         """Test db validate-config --help."""
         result = runner.invoke(app, ["db", "validate-config", "--help"])
         assert result.exit_code == 0
-        assert "--config" in result.output or "-c" in result.output
-        assert "--strict" in result.output
-        assert "--json" in result.output
+        out = _strip_ansi(result.output)
+        assert "--config" in out or "-c" in out
+        assert "--strict" in out
+        assert "--json" in out
 
     def test_db_validate_config_valid_minimal(self, tmp_path: Path):
         """A minimal two-template config with a valid reference should pass."""

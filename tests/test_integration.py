@@ -274,7 +274,9 @@ def test_postgres_restricted_role_schema_install_and_uuid_fallback():
         admin_cur.close()
         admin_conn.close()
 
-    admin_db_dsn = str(make_url(dsn).set(database=db))
+    # NOTE: SQLAlchemy URL stringification hides passwords by default (e.g. "***"),
+    # which breaks psycopg2 auth when we pass the DSN onward.
+    admin_db_dsn = make_url(dsn).set(database=db).render_as_string(hide_password=False)
     admin_db_conn = psycopg2.connect(admin_db_dsn)
     admin_db_conn.autocommit = True
     admin_db_cur = admin_db_conn.cursor()
@@ -292,7 +294,11 @@ def test_postgres_restricted_role_schema_install_and_uuid_fallback():
         admin_db_cur.close()
         admin_db_conn.close()
 
-    role_db_dsn = str(make_url(dsn).set(username=role, password=pwd, database=db))
+    role_db_dsn = (
+        make_url(dsn)
+        .set(username=role, password=pwd, database=db)
+        .render_as_string(hide_password=False)
+    )
 
     try:
         # Apply into the pre-created schema; extension install should be skipped (insufficient_privilege).
