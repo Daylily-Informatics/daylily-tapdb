@@ -1,0 +1,40 @@
+{
+  "$comment": "TAPDB v2 Template: Actor - users, systems, agents",
+  "templates": [
+    {
+      "name": "Generic Actor",
+      "polymorphic_discriminator": "actor_template",
+      "category": "generic",
+      "type": "actor",
+      "subtype": "generic",
+      "version": "1.0",
+      "instance_prefix": "ACT",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Base actor template for users, systems, and agents",
+        "properties": {
+          "name": "Generic Actor",
+          "actor_type": "user",
+          "external_id": "",
+          "comments": ""
+        },
+	        "action_imports": {
+	          "create_note": "action/core/create-note/1.0",
+	          "update_status": "action/core/update-status/1.0",
+	          "link_objects": "action/core/link-objects/1.0",
+	          "soft_delete": "action/core/soft-delete/1.0"
+	        },
+        "expected_inputs": [],
+        "expected_outputs": [],
+        "instantiation_layouts": [],
+        "cogs": {
+          "state": "active",
+          "cost": "0.00",
+          "allocation_type": ""
+        }
+      }
+    }
+  ]
+}
+

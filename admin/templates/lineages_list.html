@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}TAPDB Admin - Lineages{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Lineages</h1>
+<p style="color: var(--text-muted); margin-bottom: 1.5rem;">Total: {{ total }} lineages (relationships)</p>
+
+<div class="card">
+    <table>
+        <thead>
+            <tr>
+                <th>EUID</th>
+                <th>Parent</th>
+                <th>Child</th>
+                <th>Relationship Type</th>
+                <th>Created</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items %}
+            <tr>
+                <td><a href="/object/{{ item.euid }}">{{ item.euid }}</a></td>
+                <td>
+                    {% if item.parent_euid %}
+                    <a href="/object/{{ item.parent_euid }}">{{ item.parent_euid }}</a>
+                    <br><small style="color: var(--text-muted);">{{ item.parent_name or '-' }}</small>
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+                <td>
+                    {% if item.child_euid %}
+                    <a href="/object/{{ item.child_euid }}">{{ item.child_euid }}</a>
+                    <br><small style="color: var(--text-muted);">{{ item.child_name or '-' }}</small>
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+                <td>{{ item.relationship_type or 'related' }}</td>
+                <td>{{ item.created_dt.strftime('%Y-%m-%d %H:%M') if item.created_dt else '-' }}</td>
+                <td>
+                    <a href="/object/{{ item.euid }}" class="btn" style="padding: 0.25rem 0.5rem;">View</a>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="6" style="text-align: center; color: var(--text-muted);">No lineages found</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if pages > 1 %}
+    <div class="pagination">
+        {% if page > 1 %}
+        <a href="?page={{ page - 1 }}">&laquo; Prev</a>
+        {% endif %}
+        
+        {% for p in range(1, pages + 1) %}
+            {% if p == page %}
+            <span class="current">{{ p }}</span>
+            {% elif p <= 3 or p > pages - 2 or (p >= page - 1 and p <= page + 1) %}
+            <a href="?page={{ p }}">{{ p }}</a>
+            {% elif p == 4 or p == pages - 2 %}
+            <span>...</span>
+            {% endif %}
+        {% endfor %}
+        
+        {% if page < pages %}
+        <a href="?page={{ page + 1 }}">Next &raquo;</a>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+

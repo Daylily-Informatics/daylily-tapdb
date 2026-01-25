@@ -1,0 +1,115 @@
+{
+  "$comment": "TAPDB v2 Template: Core actions available to all objects",
+  "templates": [
+    {
+      "name": "Create Note",
+      "polymorphic_discriminator": "action_template",
+      "category": "action",
+      "type": "core",
+      "subtype": "create-note",
+      "version": "1.0",
+      "instance_prefix": "XX",
+      "is_singleton": false,
+      "bstatus": "active",
+	      "json_addl": {
+	        "action_definition": {
+	          "description": "Add a note to any object",
+	          "properties": {
+	            "name": "Create Note",
+	            "comments": ""
+	          },
+	          "action_type": "annotation",
+	          "required_fields": ["note_text"],
+	          "cogs": {
+	            "state": "active",
+	            "cost": "0.00",
+	            "allocation_type": ""
+	          }
+	        }
+	      }
+    },
+    {
+      "name": "Update Status",
+      "polymorphic_discriminator": "action_template",
+      "category": "action",
+      "type": "core",
+      "subtype": "update-status",
+      "version": "1.0",
+      "instance_prefix": "XX",
+      "is_singleton": false,
+      "bstatus": "active",
+	      "json_addl": {
+	        "action_definition": {
+	          "description": "Update object status",
+	          "properties": {
+	            "name": "Update Status",
+	            "comments": ""
+	          },
+	          "action_type": "lifecycle",
+	          "required_fields": ["new_status"],
+	          "valid_statuses": ["active", "inactive", "archived", "destroyed"],
+	          "cogs": {
+	            "state": "active",
+	            "cost": "0.00",
+	            "allocation_type": ""
+	          }
+	        }
+	      }
+    },
+    {
+      "name": "Link Objects",
+      "polymorphic_discriminator": "action_template",
+      "category": "action",
+      "type": "core",
+      "subtype": "link-objects",
+      "version": "1.0",
+      "instance_prefix": "XX",
+      "is_singleton": false,
+      "bstatus": "active",
+	      "json_addl": {
+	        "action_definition": {
+	          "description": "Create lineage relationship between objects",
+	          "properties": {
+	            "name": "Link Objects",
+	            "comments": ""
+	          },
+	          "action_type": "relationship",
+	          "required_fields": ["parent_uuid", "child_uuid"],
+	          "cogs": {
+	            "state": "active",
+	            "cost": "0.00",
+	            "allocation_type": ""
+	          }
+	        }
+	      }
+    },
+    {
+      "name": "Soft Delete",
+      "polymorphic_discriminator": "action_template",
+      "category": "action",
+      "type": "core",
+      "subtype": "soft-delete",
+      "version": "1.0",
+      "instance_prefix": "XX",
+      "is_singleton": false,
+      "bstatus": "active",
+	      "json_addl": {
+	        "action_definition": {
+	          "description": "Mark object as deleted (soft delete)",
+	          "properties": {
+	            "name": "Soft Delete",
+	            "comments": ""
+	          },
+	          "action_type": "lifecycle",
+	          "required_fields": [],
+	          "cogs": {
+	            "state": "active",
+	            "cost": "0.00",
+	            "allocation_type": ""
+	          }
+	        }
+	      }
+    }
+  ]
+}
+
