@@ -1,7 +1,7 @@
 """Action dispatcher for TAPDB."""
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 from typing import Dict, Optional, Any
 
@@ -114,7 +114,7 @@ class ActionDispatcher(ABC):
         # Update execution count and timestamp
         exec_count = int(action_def.get("action_executed", "0"))
         action_def["action_executed"] = str(exec_count + 1)
-        action_def["executed_datetime"].append(datetime.utcnow().isoformat())
+        action_def["executed_datetime"].append(datetime.now(timezone.utc).isoformat())
 
         flag_modified(instance, "json_addl")
 
@@ -161,7 +161,7 @@ class ActionDispatcher(ABC):
                 "captured_data": captured_data,
                 "result": result,
                 "executed_by": user,
-                "executed_at": datetime.utcnow().isoformat()
+                "executed_at": datetime.now(timezone.utc).isoformat()
             },
             bstatus="completed"
         )
