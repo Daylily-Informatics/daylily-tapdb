@@ -274,11 +274,23 @@ class TestCLIPG:
         assert "--force" in result.output or "-f" in result.output
 
     def test_pg_create_requires_postgres(self):
-        """Test pg create fails gracefully without PostgreSQL."""
-        result = runner.invoke(app, ["pg", "create", "dev"])
-        # Should fail or report PostgreSQL not running
+        """Test pg create fails gracefully when PostgreSQL is unavailable.
+
+        This test must be hermetic: on some dev machines PostgreSQL is installed
+        (e.g. via conda) and may already be running, which would make
+        `tapdb pg create dev` succeed or report "already exists".
+        """
+
+        # Simulate missing/unavailable PostgreSQL tools/connectivity.
+        with patch(
+            "daylily_tapdb.cli.pg._run_psql",
+            return_value=(False, "psql not found. Install PostgreSQL client tools."),
+        ):
+            result = runner.invoke(app, ["pg", "create", "dev"])
+
         output_lower = result.output.lower()
-        assert "not running" in output_lower or "psql" in output_lower or result.exit_code != 0
+        assert result.exit_code != 0
+        assert "cannot connect" in output_lower or "psql not found" in output_lower
 
     def test_pg_delete_requires_confirmation(self):
         """Test pg delete requires confirmation."""
