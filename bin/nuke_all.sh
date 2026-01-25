@@ -1,0 +1,16 @@
+tapdb ui stop || true
+tapdb pg stop-local dev || true
+tapdb pg stop-local test || true
+
+source tapdb_deactivate.sh
+
+cd /Users/daylily/projects/daylily_repos/daylily-tapdb || exit 1
+test "$(pwd)" = "$(git rev-parse --show-toplevel)" || exit 2
+rm -rf .venv postgres_data .pytest_cache .mypy_cache .ruff_cache build dist .coverage htmlcov
+find . -maxdepth 1 -name "*.egg-info" -prune -exec rm -rf {} +
+
+rm -rf "$HOME/.tapdb" "$HOME/.config/tapdb"
+
+conda env remove -y -n TAPDB
+
+unset AWS_PROFILE AWS_DEFAULT_REGION AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
