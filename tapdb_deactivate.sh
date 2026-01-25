@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # TAPDB Environment Deactivation Script
 # Usage: source tapdb_deactivate.sh
 #
@@ -6,6 +6,23 @@
 #   1. Stops any running local PostgreSQL instances
 #   2. Removes tab completion
 #   3. Deactivates the virtual environment
+
+# Guardrail: this file must be sourced (executing it cannot deactivate your current shell).
+_tapdb__sourced=0
+if [ -n "${BASH_VERSION:-}" ]; then
+    if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+        _tapdb__sourced=1
+    fi
+elif [ -n "${ZSH_VERSION:-}" ]; then
+    case "${ZSH_EVAL_CONTEXT:-}" in
+        *:file) _tapdb__sourced=1 ;;
+    esac
+fi
+if [ "${_tapdb__sourced}" -ne 1 ]; then
+    printf 'ERROR: tapdb_deactivate.sh must be sourced (bash/zsh):\n  source ./tapdb_deactivate.sh\n' >&2
+    exit 2
+fi
+unset _tapdb__sourced
 
 # Colors (POSIX-safe)
 _tapdb_red='\033[0;31m'

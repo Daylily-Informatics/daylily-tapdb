@@ -99,43 +99,17 @@ def _database_exists(db_name: str, config: dict) -> bool:
 
 def _get_pg_service_cmd() -> tuple[str, list[str], list[str], Path]:
     """
-    Get platform-specific PostgreSQL service commands.
+    Get platform-specific system PostgreSQL service commands.
+
+    This is intended for production environments where PostgreSQL is managed as a
+    system service (e.g., systemd on Linux). Local dev/test should use the
+    data-dir based commands: `tapdb pg init` + `tapdb pg start-local`.
+
     Returns: (method, start_cmd, stop_cmd, log_path)
     """
     system = platform.system()
-    
-    if system == "Darwin":  # macOS
-        # Check for Homebrew PostgreSQL
-        brew_pg = Path("/opt/homebrew/opt/postgresql@14")
-        if not brew_pg.exists():
-            brew_pg = Path("/usr/local/opt/postgresql@14")
-        if not brew_pg.exists():
-            # Try generic postgresql
-            brew_pg = Path("/opt/homebrew/opt/postgresql")
-        if not brew_pg.exists():
-            brew_pg = Path("/usr/local/opt/postgresql")
-        
-        # Check for postgres.app
-        pg_app_path = Path("/Applications/Postgres.app")
-        
-        if brew_pg.exists():
-            return (
-                "homebrew",
-                ["brew", "services", "start", "postgresql@14"],
-                ["brew", "services", "stop", "postgresql@14"],
-                Path.home() / "Library/Logs/Homebrew/postgresql@14.log"
-            )
-        elif pg_app_path.exists():
-            return (
-                "postgres.app",
-                ["open", "-a", "Postgres"],
-                ["osascript", "-e", 'quit app "Postgres"'],
-                Path.home() / "Library/Application Support/Postgres/var-14/postgresql.log"
-            )
-        else:
-            return ("unknown", [], [], Path())
-    
-    elif system == "Linux":
+
+    if system == "Linux":
         # Check for systemd
         if Path("/bin/systemctl").exists() or Path("/usr/bin/systemctl").exists():
             return (
@@ -190,7 +164,7 @@ def _is_pg_running() -> tuple[bool, str]:
 
 @pg_app.command("start")
 def pg_start():
-    """Start system PostgreSQL service (Homebrew/systemd).
+    """Start system PostgreSQL service (production only).
 
     For local development, prefer: tapdb pg start-local <env>
     """
@@ -206,14 +180,13 @@ def pg_start():
         console.print("[red]✗[/red] No system PostgreSQL service found")
         console.print("")
         console.print(
-            "[bold]Recommended: Install PostgreSQL locally and use TAPDB local commands[/bold]"
+            "[bold]Recommended: Use TAPDB local dev/test commands[/bold]"
         )
         console.print("  [cyan]tapdb pg init dev[/cyan]         # Initialize data directory")
         console.print("  [cyan]tapdb pg start-local dev[/cyan]  # Start local instance")
         console.print("")
-        console.print("[dim]Install PostgreSQL so initdb/pg_ctl are on PATH:[/dim]")
-        console.print("  [dim]macOS: brew install postgresql@16[/dim]")
-        console.print("  [dim]Linux: sudo apt install postgresql[/dim]")
+        console.print("[dim]Install PostgreSQL so initdb/pg_ctl are on PATH (conda recommended):[/dim]")
+        console.print("  [dim]conda install -c conda-forge postgresql[/dim]")
         raise typer.Exit(1)
 
     console.print(f"[yellow]►[/yellow] Starting PostgreSQL ({method})...")
@@ -247,7 +220,7 @@ def pg_start():
 
 @pg_app.command("stop")
 def pg_stop():
-    """Stop system PostgreSQL service (Homebrew/systemd).
+    """Stop system PostgreSQL service (production only).
 
     For local development instances, use: tapdb pg stop-local <env>
     """
@@ -355,13 +328,8 @@ def pg_logs(
 
     possible_logs = local_logs + [
         log_path,
-        Path.home() / "Library/Logs/Homebrew/postgresql@16.log",
-        Path.home() / "Library/Logs/Homebrew/postgresql.log",
-        Path.home() / "Library/Application Support/Postgres/var-16/postgresql.log",
         Path("/var/log/postgresql/postgresql-16-main.log"),
         Path("/var/log/postgresql/postgresql.log"),
-        Path("/usr/local/var/log/postgresql@16.log"),
-        Path("/opt/homebrew/var/log/postgresql@16.log"),
     ]
 
     log_file = None
@@ -432,11 +400,16 @@ def pg_create(
     db_name = config["database"]
     db_owner = owner or config["user"]
 
-    # Check if PostgreSQL is running
-    running, _ = _is_pg_running()
-    if not running:
-        console.print(f"[red]✗[/red] PostgreSQL is not running")
-        console.print(f"  Start with: [cyan]tapdb pg start[/cyan]")
+    # Check connectivity to the configured server
+    ok, out = _run_psql("SELECT 1", "postgres", config)
+    if not ok:
+        console.print("[red]✗[/red] Cannot connect to PostgreSQL for this environment")
+        console.print(f"  {out}")
+        if env in (Environment.dev, Environment.test):
+            console.print(f"  If using local dev/test: [cyan]tapdb pg start-local {env.value}[/cyan]")
+            console.print("  If tools are missing: [cyan]conda install -c conda-forge postgresql[/cyan]")
+        else:
+            console.print("  Verify TAPDB_PROD_* connection settings and network access")
         raise typer.Exit(1)
 
     # Check if database already exists
@@ -472,11 +445,16 @@ def pg_delete(
     config = _get_db_config(env)
     db_name = config["database"]
 
-    # Check if PostgreSQL is running
-    running, _ = _is_pg_running()
-    if not running:
-        console.print(f"[red]✗[/red] PostgreSQL is not running")
-        console.print(f"  Start with: [cyan]tapdb pg start[/cyan]")
+    # Check connectivity to the configured server
+    ok, out = _run_psql("SELECT 1", "postgres", config)
+    if not ok:
+        console.print("[red]✗[/red] Cannot connect to PostgreSQL for this environment")
+        console.print(f"  {out}")
+        if env in (Environment.dev, Environment.test):
+            console.print(f"  If using local dev/test: [cyan]tapdb pg start-local {env.value}[/cyan]")
+            console.print("  If tools are missing: [cyan]conda install -c conda-forge postgresql[/cyan]")
+        else:
+            console.print("  Verify TAPDB_PROD_* connection settings and network access")
         raise typer.Exit(1)
 
     # Check if database exists
@@ -554,8 +532,7 @@ def pg_init(
     if not initdb_path:
         console.print("[red]✗[/red] initdb not found")
         console.print("  Install PostgreSQL and ensure 'initdb' is on PATH")
-        console.print("  macOS: [cyan]brew install postgresql@16[/cyan]")
-        console.print("  Linux: [cyan]sudo apt install postgresql[/cyan]")
+        console.print("  [cyan]conda install -c conda-forge postgresql[/cyan]")
         raise typer.Exit(1)
 
     # Check if already initialized
@@ -628,8 +605,7 @@ def pg_start_local(
     if not pg_ctl_path:
         console.print("[red]✗[/red] pg_ctl not found")
         console.print("  Install PostgreSQL and ensure 'pg_ctl' is on PATH")
-        console.print("  macOS: [cyan]brew install postgresql@16[/cyan]")
-        console.print("  Linux: [cyan]sudo apt install postgresql[/cyan]")
+        console.print("  [cyan]conda install -c conda-forge postgresql[/cyan]")
         raise typer.Exit(1)
 
     # Check if already running
@@ -697,8 +673,7 @@ def pg_stop_local(
     if not pg_ctl_path:
         console.print("[red]✗[/red] pg_ctl not found")
         console.print("  Install PostgreSQL and ensure 'pg_ctl' is on PATH")
-        console.print("  macOS: [cyan]brew install postgresql@16[/cyan]")
-        console.print("  Linux: [cyan]sudo apt install postgresql[/cyan]")
+        console.print("  [cyan]conda install -c conda-forge postgresql[/cyan]")
         raise typer.Exit(1)
 
     console.print(f"[yellow]►[/yellow] Stopping PostgreSQL ({env.value})...")

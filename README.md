@@ -529,6 +529,8 @@ The fastest way to get a local TAPDB instance running:
 source tapdb_activate.sh
 
 # 2. Initialize and start local PostgreSQL
+# If initdb/pg_ctl are missing, install PostgreSQL tools via conda:
+#   conda install -c conda-forge postgresql
 tapdb pg init dev           # Creates ./postgres_data/dev/
 tapdb pg start-local dev    # Starts PostgreSQL on port 5432
 
@@ -549,6 +551,15 @@ To stop everything:
 source tapdb_deactivate.sh  # Stops PostgreSQL and deactivates .venv
 ```
 
+### Reset / "Nuke" (Local vs Full)
+
+- **Local reset (default):** removes local repo/user artifacts only (does **not** delete remote DBs or AWS resources)
+  - `bash bin/nuke_all.sh`
+  - `bash bin/nuke_all.sh --dry-run`
+- **Full deletion (dangerous):** local reset + optional remote DB deletion + optional AWS deletion
+  - `bash bin/nuke_all.sh --full`
+  - Full deletion is gated behind double confirmations and requires explicit AWS resource IDs via env vars.
+
 ### CLI Command Reference
 
 ```bash
@@ -557,12 +568,12 @@ tapdb --help              # Show all commands
 tapdb version             # Show version
 tapdb info                # Show config and status
 
-# Local PostgreSQL (data-dir based; requires initdb/pg_ctl on PATH)
+# Local PostgreSQL (data-dir based; requires initdb/pg_ctl on PATH; conda recommended)
 tapdb pg init <env>       # Initialize data directory (dev/test only)
 tapdb pg start-local <env> # Start local PostgreSQL instance
 tapdb pg stop-local <env>  # Stop local PostgreSQL instance
 
-# System PostgreSQL (Homebrew/systemd, for existing installations)
+# System PostgreSQL (system service; production only)
 tapdb pg start            # Start system PostgreSQL service
 tapdb pg stop             # Stop system PostgreSQL service
 tapdb pg status           # Check if PostgreSQL is running
