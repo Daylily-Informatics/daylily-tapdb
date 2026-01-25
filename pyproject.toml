@@ -28,6 +28,8 @@ keywords = ["database", "orm", "polymorphic", "templates", "sqlalchemy", "lims"]
 dependencies = [
     "sqlalchemy>=2.0",
     "psycopg2-binary>=2.9",
+    "typer",
+    "rich",
 ]
 
 [project.optional-dependencies]
@@ -40,10 +42,11 @@ dev = [
     "httpx",
 ]
 
-# CLI dependencies (Typer + Rich UI, and YAML config support)
+# Optional CLI add-ons.
+#
+# Note: The CLI itself (Typer + Rich) is intentionally part of core deps so
+# `tapdb --help` works after `pip install -e .` per REFACTOR_TAPDB.md Phase 0.
 cli = [
-    "typer",
-    "rich",
     "pyyaml",
 ]
 

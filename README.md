@@ -60,13 +60,12 @@ TAPDB uses SQLAlchemy single-table inheritance. Each table has typed subclasses:
 
 ## Installation
 
-### Installation modes
+### Installation
 
-- **Core library only** (no CLI, no Admin UI): `pip install daylily-tapdb`
-- **CLI tools**: `pip install "daylily-tapdb[cli]"`
-- **Admin UI**: `pip install "daylily-tapdb[admin]"`
-
-Developer tooling is separate: `pip install "daylily-tapdb[dev]"`.
+- **Library + CLI (default)**: `pip install daylily-tapdb`
+- **Admin UI (optional)**: `pip install "daylily-tapdb[admin]"`
+- **Developer tooling (optional)**: `pip install "daylily-tapdb[dev]"`
+- **CLI YAML config support (optional)**: `pip install "daylily-tapdb[cli]"` (otherwise JSON config works without PyYAML)
 
 ### Quick Start (recommended)
 
@@ -74,12 +73,12 @@ Developer tooling is separate: `pip install "daylily-tapdb[dev]"`.
 python -m venv .venv
 source .venv/bin/activate  # or .venv\\Scripts\\activate on Windows
 pip install -U pip
-pip install -e ".[cli,admin,dev]"
+pip install -e ".[admin,dev]"
 ```
 
 This workflow:
 - creates and activates a virtual environment
-- installs this repo in editable mode (with CLI/admin/dev extras)
+- installs this repo in editable mode (with admin + dev extras)
 
 Optional convenience wrapper (macOS/Linux):
 

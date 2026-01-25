@@ -46,18 +46,6 @@ def _find_admin_module() -> str:
         "Cannot find admin module. Run from the daylily-tapdb repo root, or ensure admin/ is installed."
     )
 
-
-def _require_cli_extras() -> None:
-    """Fail fast with a clear message if CLI extras aren't installed."""
-    required = ["typer", "rich", "yaml"]
-    missing = [m for m in required if importlib.util.find_spec(m) is None]
-    if missing:
-        print("tapdb CLI dependencies are not installed.", file=sys.stderr)
-        print(f"Missing modules: {', '.join(missing)}", file=sys.stderr)
-        print("Install with: pip install 'daylily-tapdb[cli]'", file=sys.stderr)
-        raise SystemExit(1)
-
-
 def _require_admin_extras() -> None:
     """Fail fast with a clear message if Admin UI extras aren't installed."""
     # Fail early with a clear, actionable list.
@@ -572,8 +560,8 @@ def build_app():
 
 # Expose a module-level Typer app for tests and embedding.
 #
-# Important: keep this conditional so a core-only install can still import
-# daylily_tapdb (and even daylily_tapdb.cli) without pulling in CLI deps.
+# Keep this guarded so imports don't explode in partially-provisioned
+# environments (e.g., importing the package without console scripts).
 try:
     if importlib.util.find_spec("typer") is not None and importlib.util.find_spec("rich") is not None:
         app = build_app()
@@ -585,8 +573,7 @@ except Exception:
 
 def main():
     """Main CLI entry point."""
-    _require_cli_extras()
-    cli_app = build_app()
+    cli_app = app or build_app()
     cli_app()
 
 
