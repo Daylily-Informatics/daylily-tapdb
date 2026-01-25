@@ -121,13 +121,12 @@ templates = TemplateManager()
 factory = InstanceFactory(templates)
 
 # Create an instance from a template
-with db.session_scope(commit=False) as session:
+with db.session_scope(commit=True) as session:
     plate = factory.create_instance(
         session=session,
         template_code='container/plate/fixed-plate-96/1.0/',
         name='PLATE-001'
     )
-    session.commit()
     print(f"Created: {plate.euid}")  # e.g., CX1234
 ```
 
@@ -145,7 +144,7 @@ Templates are blueprints stored in `generic_template`. They define:
 - **Instantiation layouts:** Child objects to create automatically
 
 ```python
-# Template code format: {category}/{type}/{subtype}/{version}/
+# Template code format: {category}/{type}/{subtype}/{version} (optional trailing `/`)
 with db.session_scope(commit=False) as session:
     template = templates.get_template(session, 'container/plate/fixed-plate-96/1.0/')
     # Or by EUID
@@ -172,7 +171,7 @@ Each element in `templates` is a template definition with:
 - `name` (string)
 - `polymorphic_discriminator` (string; e.g. `generic_template`, `workflow_template`, `action_template`)
 - `category`, `type`, `subtype`, `version` (strings) — used to build the template code:
-  - `{category}/{type}/{subtype}/{version}/`
+  - `{category}/{type}/{subtype}/{version}` (optional trailing `/`)
 - `instance_prefix` (string; EUID prefix for created instances)
 - `is_singleton` (bool)
 - `bstatus` (string; lifecycle status)
@@ -231,12 +230,34 @@ Example:
 }
 ```
 
+### Validating config files (structural vs semantic)
+
+You can run a **structure/format** validation pass over your `config/` JSON without connecting to a database:
+
+- `tapdb db validate-config` (auto-discovers `./config/` when run from the repo root)
+
+What it checks (structural):
+- JSON parses and top-level shape (`{"templates": [...]}`)
+- required template keys + basic types
+- duplicate `(category, type, subtype, version)` keys
+- template-code formatting in reference fields (accepts optional trailing `/`)
+- `json_addl.instantiation_layouts` shape via Pydantic (e.g., `count >= 1`, `relationship_type` non-empty)
+
+What it does **not** check (semantic):
+- whether `relationship_type` values are from an allowed vocabulary for your application
+- cross-template business rules (capacity constraints, compatibility, naming conventions)
+- database state (foreign keys, existing rows) or runtime action wiring correctness
+
+Useful flags:
+- `--strict/--no-strict`: in strict mode, missing referenced templates are errors
+- `--json`: emit a machine-readable report
+
 ### Instances
 
 Instances are concrete objects created from templates:
 
 ```python
-with db.session_scope(commit=False) as session:
+with db.session_scope(commit=True) as session:
     # Create with default properties
     instance = factory.create_instance(
         session=session,
@@ -254,7 +275,6 @@ with db.session_scope(commit=False) as session:
             'volume_ul': 100
         }
     )
-    session.commit()
 ```
 
 ### Lineages (Relationships)
@@ -262,7 +282,7 @@ with db.session_scope(commit=False) as session:
 Lineages connect instances in a directed acyclic graph:
 
 ```python
-with db.session_scope(commit=False) as session:
+with db.session_scope(commit=True) as session:
     # Link two existing instances (plate/sample assumed already loaded)
     lineage = factory.link_instances(
         session=session,
@@ -270,7 +290,6 @@ with db.session_scope(commit=False) as session:
         child=sample,
         relationship_type='contains'
     )
-    session.commit()
 
     # Traverse relationships (read-only)
     for lineage in plate.parent_of_lineages:
@@ -314,15 +333,17 @@ class MyActionHandler(ActionDispatcher):
         return {'status': 'success', 'message': 'Transfer complete'}
 
 # Execute an action
-handler = MyActionHandler(db)
-result = handler.execute_action(
-    instance=plate,
-    action_group='core_actions',
-    action_key='set_status',
-    action_ds=action_definition,
-    captured_data={'status': 'in_progress'},
-    user='john.doe'
-)
+handler = MyActionHandler()
+with db.session_scope(commit=True) as session:
+    result = handler.execute_action(
+        session=session,
+        instance=plate,
+        action_group='core_actions',
+        action_key='set_status',
+        action_ds=action_definition,
+        captured_data={'status': 'in_progress'},
+        user='john.doe'
+    )
 ```
 
 ## Connection Management
@@ -344,12 +365,11 @@ finally:
     session.close()
 ```
 
-### Scoped sessions (explicit commit)
+### Scoped sessions (auto-commit)
 
 ```python
-with db.session_scope(commit=False) as session:
+with db.session_scope(commit=True) as session:
     session.add(instance)
-    session.commit()
 ```
 
 ## Database Schema
@@ -456,7 +476,6 @@ db = TAPDBConnection(
 |--------|-------------|
 | `get_session()` | Get a new session (caller manages transaction) |
 | `session_scope(commit=False)` | Context manager with optional auto-commit |
-| `session` | Property returning the primary session |
 | `reflect_tables()` | Reflect database tables into AutomapBase |
 | `close()` | Close session and dispose engine |
 
@@ -464,9 +483,9 @@ db = TAPDBConnection(
 
 | Method | Description |
 |--------|-------------|
-| `get_template(template_code)` | Get template by code string |
-| `get_template_by_euid(euid)` | Get template by EUID |
-| `list_templates(category, type_, include_deleted)` | List templates with filters |
+| `get_template(session, template_code)` | Get template by code string |
+| `get_template_by_euid(session, euid)` | Get template by EUID |
+| `list_templates(session, category=None, type_=None, include_deleted=False)` | List templates with filters |
 | `template_code_from_template(template)` | Generate code string from template |
 | `clear_cache()` | Clear template cache |
 
@@ -474,14 +493,14 @@ db = TAPDBConnection(
 
 | Method | Description |
 |--------|-------------|
-| `create_instance(template_code, name, properties, create_children)` | Create instance from template |
-| `link_instances(parent, child, relationship_type)` | Create lineage between instances |
+| `create_instance(session, template_code, name, properties=None, create_children=True)` | Create instance from template |
+| `link_instances(session, parent, child, relationship_type="generic")` | Create lineage between instances |
 
 ### ActionDispatcher
 
 | Method | Description |
 |--------|-------------|
-| `execute_action(instance, action_group, action_key, ...)` | Execute and track an action |
+| `execute_action(session, instance, action_group, action_key, ...)` | Execute and (optionally) create an audit action record |
 
 Implement handlers as `do_action_{action_key}(self, instance, action_ds, captured_data)` methods.
 
@@ -657,6 +676,27 @@ tapdb ui logs                # View logs (--follow/-f to tail)
 tapdb ui restart             # Restart server
 ```
 
+### Backup & Recovery
+
+TAPDB includes thin wrappers around PostgreSQL client tools:
+
+- `tapdb db backup <env>` uses `pg_dump` and writes an **SQL** file
+- `tapdb db restore <env>` replays that file using `psql` (`ON_ERROR_STOP=1`)
+
+What is included by default (table-limited logical backup):
+- `generic_template`
+- `generic_instance`
+- `generic_instance_lineage`
+- `audit_log`
+
+Notes / operational guidance:
+- These commands require `pg_dump` / `psql` on your `PATH` (PostgreSQL client install).
+- For most workflows, prefer **data-only** backups and restore into an existing TAPDB schema:
+  - Backup: `tapdb db backup <env> --data-only -o tapdb_<env>.sql`
+  - Ensure schema exists: `tapdb db create <env>` (or `tapdb db setup <env>`)
+  - Restore: `tapdb db restore <env> -i tapdb_<env>.sql --force`
+- `restore` does not automatically drop tables; for a clean restore, run `tapdb db nuke <env>` (or recreate the database) before restoring.
+
 ### Environments
 
 TAPDB supports three environments: `dev`, `test`, and `prod`.
@@ -670,6 +710,8 @@ TAPDB supports three environments: `dev`, `test`, and `prod`.
 **Local vs Remote:**
 - `dev` and `test` can use local PostgreSQL (`tapdb pg init/start-local`)
 - `prod` requires an external PostgreSQL instance (AWS RDS, system install, etc.)
+
+TAPDB does **not** provision AWS RDS or infrastructure for you; bring your own Postgres instance, database, credentials, and network access.
 
 For remote/AWS databases, configure via environment variables:
 
