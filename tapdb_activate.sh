@@ -101,8 +101,14 @@ if [ -z "${VIRTUAL_ENV:-}" ]; then
     return 1 2>/dev/null || exit 1
 fi
 
-# Check if tapdb CLI is installed
-if ! command -v tapdb >/dev/null 2>&1; then
+# Determine expected tapdb executable from this venv.
+# NOTE: `command -v tapdb` can resolve to a shell function/alias or a global
+# install, which would cause us to skip installing into the venv.
+_tapdb_bin_dir="${VIRTUAL_ENV:-${_tapdb_venv_dir}}/bin"
+_tapdb_tapdb="${_tapdb_bin_dir}/tapdb"
+
+# Check if tapdb CLI is installed in *this* venv
+if [ ! -x "${_tapdb_tapdb}" ]; then
     if [ "${_tapdb_smoke}" = "1" ]; then
         printf "${_tapdb_yellow}⚠${_tapdb_reset} tapdb CLI not installed (smoke mode: skipping install).\n"
         printf "  Install with: ${_tapdb_cyan}(cd %s && python -m pip install -e \".[cli,admin,dev]\")${_tapdb_reset}\n" "${_tapdb_repo_root}"
@@ -131,7 +137,7 @@ case "${-}" in
     *i*) _tapdb_is_interactive=1 ;;
 esac
 
-if [ "${_tapdb_smoke}" != "1" ] && [ "${_tapdb_is_interactive}" -eq 1 ] && command -v tapdb >/dev/null 2>&1; then
+if [ "${_tapdb_smoke}" != "1" ] && [ "${_tapdb_is_interactive}" -eq 1 ] && [ -x "${_tapdb_tapdb}" ]; then
     if [ "${_tapdb_shell}" = "zsh" ]; then
         # In non-interactive zsh shells, compdef/compinit may not be loaded; avoid warnings.
         if ! command -v compdef >/dev/null 2>&1; then
@@ -141,11 +147,11 @@ if [ "${_tapdb_smoke}" != "1" ] && [ "${_tapdb_is_interactive}" -eq 1 ] && comma
             fi
         fi
         if command -v compdef >/dev/null 2>&1; then
-            eval "$(tapdb --show-completion zsh 2>/dev/null)" || true
+            eval "$("${_tapdb_tapdb}" --show-completion zsh 2>/dev/null)" || true
         fi
     elif [ "${_tapdb_shell}" = "bash" ]; then
         if command -v complete >/dev/null 2>&1; then
-            eval "$(tapdb --show-completion bash 2>/dev/null)" || true
+            eval "$("${_tapdb_tapdb}" --show-completion bash 2>/dev/null)" || true
         fi
     fi
 fi
@@ -153,8 +159,8 @@ fi
 # Show status
 if [ "${_tapdb_smoke}" = "1" ]; then
     printf "${_tapdb_green}✓${_tapdb_reset} TAPDB venv activated ${_tapdb_cyan}(smoke mode)${_tapdb_reset}\n"
-elif command -v tapdb >/dev/null 2>&1; then
-    printf "${_tapdb_green}✓${_tapdb_reset} TAPDB activated ${_tapdb_cyan}($(tapdb version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo 'dev'))${_tapdb_reset}\n"
+elif [ -x "${_tapdb_tapdb}" ]; then
+    printf "${_tapdb_green}✓${_tapdb_reset} TAPDB activated ${_tapdb_cyan}($(${_tapdb_tapdb} version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo 'dev'))${_tapdb_reset}\n"
 else
     printf "${_tapdb_green}✓${_tapdb_reset} TAPDB venv activated ${_tapdb_cyan}(tapdb not installed)${_tapdb_reset}\n"
 fi
@@ -182,8 +188,8 @@ printf "${_tapdb_bold}Quick Start:${_tapdb_reset}  tapdb pg init dev && tapdb pg
 printf "\n"
 
 # Show UI status if running
-if [ "${_tapdb_smoke}" != "1" ] && command -v tapdb >/dev/null 2>&1; then
-    _tapdb_ui_status=$(tapdb ui status 2>/dev/null)
+if [ "${_tapdb_smoke}" != "1" ] && [ -x "${_tapdb_tapdb}" ]; then
+    _tapdb_ui_status=$(${_tapdb_tapdb} ui status 2>/dev/null)
     if echo "$_tapdb_ui_status" | grep -q "running"; then
         printf "${_tapdb_green}●${_tapdb_reset} UI Server: ${_tapdb_green}running${_tapdb_reset}\n"
         printf "  URL: ${_tapdb_cyan}http://127.0.0.1:8000${_tapdb_reset}\n"
@@ -196,6 +202,7 @@ printf "${_tapdb_bold}${_tapdb_cyan}━━━━━━━━━━━━━━�
 
 # Cleanup temp vars
 unset _tapdb_repo_root _tapdb_venv_dir _tapdb_python _tapdb_shell _tapdb_ui_status
+unset _tapdb_bin_dir _tapdb_tapdb
 unset _tapdb_arg _tapdb_smoke _tapdb_is_interactive
 unset _tapdb_find_repo_root
 unset _tapdb_red _tapdb_green _tapdb_cyan _tapdb_yellow _tapdb_bold _tapdb_reset

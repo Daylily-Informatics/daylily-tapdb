@@ -58,7 +58,11 @@ admin = [
     "jinja2",
     "python-multipart",
     "itsdangerous",
+    # passlib 1.7.x is not compatible with bcrypt>=4 (bcrypt enforces 72-byte
+    # password max and passlib's backend self-test uses a longer sentinel).
+    # Pin to bcrypt<4 to keep admin auth usable.
     "passlib[bcrypt]",
+    "bcrypt<4",
 ]
 
 [project.scripts]
