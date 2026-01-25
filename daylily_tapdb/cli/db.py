@@ -4,11 +4,13 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+from pydantic import ValidationError
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -16,6 +18,10 @@ from rich.table import Table
 from rich.prompt import Prompt, Confirm
 
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+from daylily_tapdb.validation.instantiation_layouts import (
+    format_validation_error,
+    validate_instantiation_layouts,
+)
 
 console = Console()
 
@@ -793,6 +799,387 @@ def _load_template_configs(config_dir: Path, include_optional: bool = False) -> 
                 console.print(f"[yellow]⚠[/yellow] Error reading {json_file}: {e}")
 
     return templates
+
+
+@dataclass(frozen=True)
+class _ConfigIssue:
+    level: str  # "error" | "warning"
+    message: str
+    source_file: str | None = None
+    template_code: str | None = None
+
+
+def _normalize_template_code_str(code: Any) -> str:
+    s = str(code).strip()
+    if s.endswith("/"):
+        s = s[:-1]
+    return s
+
+
+def _is_template_code_str(code: Any) -> bool:
+    s = _normalize_template_code_str(code)
+    parts = [p for p in s.split("/") if p]
+    return len(parts) == 4
+
+
+def _extract_template_refs(obj: Any) -> list[str]:
+    """Return any template-code-like strings embedded in known config fields.
+
+    This is intentionally conservative: we only look at the known fields used
+    by current configs (action_imports / expected_inputs / expected_outputs /
+    instantiation_layouts.child_templates).
+    """
+
+    refs: list[str] = []
+
+    def _maybe_add(val: Any):
+        if isinstance(val, str):
+            refs.append(val)
+
+    def _walk(container: Any):
+        if not isinstance(container, dict):
+            return
+        ai = container.get("action_imports")
+        if isinstance(ai, dict):
+            for v in ai.values():
+                _maybe_add(v)
+
+        for k in ["expected_inputs", "expected_outputs"]:
+            vals = container.get(k)
+            if isinstance(vals, list):
+                for v in vals:
+                    _maybe_add(v)
+
+        layouts = container.get("instantiation_layouts")
+        if isinstance(layouts, list):
+            for layout in layouts:
+                if not isinstance(layout, dict):
+                    continue
+                children = layout.get("child_templates")
+                if isinstance(children, list):
+                    for c in children:
+                        if isinstance(c, str):
+                            _maybe_add(c)
+                        elif isinstance(c, dict):
+                            _maybe_add(c.get("template_code"))
+
+    if isinstance(obj, dict):
+        _walk(obj)
+        ja = obj.get("json_addl")
+        if isinstance(ja, dict):
+            _walk(ja)
+
+    return refs
+
+
+def _validate_template_configs(config_dir: Path, *, strict: bool) -> tuple[list[dict], list[_ConfigIssue]]:
+    """Load and validate template config JSON files.
+
+    This is a lightweight, dependency-free validator intended for operator
+    safety (Phase 3). It validates:
+    - JSON parses
+    - file shape ({"templates": [...]})
+    - basic required keys + types per template
+    - duplicate (category, type, subtype, version) keys
+    - template-code string formatting in reference fields
+
+    If strict=True, missing referenced templates become errors.
+    """
+
+    issues: list[_ConfigIssue] = []
+    templates: list[dict] = []
+
+    if not config_dir.exists():
+        return [], [
+            _ConfigIssue(level="error", message=f"Config directory not found: {config_dir}")
+        ]
+
+    # Load
+    for category_dir in sorted(config_dir.iterdir()):
+        if not category_dir.is_dir() or category_dir.name.startswith("_"):
+            continue
+
+        for json_file in sorted(category_dir.glob("*.json")):
+            rel = str(json_file.relative_to(config_dir))
+            try:
+                data = json.loads(json_file.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                issues.append(_ConfigIssue(level="error", source_file=rel, message=f"Invalid JSON: {e}"))
+                continue
+            except Exception as e:
+                issues.append(_ConfigIssue(level="error", source_file=rel, message=f"Error reading file: {e}"))
+                continue
+
+            if not isinstance(data, dict):
+                issues.append(
+                    _ConfigIssue(level="error", source_file=rel, message="Config root must be an object/dict")
+                )
+                continue
+            tmpl_list = data.get("templates")
+            if not isinstance(tmpl_list, list):
+                issues.append(
+                    _ConfigIssue(level="error", source_file=rel, message="Missing or invalid 'templates' list")
+                )
+                continue
+
+            for i, tmpl in enumerate(tmpl_list):
+                if not isinstance(tmpl, dict):
+                    issues.append(
+                        _ConfigIssue(
+                            level="error",
+                            source_file=rel,
+                            message=f"Template[{i}] must be an object/dict, got {type(tmpl).__name__}",
+                        )
+                    )
+                    continue
+                tmpl = dict(tmpl)
+                tmpl["_source_file"] = rel
+                templates.append(tmpl)
+
+    if not templates:
+        issues.append(_ConfigIssue(level="error", message=f"No templates found under: {config_dir}"))
+
+    # Validate templates
+    required_str = [
+        "polymorphic_discriminator",
+        "category",
+        "type",
+        "subtype",
+        "version",
+        "instance_prefix",
+    ]
+    keys_seen: dict[tuple[str, str, str, str], str] = {}
+    codes: set[str] = set()
+    refs: list[tuple[str, str, str]] = []  # (source_file, template_code, ref)
+
+    def _validate_ref_container(
+        container: Any, *, source_file: str | None, template_code: str
+    ) -> None:
+        if not isinstance(container, dict):
+            return
+
+        if "action_imports" in container and container.get("action_imports") is not None and not isinstance(
+            container.get("action_imports"), dict
+        ):
+            issues.append(
+                _ConfigIssue(
+                    level="error",
+                    source_file=source_file,
+                    template_code=template_code,
+                    message=(
+                        "Field 'action_imports' must be an object/dict "
+                        f"(got {type(container.get('action_imports')).__name__})"
+                    ),
+                )
+            )
+
+        for k in ["expected_inputs", "expected_outputs"]:
+            if k in container and container.get(k) is not None and not isinstance(container.get(k), list):
+                issues.append(
+                    _ConfigIssue(
+                        level="error",
+                        source_file=source_file,
+                        template_code=template_code,
+                        message=f"Field '{k}' must be an array/list (got {type(container.get(k)).__name__})",
+                    )
+                )
+
+        if "instantiation_layouts" in container and container.get("instantiation_layouts") is not None:
+            try:
+                validate_instantiation_layouts(container.get("instantiation_layouts"))
+            except ValidationError as e:
+                issues.append(
+                    _ConfigIssue(
+                        level="error",
+                        source_file=source_file,
+                        template_code=template_code,
+                        message=f"Invalid instantiation_layouts: {format_validation_error(e)}",
+                    )
+                )
+
+    for tmpl in templates:
+        source_file = str(tmpl.get("_source_file") or "") or None
+
+        # required keys
+        for k in required_str:
+            v = tmpl.get(k)
+            if not isinstance(v, str) or not v.strip():
+                issues.append(
+                    _ConfigIssue(
+                        level="error",
+                        source_file=source_file,
+                        template_code=None,
+                        message=f"Missing/invalid required field '{k}' (must be non-empty string)",
+                    )
+                )
+
+        code = _normalize_template_code_str(_template_code(tmpl))
+        codes.add(code)
+
+        # Validate instance_prefix formatting early (operator safety)
+        try:
+            _normalize_instance_prefix(str(tmpl.get("instance_prefix")))
+        except Exception as e:
+            issues.append(
+                _ConfigIssue(
+                    level="error",
+                    source_file=source_file,
+                    template_code=code,
+                    message=f"Invalid instance_prefix: {e}",
+                )
+            )
+
+        # duplicate key
+        key = _template_key(tmpl)
+        if key in keys_seen:
+            issues.append(
+                _ConfigIssue(
+                    level="error",
+                    source_file=source_file,
+                    template_code=code,
+                    message=f"Duplicate template key {key} also defined in {keys_seen[key]}",
+                )
+            )
+        else:
+            keys_seen[key] = source_file or "(unknown)"
+
+        # basic types for commonly-used fields
+        if "json_addl" in tmpl and tmpl.get("json_addl") is not None and not isinstance(tmpl.get("json_addl"), dict):
+            issues.append(
+                _ConfigIssue(
+                    level="error",
+                    source_file=source_file,
+                    template_code=code,
+                    message=f"Field 'json_addl' must be an object/dict (got {type(tmpl.get('json_addl')).__name__})",
+                )
+            )
+
+        # Validate reference container fields at both top-level and under json_addl
+        _validate_ref_container(tmpl, source_file=source_file, template_code=code)
+        if isinstance(tmpl.get("json_addl"), dict):
+            _validate_ref_container(tmpl.get("json_addl"), source_file=source_file, template_code=code)
+        if "is_singleton" in tmpl and not isinstance(tmpl.get("is_singleton"), bool):
+            issues.append(
+                _ConfigIssue(
+                    level="error",
+                    source_file=source_file,
+                    template_code=code,
+                    message=f"Field 'is_singleton' must be boolean (got {type(tmpl.get('is_singleton')).__name__})",
+                )
+            )
+        if "instance_prefix" in tmpl and tmpl.get("instance_prefix") is not None and not isinstance(
+            tmpl.get("instance_prefix"), str
+        ):
+            issues.append(
+                _ConfigIssue(
+                    level="error",
+                    source_file=source_file,
+                    template_code=code,
+                    message=f"Field 'instance_prefix' must be string (got {type(tmpl.get('instance_prefix')).__name__})",
+                )
+            )
+
+        for ref in _extract_template_refs(tmpl):
+            refs.append((source_file or "(unknown)", code, ref))
+            if not _is_template_code_str(ref):
+                issues.append(
+                    _ConfigIssue(
+                        level="error",
+                        source_file=source_file,
+                        template_code=code,
+                        message=f"Invalid template reference (expected 'category/type/subtype/version'): {ref!r}",
+                    )
+                )
+
+    # Reference existence (optional)
+    if refs:
+        for source_file, owner_code, ref in refs:
+            if not _is_template_code_str(ref):
+                continue
+            norm_ref = _normalize_template_code_str(ref)
+            if norm_ref not in codes:
+                lvl = "error" if strict else "warning"
+                issues.append(
+                    _ConfigIssue(
+                        level=lvl,
+                        source_file=source_file,
+                        template_code=owner_code,
+                        message=f"Referenced template not found in config set: {norm_ref}",
+                    )
+                )
+
+    return templates, issues
+
+
+@db_app.command("validate-config")
+def db_validate_config(
+    config_path: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to template config directory"),
+    strict: bool = typer.Option(
+        True,
+        "--strict/--no-strict",
+        help="If strict, missing referenced templates are treated as errors (non-zero exit).",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON report"),
+):
+    """Validate template JSON config files (no database required)."""
+
+    try:
+        config_dir = config_path if config_path else _find_config_dir()
+    except FileNotFoundError as e:
+        console.print(f"[red]✗[/red] {e}")
+        raise typer.Exit(1)
+
+    templates, issues = _validate_template_configs(config_dir, strict=strict)
+    errors = [i for i in issues if i.level == "error"]
+    warnings = [i for i in issues if i.level == "warning"]
+
+    if json_output:
+        payload = {
+            "config_dir": str(config_dir),
+            "strict": strict,
+            "templates": len(templates),
+            "errors": len(errors),
+            "warnings": len(warnings),
+            "issues": [
+                {
+                    "level": i.level,
+                    "message": i.message,
+                    "source_file": i.source_file,
+                    "template_code": i.template_code,
+                }
+                for i in issues
+            ],
+        }
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        raise typer.Exit(1 if errors else 0)
+
+    console.print(f"\n[bold cyan]━━━ Validate Template Config ({'strict' if strict else 'non-strict'}) ━━━[/bold cyan]")
+    console.print(f"  Config directory: [dim]{config_dir}[/dim]")
+    console.print(f"  Templates loaded: {len(templates)}")
+
+
+    if issues:
+        # Use folding for long messages so validation details are not truncated
+        # (important for test output capture and operator clarity).
+        table = Table(title="Config validation issues", show_lines=False, expand=True)
+        table.add_column("Level", style="bold")
+        table.add_column("File")
+        table.add_column("Template")
+        table.add_column("Message", overflow="fold")
+        for i in issues:
+            lvl_style = "red" if i.level == "error" else "yellow"
+            table.add_row(
+                f"[{lvl_style}]{i.level}[/{lvl_style}]",
+                i.source_file or "",
+                i.template_code or "",
+                i.message,
+            )
+        console.print(table)
+
+    if errors:
+        console.print(f"\n[red]✗[/red] Validation failed: {len(errors)} error(s), {len(warnings)} warning(s)")
+        raise typer.Exit(1)
+    console.print(f"\n[green]✓[/green] Validation OK: {len(warnings)} warning(s)")
 
 
 def _sql_escape_literal(val: str) -> str:

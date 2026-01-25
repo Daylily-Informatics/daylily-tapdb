@@ -3,11 +3,17 @@ import copy
 import logging
 from typing import Any, Dict, Optional
 
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.models.lineage import generic_instance_lineage
+from daylily_tapdb.validation.instantiation_layouts import (
+    format_validation_error,
+    normalize_template_code_str,
+    validate_instantiation_layouts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +116,8 @@ class InstanceFactory:
         Raises:
             ValueError: If template not found, max depth exceeded, or cycle detected.
         """
+        template_code = normalize_template_code_str(template_code)
+
         # Initialize visited set on first call
         if _visited is None:
             _visited = set()
@@ -208,49 +216,34 @@ class InstanceFactory:
             depth: Current recursion depth.
             visited: Set of visited template codes.
         """
-        layouts = template.json_addl.get("instantiation_layouts", [])
-
-        if layouts in (None, [], {}):
-            return
-        if not isinstance(layouts, list):
+        raw_layouts = template.json_addl.get("instantiation_layouts", [])
+        try:
+            layouts = validate_instantiation_layouts(raw_layouts)
+        except ValidationError as e:
             raise ValueError(
-                "instantiation_layouts must be a list of objects with child_templates list"
-            )
+                f"Invalid instantiation_layouts: {format_validation_error(e)}"
+            ) from e
 
-        for layout_index, layout_def in enumerate(layouts):
-            if not isinstance(layout_def, dict):
-                raise ValueError("instantiation_layouts entries must be objects")
+        if not layouts:
+            return
 
-            relationship_type = layout_def.get("relationship_type", "contains")
-            layout_name_pattern = layout_def.get("name_pattern")
-            child_templates = layout_def.get("child_templates", [])
+        for layout_index, layout in enumerate(layouts):
+            relationship_type = layout.relationship_type
+            layout_name_pattern = layout.name_pattern
 
-            if not isinstance(child_templates, list):
-                raise ValueError("child_templates must be a list")
-
-            for child_index, child_def in enumerate(child_templates):
-                # Canonical: strings are allowed (template_code)
-                if isinstance(child_def, str):
-                    child_template_code = child_def
+            for child_index, child in enumerate(layout.child_templates):
+                root = child.root
+                if isinstance(root, str):
+                    child_template_code = root
                     count = 1
                     name_pattern = layout_name_pattern
-                elif isinstance(child_def, dict):
-                    child_template_code = child_def.get("template_code")
-                    if not child_template_code:
-                        raise ValueError("child_templates objects must include template_code")
-                    count = int(child_def.get("count", 1))
-                    name_pattern = child_def.get("name_pattern") or layout_name_pattern
                 else:
-                    raise ValueError("child_templates entries must be string or object")
+                    child_template_code = root.template_code
+                    count = root.count
+                    name_pattern = root.name_pattern or layout_name_pattern
 
-
-                parts = child_template_code.strip("/").split("/")
-                if len(parts) != 4:
-                    raise ValueError(
-                        f"Invalid child template_code format: {child_template_code} "
-                        "(expected {category}/{type}/{subtype}/{version})"
-                    )
-                child_subtype = parts[2]
+                # child_template_code is validated as category/type/subtype/version
+                child_subtype = child_template_code.split("/")[2]
                 name_pattern = name_pattern or "{parent_name}_{child_subtype}_{index}"
 
                 for i in range(count):
@@ -264,7 +257,7 @@ class InstanceFactory:
                         child_template_code=child_template_code,
                     )
 
-                    child = self.create_instance(
+                    child_obj = self.create_instance(
                         session=session,
                         template_code=child_template_code,
                         name=child_name,
@@ -273,7 +266,7 @@ class InstanceFactory:
                         _visited=visited.copy(),
                     )
 
-                    self._create_lineage(session, parent, child, relationship_type)
+                    self._create_lineage(session, parent, child_obj, relationship_type)
 
     def _create_lineage(
         self,

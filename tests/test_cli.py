@@ -137,6 +137,7 @@ class TestCLIDB:
         assert "migrate" in result.output
         assert "backup" in result.output
         assert "restore" in result.output
+        assert "validate-config" in result.output
 
     def test_db_create_help(self):
         """Test db create --help."""
@@ -314,6 +315,341 @@ class TestCLIDBSeed:
         assert "--config" in result.output or "-c" in result.output
         assert "--dry-run" in result.output
         assert "--skip-existing" in result.output or "--overwrite" in result.output
+
+    def test_db_validate_config_help(self):
+        """Test db validate-config --help."""
+        result = runner.invoke(app, ["db", "validate-config", "--help"])
+        assert result.exit_code == 0
+        assert "--config" in result.output or "-c" in result.output
+        assert "--strict" in result.output
+        assert "--json" in result.output
+
+    def test_db_validate_config_valid_minimal(self, tmp_path: Path):
+        """A minimal two-template config with a valid reference should pass."""
+        (tmp_path / "generic").mkdir()
+        (tmp_path / "action").mkdir()
+
+        (tmp_path / "action" / "core.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Create Note",
+                            "polymorphic_discriminator": "action_template",
+                            "category": "action",
+                            "type": "core",
+                            "subtype": "create-note",
+                            "version": "1.0",
+                            "instance_prefix": "XX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        (tmp_path / "generic" / "generic.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Generic Object",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "generic",
+                            "version": "1.0",
+                            "instance_prefix": "GX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {
+                                "action_imports": {"create_note": "action/core/create-note/1.0"},
+                                "expected_inputs": [],
+                                "expected_outputs": [],
+                                "instantiation_layouts": [],
+                            },
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path)])
+        assert result.exit_code == 0
+
+    def test_db_validate_config_valid_instantiation_layouts_child_templates_dict(self, tmp_path: Path):
+        """Dict-format child_templates entries should validate and be reference-checked."""
+        (tmp_path / "generic").mkdir()
+        (tmp_path / "action").mkdir()
+
+        (tmp_path / "action" / "core.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Create Note",
+                            "polymorphic_discriminator": "action_template",
+                            "category": "action",
+                            "type": "core",
+                            "subtype": "create-note",
+                            "version": "1.0",
+                            "instance_prefix": "XX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        (tmp_path / "generic" / "generic.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Generic Object",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "generic",
+                            "version": "1.0",
+                            "instance_prefix": "GX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {
+                                "instantiation_layouts": [
+                                    {
+                                        "relationship_type": "contains",
+                                        "child_templates": [
+                                            {
+                                                "template_code": "action/core/create-note/1.0",
+                                                "count": 2,
+                                                "name_pattern": "{parent_name}_child_{index}",
+                                            }
+                                        ],
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path)])
+        assert result.exit_code == 0
+
+    def test_db_validate_config_missing_reference_in_instantiation_layouts_dict_strict_fails(self, tmp_path: Path):
+        """Strict mode should fail for missing refs referenced via child_templates dict entries."""
+        (tmp_path / "generic").mkdir()
+
+        (tmp_path / "generic" / "generic.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Generic Object",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "generic",
+                            "version": "1.0",
+                            "instance_prefix": "GX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {
+                                "instantiation_layouts": [
+                                    {
+                                        "child_templates": [
+                                            {"template_code": "action/core/create-note/1.0"}
+                                        ]
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path), "--strict"])
+        assert result.exit_code != 0
+        assert "referenced template" in result.output.lower() or "not found" in result.output.lower()
+
+    def test_db_validate_config_invalid_instantiation_layouts_bad_count(self, tmp_path: Path):
+        """count must be >= 1 for dict-format child_templates entries."""
+        (tmp_path / "generic").mkdir()
+        (tmp_path / "action").mkdir()
+
+        (tmp_path / "action" / "core.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Create Note",
+                            "polymorphic_discriminator": "action_template",
+                            "category": "action",
+                            "type": "core",
+                            "subtype": "create-note",
+                            "version": "1.0",
+                            "instance_prefix": "XX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        (tmp_path / "generic" / "generic.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Generic Object",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "generic",
+                            "version": "1.0",
+                            "instance_prefix": "GX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {
+                                "instantiation_layouts": [
+                                    {
+                                        "child_templates": [
+                                            {
+                                                "template_code": "action/core/create-note/1.0",
+                                                "count": 0,
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # Use --json to avoid brittle assertions against Rich table wrapping.
+        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path), "--json"])
+        assert result.exit_code != 0
+
+        payload = json.loads(result.output)
+        assert payload["errors"] >= 1
+        msgs = "\n".join(i["message"] for i in payload["issues"]).lower()
+        assert "instantiation_layouts" in msgs
+        assert "count" in msgs
+
+    def test_db_validate_config_invalid_instantiation_layouts_missing_template_code(self, tmp_path: Path):
+        """Dict-format child_templates must include template_code."""
+        (tmp_path / "generic").mkdir()
+
+        (tmp_path / "generic" / "generic.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Generic Object",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "generic",
+                            "version": "1.0",
+                            "instance_prefix": "GX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {
+                                "instantiation_layouts": [
+                                    {"child_templates": [{"count": 1}]}
+                                ]
+                            },
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # Use --json to avoid brittle assertions against Rich table wrapping.
+        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path), "--json"])
+        assert result.exit_code != 0
+
+        payload = json.loads(result.output)
+        assert payload["errors"] >= 1
+        msgs = "\n".join(i["message"] for i in payload["issues"]).lower()
+        assert "instantiation_layouts" in msgs
+        assert "template_code" in msgs
+
+    def test_db_validate_config_missing_reference_strict_fails(self, tmp_path: Path):
+        """Strict mode should fail if a referenced template is not present."""
+        (tmp_path / "generic").mkdir()
+        (tmp_path / "generic" / "generic.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Generic Object",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "generic",
+                            "version": "1.0",
+                            "instance_prefix": "GX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {"action_imports": {"create_note": "action/core/create-note/1.0"}},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path), "--strict"])
+        assert result.exit_code != 0
+        assert "referenced template" in result.output.lower() or "not found" in result.output.lower()
+
+    def test_db_validate_config_missing_reference_non_strict_warns(self, tmp_path: Path):
+        """Non-strict mode should warn but exit 0 for missing references."""
+        (tmp_path / "generic").mkdir()
+        (tmp_path / "generic" / "generic.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Generic Object",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "generic",
+                            "version": "1.0",
+                            "instance_prefix": "GX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {"action_imports": {"create_note": "action/core/create-note/1.0"}},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path), "--no-strict"])
+        assert result.exit_code == 0
 
     def test_db_setup_help(self):
         """Test db setup --help."""
