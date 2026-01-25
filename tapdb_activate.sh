@@ -1,6 +1,6 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # TAPDB Environment Activation Script (pip + venv)
-# Usage: . ./tapdb_activate.sh [--smoke]   (or: source tapdb_activate.sh [--smoke])
+# Usage (bash/zsh): source ./tapdb_activate.sh [--smoke]
 #
 # This script:
 #   1. Creates a local virtualenv at ./.venv (if needed)
@@ -13,6 +13,23 @@
 #   - Skips pip install
 #   - Skips shell completion
 #   - Intended for non-interactive CI/smoke checks: `source ./tapdb_activate.sh --smoke`
+
+# Guardrail: this file must be sourced (executing it cannot activate your current shell).
+_tapdb__sourced=0
+if [ -n "${BASH_VERSION:-}" ]; then
+    if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+        _tapdb__sourced=1
+    fi
+elif [ -n "${ZSH_VERSION:-}" ]; then
+    case "${ZSH_EVAL_CONTEXT:-}" in
+        *:file) _tapdb__sourced=1 ;;
+    esac
+fi
+if [ "${_tapdb__sourced}" -ne 1 ]; then
+    printf 'ERROR: tapdb_activate.sh must be sourced (bash/zsh):\n  source ./tapdb_activate.sh\n' >&2
+    exit 2
+fi
+unset _tapdb__sourced
 
 # Colors (POSIX-safe)
 _tapdb_red='\033[0;31m'
@@ -78,7 +95,7 @@ if [ ! -f "${_tapdb_venv_dir}/bin/activate" ]; then
 fi
 
 printf "${_tapdb_cyan}►${_tapdb_reset} Activating .venv...\n"
-. "${_tapdb_venv_dir}/bin/activate"
+source "${_tapdb_venv_dir}/bin/activate"
 if [ -z "${VIRTUAL_ENV:-}" ]; then
     printf "${_tapdb_red}✗${_tapdb_reset} Failed to activate virtual environment.\n"
     return 1 2>/dev/null || exit 1
