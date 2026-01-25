@@ -4,7 +4,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![SQLAlchemy 2.0+](https://img.shields.io/badge/sqlalchemy-2.0+-green.svg)](https://www.sqlalchemy.org/)
-[![PostgreSQL 14+](https://img.shields.io/badge/postgresql-14+-336791.svg)](https://www.postgresql.org/)
+[![PostgreSQL 13+](https://img.shields.io/badge/postgresql-13+-336791.svg)](https://www.postgresql.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
@@ -60,12 +60,10 @@ TAPDB uses SQLAlchemy single-table inheritance. Each table has typed subclasses:
 
 ## Installation
 
-### Installation
-
 - **Library + CLI (default)**: `pip install daylily-tapdb`
 - **Admin UI (optional)**: `pip install "daylily-tapdb[admin]"`
 - **Developer tooling (optional)**: `pip install "daylily-tapdb[dev]"`
-- **CLI YAML config support (optional)**: `pip install "daylily-tapdb[cli]"` (otherwise JSON config works without PyYAML)
+- **CLI YAML config support (optional)**: `pip install "daylily-tapdb[cli]"` (adds PyYAML for `tapdb-config.yaml`; template config files remain JSON)
 
 ### Quick Start (recommended)
 
@@ -75,6 +73,10 @@ source .venv/bin/activate  # or .venv\\Scripts\\activate on Windows
 pip install -U pip
 pip install -e ".[admin,dev]"
 ```
+
+If you want the optional CLI YAML config support during development, install:
+
+- `pip install -e ".[admin,dev,cli]"`
 
 This workflow:
 - creates and activates a virtual environment
@@ -195,6 +197,37 @@ Each element in `templates` is a template definition with:
       "json_addl": {"properties": {"name": "Generic Object"}}
     }
   ]
+}
+```
+
+### `instantiation_layouts` schema
+
+If a template’s `json_addl.instantiation_layouts` is present, TAPDB validates it (Phase 2) and uses it to create child instances automatically.
+
+Canonical shape:
+
+- `instantiation_layouts`: **list** of layout objects
+  - `relationship_type` (string, optional; default `"contains"`)
+  - `name_pattern` (string, optional)
+  - `child_templates`: **list** of child entries
+    - string form: a template code (e.g. `"content/sample/dna/1.0/"`)
+    - object form: `{ "template_code": "...", "count": 1, "name_pattern": "..." }` (`count` must be >= 1)
+
+Example:
+
+```json
+{
+  "json_addl": {
+    "instantiation_layouts": [
+      {
+        "relationship_type": "contains",
+        "child_templates": [
+          "content/sample/dna/1.0/",
+          {"template_code": "content/sample/dna/1.0/", "count": 2, "name_pattern": "Sample-{i}"}
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -343,7 +376,12 @@ psql -d your_database -f schema/tapdb_schema.sql
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_URL` | Full database URL | — |
+| `DATABASE_URL` | Full database URL (overrides component/env-style config) | — |
+| `TAPDB_ENV` | Active environment name used by the CLI (e.g. `dev`, `test`, `prod`) | — |
+| `TAPDB_CONFIG_PATH` | Path to `tapdb-config.yaml`/`.json` for CLI environment settings | — |
+| `TAPDB_TEST_DSN` | Postgres DSN enabling integration tests (`tests/test_integration.py`) | — |
+| `TAPDB_SESSION_SECRET` | **Prod admin UI required**: session secret | — |
+| `TAPDB_ADMIN_ALLOWED_ORIGINS` | **Prod admin UI required**: comma-separated CORS origins | — |
 | `PGPASSWORD` | PostgreSQL password | — |
 | `PGPORT` | PostgreSQL port | `5432` |
 | `USER` | Database user / audit username | System user |
@@ -451,16 +489,26 @@ Implement handlers as `do_action_{action_key}(self, instance, action_ds, capture
 
 TAPDB’s integration tests require a reachable PostgreSQL DSN.
 
-1) Set a DSN:
+For a quick local Postgres (recommended):
+
+```bash
+tapdb pg init test
+tapdb pg start-local test
+tapdb pg create test
+
+export TAPDB_TEST_DSN="postgresql://$USER@localhost:5433/tapdb_test"
+```
+
+Or, point at any reachable Postgres:
 
 ```bash
 export TAPDB_TEST_DSN='postgresql://user@localhost:5432/postgres'
 ```
 
-2) Run the integration tests:
+Run the integration tests:
 
 ```bash
-pytest tests/test_integration.py -v
+pytest -q tests/test_integration.py
 ```
 
 ### GitHub Actions
@@ -563,40 +611,50 @@ source tapdb_deactivate.sh  # Stops PostgreSQL and deactivates .venv
 
 ```bash
 # General
-tapdb --help              # Show all commands
-tapdb version             # Show version
-tapdb info                # Show config and status
+tapdb --help                 # Show all commands
+tapdb version                # Show version
+tapdb info                   # Show config and status
 
 # Local PostgreSQL (data-dir based; requires initdb/pg_ctl on PATH; conda recommended)
-tapdb pg init <env>       # Initialize data directory (dev/test only)
-tapdb pg start-local <env> # Start local PostgreSQL instance
-tapdb pg stop-local <env>  # Stop local PostgreSQL instance
+tapdb pg init <env>          # Initialize data directory (dev/test only)
+tapdb pg start-local <env>   # Start local PostgreSQL instance
+tapdb pg stop-local <env>    # Stop local PostgreSQL instance
 
 # System PostgreSQL (system service; production only)
-tapdb pg start            # Start system PostgreSQL service
-tapdb pg stop             # Stop system PostgreSQL service
-tapdb pg status           # Check if PostgreSQL is running
-tapdb pg logs             # View logs (--follow/-f to tail)
-tapdb pg restart          # Restart system PostgreSQL
+tapdb pg start               # Start system PostgreSQL service
+tapdb pg stop                # Stop system PostgreSQL service
+tapdb pg status              # Check if PostgreSQL is running
+tapdb pg logs                # View logs (--follow/-f to tail)
+tapdb pg restart             # Restart system PostgreSQL
 
 # Database management (env: dev | test | prod)
-tapdb pg create <env>     # Create empty database (e.g., tapdb_dev)
-tapdb pg delete <env>     # Delete database (⚠️ destructive)
-tapdb db create <env>     # Apply TAPDB schema to existing database
-tapdb db seed <env>       # Seed templates from config/ directory
-tapdb db setup <env>      # Full setup: create db + schema + seed (recommended)
-tapdb db status <env>     # Check schema status and row counts
-tapdb db nuke <env>       # Drop all tables (⚠️ destructive)
-tapdb db backup <env>     # Backup database (--output/-o FILE)
-tapdb db restore <env>    # Restore from backup (--input/-i FILE)
-tapdb db migrate <env>    # Apply schema migrations
+tapdb pg create <env>        # Create empty database (e.g., tapdb_dev)
+tapdb pg delete <env>        # Delete database (⚠️ destructive)
+tapdb db validate-config     # Validate template JSON config files (no database required)
+tapdb db create <env>        # Apply TAPDB schema to existing database
+tapdb db seed <env>          # Seed templates from config/ directory
+tapdb db setup <env>         # Full setup: create db + schema + seed (recommended)
+tapdb db status <env>        # Check schema status and row counts
+tapdb db nuke <env>          # Drop all tables (⚠️ destructive)
+tapdb db backup <env>        # Backup database (--output/-o FILE)
+tapdb db restore <env>       # Restore from backup (--input/-i FILE)
+tapdb db migrate <env>       # Apply schema migrations
+
+# User management
+tapdb user list              # List users
+tapdb user add               # Add a user
+tapdb user set-role          # Promote/demote (admin|user)
+tapdb user deactivate        # Disable login
+tapdb user activate          # Re-enable login
+tapdb user set-password      # Set password
+tapdb user delete            # Permanently delete (⚠️ destructive)
 
 # Admin UI
-tapdb ui start            # Start admin UI (background)
-tapdb ui stop             # Stop admin UI
-tapdb ui status           # Check if running
-tapdb ui logs             # View logs (--follow/-f to tail)
-tapdb ui restart          # Restart server
+tapdb ui start               # Start admin UI (background)
+tapdb ui stop                # Stop admin UI
+tapdb ui status              # Check if running
+tapdb ui logs                # View logs (--follow/-f to tail)
+tapdb ui restart             # Restart server
 ```
 
 ### Environments
@@ -681,8 +739,10 @@ daylily-tapdb/
 │   │   └── instance.py      # InstanceFactory
 │   ├── actions/
 │   │   └── dispatcher.py    # ActionDispatcher
+│   ├── validation/
+│   │   └── instantiation_layouts.py  # Pydantic schema for json_addl.instantiation_layouts
 │   └── cli/
-│       └── __init__.py      # CLI entry point (placeholder)
+│       └── __init__.py      # CLI entry point
 ├── admin/                   # FastAPI admin interface
 │   ├── main.py              # App entry point
 │   ├── api/                 # API endpoints
