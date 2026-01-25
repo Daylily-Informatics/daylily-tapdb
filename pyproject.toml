@@ -1,0 +1,100 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daylily-tapdb"
+version = "0.1.0"
+description = "Templated Abstract Polymorphic Database - A flexible object model library"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Daylily Informatics", email = "info@daylilyinformatics.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries",
+]
+keywords = ["database", "orm", "polymorphic", "templates", "sqlalchemy", "lims"]
+
+dependencies = [
+    "sqlalchemy>=2.0",
+    "psycopg2-binary>=2.9",
+    "pydantic",
+    "typer",
+    "rich",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+    "httpx",
+]
+
+# Optional CLI add-ons.
+#
+# Note: The CLI itself (Typer + Rich) is intentionally part of core deps so
+# `tapdb --help` works after `pip install -e .` per REFACTOR_TAPDB.md Phase 0.
+cli = [
+    "pyyaml",
+]
+
+# Optional Admin UI (FastAPI). Keep out of core installs.
+admin = [
+    "fastapi",
+    "uvicorn",
+    "jinja2",
+    "python-multipart",
+    "itsdangerous",
+    "passlib[bcrypt]",
+]
+
+[project.scripts]
+tapdb = "daylily_tapdb.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Daylily-Informatics/daylily-tapdb"
+Repository = "https://github.com/Daylily-Informatics/daylily-tapdb.git"
+Documentation = "https://daylily-tapdb.readthedocs.io"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["daylily_tapdb*", "admin*"]
+
+[tool.setuptools.package-data]
+# Admin UI ships HTML templates + static assets.
+admin = [
+    "templates/*.html",
+    "static/css/*.css",
+    "static/js/*.js",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 88
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "I", "N", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

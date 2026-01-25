@@ -1,0 +1,33 @@
+# Example TAPDB CLI config
+#
+# Save as:
+#   ~/.config/tapdb/tapdb-config.yaml
+# or:
+#   ./config/tapdb-config.yaml
+#
+# The CLI resolves config in this order:
+# 1) TAPDB_CONFIG_PATH
+# 2) ~/.config/tapdb/tapdb-config.yaml
+# 3) ./config/tapdb-config.yaml
+
+environments:
+  dev:
+    host: localhost
+    port: 5432
+    user: daylily
+    password: ""
+    database: tapdb_dev
+
+  test:
+    host: localhost
+    port: 5433
+    user: daylily
+    password: ""
+    database: tapdb_test
+
+  prod:
+    host: example-prod-host
+    port: 5432
+    user: tapdb_admin
+    password: "CHANGEME"
+    database: tapdb_prod

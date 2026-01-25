@@ -1,0 +1,27 @@
+{
+  "$schema": "tapdb-template-v2",
+  "version": "2.0.0",
+  "description": "TAPDB Template Configuration v2 Schema",
+  "field_mapping": {
+    "polymorphic_discriminator": "Path: category/type/subtype/version (e.g., container/tube/generic/1.0)",
+    "category": "Top-level category (generic, container, content, workflow, workflow_step, action)",
+    "type": "Type within category (e.g., tube, plate, queue)",
+    "subtype": "Specific variant (e.g., generic, streck-10ml, fixed-plate-96)",
+    "version": "Template version (e.g., 1.0)",
+    "instance_prefix": "EUID prefix for instances (e.g., CX, WX, GX)",
+    "json_addl": "Flexible JSON data for template-specific properties"
+  },
+  "euid_prefixes": {
+    "generic_template": "GT",
+    "generic_instance": "GX",
+    "generic_instance_lineage": "GL",
+    "container": "CX",
+    "container_well": "CWX",
+    "content": "CNX",
+    "workflow": "WX",
+    "workflow_assay": "AY",
+    "workflow_step": "WSX",
+    "action": "XX"
+  }
+}
+
