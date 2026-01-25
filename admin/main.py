@@ -805,8 +805,9 @@ async def get_graph_data(
                             edges.append({
                                 "data": {
                                     "id": lin.euid,
-                                    "source": instance.euid,
-                                    "target": lin.child_instance.euid,
+									# Major wants directionality: child -> parent
+									"source": lin.child_instance.euid,
+									"target": instance.euid,
                                     "relationship_type": lin.relationship_type or "related",
                                 }
                             })
@@ -819,8 +820,9 @@ async def get_graph_data(
                             edges.append({
                                 "data": {
                                     "id": lin.euid,
-                                    "source": lin.parent_instance.euid,
-                                    "target": instance.euid,
+									# Major wants directionality: child -> parent
+									"source": instance.euid,
+									"target": lin.parent_instance.euid,
                                     "relationship_type": lin.relationship_type or "related",
                                 }
                             })
@@ -858,8 +860,9 @@ async def get_graph_data(
                         edges.append({
                             "data": {
                                 "id": lin.euid,
-                                "source": p_euid,
-                                "target": c_euid,
+								# Major wants directionality: child -> parent
+								"source": c_euid,
+								"target": p_euid,
                                 "relationship_type": lin.relationship_type or "related",
                             }
                         })

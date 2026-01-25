@@ -35,12 +35,19 @@ const cytoscapeStyle = [
     {
         selector: 'edge',
         style: {
-            'width': 2,
-            'line-color': '#666',
-            'target-arrow-color': '#666',
-            'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
-            'arrow-scale': 1.2,
+			// Directed edges: always render arrowhead on the *target* end.
+			// Extra endpoint/distance settings keep arrowheads visible outside node borders.
+			'width': 2,
+			'line-color': '#666',
+			'curve-style': 'bezier',
+			'source-arrow-shape': 'none',
+			'target-arrow-shape': 'triangle',
+			'target-arrow-fill': 'filled',
+			'target-arrow-color': '#666',
+			'source-endpoint': 'outside-to-node',
+			'target-endpoint': 'outside-to-node',
+			'target-distance-from-node': 6,
+			'arrow-scale': 1.6,
         }
     },
     {
@@ -58,7 +65,8 @@ function initCytoscape(container, elements) {
         container: container,
         elements: elements,
         style: cytoscapeStyle,
-        layout: { name: 'dagre', rankDir: 'TB', nodeSep: 50, rankSep: 80 },
+		// With child->parent directionality, use bottom-to-top so parents tend to render above children.
+		layout: { name: 'dagre', rankDir: 'BT', nodeSep: 50, rankSep: 80 },
         minZoom: 0.1,
         maxZoom: 3,
         wheelSensitivity: 0.3,
@@ -103,8 +111,8 @@ function showEdgeInfo(data) {
     const content = document.getElementById('node-info-content');
     content.innerHTML = `
         <p><strong>Lineage EUID:</strong> <a href="/object/${data.id}">${data.id}</a></p>
-        <p><strong>Source:</strong> <a href="/object/${data.source}">${data.source}</a></p>
-        <p><strong>Target:</strong> <a href="/object/${data.target}">${data.target}</a></p>
+		<p><strong>Child (source):</strong> <a href="/object/${data.source}">${data.source}</a></p>
+		<p><strong>Parent (target):</strong> <a href="/object/${data.target}">${data.target}</a></p>
         <p><strong>Relationship:</strong> ${data.relationship_type || 'related'}</p>
         <hr style="border-color: var(--border-color); margin: 0.75rem 0;">
         <a href="/object/${data.id}" class="btn" style="width: 100%; text-align: center;">View Lineage</a>
@@ -125,7 +133,7 @@ function centerOnNode(nodeId) {
 function applyLayout() {
     const layoutName = document.getElementById('layout-select').value;
     const layoutOptions = {
-        dagre: { name: 'dagre', rankDir: 'TB', nodeSep: 50, rankSep: 80 },
+		dagre: { name: 'dagre', rankDir: 'BT', nodeSep: 50, rankSep: 80 },
         cose: { name: 'cose', animate: true, animationDuration: 500 },
         breadthfirst: { name: 'breadthfirst', directed: true, spacingFactor: 1.5 },
         circle: { name: 'circle' },

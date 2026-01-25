@@ -24,6 +24,22 @@ def test_hash_password_requires_passlib(monkeypatch):
         passwords.hash_password("pw")
 
 
+def test_hash_password_surfaces_backend_init_error(monkeypatch):
+    from daylily_tapdb import passwords
+
+    monkeypatch.setattr(passwords, "_PWD_CONTEXT", None)
+    monkeypatch.setattr(
+        passwords,
+        "_PWD_CONTEXT_ERROR",
+        ValueError("password cannot be longer than 72 bytes"),
+    )
+
+    with pytest.raises(RuntimeError) as e:
+        passwords.hash_password("pw")
+
+    assert "bcrypt<4" in str(e.value)
+
+
 def test_hash_password_delegates_to_context(monkeypatch):
     from daylily_tapdb import passwords
 
