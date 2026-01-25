@@ -823,4 +823,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-**Daylily Informatics** — [daylilyinformatics.com](https://daylilyinformatics.com)
+**Daylily Informatics** — [daylilyinformatics.com](https://daylilyinformatics.com) 
