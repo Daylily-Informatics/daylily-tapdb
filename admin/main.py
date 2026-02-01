@@ -24,6 +24,7 @@ from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
+from daylily_tapdb.cli.db_config import get_db_config_for_env
 
 from admin.auth import (
     get_current_user, require_auth, require_admin,
@@ -103,24 +104,24 @@ app.add_middleware(
 def get_db() -> TAPDBConnection:
     """Get database connection.
 
+    Uses the canonical config loader from daylily_tapdb.cli.db_config.
     Respects TAPDB_ENV environment variable (dev/test/prod).
     Defaults to 'dev' environment.
+
+    Config resolution order (highest precedence first):
+    1. TAPDB_<ENV>_* environment variables
+    2. PG* environment variables
+    3. ~/.config/tapdb/tapdb-config.yaml or ./config/tapdb-config.yaml
+    4. Hard-coded defaults
     """
     env = os.environ.get("TAPDB_ENV", "dev").lower()
-    env_upper = env.upper()
-
-    # Check for environment-specific configuration
-    db_host = os.environ.get(f"TAPDB_{env_upper}_HOST", "localhost")
-    db_port = os.environ.get(f"TAPDB_{env_upper}_PORT", "5432")
-    db_user = os.environ.get(f"TAPDB_{env_upper}_USER", os.environ.get("USER", "tapdb"))
-    db_pass = os.environ.get(f"TAPDB_{env_upper}_PASSWORD", "")
-    db_name = os.environ.get(f"TAPDB_{env_upper}_DATABASE", f"tapdb_{env}")
+    cfg = get_db_config_for_env(env)
 
     return TAPDBConnection(
-        db_hostname=f"{db_host}:{db_port}",
-        db_user=db_user,
-        db_pass=db_pass,
-        db_name=db_name,
+        db_hostname=f"{cfg['host']}:{cfg['port']}",
+        db_user=cfg["user"],
+        db_pass=cfg["password"],
+        db_name=cfg["database"],
     )
 
 
