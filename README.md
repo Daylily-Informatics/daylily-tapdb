@@ -97,7 +97,11 @@ source tapdb_activate.sh
 ### 1. Initialize the database
 
 ```bash
-psql -d your_database -f schema/tapdb_schema.sql
+# Using the CLI (recommended):
+tapdb db setup dev
+
+# Or apply schema manually to an existing database:
+# psql -d your_database -f schema/tapdb_schema.sql
 ```
 
 ### 2. Connect and create objects
@@ -105,15 +109,16 @@ psql -d your_database -f schema/tapdb_schema.sql
 ```python
 import os
 from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory
+from daylily_tapdb.cli.db_config import get_db_config_for_env
 
-# Connect to database
+# Connect to database using canonical config loader (recommended)
+env = os.environ.get("TAPDB_ENV", "dev")
+cfg = get_db_config_for_env(env)
 db = TAPDBConnection(
-    db_url=os.environ.get('DATABASE_URL'),
-    # Or specify components:
-    # db_hostname='localhost:5432',
-    # db_user='myuser',
-    # db_pass='mypass',
-    # db_name='tapdb'
+    db_hostname=f"{cfg['host']}:{cfg['port']}",
+    db_user=cfg["user"],
+    db_pass=cfg["password"],
+    db_name=cfg["database"],
 )
 
 # Initialize managers
@@ -387,7 +392,11 @@ The schema includes:
 Initialize the schema:
 
 ```bash
-psql -d your_database -f schema/tapdb_schema.sql
+# Using the CLI (recommended):
+tapdb db setup dev
+
+# Or apply schema manually to an existing database:
+# psql -d your_database -f schema/tapdb_schema.sql
 ```
 
 ## Configuration
