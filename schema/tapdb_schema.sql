@@ -279,7 +279,7 @@ BEGIN
     END IF;
     WHILE val > 0 LOOP
         remainder := val % 32;
-        result := substr(alphabet, remainder + 1, 1) || result;
+        result := substr(alphabet, (remainder + 1)::integer, 1) || result;
         val := val / 32;
     END LOOP;
     RETURN result;
