@@ -1,0 +1,204 @@
+"""Aurora PostgreSQL connection builder.
+
+Constructs SQLAlchemy connection URLs for Aurora PostgreSQL clusters with
+IAM database authentication and mandatory SSL (``sslmode=verify-full``).
+
+The RDS CA bundle is auto-downloaded and cached at
+``~/.config/tapdb/rds-ca-bundle.pem`` on first use.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from typing import Optional
+from urllib.parse import quote_plus
+
+logger = logging.getLogger(__name__)
+
+# AWS publishes a combined CA bundle for all regions.
+_RDS_CA_BUNDLE_URL = (
+    "https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem"
+)
+_CA_BUNDLE_DIR = Path.home() / ".config" / "tapdb"
+_CA_BUNDLE_PATH = _CA_BUNDLE_DIR / "rds-ca-bundle.pem"
+
+
+def _ensure_boto3():
+    """Import boto3, raising a clear error if missing."""
+    try:
+        import boto3
+        return boto3
+    except ImportError:
+        raise ImportError(
+            "boto3 is required for Aurora connections. "
+            "Install it with: pip install daylily-tapdb[aurora]"
+        ) from None
+
+
+class AuroraConnectionBuilder:
+    """Build SQLAlchemy connection URLs for Aurora PostgreSQL.
+
+    Supports two authentication modes:
+
+    1. **IAM auth** (default): generates a short-lived token via
+       ``rds.generate_db_auth_token()``.
+    2. **Secrets Manager**: retrieves the master password from a
+       Secrets Manager secret ARN.
+
+    SSL is always mandatory (``sslmode=verify-full``).
+    """
+
+    # ------------------------------------------------------------------
+    # IAM auth token
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_iam_auth_token(
+        region: str,
+        host: str,
+        port: int,
+        user: str,
+    ) -> str:
+        """Generate an RDS IAM authentication token.
+
+        Args:
+            region: AWS region (e.g. ``us-west-2``).
+            host: RDS cluster endpoint hostname.
+            port: Database port (typically ``5432``).
+            user: Database username.
+
+        Returns:
+            Short-lived IAM auth token string.
+        """
+        boto3 = _ensure_boto3()
+        client = boto3.client("rds", region_name=region)
+        token = client.generate_db_auth_token(
+            DBHostname=host,
+            Port=port,
+            DBUsername=user,
+            Region=region,
+        )
+        logger.debug("Generated IAM auth token for %s@%s:%s", user, host, port)
+        return token
+
+    # ------------------------------------------------------------------
+    # Secrets Manager password
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_secret_password(secret_arn: str, region: Optional[str] = None) -> str:
+        """Retrieve the master password from Secrets Manager.
+
+        The secret value is expected to be a JSON object with a
+        ``password`` key (the format used by RDS-managed secrets).
+
+        Args:
+            secret_arn: Full ARN of the Secrets Manager secret.
+            region: AWS region.  Inferred from the ARN if omitted.
+
+        Returns:
+            The password string.
+        """
+        boto3 = _ensure_boto3()
+        if region is None:
+            # arn:aws:secretsmanager:<region>:<account>:secret:<name>
+            parts = secret_arn.split(":")
+            region = parts[3] if len(parts) > 3 else "us-west-2"
+        client = boto3.client("secretsmanager", region_name=region)
+        resp = client.get_secret_value(SecretId=secret_arn)
+        secret = json.loads(resp["SecretString"])
+        return secret["password"]
+
+    # ------------------------------------------------------------------
+    # RDS CA bundle
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def ensure_ca_bundle() -> Path:
+        """Download the RDS CA bundle if not already cached.
+
+        Returns:
+            Path to the local CA bundle PEM file.
+        """
+        if _CA_BUNDLE_PATH.exists():
+            logger.debug("RDS CA bundle already cached at %s", _CA_BUNDLE_PATH)
+            return _CA_BUNDLE_PATH
+
+        logger.info("Downloading RDS CA bundle to %s …", _CA_BUNDLE_PATH)
+        import urllib.request
+
+        _CA_BUNDLE_DIR.mkdir(parents=True, exist_ok=True)
+        urllib.request.urlretrieve(_RDS_CA_BUNDLE_URL, str(_CA_BUNDLE_PATH))
+        logger.info("RDS CA bundle saved (%d bytes)", _CA_BUNDLE_PATH.stat().st_size)
+        return _CA_BUNDLE_PATH
+
+    # ------------------------------------------------------------------
+    # Connection URL builder
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def build_connection_url(
+        cls,
+        *,
+        host: str,
+        port: int = 5432,
+        database: str,
+        user: str,
+        region: str = "us-west-2",
+        iam_auth: bool = True,
+        secret_arn: Optional[str] = None,
+        password: Optional[str] = None,
+    ) -> str:
+        """Build a SQLAlchemy PostgreSQL URL with SSL for Aurora.
+
+        Authentication priority:
+        1. ``iam_auth=True`` → generate IAM token (default).
+        2. ``secret_arn`` provided → fetch from Secrets Manager.
+        3. ``password`` provided → use directly.
+
+        Args:
+            host: Aurora cluster endpoint.
+            port: Database port.
+            database: Database name.
+            user: Database username.
+            region: AWS region.
+            iam_auth: Use IAM database authentication.
+            secret_arn: Secrets Manager ARN for password fallback.
+            password: Explicit password (lowest priority).
+
+        Returns:
+            SQLAlchemy connection URL string.
+        """
+        # Resolve password / token
+        if iam_auth:
+            credential = cls.get_iam_auth_token(region, host, port, user)
+        elif secret_arn:
+            credential = cls.get_secret_password(secret_arn, region)
+        elif password:
+            credential = password
+        else:
+            raise ValueError(
+                "Aurora connection requires iam_auth=True, a secret_arn, "
+                "or an explicit password."
+            )
+
+        # Ensure CA bundle is available
+        ca_path = cls.ensure_ca_bundle()
+
+        # URL-encode the credential (IAM tokens contain special chars)
+        encoded_cred = quote_plus(credential)
+
+        # Build URL with SSL query params
+        url = (
+            f"postgresql+psycopg2://{quote_plus(user)}:{encoded_cred}"
+            f"@{host}:{port}/{database}"
+            f"?sslmode=verify-full&sslrootcert={quote_plus(str(ca_path))}"
+        )
+        logger.debug(
+            "Built Aurora connection URL for %s@%s:%s/%s (iam=%s)",
+            user, host, port, database, iam_auth,
+        )
+        return url
+
