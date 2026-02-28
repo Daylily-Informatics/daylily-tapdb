@@ -21,6 +21,14 @@
         },
         "true"
       ]
+    },
+    "IsDeletionProtectionEnabled": {
+      "Fn::Equals": [
+        {
+          "Ref": "DeletionProtection"
+        },
+        "true"
+      ]
     }
   },
   "Parameters": {
@@ -58,17 +66,26 @@
     },
     "IngressCIDR": {
       "Type": "String",
-      "Default": "0.0.0.0/0",
+      "Default": "10.0.0.0/8",
       "Description": "CIDR block allowed to connect on port 5432"
     },
     "PubliclyAccessible": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "true",
+        "false"
+      ],
+      "Description": "Whether the DB instance is publicly accessible"
+    },
+    "DeletionProtection": {
       "Type": "String",
       "Default": "true",
       "AllowedValues": [
         "true",
         "false"
       ],
-      "Description": "Whether the DB instance is publicly accessible"
+      "Description": "Whether deletion protection is enabled on the cluster"
     },
     "CostCenter": {
       "Type": "String",
@@ -231,7 +248,13 @@
         ],
         "EnableIAMDatabaseAuthentication": true,
         "StorageEncrypted": true,
-        "DeletionProtection": false,
+        "DeletionProtection": {
+          "Fn::If": [
+            "IsDeletionProtectionEnabled",
+            true,
+            false
+          ]
+        },
         "Tags": [
           {
             "Key": "lsmc-cost-center",
