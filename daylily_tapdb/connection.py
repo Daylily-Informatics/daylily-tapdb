@@ -17,16 +17,14 @@ For write operations:
         with conn.session_scope(commit=True) as session:
             session.add(obj)
 """
-import os
 import logging
+import os
 from contextlib import contextmanager
 from typing import Generator, Optional
 
-from sqlalchemy import create_engine, MetaData, text
+from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.ext.automap import automap_base
-from sqlalchemy.orm import sessionmaker, Session
-
-from daylily_tapdb.models.base import Base
+from sqlalchemy.orm import Session, sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +60,10 @@ class TAPDBConnection:
         max_overflow: int = 10,
         pool_timeout: int = 30,
         pool_recycle: int = 1800,
+        engine_type: Optional[str] = None,
+        region: str = "us-west-2",
+        iam_auth: bool = True,
+        secret_arn: Optional[str] = None,
     ):
         """
         Initialize database connection.
@@ -79,12 +81,15 @@ class TAPDBConnection:
             max_overflow: Max connections above pool_size
             pool_timeout: Seconds to wait for connection
             pool_recycle: Seconds before connection recycled
+            engine_type: Connection type — None or "local" for local PG,
+                "aurora" for Aurora PostgreSQL with SSL + IAM auth.
+            region: AWS region (only used when engine_type="aurora").
+            iam_auth: Use IAM database authentication (Aurora only).
+            secret_arn: Secrets Manager ARN for password (Aurora fallback).
         """
         self.logger = logging.getLogger(__name__ + ".TAPDBConnection")
 
         # Resolve defaults from environment
-        db_hostname = db_hostname or f"localhost:{os.environ.get('PGPORT', '5432')}"
-        db_pass = db_pass or os.environ.get("PGPASSWORD", "")
         db_user = db_user or os.environ.get("USER", "tapdb")
         self.app_username = app_username or os.environ.get("USER", "tapdb_orm")
 
@@ -95,7 +100,38 @@ class TAPDBConnection:
         # Build database URL
         if db_url:
             self._db_url = db_url
+        elif engine_type == "aurora":
+            from daylily_tapdb.aurora.connection import AuroraConnectionBuilder
+
+            # For Aurora, db_hostname must be the cluster endpoint (host:port
+            # or just host).
+            if not db_hostname:
+                raise ValueError(
+                    "db_hostname (Aurora cluster endpoint) is required "
+                    "when engine_type='aurora'."
+                )
+            # Split host:port if provided together
+            if ":" in db_hostname:
+                host, port_str = db_hostname.rsplit(":", 1)
+                port = int(port_str)
+            else:
+                host = db_hostname
+                port = 5432
+
+            self._db_url = AuroraConnectionBuilder.build_connection_url(
+                host=host,
+                port=port,
+                database=db_name,
+                user=db_user,
+                region=region,
+                iam_auth=iam_auth,
+                secret_arn=secret_arn,
+                password=db_pass,
+            )
         else:
+            # Local PostgreSQL (original behaviour)
+            db_hostname = db_hostname or f"localhost:{os.environ.get('PGPORT', '5432')}"
+            db_pass = db_pass or os.environ.get("PGPASSWORD", "")
             self._db_url = f"{db_url_prefix}{db_user}:{db_pass}@{db_hostname}/{db_name}"
 
         # Create engine with connection pooling
