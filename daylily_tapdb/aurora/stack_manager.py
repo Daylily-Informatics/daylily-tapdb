@@ -183,6 +183,10 @@ class AuroraStackManager:
             },
             {"ParameterKey": "CostCenter", "ParameterValue": cost},
             {"ParameterKey": "Project", "ParameterValue": proj},
+            {
+                "ParameterKey": "PubliclyAccessible",
+                "ParameterValue": "true" if config.publicly_accessible else "false",
+            },
         ]
 
         logger.info(

@@ -53,6 +53,7 @@ class TestTemplateStructure:
 
     def test_has_conditions(self, template):
         assert "HasProject" in template["Conditions"]
+        assert "IsPubliclyAccessible" in template["Conditions"]
 
 
 # --- Parameters ---
@@ -68,6 +69,7 @@ REQUIRED_PARAMS = [
     "IngressCIDR",
     "CostCenter",
     "Project",
+    "PubliclyAccessible",
 ]
 
 
@@ -80,7 +82,7 @@ class TestParameters:
         assert template["Parameters"]["InstanceClass"]["Default"] == "db.r6g.large"
 
     def test_engine_version_default(self, template):
-        assert template["Parameters"]["EngineVersion"]["Default"] == "15.4"
+        assert template["Parameters"]["EngineVersion"]["Default"] == "16.6"
 
     def test_vpc_id_type(self, template):
         assert template["Parameters"]["VpcId"]["Type"] == "AWS::EC2::VPC::Id"
@@ -152,9 +154,10 @@ class TestResources:
         props = template["Resources"]["WriterInstance"]["Properties"]
         assert props["Engine"] == "aurora-postgresql"
 
-    def test_writer_not_publicly_accessible(self, template):
+    def test_writer_publicly_accessible_uses_condition(self, template):
         props = template["Resources"]["WriterInstance"]["Properties"]
-        assert props["PubliclyAccessible"] is False
+        pa = props["PubliclyAccessible"]
+        assert pa == {"Fn::If": ["IsPubliclyAccessible", True, False]}
 
 
 # --- Tags ---
