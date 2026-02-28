@@ -8,10 +8,157 @@ Prefix Tiers:
 - CORE_PREFIXES: Required for TAPDB operation (GT, GX, GL)
 - OPTIONAL_PREFIXES: Common domain types (WX, WSX, XX)
 - Application prefixes: User-defined for specific domains
+
+Meridian EUID Format (v2):
+- Production: CATEGORY-BODYCHECK  (e.g., TX-1C)
+- Sandbox: SANDBOX:CATEGORY-BODYCHECK  (e.g., X:TX-1C)
+- BODY is Crockford Base32 encoded, unpadded, no leading zeros
+- CHECK is a single Luhn MOD32 checksum character
+- Alphabet: 0123456789ABCDEFGHJKMNPQRSTVWXYZ (no I, L, O, U)
+
+NOTE: Existing non-conformant EUIDs (e.g., GX42) require a data migration
+to convert to Meridian format (e.g., GX-1AK). Migration is NOT implemented
+here — only new EUID generation is updated.
 """
 
+from __future__ import annotations
+
+import re
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
+
+# ---------------------------------------------------------------------------
+# Meridian Crockford Base32 utilities
+# ---------------------------------------------------------------------------
+
+CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+_CROCKFORD_VALUE: dict[str, int] = {ch: i for i, ch in enumerate(CROCKFORD_ALPHABET)}
+
+# Canonical regex character classes from SPEC.md §6.4
+_ALNUM32 = r"[0-9A-HJ-KMNP-TV-Z]"
+_LETTERS32 = r"[A-HJ-KMNP-TV-Z]"
+_SANDBOX32 = r"[HJ-KMNP-TV-Z]"
+
+# Production: CATEGORY(2-3 letters) - BODY(no leading 0) CHECKSUM
+_PRODUCTION_RE = re.compile(
+    rf"^{_LETTERS32}{{2,3}}-([1-9A-HJ-KMNP-TV-Z]{_ALNUM32}*){_ALNUM32}$"
+)
+# Sandbox: PREFIX : CATEGORY - BODY CHECKSUM
+_SANDBOX_RE = re.compile(
+    rf"^{_SANDBOX32}:{_LETTERS32}{{2,3}}-([1-9A-HJ-KMNP-TV-Z]{_ALNUM32}*){_ALNUM32}$"
+)
+
+
+def crockford_base32_encode(n: int) -> str:
+    """Encode a positive integer to Crockford Base32 (unpadded, no leading zeros).
+
+    Raises ValueError if *n* < 1.
+    """
+    if n < 1:
+        raise ValueError(f"EUID body must be a positive integer, got {n}")
+    result: list[str] = []
+    while n > 0:
+        n, remainder = divmod(n, 32)
+        result.append(CROCKFORD_ALPHABET[remainder])
+    return "".join(reversed(result))
+
+
+def meridian_checksum(payload: str) -> str:
+    """Compute the Meridian Luhn-style MOD 32 check character.
+
+    *payload* is CATEGORY + BODY (no delimiters). For sandbox EUIDs,
+    include the sandbox prefix character as well.
+
+    Implements SPEC.md §7.5 exactly.
+    """
+    if not payload:
+        raise ValueError("payload must be non-empty")
+    if not payload.isascii():
+        raise ValueError("payload must be ASCII")
+
+    s = 0
+    factor = 2
+    for ch in reversed(payload):
+        v = _CROCKFORD_VALUE.get(ch)
+        if v is None:
+            raise ValueError(f"invalid character in payload: {ch!r}")
+        p = v * factor
+        s += (p // 32) + (p % 32)
+        factor = 1 if factor == 2 else 2
+
+    check_value = (32 - (s % 32)) % 32
+    return CROCKFORD_ALPHABET[check_value]
+
+
+def format_euid(prefix: str, seq_val: int, *, sandbox: str | None = None) -> str:
+    """Build a Meridian-conformant EUID string.
+
+    Args:
+        prefix: Category prefix (e.g. "TX", "GX"). 2-3 uppercase Crockford letters.
+        seq_val: Positive integer from the sequence.
+        sandbox: Optional single-letter sandbox prefix.
+
+    Returns:
+        Formatted EUID, e.g. ``TX-1C`` or ``X:TX-1C``.
+    """
+    body = crockford_base32_encode(seq_val)
+    if sandbox:
+        payload = sandbox + prefix + body
+    else:
+        payload = prefix + body
+    check = meridian_checksum(payload)
+    if sandbox:
+        return f"{sandbox}:{prefix}-{body}{check}"
+    return f"{prefix}-{body}{check}"
+
+
+def validate_euid(
+    euid: str,
+    *,
+    environment: str = "production",
+    allowed_sandbox_prefixes: list[str] | None = None,
+) -> bool:
+    """Validate an EUID string against Meridian spec.
+
+    Returns True if the EUID is syntactically valid and checksum-correct
+    for the given environment.
+    """
+    # §8.1 — reject non-ASCII, whitespace, lowercase
+    if not euid.isascii():
+        return False
+    if any(c.isspace() for c in euid):
+        return False
+    if any(c.islower() for c in euid):
+        return False
+
+    has_colon = ":" in euid
+    if has_colon:
+        # Sandbox EUID
+        if environment == "production":
+            return False
+        if not _SANDBOX_RE.match(euid):
+            return False
+        sandbox_prefix = euid[0]
+        if (
+            allowed_sandbox_prefixes is not None
+            and sandbox_prefix not in allowed_sandbox_prefixes
+        ):
+            return False
+        # Checksum payload = sandbox + category + body (no delimiters)
+        stripped = euid.replace(":", "").replace("-", "")
+        payload = stripped[:-1]
+        presented_check = stripped[-1]
+    else:
+        # Production EUID
+        if environment == "sandbox":
+            return False
+        if not _PRODUCTION_RE.match(euid):
+            return False
+        stripped = euid.replace("-", "")
+        payload = stripped[:-1]
+        presented_check = stripped[-1]
+
+    return meridian_checksum(payload) == presented_check
 
 
 @dataclass
