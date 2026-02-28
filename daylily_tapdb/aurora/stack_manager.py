@@ -107,24 +107,19 @@ class AuroraStackManager:
         stack_name = f"tapdb-{config.cluster_identifier}"
         template_body = json.dumps(generate_template())
 
-        tags = [
-            {"Key": k, "Value": v} for k, v in config.tags.items()
-        ]
+        tags = [{"Key": k, "Value": v} for k, v in config.tags.items()]
         cost = config.tags.get("lsmc-cost-center", "global")
         proj = config.tags.get("lsmc-project", "")
         params = [
-            {"ParameterKey": "ClusterIdentifier",
-             "ParameterValue": config.cluster_identifier},
-            {"ParameterKey": "InstanceClass",
-             "ParameterValue": config.instance_class},
-            {"ParameterKey": "EngineVersion",
-             "ParameterValue": config.engine_version},
-            {"ParameterKey": "VpcId",
-             "ParameterValue": config.vpc_id},
-            {"ParameterKey": "CostCenter",
-             "ParameterValue": cost},
-            {"ParameterKey": "Project",
-             "ParameterValue": proj},
+            {
+                "ParameterKey": "ClusterIdentifier",
+                "ParameterValue": config.cluster_identifier,
+            },
+            {"ParameterKey": "InstanceClass", "ParameterValue": config.instance_class},
+            {"ParameterKey": "EngineVersion", "ParameterValue": config.engine_version},
+            {"ParameterKey": "VpcId", "ParameterValue": config.vpc_id},
+            {"ParameterKey": "CostCenter", "ParameterValue": cost},
+            {"ParameterKey": "Project", "ParameterValue": proj},
         ]
 
         logger.info(
@@ -199,8 +194,7 @@ class AuroraStackManager:
         if result["status"] != "DELETE_COMPLETE":
             events = _cfn_events_summary(self._cfn, stack_name)
             raise RuntimeError(
-                f"Stack deletion ended in {result['status']}.\n"
-                f"Recent events:\n{events}"
+                f"Stack deletion ended in {result['status']}.\nRecent events:\n{events}"
             )
 
         meta = _load_metadata()
@@ -281,9 +275,7 @@ class AuroraStackManager:
                     info = self.get_stack_status(name)
                     resp = self._cfn.describe_stacks(StackName=name)
                     stack = resp["Stacks"][0]
-                    tags = {
-                        t["Key"]: t["Value"] for t in stack.get("Tags", [])
-                    }
+                    tags = {t["Key"]: t["Value"] for t in stack.get("Tags", [])}
                     if tags.get("lsmc-project", "").startswith("tapdb-"):
                         found[name] = {
                             "status": info["status"],
@@ -336,9 +328,7 @@ class AuroraStackManager:
                     return {"status": "DELETE_COMPLETE", "outputs": {}}
                 raise
 
-            logger.info(
-                "Stack %s: %s (%.0fs elapsed)", stack_name, status, elapsed
-            )
+            logger.info("Stack %s: %s (%.0fs elapsed)", stack_name, status, elapsed)
 
             if status == target_status:
                 return {"status": status, "outputs": info.get("outputs", {})}
@@ -348,4 +338,3 @@ class AuroraStackManager:
 
             time.sleep(interval)
             interval = min(interval * 1.5, max_interval)
-

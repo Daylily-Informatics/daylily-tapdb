@@ -29,8 +29,7 @@ def mock_ca_bundle(tmp_path):
     ca = tmp_path / "rds-ca-bundle.pem"
     ca.write_text("FAKE CA BUNDLE")
     with patch(
-        "daylily_tapdb.aurora.schema_deployer.AuroraConnectionBuilder"
-        ".ensure_ca_bundle",
+        "daylily_tapdb.aurora.schema_deployer.AuroraConnectionBuilder.ensure_ca_bundle",
         return_value=ca,
     ):
         yield ca

@@ -141,27 +141,26 @@ class TestWaitForStack:
         mock_cfn.describe_stacks.return_value = {
             "Stacks": [{"StackStatus": "CREATE_IN_PROGRESS", "Outputs": []}]
         }
-        manager.wait_for_stack(
-            "tapdb-test", "CREATE_COMPLETE", timeout=0
-        )
+        manager.wait_for_stack("tapdb-test", "CREATE_COMPLETE", timeout=0)
 
 
 # ------------------------------------------------------------------
 # create_stack
 # ------------------------------------------------------------------
 
-_FAKE_STACK_ID = (
-    "arn:aws:cloudformation:us-west-2:123:"
-    "stack/tapdb-test-cluster/abc"
-)
+_FAKE_STACK_ID = "arn:aws:cloudformation:us-west-2:123:stack/tapdb-test-cluster/abc"
 _FAKE_SHORT_ID = "arn:aws:cf:us-west-2:123:stack/x/y"
 
 
 class TestCreateStack:
     @patch("daylily_tapdb.aurora.stack_manager.time.sleep")
     def test_create_stack_success(
-        self, mock_sleep, manager, mock_cfn,
-        sample_config, metadata_path,
+        self,
+        mock_sleep,
+        manager,
+        mock_cfn,
+        sample_config,
+        metadata_path,
     ):
         mock_cfn.create_stack.return_value = {
             "StackId": _FAKE_STACK_ID,
@@ -200,16 +199,18 @@ class TestCreateStack:
 
     @patch("daylily_tapdb.aurora.stack_manager.time.sleep")
     def test_create_stack_failure_raises(
-        self, mock_sleep, manager, mock_cfn,
-        sample_config, metadata_path,
+        self,
+        mock_sleep,
+        manager,
+        mock_cfn,
+        sample_config,
+        metadata_path,
     ):
         mock_cfn.create_stack.return_value = {
             "StackId": _FAKE_SHORT_ID,
         }
         mock_cfn.describe_stacks.return_value = {
-            "Stacks": [
-                {"StackStatus": "CREATE_FAILED", "Outputs": []}
-            ]
+            "Stacks": [{"StackStatus": "CREATE_FAILED", "Outputs": []}]
         }
         mock_cfn.describe_stack_events.return_value = {
             "StackEvents": [],
@@ -219,16 +220,17 @@ class TestCreateStack:
             manager.create_stack(sample_config)
 
     def test_create_stack_passes_correct_params(
-        self, manager, mock_cfn,
-        sample_config, metadata_path,
+        self,
+        manager,
+        mock_cfn,
+        sample_config,
+        metadata_path,
     ):
         mock_cfn.create_stack.return_value = {
             "StackId": _FAKE_SHORT_ID,
         }
         mock_cfn.describe_stacks.return_value = {
-            "Stacks": [
-                {"StackStatus": "CREATE_COMPLETE", "Outputs": []}
-            ]
+            "Stacks": [{"StackStatus": "CREATE_COMPLETE", "Outputs": []}]
         }
 
         manager.create_stack(sample_config)
@@ -236,10 +238,7 @@ class TestCreateStack:
         call_kwargs = mock_cfn.create_stack.call_args[1]
         assert call_kwargs["StackName"] == "tapdb-test-cluster"
         assert call_kwargs["Capabilities"] == ["CAPABILITY_IAM"]
-        param_keys = {
-            p["ParameterKey"]
-            for p in call_kwargs["Parameters"]
-        }
+        param_keys = {p["ParameterKey"] for p in call_kwargs["Parameters"]}
         assert "ClusterIdentifier" in param_keys
         assert "VpcId" in param_keys
 
@@ -376,4 +375,3 @@ class TestCfnEventsSummary:
         client.describe_stack_events.side_effect = Exception("boom")
         summary = _cfn_events_summary(client, "tapdb-test")
         assert "unable to retrieve" in summary
-

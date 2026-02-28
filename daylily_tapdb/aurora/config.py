@@ -51,7 +51,10 @@ class AuroraConfig:
         # Ensure mandatory tags are always present with correct defaults.
         self.tags.setdefault("lsmc-cost-center", "global")
         # Always recompute lsmc-project from region unless caller explicitly set it.
-        if "lsmc-project" not in self.tags or self.tags["lsmc-project"] == _default_tags()["lsmc-project"]:
+        if (
+            "lsmc-project" not in self.tags
+            or self.tags["lsmc-project"] == _default_tags()["lsmc-project"]
+        ):
             self.tags["lsmc-project"] = f"tapdb-{self.region}"
 
     @classmethod
@@ -60,4 +63,3 @@ class AuroraConfig:
         known_fields = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
         filtered = {k: v for k, v in data.items() if k in known_fields}
         return cls(**filtered)
-

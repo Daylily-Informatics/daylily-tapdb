@@ -73,7 +73,9 @@ def test_upsert_template_overwrite_false_is_on_conflict_do_nothing(monkeypatch):
     assert "RETURNING 1" in sql
 
 
-def test_db_migrate_idempotent_when_all_migrations_already_applied(tmp_path, monkeypatch):
+def test_db_migrate_idempotent_when_all_migrations_already_applied(
+    tmp_path, monkeypatch
+):
     """Safety: if migrations exist but have already been recorded as applied,
     db_migrate should not attempt to apply them again.
     """

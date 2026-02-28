@@ -11,6 +11,7 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _fake_boto3_client(service, region_name=None):
     """Return a mock client that handles rds and secretsmanager."""
     client = MagicMock()
@@ -47,12 +48,15 @@ def _ca_bundle(tmp_path, monkeypatch):
 # get_iam_auth_token
 # ---------------------------------------------------------------------------
 
+
 def test_get_iam_auth_token():
     from daylily_tapdb.aurora.connection import AuroraConnectionBuilder
 
     token = AuroraConnectionBuilder.get_iam_auth_token(
-        region="us-east-1", host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
-        port=5432, user="tapdb_admin",
+        region="us-east-1",
+        host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
+        port=5432,
+        user="tapdb_admin",
     )
     assert token == "iam-token-abc123"
 
@@ -61,11 +65,13 @@ def test_get_iam_auth_token():
 # get_secret_password
 # ---------------------------------------------------------------------------
 
+
 def test_get_secret_password_with_explicit_region():
     from daylily_tapdb.aurora.connection import AuroraConnectionBuilder
 
     pw = AuroraConnectionBuilder.get_secret_password(
-        "arn:aws:secretsmanager:us-east-1:123456:secret:mydb", region="us-east-1",
+        "arn:aws:secretsmanager:us-east-1:123456:secret:mydb",
+        region="us-east-1",
     )
     assert pw == "s3cret-from-sm"
 
@@ -82,6 +88,7 @@ def test_get_secret_password_infers_region_from_arn():
 # ---------------------------------------------------------------------------
 # ensure_ca_bundle
 # ---------------------------------------------------------------------------
+
 
 def test_ensure_ca_bundle_returns_existing(tmp_path, monkeypatch):
     from daylily_tapdb.aurora import connection as mod
@@ -118,13 +125,17 @@ def test_ensure_ca_bundle_downloads_when_missing(tmp_path, monkeypatch):
 # build_connection_url
 # ---------------------------------------------------------------------------
 
+
 def test_build_connection_url_iam(_ca_bundle):
     from daylily_tapdb.aurora.connection import AuroraConnectionBuilder
 
     url = AuroraConnectionBuilder.build_connection_url(
         host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
-        port=5432, database="tapdb_dev", user="tapdb_admin",
-        region="us-east-1", iam_auth=True,
+        port=5432,
+        database="tapdb_dev",
+        user="tapdb_admin",
+        region="us-east-1",
+        iam_auth=True,
     )
     assert url.startswith("postgresql+psycopg2://")
     assert "tapdb_dev" in url
@@ -137,8 +148,11 @@ def test_build_connection_url_secret_arn(_ca_bundle):
 
     url = AuroraConnectionBuilder.build_connection_url(
         host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
-        port=5432, database="tapdb_dev", user="tapdb_admin",
-        region="us-east-1", iam_auth=False,
+        port=5432,
+        database="tapdb_dev",
+        user="tapdb_admin",
+        region="us-east-1",
+        iam_auth=False,
         secret_arn="arn:aws:secretsmanager:us-east-1:123456:secret:mydb",
     )
     assert "s3cret-from-sm" in url or "s3cret" in url  # URL-encoded
@@ -150,8 +164,12 @@ def test_build_connection_url_explicit_password(_ca_bundle):
 
     url = AuroraConnectionBuilder.build_connection_url(
         host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
-        port=5432, database="tapdb_dev", user="tapdb_admin",
-        region="us-east-1", iam_auth=False, password="plain-pw",
+        port=5432,
+        database="tapdb_dev",
+        user="tapdb_admin",
+        region="us-east-1",
+        iam_auth=False,
+        password="plain-pw",
     )
     assert "plain-pw" in url
     assert "sslmode=verify-full" in url
@@ -160,6 +178,7 @@ def test_build_connection_url_explicit_password(_ca_bundle):
 # ---------------------------------------------------------------------------
 # TAPDBConnection with engine_type="aurora"
 # ---------------------------------------------------------------------------
+
 
 def test_tapdb_connection_aurora_delegates_to_builder(_ca_bundle, monkeypatch):
     """TAPDBConnection(engine_type='aurora') uses AuroraConnectionBuilder."""
@@ -170,7 +189,7 @@ def test_tapdb_connection_aurora_delegates_to_builder(_ca_bundle, monkeypatch):
             return None
 
     monkeypatch.setattr(m, "create_engine", lambda url, **kw: FakeEngine())
-    monkeypatch.setattr(m, "sessionmaker", lambda bind: (lambda: None))
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
     conn = m.TAPDBConnection(
         engine_type="aurora",
@@ -189,7 +208,7 @@ def test_tapdb_connection_aurora_requires_hostname(monkeypatch):
     from daylily_tapdb import connection as m
 
     monkeypatch.setattr(m, "create_engine", lambda *a, **k: None)
-    monkeypatch.setattr(m, "sessionmaker", lambda bind: (lambda: None))
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
     with pytest.raises(ValueError, match="db_hostname.*required"):
         m.TAPDBConnection(engine_type="aurora", db_name="tapdb_dev")
@@ -214,7 +233,7 @@ def test_tapdb_connection_local_unchanged(monkeypatch):
         return FakeEngine()
 
     monkeypatch.setattr(m, "create_engine", fake_create_engine)
-    monkeypatch.setattr(m, "sessionmaker", lambda bind: (lambda: None))
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
     m.TAPDBConnection(db_name="tapdb")
     assert called["url"] == "postgresql://alice:pw@localhost:5432/tapdb"
@@ -224,6 +243,7 @@ def test_tapdb_connection_local_unchanged(monkeypatch):
 # _ensure_boto3 error message
 # ---------------------------------------------------------------------------
 
+
 def test_ensure_boto3_missing_gives_clear_error(monkeypatch):
     """When boto3 is not installed, a clear ImportError is raised."""
     import sys
@@ -232,6 +252,7 @@ def test_ensure_boto3_missing_gives_clear_error(monkeypatch):
 
     # Temporarily make boto3 unimportable
     import builtins
+
     real_import = builtins.__import__
 
     def no_boto3(name, *args, **kwargs):
@@ -253,7 +274,9 @@ def test_build_connection_url_no_auth_raises(_ca_bundle):
     with pytest.raises(ValueError, match="requires iam_auth"):
         AuroraConnectionBuilder.build_connection_url(
             host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
-            port=5432, database="tapdb_dev", user="tapdb_admin",
-            region="us-east-1", iam_auth=False,
+            port=5432,
+            database="tapdb_dev",
+            user="tapdb_admin",
+            region="us-east-1",
+            iam_auth=False,
         )
-

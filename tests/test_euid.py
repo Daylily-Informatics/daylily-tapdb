@@ -1,4 +1,5 @@
 """Tests for EUID configuration."""
+
 import pytest
 
 

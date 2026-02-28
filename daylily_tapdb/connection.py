@@ -17,6 +17,7 @@ For write operations:
         with conn.session_scope(commit=True) as session:
             session.add(obj)
 """
+
 import logging
 import os
 from contextlib import contextmanager
@@ -157,7 +158,7 @@ class TAPDBConnection:
         try:
             session.execute(
                 text("SET LOCAL session.current_username = :username"),
-                {"username": self.app_username}
+                {"username": self.app_username},
             )
         except Exception as e:
             self.logger.warning(f"Could not set session username: {e}")

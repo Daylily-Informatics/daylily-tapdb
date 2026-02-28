@@ -38,6 +38,7 @@ class tapdb_core(Base):
         is_singleton: Whether only one instance can exist per template
         is_deleted: Soft delete flag (DB-managed via trigger)
     """
+
     __abstract__ = True
 
     # DB-owned identifiers

@@ -45,11 +45,15 @@ class AuroraSchemaDeployer:
         # Resolve credential
         if iam_auth:
             credential = AuroraConnectionBuilder.get_iam_auth_token(
-                region=region, host=host, port=port, user=user,
+                region=region,
+                host=host,
+                port=port,
+                user=user,
             )
         elif secret_arn:
             credential = AuroraConnectionBuilder.get_secret_password(
-                secret_arn=secret_arn, region=region,
+                secret_arn=secret_arn,
+                region=region,
             )
         elif password:
             credential = password
@@ -73,11 +77,16 @@ class AuroraSchemaDeployer:
             "-q",
             "-t",
             "-A",
-            "-h", host,
-            "-p", str(port),
-            "-U", user,
-            "-d", database,
-            "-v", "ON_ERROR_STOP=1",
+            "-h",
+            host,
+            "-p",
+            str(port),
+            "-U",
+            user,
+            "-d",
+            database,
+            "-v",
+            "ON_ERROR_STOP=1",
         ]
 
         return cmd, env_vars
@@ -103,8 +112,13 @@ class AuroraSchemaDeployer:
             Tuple of (success, output).
         """
         cmd, env_vars = cls._build_psql_env(
-            host=host, port=port, user=user, database=database,
-            region=region, iam_auth=iam_auth, secret_arn=secret_arn,
+            host=host,
+            port=port,
+            user=user,
+            database=database,
+            region=region,
+            iam_auth=iam_auth,
+            secret_arn=secret_arn,
             password=password,
         )
 
@@ -115,7 +129,10 @@ class AuroraSchemaDeployer:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, env=env_vars,
+                cmd,
+                capture_output=True,
+                text=True,
+                env=env_vars,
             )
             if result.returncode == 0:
                 return True, (result.stdout or "").strip()
@@ -149,13 +166,23 @@ class AuroraSchemaDeployer:
             Tuple of (success, output_message).
         """
         logger.info(
-            "Deploying schema %s to %s:%s/%s", schema_file, host, port, database,
+            "Deploying schema %s to %s:%s/%s",
+            schema_file,
+            host,
+            port,
+            database,
         )
 
         success, output = cls.run_psql(
-            host=host, port=port, user=user, database=database,
-            region=region, iam_auth=iam_auth, secret_arn=secret_arn,
-            password=password, file=schema_file,
+            host=host,
+            port=port,
+            user=user,
+            database=database,
+            region=region,
+            iam_auth=iam_auth,
+            secret_arn=secret_arn,
+            password=password,
+            file=schema_file,
         )
 
         if success:
@@ -164,4 +191,3 @@ class AuroraSchemaDeployer:
             logger.error("Schema deployment failed: %s", output[:500])
 
         return success, output
-

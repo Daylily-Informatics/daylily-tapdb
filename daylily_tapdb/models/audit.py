@@ -6,7 +6,6 @@ The `audit_log` table is populated by Postgres triggers and should be treated as
 Phase 2 spec: audit log is trigger-based but ORM-available for querying/display.
 """
 
-import sqlalchemy.orm as sqla_orm
 from sqlalchemy import Boolean, Column, DateTime, FetchedValue, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
@@ -30,7 +29,9 @@ class audit_log(Base):
     new_value = Column(Text, nullable=True)
 
     changed_by = Column(Text, nullable=True)
-    changed_at = Column(DateTime(timezone=True), nullable=False, server_default=FetchedValue())
+    changed_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=FetchedValue()
+    )
 
     operation_type = Column(Text, nullable=True)
 
@@ -47,4 +48,3 @@ class audit_log(Base):
             f"{self.rel_table_name!r}, rel_table_euid_fk={self.rel_table_euid_fk!r}, "
             f"operation_type={self.operation_type!r})>"
         )
-
