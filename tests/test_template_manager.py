@@ -187,5 +187,13 @@ def test_template_code_from_template_formats_code():
     from daylily_tapdb.templates.manager import TemplateManager
 
     tm = TemplateManager()
-    tmpl = _FakeTemplate(uuid="u9", euid="GT9", is_deleted=False, category="c", type="t", subtype="s", version="1.2")
+    tmpl = _FakeTemplate(
+        uuid="u9",
+        euid="GT9",
+        is_deleted=False,
+        category="c",
+        type="t",
+        subtype="s",
+        version="1.2",
+    )
     assert tm.template_code_from_template(tmpl) == "c/t/s/1.2/"

@@ -1,0 +1,396 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Aurora PostgreSQL cluster for TAPDB",
+  "Conditions": {
+    "HasProject": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "Project"
+            },
+            ""
+          ]
+        }
+      ]
+    },
+    "IsPubliclyAccessible": {
+      "Fn::Equals": [
+        {
+          "Ref": "PubliclyAccessible"
+        },
+        "true"
+      ]
+    },
+    "IsDeletionProtectionEnabled": {
+      "Fn::Equals": [
+        {
+          "Ref": "DeletionProtection"
+        },
+        "true"
+      ]
+    }
+  },
+  "Parameters": {
+    "ClusterIdentifier": {
+      "Type": "String",
+      "Description": "Identifier for the Aurora PostgreSQL cluster"
+    },
+    "InstanceClass": {
+      "Type": "String",
+      "Default": "db.r6g.large",
+      "Description": "DB instance class for the writer instance"
+    },
+    "EngineVersion": {
+      "Type": "String",
+      "Default": "16.6",
+      "Description": "Aurora PostgreSQL engine version"
+    },
+    "VpcId": {
+      "Type": "AWS::EC2::VPC::Id",
+      "Description": "VPC ID for the Aurora cluster"
+    },
+    "MasterUsername": {
+      "Type": "String",
+      "Default": "tapdb_admin",
+      "Description": "Master username for the Aurora cluster"
+    },
+    "DatabaseName": {
+      "Type": "String",
+      "Default": "tapdb",
+      "Description": "Name of the default database"
+    },
+    "SubnetIds": {
+      "Type": "List<AWS::EC2::Subnet::Id>",
+      "Description": "Subnet IDs for the DB subnet group"
+    },
+    "IngressCIDR": {
+      "Type": "String",
+      "Default": "10.0.0.0/8",
+      "Description": "CIDR block allowed to connect on port 5432"
+    },
+    "PubliclyAccessible": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "true",
+        "false"
+      ],
+      "Description": "Whether the DB instance is publicly accessible"
+    },
+    "DeletionProtection": {
+      "Type": "String",
+      "Default": "true",
+      "AllowedValues": [
+        "true",
+        "false"
+      ],
+      "Description": "Whether deletion protection is enabled on the cluster"
+    },
+    "CostCenter": {
+      "Type": "String",
+      "Default": "global",
+      "Description": "Value for lsmc-cost-center tag"
+    },
+    "Project": {
+      "Type": "String",
+      "Default": "",
+      "Description": "Value for lsmc-project tag. If empty, defaults to tapdb-{region}."
+    }
+  },
+  "Resources": {
+    "DBSubnetGroup": {
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Properties": {
+        "DBSubnetGroupDescription": {
+          "Fn::Sub": "Subnet group for ${ClusterIdentifier}"
+        },
+        "SubnetIds": {
+          "Ref": "SubnetIds"
+        },
+        "Tags": [
+          {
+            "Key": "lsmc-cost-center",
+            "Value": {
+              "Ref": "CostCenter"
+            }
+          },
+          {
+            "Key": "lsmc-project",
+            "Value": {
+              "Fn::If": [
+                "HasProject",
+                {
+                  "Ref": "Project"
+                },
+                {
+                  "Fn::Sub": "tapdb-${AWS::Region}"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ClusterSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": {
+          "Fn::Sub": "Security group for Aurora cluster ${ClusterIdentifier}"
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 5432,
+            "ToPort": 5432,
+            "CidrIp": {
+              "Ref": "IngressCIDR"
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "lsmc-cost-center",
+            "Value": {
+              "Ref": "CostCenter"
+            }
+          },
+          {
+            "Key": "lsmc-project",
+            "Value": {
+              "Fn::If": [
+                "HasProject",
+                {
+                  "Ref": "Project"
+                },
+                {
+                  "Fn::Sub": "tapdb-${AWS::Region}"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "MasterSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${ClusterIdentifier}-master-password"
+        },
+        "Description": {
+          "Fn::Sub": "Master password for Aurora cluster ${ClusterIdentifier}"
+        },
+        "GenerateSecretString": {
+          "SecretStringTemplate": {
+            "Fn::Sub": "{\"username\": \"${MasterUsername}\"}"
+          },
+          "GenerateStringKey": "password",
+          "PasswordLength": 32,
+          "ExcludeCharacters": "\"@/\\"
+        },
+        "Tags": [
+          {
+            "Key": "lsmc-cost-center",
+            "Value": {
+              "Ref": "CostCenter"
+            }
+          },
+          {
+            "Key": "lsmc-project",
+            "Value": {
+              "Fn::If": [
+                "HasProject",
+                {
+                  "Ref": "Project"
+                },
+                {
+                  "Fn::Sub": "tapdb-${AWS::Region}"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "AuroraCluster": {
+      "Type": "AWS::RDS::DBCluster",
+      "Properties": {
+        "DBClusterIdentifier": {
+          "Ref": "ClusterIdentifier"
+        },
+        "Engine": "aurora-postgresql",
+        "EngineVersion": {
+          "Ref": "EngineVersion"
+        },
+        "DatabaseName": {
+          "Ref": "DatabaseName"
+        },
+        "MasterUsername": {
+          "Fn::Sub": "{{resolve:secretsmanager:${MasterSecret}:SecretString:username}}"
+        },
+        "MasterUserPassword": {
+          "Fn::Sub": "{{resolve:secretsmanager:${MasterSecret}:SecretString:password}}"
+        },
+        "DBSubnetGroupName": {
+          "Ref": "DBSubnetGroup"
+        },
+        "VpcSecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "ClusterSecurityGroup",
+              "GroupId"
+            ]
+          }
+        ],
+        "EnableIAMDatabaseAuthentication": true,
+        "StorageEncrypted": true,
+        "DeletionProtection": {
+          "Fn::If": [
+            "IsDeletionProtectionEnabled",
+            true,
+            false
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "lsmc-cost-center",
+            "Value": {
+              "Ref": "CostCenter"
+            }
+          },
+          {
+            "Key": "lsmc-project",
+            "Value": {
+              "Fn::If": [
+                "HasProject",
+                {
+                  "Ref": "Project"
+                },
+                {
+                  "Fn::Sub": "tapdb-${AWS::Region}"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "WriterInstance": {
+      "Type": "AWS::RDS::DBInstance",
+      "Properties": {
+        "DBClusterIdentifier": {
+          "Ref": "AuroraCluster"
+        },
+        "DBInstanceIdentifier": {
+          "Fn::Sub": "${ClusterIdentifier}-writer"
+        },
+        "DBInstanceClass": {
+          "Ref": "InstanceClass"
+        },
+        "Engine": "aurora-postgresql",
+        "PubliclyAccessible": {
+          "Fn::If": [
+            "IsPubliclyAccessible",
+            true,
+            false
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "lsmc-cost-center",
+            "Value": {
+              "Ref": "CostCenter"
+            }
+          },
+          {
+            "Key": "lsmc-project",
+            "Value": {
+              "Fn::If": [
+                "HasProject",
+                {
+                  "Ref": "Project"
+                },
+                {
+                  "Fn::Sub": "tapdb-${AWS::Region}"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "DatabaseIAMPolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "ManagedPolicyName": {
+          "Fn::Sub": "tapdb-${ClusterIdentifier}-rds-connect"
+        },
+        "Description": {
+          "Fn::Sub": "Allow IAM database auth to TAPDB ${ClusterIdentifier} Aurora cluster"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "rds-db:connect",
+              "Resource": {
+                "Fn::Sub": "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${AuroraCluster.DbClusterResourceId}/${MasterUsername}"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "ClusterEndpoint": {
+      "Description": "Aurora cluster writer endpoint",
+      "Value": {
+        "Fn::GetAtt": [
+          "AuroraCluster",
+          "Endpoint.Address"
+        ]
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${ClusterIdentifier}-endpoint"
+        }
+      }
+    },
+    "ClusterPort": {
+      "Description": "Aurora cluster port",
+      "Value": {
+        "Fn::GetAtt": [
+          "AuroraCluster",
+          "Endpoint.Port"
+        ]
+      }
+    },
+    "SecretArn": {
+      "Description": "ARN of the Secrets Manager secret for master credentials",
+      "Value": {
+        "Ref": "MasterSecret"
+      }
+    },
+    "SecurityGroupId": {
+      "Description": "Security group ID for the Aurora cluster",
+      "Value": {
+        "Fn::GetAtt": [
+          "ClusterSecurityGroup",
+          "GroupId"
+        ]
+      }
+    },
+    "DatabaseIAMPolicyArn": {
+      "Description": "ARN of the IAM policy for database authentication",
+      "Value": {
+        "Ref": "DatabaseIAMPolicy"
+      }
+    }
+  }
+}
