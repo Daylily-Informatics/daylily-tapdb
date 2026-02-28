@@ -322,6 +322,29 @@
           }
         ]
       }
+    },
+    "DatabaseIAMPolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "ManagedPolicyName": {
+          "Fn::Sub": "tapdb-${ClusterIdentifier}-rds-connect"
+        },
+        "Description": {
+          "Fn::Sub": "Allow IAM database auth to TAPDB ${ClusterIdentifier} Aurora cluster"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "rds-db:connect",
+              "Resource": {
+                "Fn::Sub": "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${AuroraCluster.DbClusterResourceId}/${MasterUsername}"
+              }
+            }
+          ]
+        }
+      }
     }
   },
   "Outputs": {
@@ -361,6 +384,12 @@
           "ClusterSecurityGroup",
           "GroupId"
         ]
+      }
+    },
+    "DatabaseIAMPolicyArn": {
+      "Description": "ARN of the IAM policy for database authentication",
+      "Value": {
+        "Ref": "DatabaseIAMPolicy"
       }
     }
   }
