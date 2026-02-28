@@ -372,7 +372,7 @@ CREATE OR REPLACE FUNCTION set_generic_instance_lineage_euid()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
-        NEW.euid := meridian_generate_euid('GL', nextval('generic_instance_lineage_seq'));
+        NEW.euid := meridian_generate_euid('GN', nextval('generic_instance_lineage_seq'));
     END IF;
     RETURN NEW;
 END;

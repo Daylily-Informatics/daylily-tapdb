@@ -193,7 +193,7 @@ class EUIDConfig:
         default_factory=lambda: {
             "GT": "generic_template",
             "GX": "generic_instance",
-            "GL": "generic_instance_lineage",
+            "GN": "generic_instance_lineage",
         }
     )
 
