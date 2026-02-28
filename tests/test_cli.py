@@ -4,23 +4,22 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
 
-from daylily_tapdb.cli import app
 import daylily_tapdb.cli as cli_mod
+from daylily_tapdb.cli import app
 from daylily_tapdb.cli.db import (
+    CONFIG_DIR,
     Environment,
-    _get_db_config,
-    _find_schema_file,
     _ensure_dirs,
     _find_config_dir,
+    _find_schema_file,
+    _get_db_config,
     _load_template_configs,
-    CONFIG_DIR,
 )
 
 runner = CliRunner()
@@ -176,11 +175,14 @@ class TestCLIDB:
 
     def test_get_db_config_env_override(self):
         """Test _get_db_config respects environment variables."""
-        with patch.dict(os.environ, {
-            "TAPDB_TEST_HOST": "testhost",
-            "TAPDB_TEST_PORT": "5433",
-            "TAPDB_TEST_DATABASE": "my_test_db",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "TAPDB_TEST_HOST": "testhost",
+                "TAPDB_TEST_PORT": "5433",
+                "TAPDB_TEST_DATABASE": "my_test_db",
+            },
+        ):
             config = _get_db_config(Environment.test)
             assert config["host"] == "testhost"
             assert config["port"] == "5433"
@@ -203,7 +205,11 @@ class TestCLIDB:
             mock_run.side_effect = FileNotFoundError("psql not found")
             result = runner.invoke(app, ["db", "status", "dev"])
             # Should handle error gracefully
-            assert result.exit_code != 0 or "psql" in result.output.lower() or "error" in result.output.lower()
+            assert (
+                result.exit_code != 0
+                or "psql" in result.output.lower()
+                or "error" in result.output.lower()
+            )
 
     def test_db_nuke_requires_confirmation(self):
         """Test db nuke aborts without confirmation."""
@@ -394,7 +400,9 @@ class TestCLIDBSeed:
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {
-                                "action_imports": {"create_note": "action/core/create-note/1.0"},
+                                "action_imports": {
+                                    "create_note": "action/core/create-note/1.0"
+                                },
                                 "expected_inputs": [],
                                 "expected_outputs": [],
                                 "instantiation_layouts": [],
@@ -406,11 +414,15 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path)])
+        result = runner.invoke(
+            app, ["db", "validate-config", "--config", str(tmp_path)]
+        )
         assert result.exit_code == 0
 
-    def test_db_validate_config_valid_instantiation_layouts_child_templates_dict(self, tmp_path: Path):
-        """Dict-format child_templates entries should validate and be reference-checked."""
+    def test_db_validate_config_valid_instantiation_layouts_child_templates_dict(
+        self, tmp_path: Path
+    ):
+        """Dict-format child_templates entries validate and ref-check."""
         (tmp_path / "generic").mkdir()
         (tmp_path / "action").mkdir()
 
@@ -456,9 +468,9 @@ class TestCLIDBSeed:
                                         "relationship_type": "contains",
                                         "child_templates": [
                                             {
-                                                "template_code": "action/core/create-note/1.0",
+                                                "template_code": "action/core/create-note/1.0",  # noqa: E501
                                                 "count": 2,
-                                                "name_pattern": "{parent_name}_child_{index}",
+                                                "name_pattern": "{parent_name}_child_{index}",  # noqa: E501
                                             }
                                         ],
                                     }
@@ -471,11 +483,15 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path)])
+        result = runner.invoke(
+            app, ["db", "validate-config", "--config", str(tmp_path)]
+        )
         assert result.exit_code == 0
 
-    def test_db_validate_config_missing_reference_in_instantiation_layouts_dict_strict_fails(self, tmp_path: Path):
-        """Strict mode should fail for missing refs referenced via child_templates dict entries."""
+    def test_db_validate_config_missing_reference_in_instantiation_layouts_dict_strict_fails(  # noqa: E501
+        self, tmp_path: Path
+    ):
+        """Strict mode fails for missing refs in child_templates dicts."""
         (tmp_path / "generic").mkdir()
 
         (tmp_path / "generic" / "generic.json").write_text(
@@ -496,7 +512,9 @@ class TestCLIDBSeed:
                                 "instantiation_layouts": [
                                     {
                                         "child_templates": [
-                                            {"template_code": "action/core/create-note/1.0"}
+                                            {
+                                                "template_code": "action/core/create-note/1.0"  # noqa: E501
+                                            }
                                         ]
                                     }
                                 ]
@@ -508,11 +526,18 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path), "--strict"])
+        result = runner.invoke(
+            app, ["db", "validate-config", "--config", str(tmp_path), "--strict"]
+        )
         assert result.exit_code != 0
-        assert "referenced template" in result.output.lower() or "not found" in result.output.lower()
+        assert (
+            "referenced template" in result.output.lower()
+            or "not found" in result.output.lower()
+        )
 
-    def test_db_validate_config_invalid_instantiation_layouts_bad_count(self, tmp_path: Path):
+    def test_db_validate_config_invalid_instantiation_layouts_bad_count(
+        self, tmp_path: Path
+    ):
         """count must be >= 1 for dict-format child_templates entries."""
         (tmp_path / "generic").mkdir()
         (tmp_path / "action").mkdir()
@@ -558,7 +583,7 @@ class TestCLIDBSeed:
                                     {
                                         "child_templates": [
                                             {
-                                                "template_code": "action/core/create-note/1.0",
+                                                "template_code": "action/core/create-note/1.0",  # noqa: E501
                                                 "count": 0,
                                             }
                                         ]
@@ -573,7 +598,9 @@ class TestCLIDBSeed:
         )
 
         # Use --json to avoid brittle assertions against Rich table wrapping.
-        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path), "--json"])
+        result = runner.invoke(
+            app, ["db", "validate-config", "--config", str(tmp_path), "--json"]
+        )
         assert result.exit_code != 0
 
         payload = json.loads(result.output)
@@ -582,7 +609,9 @@ class TestCLIDBSeed:
         assert "instantiation_layouts" in msgs
         assert "count" in msgs
 
-    def test_db_validate_config_invalid_instantiation_layouts_missing_template_code(self, tmp_path: Path):
+    def test_db_validate_config_invalid_instantiation_layouts_missing_template_code(
+        self, tmp_path: Path
+    ):
         """Dict-format child_templates must include template_code."""
         (tmp_path / "generic").mkdir()
 
@@ -613,7 +642,9 @@ class TestCLIDBSeed:
         )
 
         # Use --json to avoid brittle assertions against Rich table wrapping.
-        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path), "--json"])
+        result = runner.invoke(
+            app, ["db", "validate-config", "--config", str(tmp_path), "--json"]
+        )
         assert result.exit_code != 0
 
         payload = json.loads(result.output)
@@ -639,7 +670,11 @@ class TestCLIDBSeed:
                             "instance_prefix": "GX",
                             "is_singleton": False,
                             "bstatus": "active",
-                            "json_addl": {"action_imports": {"create_note": "action/core/create-note/1.0"}},
+                            "json_addl": {
+                                "action_imports": {
+                                    "create_note": "action/core/create-note/1.0"
+                                }
+                            },
                         }
                     ]
                 }
@@ -647,11 +682,18 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path), "--strict"])
+        result = runner.invoke(
+            app, ["db", "validate-config", "--config", str(tmp_path), "--strict"]
+        )
         assert result.exit_code != 0
-        assert "referenced template" in result.output.lower() or "not found" in result.output.lower()
+        assert (
+            "referenced template" in result.output.lower()
+            or "not found" in result.output.lower()
+        )
 
-    def test_db_validate_config_missing_reference_non_strict_warns(self, tmp_path: Path):
+    def test_db_validate_config_missing_reference_non_strict_warns(
+        self, tmp_path: Path
+    ):
         """Non-strict mode should warn but exit 0 for missing references."""
         (tmp_path / "generic").mkdir()
         (tmp_path / "generic" / "generic.json").write_text(
@@ -668,7 +710,11 @@ class TestCLIDBSeed:
                             "instance_prefix": "GX",
                             "is_singleton": False,
                             "bstatus": "active",
-                            "json_addl": {"action_imports": {"create_note": "action/core/create-note/1.0"}},
+                            "json_addl": {
+                                "action_imports": {
+                                    "create_note": "action/core/create-note/1.0"
+                                }
+                            },
                         }
                     ]
                 }
@@ -676,7 +722,9 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(app, ["db", "validate-config", "--config", str(tmp_path), "--no-strict"])
+        result = runner.invoke(
+            app, ["db", "validate-config", "--config", str(tmp_path), "--no-strict"]
+        )
         assert result.exit_code == 0
 
     def test_db_setup_help(self):
@@ -690,7 +738,9 @@ class TestCLIDBSeed:
         """Test _find_config_dir locates the config directory."""
         config_dir = _find_config_dir()
         assert config_dir.exists()
-        assert (config_dir / "_metadata.json").exists() or len(list(config_dir.glob("*.json"))) > 0
+        assert (config_dir / "_metadata.json").exists() or len(
+            list(config_dir.glob("*.json"))
+        ) > 0
 
     def test_load_template_configs(self):
         """Test _load_template_configs loads templates from config files."""
@@ -812,4 +862,3 @@ class TestCLISubprocess:
         assert result.returncode == 0
         assert "start" in result.stdout
         assert "status" in result.stdout
-

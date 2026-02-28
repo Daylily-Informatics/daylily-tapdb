@@ -14,7 +14,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, RootModel, TypeAdapter, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    RootModel,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 
 
 def normalize_template_code_str(code: str) -> str:
@@ -41,7 +48,9 @@ def validate_template_code_str(code: str) -> str:
     parts = [p for p in s.split("/") if p]
     if len(parts) != 4:
         raise ValueError(
-            "invalid template_code format (expected {category}/{type}/{subtype}/{version})"
+            "invalid template_code format"
+            " (expected {category}/{type}/"
+            "{subtype}/{version})"
         )
     return s
 
@@ -101,7 +110,9 @@ class InstantiationLayout(BaseModel):
         return v
 
 
-_layouts_adapter: TypeAdapter[list[InstantiationLayout]] = TypeAdapter(list[InstantiationLayout])
+_layouts_adapter: TypeAdapter[list[InstantiationLayout]] = TypeAdapter(
+    list[InstantiationLayout]
+)
 
 
 def validate_instantiation_layouts(value: Any) -> list[InstantiationLayout]:
