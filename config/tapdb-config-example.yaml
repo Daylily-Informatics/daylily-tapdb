@@ -31,3 +31,17 @@ environments:
     user: tapdb_admin
     password: "CHANGEME"
     database: tapdb_prod
+
+  # Aurora (AWS RDS) environments use engine_type: aurora
+  # and require additional aurora-specific fields.
+  aurora_dev:
+    engine_type: aurora
+    host: tapdb-dev-cluster.cluster-xxxxxxxxxxxx.us-west-2.rds.amazonaws.com
+    port: 5432
+    user: tapdb_admin
+    password: ""
+    database: tapdb_dev
+    region: us-west-2
+    cluster_identifier: tapdb-dev-cluster
+    iam_auth: true
+    ssl: true

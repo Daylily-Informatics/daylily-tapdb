@@ -71,17 +71,24 @@ def load_config() -> dict[str, Any]:
 
 
 def get_db_config_for_env(env_name: str) -> dict[str, str]:
-    """Resolve DB config for an environment name (dev/test/prod).
+    """Resolve DB config for an environment name (dev/test/prod/aurora_*).
 
-  Resolution order (highest precedence first):
-  1) TAPDB_<ENV>_* environment variables
-  2) PG* environment variables
-  3) Config file (searched in order via get_config_paths())
-  4) hard defaults
+    Resolution order (highest precedence first):
+    1) TAPDB_<ENV>_* environment variables
+    2) PG* environment variables
+    3) Config file (searched in order via get_config_paths())
+    4) hard defaults
 
     Supported file shapes:
     - {"dev": {host, port, user, password, database}, "prod": {...}}
     - {"environments": {"dev": {...}, "prod": {...}}}
+
+    The returned dict always contains an ``engine_type`` key:
+    - ``"local"`` (default) for standard PostgreSQL environments
+    - ``"aurora"`` when the config file sets ``engine_type: aurora``
+
+    Aurora environments additionally return ``region``,
+    ``cluster_identifier``, ``iam_auth``, and ``ssl`` keys.
     """
 
     env_key = env_name.lower()
@@ -100,7 +107,12 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
             return None
         return str(val)
 
-    return {
+    engine_type = os.environ.get(
+        f"{env_prefix}ENGINE_TYPE", _file_str("engine_type") or "local"
+    )
+
+    cfg: dict[str, str] = {
+        "engine_type": engine_type,
         "host": os.environ.get(f"{env_prefix}HOST", os.environ.get("PGHOST", _file_str("host") or "localhost")),
         "port": os.environ.get(f"{env_prefix}PORT", os.environ.get("PGPORT", _file_str("port") or "5432")),
         "user": os.environ.get(
@@ -112,4 +124,21 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
         ),
         "database": os.environ.get(f"{env_prefix}DATABASE", _file_str("database") or f"tapdb_{env_key}"),
     }
+
+    if engine_type == "aurora":
+        cfg["region"] = os.environ.get(
+            f"{env_prefix}REGION", _file_str("region") or "us-west-2"
+        )
+        cfg["cluster_identifier"] = os.environ.get(
+            f"{env_prefix}CLUSTER_IDENTIFIER",
+            _file_str("cluster_identifier") or "",
+        )
+        cfg["iam_auth"] = os.environ.get(
+            f"{env_prefix}IAM_AUTH", _file_str("iam_auth") or "true"
+        )
+        cfg["ssl"] = os.environ.get(
+            f"{env_prefix}SSL", _file_str("ssl") or "true"
+        )
+
+    return cfg
 
