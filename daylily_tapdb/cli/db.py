@@ -48,10 +48,15 @@ def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
     next nextval() should yield max(existing numeric suffix) + 1.
     """
     prefix = _normalize_instance_prefix(prefix)
+
+    # Defense-in-depth: reject non-alpha prefixes before SQL interpolation
+    if not prefix or not prefix.isalpha():
+        raise ValueError(f"Instance prefix must be alphabetic, got: {prefix!r}")
+
     seq_name = f"{prefix.lower()}_instance_seq"
 
     sql = f"""
-    CREATE SEQUENCE IF NOT EXISTS {seq_name};
+    CREATE SEQUENCE IF NOT EXISTS "{seq_name}";
 
     -- Initialize sequence so next nextval() yields max(existing numeric suffix) + 1.
     -- Also: never move the sequence backwards (avoid reusing previously-issued EUIs).
@@ -68,7 +73,7 @@ def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
           ) + 1 AS next_val
       ),
       seq_state AS (
-        SELECT last_value, is_called FROM {seq_name}
+        SELECT last_value, is_called FROM "{seq_name}"
       ),
       seq_next AS (
         SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END AS next_val
@@ -81,7 +86,7 @@ def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
         ) AS next_val
       )
     SELECT setval(
-      '{seq_name}',
+      '"{seq_name}"',
       (SELECT next_val FROM final_next),
       false
     );

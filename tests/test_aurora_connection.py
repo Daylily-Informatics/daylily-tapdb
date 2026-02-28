@@ -1,5 +1,6 @@
 """Tests for AuroraConnectionBuilder — all boto3 calls are mocked."""
 
+import hashlib
 import json
 import types
 from pathlib import Path
@@ -30,6 +31,16 @@ def _mock_boto3(monkeypatch):
     fake_boto3 = types.ModuleType("boto3")
     fake_boto3.client = _fake_boto3_client
     monkeypatch.setitem(__import__("sys").modules, "boto3", fake_boto3)
+
+
+@pytest.fixture(autouse=True)
+def _clear_iam_cache():
+    """Clear IAM token cache between tests."""
+    from daylily_tapdb.aurora import connection as mod
+
+    mod._iam_token_cache.clear()
+    yield
+    mod._iam_token_cache.clear()
 
 
 @pytest.fixture()
@@ -109,16 +120,40 @@ def test_ensure_ca_bundle_downloads_when_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "_CA_BUNDLE_PATH", bundle)
     monkeypatch.setattr(mod, "_CA_BUNDLE_DIR", tmp_path / "subdir")
 
+    content = b"DOWNLOADED"
+    sha256 = hashlib.sha256(content).hexdigest()
+    monkeypatch.setattr(mod, "_RDS_CA_BUNDLE_SHA256", sha256)
+
     # Mock urllib.request.urlretrieve
     def fake_urlretrieve(url, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text("DOWNLOADED")
+        Path(path).write_bytes(content)
 
     with patch("urllib.request.urlretrieve", fake_urlretrieve):
         result = mod.AuroraConnectionBuilder.ensure_ca_bundle()
 
     assert result == bundle
-    assert bundle.read_text() == "DOWNLOADED"
+    assert bundle.read_bytes() == content
+
+
+def test_ensure_ca_bundle_checksum_mismatch(tmp_path, monkeypatch):
+    """Downloaded CA bundle with wrong checksum is removed and raises."""
+    from daylily_tapdb.aurora import connection as mod
+
+    bundle = tmp_path / "rds-ca-bundle.pem"
+    monkeypatch.setattr(mod, "_CA_BUNDLE_PATH", bundle)
+    monkeypatch.setattr(mod, "_CA_BUNDLE_DIR", tmp_path)
+    monkeypatch.setattr(mod, "_RDS_CA_BUNDLE_SHA256", "0" * 64)
+
+    def fake_urlretrieve(url, path):
+        Path(path).write_text("BAD CONTENT")
+
+    with patch("urllib.request.urlretrieve", fake_urlretrieve):
+        with pytest.raises(RuntimeError, match="checksum mismatch"):
+            mod.AuroraConnectionBuilder.ensure_ca_bundle()
+
+    # File should be removed
+    assert not bundle.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -280,3 +315,57 @@ def test_build_connection_url_no_auth_raises(_ca_bundle):
             region="us-east-1",
             iam_auth=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# IAM token cache (L1)
+# ---------------------------------------------------------------------------
+
+
+def test_iam_token_cache_returns_cached():
+    """Second call with same args returns cached token without new API call."""
+    from daylily_tapdb.aurora import connection as mod
+
+    builder = mod.AuroraConnectionBuilder
+
+    host = "host.rds.amazonaws.com"
+    token1 = builder.get_iam_auth_token("us-east-1", host, 5432, "user1")
+    token2 = builder.get_iam_auth_token("us-east-1", host, 5432, "user1")
+    assert token1 == token2
+    assert len(mod._iam_token_cache) == 1
+
+
+def test_iam_token_cache_expires(monkeypatch):
+    """Expired cache entry triggers a new token generation."""
+    import time as time_mod
+
+    from daylily_tapdb.aurora import connection as mod
+
+    builder = mod.AuroraConnectionBuilder
+
+    # First call populates cache
+    builder.get_iam_auth_token("us-east-1", "host.rds.amazonaws.com", 5432, "user1")
+    assert len(mod._iam_token_cache) == 1
+
+    # Expire the cache by manipulating the stored expiry
+    cache_key = ("us-east-1", "host.rds.amazonaws.com", 5432, "user1")
+    token, _ = mod._iam_token_cache[cache_key]
+    mod._iam_token_cache[cache_key] = (token, time_mod.monotonic() - 1)
+
+    # Next call should generate a new token
+    host = "host.rds.amazonaws.com"
+    token2 = builder.get_iam_auth_token("us-east-1", host, 5432, "user1")
+    assert token2 == "iam-token-abc123"  # same mock value, but cache was refreshed
+    # Verify expiry is now in the future
+    _, new_expiry = mod._iam_token_cache[cache_key]
+    assert new_expiry > time_mod.monotonic()
+
+
+def test_iam_token_cache_different_keys():
+    """Different (host, user) combos get separate cache entries."""
+    from daylily_tapdb.aurora import connection as mod
+
+    builder = mod.AuroraConnectionBuilder
+    builder.get_iam_auth_token("us-east-1", "host1.rds.amazonaws.com", 5432, "user1")
+    builder.get_iam_auth_token("us-east-1", "host2.rds.amazonaws.com", 5432, "user1")
+    assert len(mod._iam_token_cache) == 2

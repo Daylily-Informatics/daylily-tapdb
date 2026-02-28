@@ -201,6 +201,37 @@ def _resources() -> dict[str, Any]:
                 "Tags": tags_with_refs,
             },
         },
+        "DatabaseIAMPolicy": {
+            "Type": "AWS::IAM::ManagedPolicy",
+            "Properties": {
+                "ManagedPolicyName": {
+                    "Fn::Sub": "tapdb-${ClusterIdentifier}-rds-connect"
+                },
+                "Description": {
+                    "Fn::Sub": (
+                        "Allow IAM database auth to TAPDB "
+                        "${ClusterIdentifier} Aurora cluster"
+                    )
+                },
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": "rds-db:connect",
+                            "Resource": {
+                                "Fn::Sub": (
+                                    "arn:aws:rds-db:${AWS::Region}:"
+                                    "${AWS::AccountId}:dbuser:"
+                                    "${AuroraCluster.DbClusterResourceId}"
+                                    "/${MasterUsername}"
+                                )
+                            },
+                        }
+                    ],
+                },
+            },
+        },
     }
 
 
@@ -224,6 +255,10 @@ def _outputs() -> dict[str, Any]:
         "SecurityGroupId": {
             "Description": "Security group ID for the Aurora cluster",
             "Value": {"Fn::GetAtt": ["ClusterSecurityGroup", "GroupId"]},
+        },
+        "DatabaseIAMPolicyArn": {
+            "Description": "ARN of the IAM policy for database authentication",
+            "Value": {"Ref": "DatabaseIAMPolicy"},
         },
     }
 
