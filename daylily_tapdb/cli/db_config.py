@@ -18,7 +18,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "tapdb" / "tapdb-config.yaml"
 REPO_CONFIG_PATH = Path.cwd() / "config" / "tapdb-config.yaml"
 
@@ -58,7 +57,9 @@ def _load_yaml_or_json(path: Path) -> dict[str, Any]:
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise ValueError(f"Config root must be a mapping/dict, got {type(data).__name__}")
+        raise ValueError(
+            f"Config root must be a mapping/dict, got {type(data).__name__}"
+        )
     return data
 
 
@@ -113,16 +114,26 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
 
     cfg: dict[str, str] = {
         "engine_type": engine_type,
-        "host": os.environ.get(f"{env_prefix}HOST", os.environ.get("PGHOST", _file_str("host") or "localhost")),
-        "port": os.environ.get(f"{env_prefix}PORT", os.environ.get("PGPORT", _file_str("port") or "5432")),
+        "host": os.environ.get(
+            f"{env_prefix}HOST",
+            os.environ.get("PGHOST", _file_str("host") or "localhost"),
+        ),
+        "port": os.environ.get(
+            f"{env_prefix}PORT", os.environ.get("PGPORT", _file_str("port") or "5432")
+        ),
         "user": os.environ.get(
             f"{env_prefix}USER",
-            os.environ.get("PGUSER", _file_str("user") or os.environ.get("USER", "postgres")),
+            os.environ.get(
+                "PGUSER", _file_str("user") or os.environ.get("USER", "postgres")
+            ),
         ),
         "password": os.environ.get(
-            f"{env_prefix}PASSWORD", os.environ.get("PGPASSWORD", _file_str("password") or "")
+            f"{env_prefix}PASSWORD",
+            os.environ.get("PGPASSWORD", _file_str("password") or ""),
         ),
-        "database": os.environ.get(f"{env_prefix}DATABASE", _file_str("database") or f"tapdb_{env_key}"),
+        "database": os.environ.get(
+            f"{env_prefix}DATABASE", _file_str("database") or f"tapdb_{env_key}"
+        ),
     }
 
     if engine_type == "aurora":
@@ -136,9 +147,6 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
         cfg["iam_auth"] = os.environ.get(
             f"{env_prefix}IAM_AUTH", _file_str("iam_auth") or "true"
         )
-        cfg["ssl"] = os.environ.get(
-            f"{env_prefix}SSL", _file_str("ssl") or "true"
-        )
+        cfg["ssl"] = os.environ.get(f"{env_prefix}SSL", _file_str("ssl") or "true")
 
     return cfg
-

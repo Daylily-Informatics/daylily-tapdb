@@ -18,9 +18,7 @@ from urllib.parse import quote_plus
 logger = logging.getLogger(__name__)
 
 # AWS publishes a combined CA bundle for all regions.
-_RDS_CA_BUNDLE_URL = (
-    "https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem"
-)
+_RDS_CA_BUNDLE_URL = "https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem"
 _CA_BUNDLE_DIR = Path.home() / ".config" / "tapdb"
 _CA_BUNDLE_PATH = _CA_BUNDLE_DIR / "rds-ca-bundle.pem"
 
@@ -29,6 +27,7 @@ def _ensure_boto3():
     """Import boto3, raising a clear error if missing."""
     try:
         import boto3
+
         return boto3
     except ImportError:
         raise ImportError(
@@ -198,7 +197,10 @@ class AuroraConnectionBuilder:
         )
         logger.debug(
             "Built Aurora connection URL for %s@%s:%s/%s (iam=%s)",
-            user, host, port, database, iam_auth,
+            user,
+            host,
+            port,
+            database,
+            iam_auth,
         )
         return url
-

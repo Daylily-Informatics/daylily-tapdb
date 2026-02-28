@@ -17,7 +17,6 @@ import pytest
 
 from daylily_tapdb.aurora.config import AuroraConfig
 
-
 # ---------------------------------------------------------------------------
 # AuroraConfig dataclass
 # ---------------------------------------------------------------------------
@@ -162,4 +161,3 @@ class TestGetDbConfigEngineType:
             assert key in cfg
         assert cfg["host"] == "localhost"
         assert cfg["database"] == "tapdb_dev"
-

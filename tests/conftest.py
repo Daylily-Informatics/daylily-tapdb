@@ -1,4 +1,5 @@
 """Pytest configuration for daylily-tapdb tests."""
+
 import pytest
 
 
@@ -6,4 +7,5 @@ import pytest
 def euid_config():
     """Provide a fresh EUIDConfig for testing."""
     from daylily_tapdb.euid import EUIDConfig
+
     return EUIDConfig()

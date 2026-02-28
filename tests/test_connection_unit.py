@@ -21,7 +21,7 @@ def test_connection_builds_default_url_and_creates_engine(monkeypatch):
 
     # avoid needing a real SQLAlchemy Engine inside sessionmaker
     monkeypatch.setattr(m, "create_engine", fake_create_engine)
-    monkeypatch.setattr(m, "sessionmaker", lambda bind: (lambda: None))
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
     conn = m.TAPDBConnection(db_url=None, db_name="tapdb")
     assert "postgresql://alice:pw@localhost:5544/tapdb" == called["url"]
@@ -32,8 +32,10 @@ def test_set_session_username_logs_and_swallows_execute_error(monkeypatch, caplo
     from daylily_tapdb import connection as m
 
     # minimal conn with no real engine/sessionmaker
-    monkeypatch.setattr(m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None))
-    monkeypatch.setattr(m, "sessionmaker", lambda bind: (lambda: None))
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(db_url="sqlite:///:memory:", app_username="pytest")
 
     class BadSession:
@@ -47,8 +49,10 @@ def test_set_session_username_logs_and_swallows_execute_error(monkeypatch, caplo
 def test_session_scope_commit_true_commits(monkeypatch):
     from daylily_tapdb import connection as m
 
-    monkeypatch.setattr(m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None))
-    monkeypatch.setattr(m, "sessionmaker", lambda bind: (lambda: None))
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(db_url="sqlite:///:memory:", app_username="pytest")
 
     class Trans:
@@ -92,8 +96,10 @@ def test_session_scope_commit_true_commits(monkeypatch):
 def test_session_scope_commit_false_rolls_back(monkeypatch):
     from daylily_tapdb import connection as m
 
-    monkeypatch.setattr(m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None))
-    monkeypatch.setattr(m, "sessionmaker", lambda bind: (lambda: None))
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(db_url="sqlite:///:memory:", app_username="pytest")
 
     class Trans:
@@ -110,10 +116,13 @@ def test_session_scope_commit_false_rolls_back(monkeypatch):
     class Sess:
         def __init__(self):
             self.trans = Trans()
+
         def begin(self):
             return self.trans
+
         def execute(self, *a, **k):
             return None
+
         def close(self):
             return None
 
@@ -130,25 +139,32 @@ def test_session_scope_commit_false_rolls_back(monkeypatch):
 def test_session_scope_exception_rolls_back_and_reraises(monkeypatch):
     from daylily_tapdb import connection as m
 
-    monkeypatch.setattr(m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None))
-    monkeypatch.setattr(m, "sessionmaker", lambda bind: (lambda: None))
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(db_url="sqlite:///:memory:", app_username="pytest")
 
     class Trans:
         def __init__(self):
             self.rolled_back = False
+
         def commit(self):
             raise AssertionError("should not commit")
+
         def rollback(self):
             self.rolled_back = True
 
     class Sess:
         def __init__(self):
             self.trans = Trans()
+
         def begin(self):
             return self.trans
+
         def execute(self, *a, **k):
             return None
+
         def close(self):
             return None
 
@@ -172,12 +188,13 @@ def test_reflect_tables_and_close_handle_exceptions(monkeypatch, caplog):
     class Engine:
         def __init__(self):
             self.raise_dispose = False
+
         def dispose(self):
             if self.raise_dispose:
                 raise RuntimeError("dispose boom")
 
     monkeypatch.setattr(m, "create_engine", lambda *a, **k: Engine())
-    monkeypatch.setattr(m, "sessionmaker", lambda bind: (lambda: None))
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
 
     prepared = {}
