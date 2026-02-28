@@ -25,7 +25,7 @@ class TestEUIDConfig:
         """Test that core prefixes are present."""
         assert "GT" in euid_config.CORE_PREFIXES
         assert "GX" in euid_config.CORE_PREFIXES
-        assert "GL" in euid_config.CORE_PREFIXES
+        assert "GN" in euid_config.CORE_PREFIXES
 
     def test_optional_prefixes(self, euid_config):
         """Test that optional prefixes are present."""

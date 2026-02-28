@@ -14,7 +14,7 @@
   "euid_prefixes": {
     "generic_template": "GT",
     "generic_instance": "GX",
-    "generic_instance_lineage": "GL",
+    "generic_instance_lineage": "GN",
     "container": "CX",
     "container_well": "CWX",
     "content": "CNX",
