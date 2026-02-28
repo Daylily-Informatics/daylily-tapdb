@@ -57,7 +57,7 @@ CREATE SEQUENCE IF NOT EXISTS ay_instance_seq;   -- AY (assay)
 CREATE TABLE IF NOT EXISTS generic_template (
     -- Primary identification
     uuid UUID PRIMARY KEY DEFAULT tapdb_gen_uuid(),
-    euid TEXT UNIQUE NOT NULL DEFAULT ('GT' || nextval('generic_template_seq')),
+    euid TEXT UNIQUE NOT NULL,  -- Meridian EUID set by trigger (set_generic_template_euid)
     name TEXT NOT NULL,
 
     -- Type hierarchy (category/type/subtype/version)
@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS generic_instance (
 CREATE TABLE IF NOT EXISTS generic_instance_lineage (
     -- Primary identification
     uuid UUID PRIMARY KEY DEFAULT tapdb_gen_uuid(),
-    euid TEXT UNIQUE NOT NULL DEFAULT ('GL' || nextval('generic_instance_lineage_seq')),
+    euid TEXT UNIQUE NOT NULL,  -- Meridian EUID set by trigger (set_generic_instance_lineage_euid)
     name TEXT NOT NULL,
 
     -- Type hierarchy (category/type/subtype/version)
@@ -266,7 +266,64 @@ CREATE INDEX IF NOT EXISTS idx_tapdb_user_is_active ON tapdb_user(is_active);
 -- FUNCTIONS
 --------------------------------------------------------------------------------
 
--- EUID auto-generation for generic_instance
+-- Meridian EUID: Crockford Base32 encode (positive integer → unpadded text)
+CREATE OR REPLACE FUNCTION crockford_base32_encode(val BIGINT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    alphabet TEXT := '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    result TEXT := '';
+    remainder BIGINT;
+BEGIN
+    IF val <= 0 THEN
+        RAISE EXCEPTION 'EUID body must be a positive integer, got %', val;
+    END IF;
+    WHILE val > 0 LOOP
+        remainder := val % 32;
+        result := substr(alphabet, remainder + 1, 1) || result;
+        val := val / 32;
+    END LOOP;
+    RETURN result;
+END;
+$$;
+
+-- Meridian EUID: Luhn-style MOD 32 check character (SPEC.md §7.5)
+CREATE OR REPLACE FUNCTION meridian_luhn_mod32_check(payload TEXT)
+RETURNS CHAR LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    alphabet TEXT := '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    i INT; ch CHAR; v INT; factor INT; p INT;
+    total INT := 0; payload_len INT; check_value INT;
+BEGIN
+    payload_len := length(payload);
+    FOR i IN REVERSE payload_len..1 LOOP
+        ch := substr(payload, i, 1);
+        v := position(ch IN alphabet) - 1;
+        IF v < 0 THEN
+            RAISE EXCEPTION 'Invalid character "%" in EUID payload', ch;
+        END IF;
+        factor := CASE WHEN (payload_len - i) % 2 = 0 THEN 2 ELSE 1 END;
+        p := v * factor;
+        total := total + (p / 32) + (p % 32);
+    END LOOP;
+    check_value := (32 - (total % 32)) % 32;
+    RETURN substr(alphabet, check_value + 1, 1);
+END;
+$$;
+
+-- Meridian EUID: Generate full EUID string (PREFIX-BODYCHECK)
+CREATE OR REPLACE FUNCTION meridian_generate_euid(prefix TEXT, seq_val BIGINT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    body TEXT; payload TEXT; check_char CHAR;
+BEGIN
+    body := crockford_base32_encode(seq_val);
+    payload := prefix || body;
+    check_char := meridian_luhn_mod32_check(payload);
+    RETURN prefix || '-' || body || check_char;
+END;
+$$;
+
+-- EUID auto-generation for generic_instance (Meridian-conformant)
 CREATE OR REPLACE FUNCTION set_generic_instance_euid()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -294,7 +351,29 @@ BEGIN
 	        seq_name, prefix;
     END;
 
-    NEW.euid := prefix || seq_val;
+    NEW.euid := meridian_generate_euid(prefix, seq_val);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- EUID auto-generation for generic_template (Meridian-conformant)
+CREATE OR REPLACE FUNCTION set_generic_template_euid()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.euid IS NULL OR NEW.euid = '' THEN
+        NEW.euid := meridian_generate_euid('GT', nextval('generic_template_seq'));
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- EUID auto-generation for generic_instance_lineage (Meridian-conformant)
+CREATE OR REPLACE FUNCTION set_generic_instance_lineage_euid()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.euid IS NULL OR NEW.euid = '' THEN
+        NEW.euid := meridian_generate_euid('GL', nextval('generic_instance_lineage_seq'));
+    END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -396,11 +475,23 @@ $$ LANGUAGE plpgsql;
 -- TRIGGERS
 --------------------------------------------------------------------------------
 
--- EUID trigger for generic_instance
+-- EUID trigger for generic_template (Meridian-conformant)
+DROP TRIGGER IF EXISTS trigger_set_generic_template_euid ON generic_template;
+CREATE TRIGGER trigger_set_generic_template_euid
+    BEFORE INSERT ON generic_template
+    FOR EACH ROW EXECUTE FUNCTION set_generic_template_euid();
+
+-- EUID trigger for generic_instance (Meridian-conformant)
 DROP TRIGGER IF EXISTS trigger_set_generic_instance_euid ON generic_instance;
 CREATE TRIGGER trigger_set_generic_instance_euid
     BEFORE INSERT ON generic_instance
     FOR EACH ROW EXECUTE FUNCTION set_generic_instance_euid();
+
+-- EUID trigger for generic_instance_lineage (Meridian-conformant)
+DROP TRIGGER IF EXISTS trigger_set_generic_instance_lineage_euid ON generic_instance_lineage;
+CREATE TRIGGER trigger_set_generic_instance_lineage_euid
+    BEFORE INSERT ON generic_instance_lineage
+    FOR EACH ROW EXECUTE FUNCTION set_generic_instance_lineage_euid();
 
 -- Soft delete triggers (BEFORE DELETE)
 DROP TRIGGER IF EXISTS soft_delete_generic_template ON generic_template;
