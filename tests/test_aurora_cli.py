@@ -39,6 +39,11 @@ def _mock_stack_manager():
             "SecretArn": "arn:aws:secretsmanager:us-west-2:123:secret:tapdb-dev",
         },
     }
+    mgr.initiate_create_stack.return_value = {
+        "stack_name": "tapdb-dev",
+        "stack_id": "arn:aws:cloudformation:us-west-2:123:stack/tapdb-dev/abc",
+        "vpc_id": "vpc-abc123",
+    }
     mgr.delete_stack.return_value = {
         "stack_name": "tapdb-dev",
         "status": "DELETE_COMPLETE",
@@ -269,3 +274,50 @@ class TestConfigUpdate:
         # Should contain the environment entry
         assert "staging" in raw
         assert "aurora" in raw
+
+
+
+# ── aurora create --background ──────────────────────────────────────
+
+
+class TestAuroraCreateBackground:
+    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+    def test_background_returns_immediately(self, mock_mgr_cls, app):
+        mock_mgr = _mock_stack_manager()
+        mock_mgr_cls.return_value = mock_mgr
+
+        result = runner.invoke(
+            app, ["aurora", "create", "dev", "--background", "--vpc-id", "vpc-123"]
+        )
+        assert result.exit_code == 0
+        out = _strip(result.output)
+        assert "initiated" in out.lower()
+        assert "tapdb aurora status dev" in out
+        mock_mgr.initiate_create_stack.assert_called_once()
+        mock_mgr.create_stack.assert_not_called()
+
+    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+    def test_no_background_calls_create_stack(
+        self, mock_mgr_cls, app, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        mock_mgr = _mock_stack_manager()
+        mock_mgr_cls.return_value = mock_mgr
+
+        result = runner.invoke(
+            app, ["aurora", "create", "dev", "--vpc-id", "vpc-123"]
+        )
+        assert result.exit_code == 0
+        mock_mgr.create_stack.assert_called_once()
+        mock_mgr.initiate_create_stack.assert_not_called()
+
+    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+    def test_background_failure(self, mock_mgr_cls, app):
+        mock_mgr_cls.return_value.initiate_create_stack.side_effect = RuntimeError(
+            "No default VPC"
+        )
+        result = runner.invoke(
+            app, ["aurora", "create", "dev", "--background"]
+        )
+        assert result.exit_code == 1
+        assert "No default VPC" in _strip(result.output)

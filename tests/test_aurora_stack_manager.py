@@ -30,9 +30,27 @@ def mock_cfn():
 
 
 @pytest.fixture()
-def manager(mock_cfn):
-    """Return an AuroraStackManager with a mocked CFN client."""
-    return AuroraStackManager(cfn_client=mock_cfn, region="us-west-2")
+def mock_ec2():
+    """Return a MagicMock pretending to be a boto3 EC2 client."""
+    ec2 = MagicMock()
+    ec2.describe_vpcs.return_value = {
+        "Vpcs": [{"VpcId": "vpc-default123", "IsDefault": True}]
+    }
+    ec2.describe_subnets.return_value = {
+        "Subnets": [
+            {"SubnetId": "subnet-aaa"},
+            {"SubnetId": "subnet-bbb"},
+        ]
+    }
+    return ec2
+
+
+@pytest.fixture()
+def manager(mock_cfn, mock_ec2):
+    """Return an AuroraStackManager with mocked CFN and EC2 clients."""
+    return AuroraStackManager(
+        cfn_client=mock_cfn, ec2_client=mock_ec2, region="us-west-2"
+    )
 
 
 @pytest.fixture()
@@ -61,9 +79,10 @@ def metadata_path(tmp_path, monkeypatch):
 
 
 class TestConstructor:
-    def test_accepts_injected_client(self, mock_cfn):
-        mgr = AuroraStackManager(cfn_client=mock_cfn)
+    def test_accepts_injected_client(self, mock_cfn, mock_ec2):
+        mgr = AuroraStackManager(cfn_client=mock_cfn, ec2_client=mock_ec2)
         assert mgr._cfn is mock_cfn
+        assert mgr._ec2 is mock_ec2
 
     def test_missing_boto3_raises_import_error(self):
         with patch.dict("sys.modules", {"boto3": None}):
@@ -241,6 +260,67 @@ class TestCreateStack:
         param_keys = {p["ParameterKey"] for p in call_kwargs["Parameters"]}
         assert "ClusterIdentifier" in param_keys
         assert "VpcId" in param_keys
+        assert "SubnetIds" in param_keys
+
+        # SubnetIds should be comma-separated
+        subnet_param = next(
+            p for p in call_kwargs["Parameters"] if p["ParameterKey"] == "SubnetIds"
+        )
+        assert "subnet-aaa" in subnet_param["ParameterValue"]
+        assert "subnet-bbb" in subnet_param["ParameterValue"]
+
+
+# ------------------------------------------------------------------
+# VPC / subnet auto-discovery
+# ------------------------------------------------------------------
+
+
+class TestResolveVpcAndSubnets:
+    def test_uses_config_vpc_id(self, manager, mock_ec2):
+        """When config has vpc_id, use it (don't discover)."""
+        config = AuroraConfig(vpc_id="vpc-explicit", cluster_identifier="x")
+        vpc_id, subnets = manager._resolve_vpc_and_subnets(config)
+        assert vpc_id == "vpc-explicit"
+        mock_ec2.describe_vpcs.assert_not_called()
+
+    def test_auto_discovers_default_vpc(self, manager, mock_ec2):
+        """When config.vpc_id is empty, discover default VPC."""
+        config = AuroraConfig(vpc_id="", cluster_identifier="x")
+        vpc_id, subnets = manager._resolve_vpc_and_subnets(config)
+        assert vpc_id == "vpc-default123"
+        assert len(subnets) == 2
+        mock_ec2.describe_vpcs.assert_called_once()
+
+    def test_no_default_vpc_raises(self, manager, mock_ec2):
+        """No default VPC and no --vpc-id → RuntimeError."""
+        mock_ec2.describe_vpcs.return_value = {"Vpcs": []}
+        config = AuroraConfig(vpc_id="", cluster_identifier="x")
+        with pytest.raises(RuntimeError, match="No default VPC"):
+            manager._resolve_vpc_and_subnets(config)
+
+    def test_no_subnets_raises(self, manager, mock_ec2):
+        """VPC exists but has no subnets → RuntimeError."""
+        mock_ec2.describe_subnets.return_value = {"Subnets": []}
+        config = AuroraConfig(vpc_id="vpc-empty", cluster_identifier="x")
+        with pytest.raises(RuntimeError, match="No subnets found"):
+            manager._resolve_vpc_and_subnets(config)
+
+
+# ------------------------------------------------------------------
+# initiate_create_stack
+# ------------------------------------------------------------------
+
+
+class TestInitiateCreateStack:
+    def test_returns_without_waiting(self, manager, mock_cfn, mock_ec2):
+        mock_cfn.create_stack.return_value = {"StackId": _FAKE_STACK_ID}
+        config = AuroraConfig(cluster_identifier="bg-test")
+        result = manager.initiate_create_stack(config)
+        assert result["stack_name"] == "tapdb-bg-test"
+        assert "arn:" in result["stack_id"]
+        assert result["vpc_id"] == "vpc-default123"
+        # Should NOT have called describe_stacks (no waiting)
+        mock_cfn.describe_stacks.assert_not_called()
 
 
 # ------------------------------------------------------------------
