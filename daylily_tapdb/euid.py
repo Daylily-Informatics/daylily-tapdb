@@ -112,8 +112,12 @@ def format_euid(prefix: str, seq_val: int, *, sandbox: str | None = None) -> str
     return f"{prefix}-{body}{check}"
 
 
-def validate_euid(euid: str, *, environment: str = "production",
-                  allowed_sandbox_prefixes: list[str] | None = None) -> bool:
+def validate_euid(
+    euid: str,
+    *,
+    environment: str = "production",
+    allowed_sandbox_prefixes: list[str] | None = None,
+) -> bool:
     """Validate an EUID string against Meridian spec.
 
     Returns True if the EUID is syntactically valid and checksum-correct
@@ -135,7 +139,10 @@ def validate_euid(euid: str, *, environment: str = "production",
         if not _SANDBOX_RE.match(euid):
             return False
         sandbox_prefix = euid[0]
-        if allowed_sandbox_prefixes is not None and sandbox_prefix not in allowed_sandbox_prefixes:
+        if (
+            allowed_sandbox_prefixes is not None
+            and sandbox_prefix not in allowed_sandbox_prefixes
+        ):
             return False
         # Checksum payload = sandbox + category + body (no delimiters)
         stripped = euid.replace(":", "").replace("-", "")

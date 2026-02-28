@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from daylily_tapdb.euid import (
-    CROCKFORD_ALPHABET,
     crockford_base32_encode,
     format_euid,
     meridian_checksum,
@@ -178,8 +177,12 @@ class TestValidateEuid:
         assert validate_euid("X:TX-1C") is False
 
     def test_reject_production_in_sandbox(self):
-        assert validate_euid("TX-1C", environment="sandbox",
-                             allowed_sandbox_prefixes=["X"]) is False
+        assert (
+            validate_euid(
+                "TX-1C", environment="sandbox", allowed_sandbox_prefixes=["X"]
+            )
+            is False
+        )
 
     def test_reject_wrong_checksum(self):
         assert validate_euid("TX-1D") is False
@@ -239,10 +242,14 @@ class TestMeridianTestVectors:
                 f"format_euid({category!r}, {integer}, sandbox={sandbox_prefix!r}) "
                 f"= {generated!r}, expected {euid_str!r}"
             )
-            assert validate_euid(
-                euid_str, environment="sandbox",
-                allowed_sandbox_prefixes=allowed,
-            ) is True
+            assert (
+                validate_euid(
+                    euid_str,
+                    environment="sandbox",
+                    allowed_sandbox_prefixes=allowed,
+                )
+                is True
+            )
 
     def test_invalid_vectors(self, vectors):
         """Each invalid vector must be rejected by validate_euid."""
@@ -252,7 +259,8 @@ class TestMeridianTestVectors:
             env = ctx.get("environment", "production")
             allowed = ctx.get("allowed_sandbox_prefixes")
             result = validate_euid(
-                euid_str, environment=env,
+                euid_str,
+                environment=env,
                 allowed_sandbox_prefixes=allowed,
             )
             assert result is False, (
