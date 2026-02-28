@@ -5,7 +5,7 @@ Phase 2 policy:
 - Core library methods accept an explicit SQLAlchemy Session
 - Do not cache ORM objects across sessions (cache IDs instead)
 """
-import json
+
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -40,7 +40,9 @@ class TemplateManager:
         self._template_uuid_cache: Dict[str, Any] = {}
         self._template_euid_cache: Dict[str, Any] = {}
 
-    def get_template(self, session: Session, template_code: str) -> Optional[generic_template]:
+    def get_template(
+        self, session: Session, template_code: str
+    ) -> Optional[generic_template]:
         """
         Get a template by its code string.
 
@@ -67,13 +69,17 @@ class TemplateManager:
 
         category, type_, subtype, version = parts
 
-        template = session.query(generic_template).filter(
-            generic_template.category == category,
-            generic_template.type == type_,
-            generic_template.subtype == subtype,
-            generic_template.version == version,
-            generic_template.is_deleted == False
-        ).first()
+        template = (
+            session.query(generic_template)
+            .filter(
+                generic_template.category == category,
+                generic_template.type == type_,
+                generic_template.subtype == subtype,
+                generic_template.version == version,
+                generic_template.is_deleted.is_(False),
+            )
+            .first()
+        )
 
         if template:
             self._template_uuid_cache[template_code] = template.uuid
@@ -81,7 +87,9 @@ class TemplateManager:
 
         return template
 
-    def get_template_by_euid(self, session: Session, euid: str) -> Optional[generic_template]:
+    def get_template_by_euid(
+        self, session: Session, euid: str
+    ) -> Optional[generic_template]:
         """
         Get a template by its EUID.
 
@@ -97,10 +105,14 @@ class TemplateManager:
             if tmpl is not None and tmpl.is_deleted is False:
                 return tmpl
 
-        tmpl = session.query(generic_template).filter(
-            generic_template.euid == euid,
-            generic_template.is_deleted == False,
-        ).first()
+        tmpl = (
+            session.query(generic_template)
+            .filter(
+                generic_template.euid == euid,
+                generic_template.is_deleted.is_(False),
+            )
+            .first()
+        )
         if tmpl is not None:
             self._template_euid_cache[euid] = tmpl.uuid
         return tmpl
@@ -115,7 +127,7 @@ class TemplateManager:
         session: Session,
         category: Optional[str] = None,
         type_: Optional[str] = None,
-        include_deleted: bool = False
+        include_deleted: bool = False,
     ) -> List[generic_template]:
         """
         List templates with optional filtering.
@@ -131,7 +143,7 @@ class TemplateManager:
         query = session.query(generic_template)
 
         if not include_deleted:
-            query = query.filter(generic_template.is_deleted == False)
+            query = query.filter(generic_template.is_deleted.is_(False))
         if category:
             query = query.filter(generic_template.category == category)
         if type_:
@@ -149,4 +161,7 @@ class TemplateManager:
         Returns:
             Template code string.
         """
-        return f"{template.category}/{template.type}/{template.subtype}/{template.version}/"
+        return (
+            f"{template.category}/{template.type}/"
+            f"{template.subtype}/{template.version}/"
+        )

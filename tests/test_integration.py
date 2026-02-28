@@ -145,7 +145,9 @@ def test_postgres_schema_seed_action_audit_soft_delete():
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
 
             _seed_templates(session, repo_root / "config" / "action" / "core.json")
-            _seed_templates(session, repo_root / "config" / "workflow_step" / "queue.json")
+            _seed_templates(
+                session, repo_root / "config" / "workflow_step" / "queue.json"
+            )
             _seed_templates(session, repo_root / "config" / "workflow" / "assay.json")
 
             wf = factory.create_instance(
@@ -206,7 +208,9 @@ def test_postgres_schema_install_is_idempotent():
     repo_root = Path(__file__).resolve().parents[1]
     schema_sql_path = repo_root / "schema" / "tapdb_schema.sql"
 
-    schema_name = f"tapdb_test_idem_{int(time.time())}_{random.randint(1, 1_000_000_000)}"
+    schema_name = (
+        f"tapdb_test_idem_{int(time.time())}_{random.randint(1, 1_000_000_000)}"
+    )
     _install_schema(dsn, schema_name, schema_sql_path)
 
     try:
@@ -248,8 +252,12 @@ def test_postgres_restricted_role_schema_install_and_uuid_fallback():
     admin_conn.autocommit = True
     admin_cur = admin_conn.cursor()
     try:
-        admin_cur.execute(psql.SQL("DROP DATABASE IF EXISTS {};").format(psql.Identifier(db)))
-        admin_cur.execute(psql.SQL("DROP ROLE IF EXISTS {};").format(psql.Identifier(role)))
+        admin_cur.execute(
+            psql.SQL("DROP DATABASE IF EXISTS {};").format(psql.Identifier(db))
+        )
+        admin_cur.execute(
+            psql.SQL("DROP ROLE IF EXISTS {};").format(psql.Identifier(role))
+        )
         admin_cur.execute(
             psql.SQL("CREATE ROLE {} LOGIN PASSWORD %s;").format(psql.Identifier(role)),
             [pwd],
@@ -263,7 +271,9 @@ def test_postgres_restricted_role_schema_install_and_uuid_fallback():
         )
         # Explicitly prevent extension installs by the restricted role.
         admin_cur.execute(
-            psql.SQL("REVOKE CREATE ON DATABASE {} FROM PUBLIC;").format(psql.Identifier(db))
+            psql.SQL("REVOKE CREATE ON DATABASE {} FROM PUBLIC;").format(
+                psql.Identifier(db)
+            )
         )
         admin_cur.execute(
             psql.SQL("REVOKE CREATE ON DATABASE {} FROM {};").format(
@@ -301,14 +311,17 @@ def test_postgres_restricted_role_schema_install_and_uuid_fallback():
     )
 
     try:
-        # Apply into the pre-created schema; extension install should be skipped (insufficient_privilege).
+        # Apply into the pre-created schema; extension install
+        # should be skipped (insufficient_privilege).
         _apply_schema(role_db_dsn, schema_name, schema_sql_path)
 
         role_conn = psycopg2.connect(role_db_dsn)
         role_conn.autocommit = True
         role_cur = role_conn.cursor()
         try:
-            role_cur.execute(psql.SQL("SET search_path TO {};").format(psql.Identifier(schema_name)))
+            role_cur.execute(
+                psql.SQL("SET search_path TO {};").format(psql.Identifier(schema_name))
+            )
 
             # Force the tapdb_gen_uuid() fallback branch in a portable way even
             # if the cluster provides gen_random_uuid() (via pgcrypto or otherwise).
@@ -335,9 +348,12 @@ def test_postgres_restricted_role_schema_install_and_uuid_fallback():
         admin_conn.autocommit = True
         admin_cur = admin_conn.cursor()
         try:
-            admin_cur.execute(psql.SQL("DROP DATABASE IF EXISTS {};").format(psql.Identifier(db)))
-            admin_cur.execute(psql.SQL("DROP ROLE IF EXISTS {};").format(psql.Identifier(role)))
+            admin_cur.execute(
+                psql.SQL("DROP DATABASE IF EXISTS {};").format(psql.Identifier(db))
+            )
+            admin_cur.execute(
+                psql.SQL("DROP ROLE IF EXISTS {};").format(psql.Identifier(role))
+            )
         finally:
             admin_cur.close()
             admin_conn.close()
-

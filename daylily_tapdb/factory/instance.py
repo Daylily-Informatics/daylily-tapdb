@@ -1,4 +1,5 @@
 """Instance factory for TAPDB."""
+
 import copy
 import logging
 from typing import Any, Dict, Optional
@@ -7,8 +8,8 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from daylily_tapdb.models.instance import generic_instance
-from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.models.lineage import generic_instance_lineage
+from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.validation.instantiation_layouts import (
     format_validation_error,
     normalize_template_code_str,
@@ -19,9 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def materialize_actions(
-    session: Session,
-    template: generic_template,
-    template_manager
+    session: Session, template: generic_template, template_manager
 ) -> Dict[str, Any]:
     """
     Materialize action_imports into action_groups for an instance.
@@ -38,7 +37,9 @@ def materialize_actions(
     """
     action_groups: Dict[str, Any] = {}
 
-    for action_key, template_code in template.json_addl.get("action_imports", {}).items():
+    for action_key, template_code in template.json_addl.get(
+        "action_imports", {}
+    ).items():
         action_tmpl = template_manager.get_template(session, template_code)
         if action_tmpl is None:
             continue
@@ -97,7 +98,7 @@ class InstanceFactory:
         properties: Optional[Dict[str, Any]] = None,
         create_children: bool = True,
         _depth: int = 0,
-        _visited: Optional[set] = None
+        _visited: Optional[set] = None,
     ) -> generic_instance:
         """
         Create an instance from a template.
@@ -124,9 +125,11 @@ class InstanceFactory:
 
         # Check recursion depth
         if _depth > self.MAX_INSTANTIATION_DEPTH:
+            max_d = self.MAX_INSTANTIATION_DEPTH
             raise ValueError(
-                f"Maximum instantiation depth ({self.MAX_INSTANTIATION_DEPTH}) exceeded. "
-                f"Check for cycles in instantiation_layouts."
+                f"Maximum instantiation depth ({max_d})"
+                " exceeded. Check for cycles in"
+                " instantiation_layouts."
             )
 
         # Check for cycles
@@ -148,7 +151,8 @@ class InstanceFactory:
         # Create instance
         instance = generic_instance(
             name=name,
-            polymorphic_discriminator=template.instance_polymorphic_identity or template.polymorphic_discriminator.replace("_template", "_instance"),
+            polymorphic_discriminator=template.instance_polymorphic_identity
+            or template.polymorphic_discriminator.replace("_template", "_instance"),
             category=template.category,
             type=template.type,
             subtype=template.subtype,
@@ -167,7 +171,6 @@ class InstanceFactory:
             self._create_children(session, instance, template, _depth, _visited.copy())
 
         return instance
-
 
     def _build_json_addl(
         self,
@@ -189,8 +192,10 @@ class InstanceFactory:
         """
         json_addl = {
             "properties": copy.deepcopy(template.json_addl.get("properties", {})),
-            "action_groups": materialize_actions(session, template, self.template_manager),
-            "audit_log": []
+            "action_groups": materialize_actions(
+                session, template, self.template_manager
+            ),
+            "audit_log": [],
         }
 
         # Merge custom properties
@@ -205,7 +210,7 @@ class InstanceFactory:
         parent: generic_instance,
         template: generic_template,
         depth: int,
-        visited: set
+        visited: set,
     ):
         """
         Create child instances from instantiation_layouts.
@@ -273,7 +278,7 @@ class InstanceFactory:
         session: Session,
         parent: generic_instance,
         child: generic_instance,
-        relationship_type: str = "contains"
+        relationship_type: str = "contains",
     ) -> generic_instance_lineage:
         """
         Create a lineage relationship between two instances.
@@ -298,7 +303,7 @@ class InstanceFactory:
             child_instance_uuid=child.uuid,
             relationship_type=relationship_type,
             parent_type=parent.polymorphic_discriminator,
-            child_type=child.polymorphic_discriminator
+            child_type=child.polymorphic_discriminator,
         )
 
         session.add(lineage)
@@ -311,7 +316,7 @@ class InstanceFactory:
         session: Session,
         parent: generic_instance,
         child: generic_instance,
-        relationship_type: str = "generic"
+        relationship_type: str = "generic",
     ) -> generic_instance_lineage:
         """
         Create a lineage link between two existing instances.
@@ -348,7 +353,7 @@ class InstanceFactory:
             session.query(generic_instance)
             .filter(
                 generic_instance.template_uuid == template.uuid,
-                generic_instance.is_deleted == False,
+                generic_instance.is_deleted.is_(False),
             )
             .order_by(generic_instance.created_dt.desc())
             .first()

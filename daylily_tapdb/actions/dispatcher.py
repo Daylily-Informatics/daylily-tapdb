@@ -1,14 +1,15 @@
 """Action dispatcher for TAPDB."""
+
 import logging
-from abc import ABC, abstractmethod
+from abc import ABC
 from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 from uuid import UUID
-from typing import Dict, Optional, Any
 
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from daylily_tapdb.models.instance import generic_instance, action_instance
+from daylily_tapdb.models.instance import action_instance, generic_instance
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class ActionDispatcher(ABC):
         action_ds: Dict[str, Any],
         captured_data: Optional[Dict[str, Any]] = None,
         create_action_record: bool = True,
-        user: Optional[str] = None
+        user: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Route action to appropriate handler method.
@@ -71,7 +72,7 @@ class ActionDispatcher(ABC):
             logger.warning(f"No handler found for action: {action_key}")
             return {
                 "status": "error",
-                "message": f"No handler for action: {action_key}"
+                "message": f"No handler for action: {action_key}",
             }
 
         # Execute action
@@ -79,10 +80,7 @@ class ActionDispatcher(ABC):
             result = handler(instance, action_ds, captured_data)
         except Exception as e:
             logger.exception(f"Action {action_key} failed: {e}")
-            result = {
-                "status": "error",
-                "message": str(e)
-            }
+            result = {"status": "error", "message": str(e)}
 
         # Update action tracking in json_addl
         self._update_action_tracking(instance, action_group, action_key, result)
@@ -90,8 +88,14 @@ class ActionDispatcher(ABC):
         # Create action record if requested
         if create_action_record and result.get("status") == "success":
             self._create_action_record(
-                session, instance, action_group, action_key, action_ds,
-                captured_data, result, user
+                session,
+                instance,
+                action_group,
+                action_key,
+                action_ds,
+                captured_data,
+                result,
+                user,
             )
 
         return result
@@ -101,7 +105,7 @@ class ActionDispatcher(ABC):
         instance: generic_instance,
         action_group: str,
         action_key: str,
-        result: Dict[str, Any]
+        result: Dict[str, Any],
     ):
         """Update action execution tracking in instance json_addl."""
         if action_group not in instance.json_addl.get("action_groups", {}):
@@ -127,7 +131,7 @@ class ActionDispatcher(ABC):
         action_ds: Dict[str, Any],
         captured_data: Dict[str, Any],
         result: Dict[str, Any],
-        user: Optional[str]
+        user: Optional[str],
     ):
         """Create an action_instance record for audit/scheduling."""
         action_template_uuid = action_ds.get("action_template_uuid")
@@ -161,9 +165,9 @@ class ActionDispatcher(ABC):
                 "captured_data": captured_data,
                 "result": result,
                 "executed_by": user,
-                "executed_at": datetime.now(timezone.utc).isoformat()
+                "executed_at": datetime.now(timezone.utc).isoformat(),
             },
-            bstatus="completed"
+            bstatus="completed",
         )
 
         session.add(action_record)

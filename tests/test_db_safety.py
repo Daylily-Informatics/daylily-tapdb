@@ -73,7 +73,9 @@ def test_upsert_template_overwrite_false_is_on_conflict_do_nothing(monkeypatch):
     assert "RETURNING 1" in sql
 
 
-def test_db_migrate_idempotent_when_all_migrations_already_applied(tmp_path, monkeypatch):
+def test_db_migrate_idempotent_when_all_migrations_already_applied(
+    tmp_path, monkeypatch
+):
     """Safety: if migrations exist but have already been recorded as applied,
     db_migrate should not attempt to apply them again.
     """
@@ -108,3 +110,41 @@ def test_db_migrate_idempotent_when_all_migrations_already_applied(tmp_path, mon
 
     # Ensure we never attempted to apply a migration file.
     assert not any(c["file"] is not None for c in calls)
+
+
+
+# ---------------------------------------------------------------------------
+# M5: _ensure_instance_prefix_sequence rejects non-alpha prefixes
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_instance_prefix_sequence_rejects_non_alpha():
+    import pytest
+
+    import daylily_tapdb.cli.db as m
+
+    with pytest.raises(ValueError, match="letters only"):
+        m._ensure_instance_prefix_sequence(m.Environment.dev, "AB123")
+
+    with pytest.raises(ValueError, match="cannot be empty"):
+        m._ensure_instance_prefix_sequence(m.Environment.dev, "")
+
+    with pytest.raises(ValueError, match="cannot be empty"):
+        m._ensure_instance_prefix_sequence(m.Environment.dev, "   ")
+
+
+def test_ensure_instance_prefix_sequence_quotes_sql(monkeypatch):
+    """Verify sequence names are double-quoted in SQL."""
+    import daylily_tapdb.cli.db as m
+
+    captured = {}
+
+    def fake_run_psql(env, *, sql=None, file=None):
+        captured["sql"] = sql
+        return True, ""
+
+    monkeypatch.setattr(m, "_run_psql", fake_run_psql)
+    m._ensure_instance_prefix_sequence(m.Environment.dev, "GX")
+
+    sql = captured["sql"]
+    assert '"gx_instance_seq"' in sql

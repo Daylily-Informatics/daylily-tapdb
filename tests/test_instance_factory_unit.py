@@ -140,10 +140,14 @@ def test_create_instance_invalid_instantiation_layouts_raises_value_error():
 
     f = InstanceFactory(TM())
     with pytest.raises(ValueError, match="Invalid instantiation_layouts"):
-        f.create_instance(sess, "generic/generic/generic/1.0", "x", create_children=True)
+        f.create_instance(
+            sess, "generic/generic/generic/1.0", "x", create_children=True
+        )
 
 
-def test_create_children_handles_string_and_object_child_templates_and_creates_lineages(monkeypatch):
+def test_create_children_handles_string_and_object_child_templates_and_creates_lineages(
+    monkeypatch,
+):
     from daylily_tapdb.factory.instance import InstanceFactory
     from daylily_tapdb.models.lineage import generic_instance_lineage
 
@@ -164,7 +168,11 @@ def test_create_children_handles_string_and_object_child_templates_and_creates_l
                     "name_pattern": "{parent_name}_{child_subtype}_{index}",
                     "child_templates": [
                         "generic/generic/child1/1.0",
-                        {"template_code": "generic/generic/child2/1.0", "count": 2, "name_pattern": "{parent_euid}:{child_subtype}:{index}"},
+                        {
+                            "template_code": "generic/generic/child2/1.0",
+                            "count": 2,
+                            "name_pattern": "{parent_euid}:{child_subtype}:{index}",
+                        },
                     ],
                 }
             ]
@@ -181,7 +189,9 @@ def test_create_children_handles_string_and_object_child_templates_and_creates_l
             polymorphic_discriminator="generic_instance",
         )
 
-    f = InstanceFactory(template_manager=SimpleNamespace(get_template=lambda *a, **k: None))
+    f = InstanceFactory(
+        template_manager=SimpleNamespace(get_template=lambda *a, **k: None)
+    )
     monkeypatch.setattr(f, "create_instance", fake_create_instance)
 
     f._create_children(sess, parent=parent, template=tmpl, depth=0, visited=set())
@@ -219,6 +229,7 @@ def test_get_or_create_singleton_instance_existing_is_returned_and_filters_is_de
     class Sess:
         def __init__(self):
             self.q = Q(existing)
+
         def query(self, *a, **k):
             return self.q
 

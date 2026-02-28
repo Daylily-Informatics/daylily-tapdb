@@ -111,10 +111,10 @@ _tapdb_tapdb="${_tapdb_bin_dir}/tapdb"
 if [ ! -x "${_tapdb_tapdb}" ]; then
     if [ "${_tapdb_smoke}" = "1" ]; then
         printf "${_tapdb_yellow}⚠${_tapdb_reset} tapdb CLI not installed (smoke mode: skipping install).\n"
-        printf "  Install with: ${_tapdb_cyan}(cd %s && python -m pip install -e \".[cli,admin,dev]\")${_tapdb_reset}\n" "${_tapdb_repo_root}"
+        printf "  Install with: ${_tapdb_cyan}(cd %s && python -m pip install -e \".[cli,admin,aurora,dev]\")${_tapdb_reset}\n" "${_tapdb_repo_root}"
     else
         printf "${_tapdb_yellow}⚠${_tapdb_reset} tapdb CLI not installed. Installing...\n"
-        (cd "${_tapdb_repo_root}" && python -m pip install -e ".[cli,admin,dev]" -q)
+        (cd "${_tapdb_repo_root}" && python -m pip install -e ".[cli,admin,aurora,dev]" -q)
         if [ $? -ne 0 ]; then
             printf "${_tapdb_red}✗${_tapdb_reset} Failed to install tapdb.\n"
             return 1 2>/dev/null || exit 1

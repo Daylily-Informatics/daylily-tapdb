@@ -9,8 +9,9 @@ Prefix Tiers:
 - OPTIONAL_PREFIXES: Common domain types (WX, WSX, XX)
 - Application prefixes: User-defined for specific domains
 """
+
 from dataclasses import dataclass, field
-from typing import Dict, Set, Optional
+from typing import Dict, Optional, Set
 
 
 @dataclass
@@ -41,18 +42,22 @@ class EUIDConfig:
     """
 
     # Core prefixes - required for TAPDB operation
-    CORE_PREFIXES: Dict[str, str] = field(default_factory=lambda: {
-        "GT": "generic_template",
-        "GX": "generic_instance",
-        "GL": "generic_instance_lineage",
-    })
+    CORE_PREFIXES: Dict[str, str] = field(
+        default_factory=lambda: {
+            "GT": "generic_template",
+            "GX": "generic_instance",
+            "GL": "generic_instance_lineage",
+        }
+    )
 
     # Optional prefixes - common domain types
-    OPTIONAL_PREFIXES: Dict[str, str] = field(default_factory=lambda: {
-        "WX": "workflow_instance",
-        "WSX": "workflow_step_instance",
-        "XX": "action_instance",
-    })
+    OPTIONAL_PREFIXES: Dict[str, str] = field(
+        default_factory=lambda: {
+            "WX": "workflow_instance",
+            "WSX": "workflow_step_instance",
+            "XX": "action_instance",
+        }
+    )
 
     # Application prefixes - user-defined
     application_prefixes: Dict[str, str] = field(default_factory=dict)
@@ -79,7 +84,8 @@ class EUIDConfig:
 
         Args:
             prefix: The EUID prefix (e.g., "CX")
-            discriminator: The polymorphic_discriminator value (e.g., "container_instance")
+            discriminator: The polymorphic_discriminator value
+                (e.g., "container_instance")
 
         Raises:
             ValueError: If prefix already exists
