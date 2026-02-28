@@ -820,11 +820,12 @@ Provision a new Aurora PostgreSQL cluster via CloudFormation.
 | `--instance-class` | `db.r6g.large` | RDS instance class |
 | `--engine-version` | `16.6` | Aurora PostgreSQL engine version |
 | `--vpc-id` | *(auto-discover)* | VPC to deploy into (uses default VPC if omitted) |
-| `--cidr` | `0.0.0.0/0` | Ingress CIDR for the security group |
+| `--cidr` | `10.0.0.0/8` | Ingress CIDR for the security group |
 | `--cost-center` | `global` | Value for `lsmc-cost-center` tag |
 | `--project` | `tapdb-<region>` | Value for `lsmc-project` tag |
-| `--publicly-accessible` / `--no-publicly-accessible` | `True` | Whether the instance has a public endpoint |
+| `--publicly-accessible` / `--no-publicly-accessible` | `False` | Whether the instance has a public endpoint |
 | `--no-iam-auth` | `False` | Disable IAM database authentication |
+| `--no-deletion-protection` | `False` | Disable deletion protection (enabled by default) |
 | `--background` | `False` | Initiate creation and exit immediately |
 
 #### `tapdb aurora status <env>`
