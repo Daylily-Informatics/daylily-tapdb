@@ -167,21 +167,38 @@ class TestCLIDB:
         assert "DESTRUCTIVE" in result.output or "force" in result.output
 
     def test_get_db_config_defaults(self):
-        """Test _get_db_config returns correct defaults."""
-        config = _get_db_config(Environment.dev)
-        assert config["database"] == "tapdb_dev"
-        assert config["host"] == os.environ.get("PGHOST", "localhost")
-        assert config["port"] == os.environ.get("PGPORT", "5432")
+        """Test _get_db_config returns correct defaults when no config file exists."""
+        # Mock load_config so the real ~/.config/tapdb/tapdb-config.yaml is ignored.
+        # Also clear PG* env vars that would override the hard defaults.
+        env_clear = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith("PGHOST")
+            and not k.startswith("PGPORT")
+            and not k.startswith("TAPDB_DEV_")
+        }
+        with (
+            patch("daylily_tapdb.cli.db_config.load_config", return_value={}),
+            patch.dict(os.environ, env_clear, clear=True),
+        ):
+            config = _get_db_config(Environment.dev)
+            assert config["database"] == "tapdb_dev"
+            assert config["host"] == "localhost"
+            assert config["port"] == "5432"
 
     def test_get_db_config_env_override(self):
         """Test _get_db_config respects environment variables."""
-        with patch.dict(
-            os.environ,
-            {
-                "TAPDB_TEST_HOST": "testhost",
-                "TAPDB_TEST_PORT": "5433",
-                "TAPDB_TEST_DATABASE": "my_test_db",
-            },
+        # Mock load_config to isolate from real config file.
+        with (
+            patch("daylily_tapdb.cli.db_config.load_config", return_value={}),
+            patch.dict(
+                os.environ,
+                {
+                    "TAPDB_TEST_HOST": "testhost",
+                    "TAPDB_TEST_PORT": "5433",
+                    "TAPDB_TEST_DATABASE": "my_test_db",
+                },
+            ),
         ):
             config = _get_db_config(Environment.test)
             assert config["host"] == "testhost"
