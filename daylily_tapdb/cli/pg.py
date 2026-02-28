@@ -2,18 +2,17 @@
 
 import os
 import platform
+import shutil
 import subprocess
-import sys
 from enum import Enum
 from pathlib import Path
-import shutil
 
 import typer
 from rich.console import Console
 from rich.prompt import Confirm
-from rich.table import Table
 
 from daylily_tapdb.cli.db_config import get_db_config_for_env
+
 console = Console()
 
 pg_app = typer.Typer(help="PostgreSQL service management commands")
@@ -56,10 +55,16 @@ def _get_db_config(env: Environment) -> dict:
     return get_db_config_for_env(env.value)
 
 
-def _run_psql(sql: str, database: str = "postgres", config: dict = None) -> tuple[bool, str]:
+def _run_psql(
+    sql: str, database: str = "postgres", config: dict = None
+) -> tuple[bool, str]:
     """Run a SQL command via psql. Returns (success, output)."""
     if config is None:
-        config = {"host": "localhost", "port": "5432", "user": os.environ.get("USER", "postgres")}
+        config = {
+            "host": "localhost",
+            "port": "5432",
+            "user": os.environ.get("USER", "postgres"),
+        }
 
     env = os.environ.copy()
     if config.get("password"):
@@ -71,16 +76,24 @@ def _run_psql(sql: str, database: str = "postgres", config: dict = None) -> tupl
         "-q",  # quiet
         "-t",  # tuples only
         "-A",  # unaligned
-        "-h", config["host"],
-        "-p", str(config["port"]),
-        "-U", config["user"],
-        "-d", database,
-        "-v", "ON_ERROR_STOP=1",
-        "-c", sql,
+        "-h",
+        config["host"],
+        "-p",
+        str(config["port"]),
+        "-U",
+        config["user"],
+        "-d",
+        database,
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-c",
+        sql,
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=30)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, env=env, timeout=30
+        )
         return result.returncode == 0, result.stdout.strip() or result.stderr.strip()
     except FileNotFoundError:
         return False, "psql not found. Install PostgreSQL client tools."
@@ -116,7 +129,7 @@ def _get_pg_service_cmd() -> tuple[str, list[str], list[str], Path]:
                 "systemd",
                 ["sudo", "systemctl", "start", "postgresql"],
                 ["sudo", "systemctl", "stop", "postgresql"],
-                Path("/var/log/postgresql/postgresql-14-main.log")
+                Path("/var/log/postgresql/postgresql-14-main.log"),
             )
         # Check for service command
         elif Path("/usr/sbin/service").exists():
@@ -124,11 +137,11 @@ def _get_pg_service_cmd() -> tuple[str, list[str], list[str], Path]:
                 "sysvinit",
                 ["sudo", "service", "postgresql", "start"],
                 ["sudo", "service", "postgresql", "stop"],
-                Path("/var/log/postgresql/postgresql-14-main.log")
+                Path("/var/log/postgresql/postgresql-14-main.log"),
             )
         else:
             return ("unknown", [], [], Path())
-    
+
     else:
         return ("unknown", [], [], Path())
 
@@ -151,7 +164,11 @@ def _is_pg_running() -> tuple[bool, str]:
                 env={**os.environ, "PGDATABASE": "postgres"},
                 timeout=5,
             )
-            version = ver_result.stdout.strip().split(",")[0] if ver_result.returncode == 0 else "unknown"
+            version = (
+                ver_result.stdout.strip().split(",")[0]
+                if ver_result.returncode == 0
+                else "unknown"
+            )
             return True, version
         return False, ""
     except FileNotFoundError:
@@ -170,7 +187,7 @@ def pg_start():
     """
     running, details = _is_pg_running()
     if running:
-        console.print(f"[green]●[/green] PostgreSQL is already running")
+        console.print("[green]●[/green] PostgreSQL is already running")
         console.print(f"  {details}")
         return
 
@@ -179,36 +196,43 @@ def pg_start():
     if method == "unknown":
         console.print("[red]✗[/red] No system PostgreSQL service found")
         console.print("")
+        console.print("[bold]Recommended: Use TAPDB local dev/test commands[/bold]")
         console.print(
-            "[bold]Recommended: Use TAPDB local dev/test commands[/bold]"
+            "  [cyan]tapdb pg init dev[/cyan]         # Initialize data directory"
         )
-        console.print("  [cyan]tapdb pg init dev[/cyan]         # Initialize data directory")
         console.print("  [cyan]tapdb pg start-local dev[/cyan]  # Start local instance")
         console.print("")
-        console.print("[dim]Install PostgreSQL so initdb/pg_ctl are on PATH (conda recommended):[/dim]")
+        console.print(
+            "[dim]Install PostgreSQL so initdb/pg_ctl"
+            " are on PATH (conda recommended):[/dim]"
+        )
         console.print("  [dim]conda install -c conda-forge postgresql[/dim]")
         raise typer.Exit(1)
 
     console.print(f"[yellow]►[/yellow] Starting PostgreSQL ({method})...")
-    
+
     try:
         result = subprocess.run(start_cmd, capture_output=True, text=True, timeout=30)
-        
+
         if result.returncode == 0:
             # Wait and verify
             import time
+
             for _ in range(10):
                 time.sleep(1)
                 running, details = _is_pg_running()
                 if running:
-                    console.print(f"[green]✓[/green] PostgreSQL started")
+                    console.print("[green]✓[/green] PostgreSQL started")
                     console.print(f"  {details}")
                     return
-            
-            console.print("[yellow]⚠[/yellow] Start command succeeded but PostgreSQL not responding")
-            console.print(f"  Check logs: [cyan]tapdb pg logs[/cyan]")
+
+            console.print(
+                "[yellow]⚠[/yellow] Start command succeeded"
+                " but PostgreSQL not responding"
+            )
+            console.print("  Check logs: [cyan]tapdb pg logs[/cyan]")
         else:
-            console.print(f"[red]✗[/red] Failed to start PostgreSQL")
+            console.print("[red]✗[/red] Failed to start PostgreSQL")
             console.print(f"  {result.stderr}")
             raise typer.Exit(1)
     except subprocess.TimeoutExpired:
@@ -226,14 +250,16 @@ def pg_stop():
     """
     running, _ = _is_pg_running()
     if not running:
-        console.print(f"[dim]○[/dim] PostgreSQL is not running")
+        console.print("[dim]○[/dim] PostgreSQL is not running")
         return
 
     method, _, stop_cmd, _ = _get_pg_service_cmd()
 
     if method == "unknown":
         console.print("[red]✗[/red] No system PostgreSQL service found")
-        console.print("  For local instances, use: [cyan]tapdb pg stop-local <env>[/cyan]")
+        console.print(
+            "  For local instances, use: [cyan]tapdb pg stop-local <env>[/cyan]"
+        )
         raise typer.Exit(1)
 
     console.print(f"[yellow]►[/yellow] Stopping PostgreSQL ({method})...")
@@ -244,16 +270,19 @@ def pg_stop():
         if result.returncode == 0:
             # Wait and verify
             import time
+
             for _ in range(10):
                 time.sleep(1)
                 running, _ = _is_pg_running()
                 if not running:
-                    console.print(f"[green]✓[/green] PostgreSQL stopped")
+                    console.print("[green]✓[/green] PostgreSQL stopped")
                     return
 
-            console.print("[yellow]⚠[/yellow] Stop command succeeded but PostgreSQL still running")
+            console.print(
+                "[yellow]⚠[/yellow] Stop command succeeded but PostgreSQL still running"
+            )
         else:
-            console.print(f"[red]✗[/red] Failed to stop PostgreSQL")
+            console.print("[red]✗[/red] Failed to stop PostgreSQL")
             console.print(f"  {result.stderr}")
             raise typer.Exit(1)
     except Exception as e:
@@ -264,18 +293,18 @@ def pg_stop():
 @pg_app.command("status")
 def pg_status():
     """Check if PostgreSQL is running and show connection info."""
-    console.print(f"\n[bold cyan]━━━ PostgreSQL Status ━━━[/bold cyan]")
+    console.print("\n[bold cyan]━━━ PostgreSQL Status ━━━[/bold cyan]")
 
     running, details = _is_pg_running()
 
     if running:
-        console.print(f"[green]●[/green] PostgreSQL is [green]running[/green]")
+        console.print("[green]●[/green] PostgreSQL is [green]running[/green]")
         console.print(f"  Version: {details}")
     else:
-        console.print(f"[red]○[/red] PostgreSQL is [red]not running[/red]")
+        console.print("[red]○[/red] PostgreSQL is [red]not running[/red]")
         if details and details not in ("", "timeout"):
             console.print(f"  Error: {details}")
-        console.print(f"\n  Start with: [cyan]tapdb pg start[/cyan]")
+        console.print("\n  Start with: [cyan]tapdb pg start[/cyan]")
         return
 
     # Connection info
@@ -283,7 +312,7 @@ def pg_status():
     port = os.environ.get("PGPORT", "5432")
     user = os.environ.get("PGUSER", os.environ.get("USER", "postgres"))
 
-    console.print(f"\n[bold]Connection Info:[/bold]")
+    console.print("\n[bold]Connection Info:[/bold]")
     console.print(f"  Host: {host}")
     console.print(f"  Port: {port}")
     console.print(f"  User: {user}")
@@ -291,29 +320,42 @@ def pg_status():
     # List databases
     try:
         result = subprocess.run(
-            ["psql", "-t", "-c", "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"],
+            [
+                "psql",
+                "-t",
+                "-c",
+                "SELECT datname FROM pg_database"
+                " WHERE datistemplate = false"
+                " ORDER BY datname",
+            ],
             capture_output=True,
             text=True,
             env={**os.environ, "PGDATABASE": "postgres"},
             timeout=5,
         )
         if result.returncode == 0:
-            databases = [db.strip() for db in result.stdout.strip().split("\n") if db.strip()]
+            databases = [
+                db.strip() for db in result.stdout.strip().split("\n") if db.strip()
+            ]
             tapdb_dbs = [db for db in databases if db.startswith("tapdb")]
 
-            console.print(f"\n[bold]TAPDB Databases:[/bold]")
+            console.print("\n[bold]TAPDB Databases:[/bold]")
             if tapdb_dbs:
                 for db in tapdb_dbs:
                     console.print(f"  [green]●[/green] {db}")
             else:
-                console.print(f"  [dim]None found (create with: tapdb db create dev)[/dim]")
+                console.print(
+                    "  [dim]None found (create with: tapdb db create dev)[/dim]"
+                )
     except Exception:
         pass
 
 
 @pg_app.command("logs")
 def pg_logs(
-    follow: bool = typer.Option(True, "--follow/--no-follow", "-f/-F", help="Follow log output (default: true)"),
+    follow: bool = typer.Option(
+        True, "--follow/--no-follow", "-f/-F", help="Follow log output (default: true)"
+    ),
     lines: int = typer.Option(50, "--lines", "-n", help="Number of lines to show"),
 ):
     """View PostgreSQL logs (tails by default, Ctrl+C to stop)."""
@@ -340,7 +382,10 @@ def pg_logs(
 
     if not log_file:
         console.print("[yellow]⚠[/yellow] PostgreSQL log file not found")
-        console.print(f"  Checked: ./postgres_data/dev/postgresql.log, ./postgres_data/test/postgresql.log")
+        console.print(
+            "  Checked: ./postgres_data/dev/postgresql.log,"
+            " ./postgres_data/test/postgresql.log"
+        )
 
         # Try journalctl on Linux
         if platform.system() == "Linux":
@@ -382,6 +427,7 @@ def pg_restart():
     """Restart local PostgreSQL service."""
     pg_stop()
     import time
+
     time.sleep(2)
     pg_start()
 
@@ -389,7 +435,9 @@ def pg_restart():
 @pg_app.command("create")
 def pg_create(
     env: Environment = typer.Argument(..., help="Target environment"),
-    owner: str = typer.Option(None, "--owner", "-o", help="Database owner (default: connection user)"),
+    owner: str = typer.Option(
+        None, "--owner", "-o", help="Database owner (default: connection user)"
+    ),
 ):
     """Create the TAPDB database for the specified environment.
 
@@ -406,10 +454,19 @@ def pg_create(
         console.print("[red]✗[/red] Cannot connect to PostgreSQL for this environment")
         console.print(f"  {out}")
         if env in (Environment.dev, Environment.test):
-            console.print(f"  If using local dev/test: [cyan]tapdb pg start-local {env.value}[/cyan]")
-            console.print("  If tools are missing: [cyan]conda install -c conda-forge postgresql[/cyan]")
+            console.print(
+                "  If using local dev/test:"
+                f" [cyan]tapdb pg start-local {env.value}[/cyan]"
+            )
+            console.print(
+                "  If tools are missing:"
+                " [cyan]conda install -c conda-forge"
+                " postgresql[/cyan]"
+            )
         else:
-            console.print("  Verify TAPDB_PROD_* connection settings and network access")
+            console.print(
+                "  Verify TAPDB_PROD_* connection settings and network access"
+            )
         raise typer.Exit(1)
 
     # Check if database already exists
@@ -426,9 +483,11 @@ def pg_create(
     if success:
         console.print(f"[green]✓[/green] Database '{db_name}' created")
         console.print(f"  Owner: {db_owner}")
-        console.print(f"\n  Next: [cyan]tapdb db create {env.value}[/cyan] to initialize schema")
+        console.print(
+            f"\n  Next: [cyan]tapdb db create {env.value}[/cyan] to initialize schema"
+        )
     else:
-        console.print(f"[red]✗[/red] Failed to create database")
+        console.print("[red]✗[/red] Failed to create database")
         console.print(f"  {output}")
         raise typer.Exit(1)
 
@@ -451,10 +510,19 @@ def pg_delete(
         console.print("[red]✗[/red] Cannot connect to PostgreSQL for this environment")
         console.print(f"  {out}")
         if env in (Environment.dev, Environment.test):
-            console.print(f"  If using local dev/test: [cyan]tapdb pg start-local {env.value}[/cyan]")
-            console.print("  If tools are missing: [cyan]conda install -c conda-forge postgresql[/cyan]")
+            console.print(
+                "  If using local dev/test:"
+                f" [cyan]tapdb pg start-local {env.value}[/cyan]"
+            )
+            console.print(
+                "  If tools are missing:"
+                " [cyan]conda install -c conda-forge"
+                " postgresql[/cyan]"
+            )
         else:
-            console.print("  Verify TAPDB_PROD_* connection settings and network access")
+            console.print(
+                "  Verify TAPDB_PROD_* connection settings and network access"
+            )
         raise typer.Exit(1)
 
     # Check if database exists
@@ -464,9 +532,9 @@ def pg_delete(
 
     # Safety confirmation for non-dev environments
     if not force:
-        console.print(f"\n[bold red]⚠️  WARNING: DESTRUCTIVE OPERATION[/bold red]")
+        console.print("\n[bold red]⚠️  WARNING: DESTRUCTIVE OPERATION[/bold red]")
         console.print(f"This will permanently delete database: [bold]{db_name}[/bold]")
-        console.print(f"All data will be lost!\n")
+        console.print("All data will be lost!\n")
 
         if env == Environment.prod:
             console.print("[bold red]🚨 THIS IS A PRODUCTION DATABASE! 🚨[/bold red]\n")
@@ -479,7 +547,7 @@ def pg_delete(
         if env == Environment.prod:
             typed = typer.prompt("Type the database name to confirm")
             if typed != db_name:
-                console.print(f"[red]✗[/red] Name mismatch. Aborted.")
+                console.print("[red]✗[/red] Name mismatch. Aborted.")
                 raise typer.Exit(1)
 
     console.print(f"[yellow]►[/yellow] Deleting database '{db_name}'...")
@@ -499,7 +567,7 @@ def pg_delete(
     if success:
         console.print(f"[green]✓[/green] Database '{db_name}' deleted")
     else:
-        console.print(f"[red]✗[/red] Failed to delete database")
+        console.print("[red]✗[/red] Failed to delete database")
         console.print(f"  {output}")
         raise typer.Exit(1)
 
@@ -507,7 +575,9 @@ def pg_delete(
 @pg_app.command("init")
 def pg_init(
     env: Environment = typer.Argument(..., help="Target environment (dev/test only)"),
-    force: bool = typer.Option(False, "--force", "-f", help="Reinitialize if already exists"),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Reinitialize if already exists"
+    ),
 ):
     """Initialize a PostgreSQL data directory for dev/test.
 
@@ -523,9 +593,10 @@ def pg_init(
 
     data_dir = _get_postgres_data_dir(env)
 
-    console.print(f"\n[bold cyan]━━━ Initialize PostgreSQL ({env.value}) ━━━[/bold cyan]")
+    console.print(
+        f"\n[bold cyan]━━━ Initialize PostgreSQL ({env.value}) ━━━[/bold cyan]"
+    )
     console.print(f"  Data directory: {data_dir}")
-
 
     # Check if initdb is available (must be in PATH)
     initdb_path = shutil.which("initdb")
@@ -538,17 +609,17 @@ def pg_init(
     # Check if already initialized
     if data_dir.exists() and (data_dir / "PG_VERSION").exists():
         if not force:
-            console.print(f"[yellow]⚠[/yellow] Data directory already initialized")
-            console.print(f"  Use --force to reinitialize (will delete existing data)")
+            console.print("[yellow]⚠[/yellow] Data directory already initialized")
+            console.print("  Use --force to reinitialize (will delete existing data)")
             return
         else:
-            console.print(f"[yellow]►[/yellow] Removing existing data directory...")
+            console.print("[yellow]►[/yellow] Removing existing data directory...")
             shutil.rmtree(data_dir)
 
     # Create parent directory
     data_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    console.print(f"[yellow]►[/yellow] Running initdb...")
+    console.print("[yellow]►[/yellow] Running initdb...")
 
     # Run initdb
     try:
@@ -560,12 +631,17 @@ def pg_init(
         )
 
         if result.returncode == 0:
-            console.print(f"[green]✓[/green] PostgreSQL data directory initialized")
-            console.print(f"\n[bold]Next steps:[/bold]")
-            console.print(f"  [cyan]tapdb pg start-local {env.value}[/cyan]  # Start PostgreSQL")
-            console.print(f"  [cyan]tapdb db setup {env.value}[/cyan]        # Create DB + schema + seed")
+            console.print("[green]✓[/green] PostgreSQL data directory initialized")
+            console.print("\n[bold]Next steps:[/bold]")
+            console.print(
+                f"  [cyan]tapdb pg start-local {env.value}[/cyan]  # Start PostgreSQL"
+            )
+            console.print(
+                f"  [cyan]tapdb db setup {env.value}[/cyan]"
+                "        # Create DB + schema + seed"
+            )
         else:
-            console.print(f"[red]✗[/red] initdb failed")
+            console.print("[red]✗[/red] initdb failed")
             console.print(f"  {result.stderr}")
             raise typer.Exit(1)
     except subprocess.TimeoutExpired:
@@ -579,7 +655,9 @@ def pg_init(
 @pg_app.command("start-local")
 def pg_start_local(
     env: Environment = typer.Argument(..., help="Target environment (dev/test only)"),
-    port: int = typer.Option(None, "--port", "-p", help="Port (default: 5432 for dev, 5433 for test)"),
+    port: int = typer.Option(
+        None, "--port", "-p", help="Port (default: 5432 for dev, 5433 for test)"
+    ),
 ):
     """Start a local PostgreSQL instance for dev/test.
 
@@ -592,7 +670,7 @@ def pg_start_local(
     data_dir = _get_postgres_data_dir(env)
 
     if not data_dir.exists() or not (data_dir / "PG_VERSION").exists():
-        console.print(f"[red]✗[/red] Data directory not initialized")
+        console.print("[red]✗[/red] Data directory not initialized")
         console.print(f"  Run: [cyan]tapdb pg init {env.value}[/cyan]")
         raise typer.Exit(1)
 
@@ -611,21 +689,29 @@ def pg_start_local(
     # Check if already running
     pid_file = data_dir / "postmaster.pid"
     if pid_file.exists():
-        console.print(f"[yellow]⚠[/yellow] PostgreSQL may already be running for {env.value}")
+        console.print(
+            f"[yellow]⚠[/yellow] PostgreSQL may already be running for {env.value}"
+        )
         console.print(f"  PID file exists: {pid_file}")
         return
 
-    console.print(f"[yellow]►[/yellow] Starting PostgreSQL ({env.value}) on port {port}...")
+    console.print(
+        f"[yellow]►[/yellow] Starting PostgreSQL ({env.value}) on port {port}..."
+    )
 
     log_file = data_dir / "postgresql.log"
 
     try:
         result = subprocess.run(
             [
-                pg_ctl_path, "start",
-                "-D", str(data_dir),
-                "-l", str(log_file),
-                "-o", f"-p {port}",
+                pg_ctl_path,
+                "start",
+                "-D",
+                str(data_dir),
+                "-l",
+                str(log_file),
+                "-o",
+                f"-p {port}",
             ],
             capture_output=True,
             text=True,
@@ -633,18 +719,18 @@ def pg_start_local(
         )
 
         if result.returncode == 0:
-            console.print(f"[green]✓[/green] PostgreSQL started")
+            console.print("[green]✓[/green] PostgreSQL started")
             console.print(f"  Port: {port}")
             console.print(f"  Data: {data_dir}")
             console.print(f"  Log:  {log_file}")
 
             # Set env vars hint
-            console.print(f"\n[bold]Set environment:[/bold]")
+            console.print("\n[bold]Set environment:[/bold]")
             env_prefix = f"TAPDB_{env.value.upper()}_"
             console.print(f"  export {env_prefix}HOST=localhost")
             console.print(f"  export {env_prefix}PORT={port}")
         else:
-            console.print(f"[red]✗[/red] Failed to start PostgreSQL")
+            console.print("[red]✗[/red] Failed to start PostgreSQL")
             console.print(f"  {result.stderr}")
             console.print(f"  Check log: {log_file}")
             raise typer.Exit(1)
@@ -687,9 +773,10 @@ def pg_stop_local(
         )
 
         if result.returncode == 0:
-            console.print(f"[green]✓[/green] PostgreSQL stopped")
+            console.print("[green]✓[/green] PostgreSQL stopped")
         else:
-            console.print(f"[yellow]⚠[/yellow] {result.stderr.strip() or 'PostgreSQL may not be running'}")
+            err = result.stderr.strip() or ("PostgreSQL may not be running")
+            console.print(f"[yellow]⚠[/yellow] {err}")
     except Exception as e:
         console.print(f"[red]✗[/red] Error: {e}")
         raise typer.Exit(1)

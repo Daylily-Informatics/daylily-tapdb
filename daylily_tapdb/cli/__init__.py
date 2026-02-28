@@ -1,11 +1,11 @@
 """CLI entry point for daylily-tapdb."""
 
+import importlib.util
 import os
 import signal
 import subprocess
 import sys
 import time
-import importlib.util
 from pathlib import Path
 from typing import Optional
 
@@ -43,8 +43,10 @@ def _find_admin_module() -> str:
         return "admin.main:app"
 
     raise ValueError(
-        "Cannot find admin module. Run from the daylily-tapdb repo root, or ensure admin/ is installed."
+        "Cannot find admin module. Run from the daylily-tapdb"
+        " repo root, or ensure admin/ is installed."
     )
+
 
 def _require_admin_extras() -> None:
     """Fail fast with a clear message if Admin UI extras aren't installed."""
@@ -60,7 +62,10 @@ def _require_admin_extras() -> None:
 
 
 def build_app():
-    """Build the Typer app (lazy-imports CLI deps so core installs can import daylily_tapdb)."""
+    """Build the Typer app.
+
+    Lazy-imports CLI deps so core installs can import daylily_tapdb.
+    """
     import typer
     from rich.console import Console
     from rich.table import Table
@@ -84,23 +89,44 @@ def build_app():
     app.add_typer(pg_app, name="pg")
     app.add_typer(user_app, name="user")
 
-    # Aurora subcommand — guarded behind boto3 availability
+    # Aurora subcommand — always visible, but requires boto3
+    _has_boto3 = False
     try:
         import importlib.util as _ilu
 
-        if _ilu.find_spec("boto3") is not None:
-            from daylily_tapdb.cli.aurora import aurora_app
-
-            app.add_typer(aurora_app, name="aurora")
+        _has_boto3 = _ilu.find_spec("boto3") is not None
     except Exception:
-        pass  # boto3 not installed; aurora commands unavailable
+        pass
+
+    if _has_boto3:
+        from daylily_tapdb.cli.aurora import aurora_app
+
+        app.add_typer(aurora_app, name="aurora")
+    else:
+        aurora_stub = typer.Typer(
+            help="Aurora PostgreSQL management (requires boto3)",
+        )
+
+        @aurora_stub.callback(invoke_without_command=True)
+        def _aurora_missing(ctx: typer.Context):
+            console.print("[red]✗[/red] boto3 is required for Aurora commands.")
+            console.print(
+                "  Install with: [cyan]pip install 'daylily-tapdb[aurora]'[/cyan]"
+            )
+            raise typer.Exit(1)
+
+        app.add_typer(aurora_stub, name="aurora")
 
     @ui_app.command("start")
     def ui_start(
-        port: int = typer.Option(8000, "--port", "-p", help="Port to run the server on"),
+        port: int = typer.Option(
+            8000, "--port", "-p", help="Port to run the server on"
+        ),
         host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
         reload: bool = typer.Option(False, "--reload", "-r", help="Enable auto-reload"),
-        background: bool = typer.Option(True, "--background/--foreground", "-b/-f", help="Run in background"),
+        background: bool = typer.Option(
+            True, "--background/--foreground", "-b/-f", help="Run in background"
+        ),
     ):
         """Start the TAPDB Admin UI server."""
         _ensure_dir()
@@ -109,7 +135,9 @@ def build_app():
             _require_admin_extras()
         except SystemExit:
             console.print("[red]✗[/red] Admin UI dependencies are not installed.")
-            console.print("  Install with: [cyan]pip install 'daylily-tapdb[admin]'[/cyan]")
+            console.print(
+                "  Install with: [cyan]pip install 'daylily-tapdb[admin]'[/cyan]"
+            )
             raise typer.Exit(1)
 
         pid = _get_pid()
@@ -157,7 +185,9 @@ def build_app():
             console.print(f"   URL: [cyan]http://{host}:{port}[/cyan]")
             console.print(f"   Logs: [dim]{LOG_FILE}[/dim]")
         else:
-            console.print(f"[green]✓[/green]  Starting UI server on [cyan]http://{host}:{port}[/cyan]")
+            console.print(
+                f"[green]✓[/green]  Starting UI server on [cyan]http://{host}:{port}[/cyan]"
+            )
             console.print("   Press Ctrl+C to stop\n")
             try:
                 subprocess.run(cmd)
@@ -197,7 +227,9 @@ def build_app():
         """Check the status of the TAPDB Admin UI server."""
         pid = _get_pid()
         if pid:
-            console.print(f"[green]●[/green]  UI server is [green]running[/green] (PID {pid})")
+            console.print(
+                f"[green]●[/green]  UI server is [green]running[/green] (PID {pid})"
+            )
             console.print(f"   Logs: [dim]{LOG_FILE}[/dim]")
         else:
             console.print("[dim]○[/dim]  UI server is [dim]not running[/dim]")
@@ -214,7 +246,9 @@ def build_app():
     ):
         """View TAPDB Admin UI server logs (tails by default, Ctrl+C to stop)."""
         if not LOG_FILE.exists():
-            console.print("[yellow]⚠[/yellow]  No log file found. Start the server first.")
+            console.print(
+                "[yellow]⚠[/yellow]  No log file found. Start the server first."
+            )
             return
 
         if follow:
@@ -234,7 +268,9 @@ def build_app():
 
     @ui_app.command("restart")
     def ui_restart(
-        port: int = typer.Option(8000, "--port", "-p", help="Port to run the server on"),
+        port: int = typer.Option(
+            8000, "--port", "-p", help="Port to run the server on"
+        ),
         host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
     ):
         """Restart the TAPDB Admin UI server."""
@@ -259,16 +295,17 @@ def build_app():
                 "Default probes only TAPDB_ENV."
             ),
         ),
-        as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON (no tables)."),
+        as_json: bool = typer.Option(
+            False, "--json", help="Emit machine-readable JSON (no tables)."
+        ),
     ):
         """Show TAPDB configuration and status."""
-        from daylily_tapdb import __version__
-
         import json
-        from datetime import datetime
         import shutil
+        from datetime import datetime
         from urllib.parse import urlsplit, urlunsplit
 
+        from daylily_tapdb import __version__
         from daylily_tapdb.cli.db_config import (
             get_config_path,
             get_config_paths,
@@ -380,7 +417,9 @@ def build_app():
                     timeout=2,
                 )
                 if r.returncode != 0:
-                    result["error"] = (r.stderr or "").strip() or f"ps exit={r.returncode}"
+                    result["error"] = (
+                        r.stderr or ""
+                    ).strip() or f"ps exit={r.returncode}"
                     return result
                 raw = (r.stdout or "").strip()
                 if not raw:
@@ -430,10 +469,8 @@ def build_app():
                 out["uptime"] = f"error: {msg_u}"
             return out
 
-
-
-        # NOTE: This function is nested inside build_app(); keep indentation purely spaces
-        # to avoid TabError.
+        # NOTE: This function is nested inside build_app();
+        # keep indentation purely spaces to avoid TabError.
         config_paths = get_config_paths()
         # get_config_path() returns None when no config file exists yet.
         # For diagnostics, we still want to print a deterministic "effective" path.
@@ -519,16 +556,14 @@ def build_app():
         config_table.add_row(
             "Config search order",
             "\n".join(
-                [
-                    f"{p} ({'exists' if p.exists() else 'missing'})"
-                    for p in config_paths
-                ]
+                [f"{p} ({'exists' if p.exists() else 'missing'})" for p in config_paths]
             ),
         )
 
+        exists_label = "exists" if effective_config_path.exists() else "missing"
         config_table.add_row(
             "Effective config",
-            f"{effective_config_path} ({'exists' if effective_config_path.exists() else 'missing'})",
+            f"{effective_config_path} ({exists_label})",
         )
         config_table.add_row("Config dir", str(effective_config_path.parent))
         config_table.add_row("DB log dir", str(effective_config_path.parent / "logs"))
@@ -536,7 +571,9 @@ def build_app():
         if template_config_dir:
             config_table.add_row("Template config dir", template_config_dir)
         else:
-            config_table.add_row("Template config dir", f"(not found) {template_config_error}")
+            config_table.add_row(
+                "Template config dir", f"(not found) {template_config_error}"
+            )
 
         console.print(config_table)
 
@@ -574,7 +611,10 @@ def build_app():
 # Keep this guarded so imports don't explode in partially-provisioned
 # environments (e.g., importing the package without console scripts).
 try:
-    if importlib.util.find_spec("typer") is not None and importlib.util.find_spec("rich") is not None:
+    if (
+        importlib.util.find_spec("typer") is not None
+        and importlib.util.find_spec("rich") is not None
+    ):
         app = build_app()
     else:
         app = None
