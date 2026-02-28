@@ -200,10 +200,7 @@ def _outputs() -> dict[str, Any]:
             "Description": "Aurora cluster port",
             "Value": {"Fn::GetAtt": ["AuroraCluster", "Endpoint.Port"]},
         },
-        "ClusterReaderEndpoint": {
-            "Description": "Aurora cluster reader endpoint",
-            "Value": {"Fn::GetAtt": ["AuroraCluster", "ReaderEndpoint.Address"]},
-        },
+
         "SecretArn": {
             "Description": "ARN of the Secrets Manager secret for master credentials",
             "Value": {"Ref": "MasterSecret"},
