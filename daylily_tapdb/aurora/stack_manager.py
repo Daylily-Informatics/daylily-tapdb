@@ -206,7 +206,7 @@ class AuroraStackManager:
             TemplateBody=template_body,
             Parameters=params,
             Tags=tags,
-            Capabilities=["CAPABILITY_IAM"],
+            Capabilities=["CAPABILITY_NAMED_IAM"],
         )
         stack_id = resp["StackId"]
         logger.info("Stack creation initiated: %s", stack_id)

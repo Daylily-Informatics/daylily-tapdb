@@ -256,7 +256,7 @@ class TestCreateStack:
 
         call_kwargs = mock_cfn.create_stack.call_args[1]
         assert call_kwargs["StackName"] == "tapdb-test-cluster"
-        assert call_kwargs["Capabilities"] == ["CAPABILITY_IAM"]
+        assert call_kwargs["Capabilities"] == ["CAPABILITY_NAMED_IAM"]
         param_keys = {p["ParameterKey"] for p in call_kwargs["Parameters"]}
         assert "ClusterIdentifier" in param_keys
         assert "VpcId" in param_keys

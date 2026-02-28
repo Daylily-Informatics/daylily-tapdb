@@ -104,6 +104,7 @@ REQUIRED_RESOURCES = [
     "MasterSecret",
     "AuroraCluster",
     "WriterInstance",
+    "DatabaseIAMPolicy",
 ]
 
 
@@ -175,12 +176,36 @@ class TestResources:
     def test_deletion_protection_default_true(self, template):
         assert template["Parameters"]["DeletionProtection"]["Default"] == "true"
 
+    def test_iam_policy_type(self, template):
+        r = template["Resources"]["DatabaseIAMPolicy"]
+        assert r["Type"] == "AWS::IAM::ManagedPolicy"
+
+    def test_iam_policy_has_rds_connect_action(self, template):
+        policy = template["Resources"]["DatabaseIAMPolicy"]["Properties"]
+        stmt = policy["PolicyDocument"]["Statement"][0]
+        assert stmt["Action"] == "rds-db:connect"
+        assert stmt["Effect"] == "Allow"
+
+    def test_iam_policy_resource_uses_cluster_resource_id(self, template):
+        policy = template["Resources"]["DatabaseIAMPolicy"]["Properties"]
+        resource = policy["PolicyDocument"]["Statement"][0]["Resource"]
+        assert "Fn::Sub" in resource
+        assert "DbClusterResourceId" in resource["Fn::Sub"]
+
 
 # --- Tags ---
 
+TAGGED_RESOURCES = [
+    "DBSubnetGroup",
+    "ClusterSecurityGroup",
+    "MasterSecret",
+    "AuroraCluster",
+    "WriterInstance",
+]
+
 
 class TestTags:
-    @pytest.mark.parametrize("resource", REQUIRED_RESOURCES)
+    @pytest.mark.parametrize("resource", TAGGED_RESOURCES)
     def test_resource_has_tags(self, template, resource):
         props = template["Resources"][resource]["Properties"]
         assert "Tags" in props
@@ -201,6 +226,11 @@ class TestOutputs:
 
     def test_security_group_id_output(self, template):
         assert "SecurityGroupId" in template["Outputs"]
+
+    def test_database_iam_policy_arn_output(self, template):
+        assert "DatabaseIAMPolicyArn" in template["Outputs"]
+        out = template["Outputs"]["DatabaseIAMPolicyArn"]
+        assert out["Value"] == {"Ref": "DatabaseIAMPolicy"}
 
 
 # --- Serialization ---
