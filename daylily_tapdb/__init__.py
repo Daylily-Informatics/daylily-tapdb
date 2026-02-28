@@ -30,7 +30,10 @@ Example:
         )
 """
 
-from daylily_tapdb._version import __version__
+try:
+    from daylily_tapdb._version import __version__
+except ImportError:
+    __version__ = "0.0.0.dev0"
 from daylily_tapdb.actions import ActionDispatcher
 from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.euid import EUIDConfig
