@@ -84,6 +84,17 @@ def build_app():
     app.add_typer(pg_app, name="pg")
     app.add_typer(user_app, name="user")
 
+    # Aurora subcommand — guarded behind boto3 availability
+    try:
+        import importlib.util as _ilu
+
+        if _ilu.find_spec("boto3") is not None:
+            from daylily_tapdb.cli.aurora import aurora_app
+
+            app.add_typer(aurora_app, name="aurora")
+    except Exception:
+        pass  # boto3 not installed; aurora commands unavailable
+
     @ui_app.command("start")
     def ui_start(
         port: int = typer.Option(8000, "--port", "-p", help="Port to run the server on"),
