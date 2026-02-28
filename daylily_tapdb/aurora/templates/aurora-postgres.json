@@ -13,6 +13,14 @@
           ]
         }
       ]
+    },
+    "IsPubliclyAccessible": {
+      "Fn::Equals": [
+        {
+          "Ref": "PubliclyAccessible"
+        },
+        "true"
+      ]
     }
   },
   "Parameters": {
@@ -27,7 +35,7 @@
     },
     "EngineVersion": {
       "Type": "String",
-      "Default": "15.4",
+      "Default": "16.6",
       "Description": "Aurora PostgreSQL engine version"
     },
     "VpcId": {
@@ -44,10 +52,23 @@
       "Default": "tapdb",
       "Description": "Name of the default database"
     },
+    "SubnetIds": {
+      "Type": "List<AWS::EC2::Subnet::Id>",
+      "Description": "Subnet IDs for the DB subnet group"
+    },
     "IngressCIDR": {
       "Type": "String",
-      "Default": "10.0.0.0/8",
+      "Default": "0.0.0.0/0",
       "Description": "CIDR block allowed to connect on port 5432"
+    },
+    "PubliclyAccessible": {
+      "Type": "String",
+      "Default": "true",
+      "AllowedValues": [
+        "true",
+        "false"
+      ],
+      "Description": "Whether the DB instance is publicly accessible"
     },
     "CostCenter": {
       "Type": "String",
@@ -68,12 +89,7 @@
           "Fn::Sub": "Subnet group for ${ClusterIdentifier}"
         },
         "SubnetIds": {
-          "Fn::Split": [
-            ",",
-            {
-              "Fn::ImportValue": "DefaultVPCSubnets"
-            }
-          ]
+          "Ref": "SubnetIds"
         },
         "Tags": [
           {
@@ -253,7 +269,13 @@
           "Ref": "InstanceClass"
         },
         "Engine": "aurora-postgresql",
-        "PubliclyAccessible": false,
+        "PubliclyAccessible": {
+          "Fn::If": [
+            "IsPubliclyAccessible",
+            true,
+            false
+          ]
+        },
         "Tags": [
           {
             "Key": "lsmc-cost-center",
@@ -300,15 +322,6 @@
         "Fn::GetAtt": [
           "AuroraCluster",
           "Endpoint.Port"
-        ]
-      }
-    },
-    "ClusterReaderEndpoint": {
-      "Description": "Aurora cluster reader endpoint",
-      "Value": {
-        "Fn::GetAtt": [
-          "AuroraCluster",
-          "ReaderEndpoint.Address"
         ]
       }
     },
