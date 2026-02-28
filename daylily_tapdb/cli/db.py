@@ -189,10 +189,14 @@ def _get_connection_string(env: Environment, database: Optional[str] = None) -> 
     """Build PostgreSQL connection string for display.
 
     Intentionally omits any password. Commands use PGPASSWORD/.pgpass for auth.
+    For aurora environments, appends ``?sslmode=verify-full``.
     """
     cfg = _get_db_config(env)
     db = database or cfg["database"]
-    return f"postgresql://{cfg['user']}@{cfg['host']}:{cfg['port']}/{db}"
+    base = f"postgresql://{cfg['user']}@{cfg['host']}:{cfg['port']}/{db}"
+    if cfg.get("engine_type") == "aurora":
+        return f"{base}?sslmode=verify-full"
+    return base
 
 
 def _find_schema_file() -> Path:
@@ -214,10 +218,31 @@ def _find_schema_file() -> Path:
 
 
 def _run_psql(env: Environment, sql: str = None, file: Path = None, database: str = None) -> tuple[bool, str]:
-    """Run psql command and return (success, output)."""
+    """Run psql command and return (success, output).
+
+    For aurora engine_type environments, delegates to
+    ``AuroraSchemaDeployer.run_psql`` which enforces SSL
+    (``sslmode=verify-full``) and uses IAM auth or Secrets Manager.
+    """
     cfg = _get_db_config(env)
     db = database or cfg["database"]
-    
+
+    if cfg.get("engine_type") == "aurora":
+        from daylily_tapdb.aurora.schema_deployer import AuroraSchemaDeployer
+
+        iam_auth = cfg.get("iam_auth", "true").lower() in ("true", "1", "yes")
+        return AuroraSchemaDeployer.run_psql(
+            host=cfg["host"],
+            port=int(cfg["port"]),
+            user=cfg["user"],
+            database=db,
+            region=cfg.get("region", "us-west-2"),
+            iam_auth=iam_auth,
+            password=cfg.get("password") or None,
+            sql=sql,
+            file=file,
+        )
+
     cmd = [
         "psql",
         "-X",  # do not read ~/.psqlrc
@@ -230,16 +255,16 @@ def _run_psql(env: Environment, sql: str = None, file: Path = None, database: st
         "-d", db,
         "-v", "ON_ERROR_STOP=1",
     ]
-    
+
     if file:
         cmd.extend(["-f", str(file)])
     elif sql:
         cmd.extend(["-c", sql])
-    
+
     env_vars = os.environ.copy()
     if cfg["password"]:
         env_vars["PGPASSWORD"] = cfg["password"]
-    
+
     try:
         result = subprocess.run(
             cmd,
@@ -434,6 +459,12 @@ def db_status(
     console.print(f"\n[bold]Connection:[/bold]")
     console.print(f"  Host: {cfg['host']}:{cfg['port']}")
     console.print(f"  User: {cfg['user']}")
+    if cfg.get("engine_type") == "aurora":
+        console.print(f"  Engine: [bold yellow]Aurora PostgreSQL[/bold yellow]")
+        console.print(f"  Region: {cfg.get('region', 'us-west-2')}")
+        console.print(f"  SSL:    verify-full (enforced)")
+        iam = cfg.get("iam_auth", "true").lower() in ("true", "1", "yes")
+        console.print(f"  Auth:   {'IAM' if iam else 'password'}")
     console.print(f"  URL:  [dim]{_get_connection_string(env)}[/dim]")
 
 
@@ -448,6 +479,7 @@ def db_nuke(
     ⚠️  DESTRUCTIVE OPERATION - This cannot be undone!
     """
     cfg = _get_db_config(env)
+    is_aurora = cfg.get("engine_type") == "aurora"
 
     # Get what will be deleted
     if not _check_db_exists(env, cfg["database"]):
@@ -457,12 +489,21 @@ def db_nuke(
     counts = _get_table_counts(env)
     total_rows = sum(c for c in counts.values() if isinstance(c, int))
 
+    aurora_warning = ""
+    if is_aurora:
+        aurora_warning = (
+            "\n[bold yellow]⚠ AURORA CLUSTER:[/bold yellow] This drops schema "
+            "objects only.\n  To delete the Aurora cluster itself, use: "
+            "[cyan]tapdb aurora delete[/cyan]\n"
+        )
+
     # Show what will be deleted
     console.print(Panel(
         f"[bold red]⚠️  DESTRUCTIVE OPERATION[/bold red]\n\n"
         f"Environment: [bold]{env.value.upper()}[/bold]\n"
         f"Database:    [bold]{cfg['database']}[/bold]\n"
-        f"Host:        {cfg['host']}:{cfg['port']}\n\n"
+        f"Host:        {cfg['host']}:{cfg['port']}\n"
+        f"{aurora_warning}\n"
         f"[yellow]Data to be deleted:[/yellow]\n"
         f"  • generic_template:         {counts.get('generic_template', '?')} rows\n"
         f"  • generic_instance:         {counts.get('generic_instance', '?')} rows\n"
@@ -1483,18 +1524,28 @@ def db_setup(
     Use --include-workflow to also seed workflow, workflow_step, and action templates.
 
     Combines: tapdb pg create + tapdb db create + tapdb db seed
+
+    For aurora environments, the database is already created by CloudFormation,
+    so the "create database" step is skipped.
     """
     cfg = _get_db_config(env)
+    is_aurora = cfg.get("engine_type") == "aurora"
 
     mode = "core + workflow" if include_workflow else "core only"
     console.print(f"\n[bold cyan]━━━ TAPDB Full Setup ({env.value}) ━━━[/bold cyan]")
     console.print(f"  Database: {cfg['database']}")
     console.print(f"  Host:     {cfg['host']}:{cfg['port']}")
+    if is_aurora:
+        console.print(f"  Engine:   [bold yellow]Aurora PostgreSQL[/bold yellow]")
+        console.print(f"  Region:   {cfg.get('region', 'us-west-2')}")
+        console.print(f"  SSL:      verify-full (enforced)")
     console.print(f"  Seed mode: {mode}")
 
-    # Step 1: Create database
+    # Step 1: Create database (skipped for aurora — CFN creates it)
     console.print(f"\n[bold]Step 1/3: Create Database[/bold]")
-    if _check_db_exists(env, cfg["database"]):
+    if is_aurora:
+        console.print(f"  [green]✓[/green] Database managed by CloudFormation (skipping create)")
+    elif _check_db_exists(env, cfg["database"]):
         if force:
             console.print(f"  [yellow]►[/yellow] Database exists, recreating...")
             # Use pg module functions
