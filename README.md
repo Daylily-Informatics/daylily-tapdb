@@ -5,6 +5,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![SQLAlchemy 2.0+](https://img.shields.io/badge/sqlalchemy-2.0+-green.svg)](https://www.sqlalchemy.org/)
 [![PostgreSQL 13+](https://img.shields.io/badge/postgresql-13+-336791.svg)](https://www.postgresql.org/)
+[![Aurora PostgreSQL](https://img.shields.io/badge/Aurora-PostgreSQL-ff9900.svg)](https://aws.amazon.com/rds/aurora/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
@@ -63,6 +64,7 @@ TAPDB uses SQLAlchemy single-table inheritance. Each table has typed subclasses:
 - **Library + CLI (default)**: `pip install daylily-tapdb`
 - **Admin UI (optional)**: `pip install "daylily-tapdb[admin]"`
 - **Developer tooling (optional)**: `pip install "daylily-tapdb[dev]"`
+- **Aurora (AWS) support**: `pip install "daylily-tapdb[aurora]"` (adds boto3 for Aurora cluster management)
 - **CLI YAML config support (optional)**: `pip install "daylily-tapdb[cli]"` (adds PyYAML for `tapdb-config.yaml`; template config files remain JSON)
 
 ### Quick Start (recommended)
@@ -683,6 +685,13 @@ tapdb ui stop                # Stop admin UI
 tapdb ui status              # Check if running
 tapdb ui logs                # View logs (--follow/-f to tail)
 tapdb ui restart             # Restart server
+
+# Aurora PostgreSQL (AWS) — requires pip install daylily-tapdb[aurora]
+tapdb aurora create <env>    # Provision Aurora cluster via CloudFormation
+tapdb aurora status <env>    # Show cluster status, endpoint, outputs
+tapdb aurora connect <env>   # Print connection info / psql command
+tapdb aurora list            # List all tapdb Aurora stacks in a region
+tapdb aurora delete <env>    # Tear down Aurora CloudFormation stack
 ```
 
 ### Backup & Recovery
@@ -720,7 +729,7 @@ TAPDB supports three environments: `dev`, `test`, and `prod`.
 - `dev` and `test` can use local PostgreSQL (`tapdb pg init/start-local`)
 - `prod` requires an external PostgreSQL instance (AWS RDS, system install, etc.)
 
-TAPDB does **not** provision AWS RDS or infrastructure for you; bring your own Postgres instance, database, credentials, and network access.
+For local/manual PostgreSQL, bring your own Postgres instance, database, credentials, and network access. For automated AWS provisioning, see [Aurora PostgreSQL (AWS)](#aurora-postgresql-aws).
 
 For remote/AWS databases, configure via environment variables:
 
@@ -770,6 +779,181 @@ Replace `DEV` with `TEST` or `PROD` for other environments. Falls back to `PGHOS
 | `/api/lineage` | POST | Create a new lineage relationship |
 | `/api/object/{euid}` | DELETE | Soft-delete an object |
 
+
+## Aurora PostgreSQL (AWS)
+
+TAPDB can provision and manage Aurora PostgreSQL clusters on AWS via CloudFormation. This is the recommended path for staging and production deployments.
+
+### Prerequisites
+
+- **AWS CLI** configured with credentials (`aws configure` or `AWS_PROFILE`)
+- **IAM permissions**: CloudFormation, RDS, EC2 (VPC/SG/subnets), Secrets Manager, IAM (for IAM auth)
+- **Install Aurora extras**: `pip install "daylily-tapdb[aurora]"`
+
+### Aurora Quick Start
+
+```bash
+# 1. Provision an Aurora cluster (takes ~10-15 minutes)
+tapdb aurora create dev --region us-east-1 --instance-class db.t4g.medium
+
+# 2. Check cluster status and get endpoint
+tapdb aurora status dev --region us-east-1
+
+# 3. Deploy TAPDB schema to the Aurora cluster
+tapdb db setup dev
+
+# 4. Verify schema and row counts
+tapdb db status dev
+```
+
+The `create` command provisions a full CloudFormation stack, waits for completion, and writes connection details to `~/.config/tapdb/tapdb-config.yaml`.
+
+### Aurora CLI Command Reference
+
+#### `tapdb aurora create <env>`
+
+Provision a new Aurora PostgreSQL cluster via CloudFormation.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--region`, `-r` | `us-west-2` | AWS region |
+| `--instance-class` | `db.r6g.large` | RDS instance class |
+| `--engine-version` | `16.6` | Aurora PostgreSQL engine version |
+| `--vpc-id` | *(auto-discover)* | VPC to deploy into (uses default VPC if omitted) |
+| `--cidr` | `0.0.0.0/0` | Ingress CIDR for the security group |
+| `--cost-center` | `global` | Value for `lsmc-cost-center` tag |
+| `--project` | `tapdb-<region>` | Value for `lsmc-project` tag |
+| `--publicly-accessible` / `--no-publicly-accessible` | `True` | Whether the instance has a public endpoint |
+| `--no-iam-auth` | `False` | Disable IAM database authentication |
+| `--background` | `False` | Initiate creation and exit immediately |
+
+#### `tapdb aurora status <env>`
+
+Show stack status, endpoint, and CloudFormation outputs.
+
+| Flag | Description |
+|------|-------------|
+| `--region`, `-r` | AWS region (default: `us-west-2`) |
+| `--json` | Output as JSON |
+
+#### `tapdb aurora connect <env>`
+
+Print connection info for an Aurora environment.
+
+| Flag | Description |
+|------|-------------|
+| `--region`, `-r` | AWS region (default: `us-west-2`) |
+| `--user`, `-u` | Database user (default: `tapdb_admin`) |
+| `--database`, `-d` | Database name (default: `tapdb_<env>`) |
+| `--export`, `-e` | Print shell export statements (`PGHOST`, `PGPORT`, etc.) |
+
+#### `tapdb aurora list`
+
+List all tapdb Aurora stacks in a region.
+
+| Flag | Description |
+|------|-------------|
+| `--region`, `-r` | AWS region to scan (default: `us-west-2`) |
+| `--json` | Output as JSON |
+
+#### `tapdb aurora delete <env>`
+
+Delete an Aurora CloudFormation stack.
+
+| Flag | Description |
+|------|-------------|
+| `--region`, `-r` | AWS region (default: `us-west-2`) |
+| `--retain-networking` / `--no-retain-networking` | Retain VPC security group and subnet group (default: retain) |
+| `--force`, `-f` | Skip confirmation prompt |
+
+### Architecture
+
+The `tapdb aurora create` command deploys a CloudFormation stack containing:
+
+| Resource | Type | Purpose |
+|----------|------|---------|
+| `DBSubnetGroup` | `AWS::RDS::DBSubnetGroup` | Subnet group for cluster placement |
+| `ClusterSecurityGroup` | `AWS::EC2::SecurityGroup` | Ingress rule allowing port 5432 from configured CIDR |
+| `MasterSecret` | `AWS::SecretsManager::Secret` | Auto-generated 32-char master password |
+| `AuroraCluster` | `AWS::RDS::DBCluster` | Aurora PostgreSQL Serverless-compatible cluster |
+| `AuroraInstance` | `AWS::RDS::DBInstance` | Writer instance in the cluster |
+
+Module structure:
+
+```
+daylily_tapdb/aurora/
+├── __init__.py           # Public API exports
+├── cfn_template.py       # CloudFormation template generator
+├── config.py             # AuroraConfig dataclass
+├── connection.py         # AuroraConnectionBuilder (IAM + Secrets Manager auth)
+├── schema_deployer.py    # Deploy TAPDB schema to Aurora
+├── stack_manager.py      # CloudFormation stack CRUD operations
+└── templates/
+    └── aurora-postgres.json  # Base CFN template
+```
+
+### Security Model
+
+**Authentication:**
+- **IAM auth** (default): Short-lived tokens via `rds.generate_db_auth_token()`. No long-lived passwords in config files.
+- **Secrets Manager**: Master password auto-generated and stored in Secrets Manager. Retrieved at connection time.
+
+**SSL/TLS:**
+- All connections use `sslmode=verify-full` with the AWS RDS global CA bundle
+- CA bundle auto-downloaded and cached at `~/.config/tapdb/rds-ca-bundle.pem`
+
+**Network security:**
+- Security group restricts port 5432 ingress to the configured `--cidr`
+- Default CIDR is `0.0.0.0/0` — restrict to your IP for dev: `--cidr $(curl -s ifconfig.me)/32`
+- Use `--no-publicly-accessible` for VPC-only access
+
+**Credential storage:**
+- Connection config written to `~/.config/tapdb/tapdb-config.yaml`
+- Secrets Manager ARN stored in CloudFormation outputs (no plaintext passwords on disk)
+
+### Cost Considerations
+
+Aurora pricing varies by region. Representative us-east-1 costs (as of 2026):
+
+| Instance Class | vCPU | RAM | Hourly | Daily | Monthly (730h) |
+|----------------|------|-----|--------|-------|----------------|
+| `db.t4g.medium` | 2 | 4 GB | ~$0.073 | ~$1.75 | ~$53 |
+| `db.t4g.large` | 2 | 8 GB | ~$0.146 | ~$3.50 | ~$107 |
+| `db.r6g.large` | 2 | 16 GB | ~$0.26 | ~$6.24 | ~$190 |
+| `db.r6g.xlarge` | 4 | 32 GB | ~$0.52 | ~$12.48 | ~$380 |
+
+Additional costs:
+- **Storage**: $0.10/GB-month (Aurora automatically scales)
+- **I/O**: $0.20 per million requests (Aurora Standard) or included (Aurora I/O-Optimized)
+- **Secrets Manager**: $0.40/secret/month + $0.05 per 10K API calls
+
+> **Tip**: Use `db.t4g.medium` for dev/test. Use `--retain-networking` on delete to speed up re-creation.
+
+### Connectivity Options
+
+| Method | Best For | Setup |
+|--------|----------|-------|
+| **IP-restricted public access** | Dev/test, solo developers | `--publicly-accessible --cidr $(curl -s ifconfig.me)/32` |
+| **VPN / Tailscale subnet router** | Teams, multi-user | Route VPC subnet through Tailscale exit node |
+| **VPC peering** | Production, cross-account | Peer application VPC with database VPC |
+| **Private (no public endpoint)** | Production, compliance | `--no-publicly-accessible` + VPC-internal access only |
+
+For development, **IP-restricted public access** is the simplest approach. The security group limits port 5432 to your IP.
+
+### Teardown
+
+```bash
+# Delete the Aurora stack (retains networking resources by default)
+tapdb aurora delete dev --region us-east-1
+
+# Delete everything including VPC security group and subnet group
+tapdb aurora delete dev --region us-east-1 --no-retain-networking
+
+# Skip confirmation prompt
+tapdb aurora delete dev --region us-east-1 --force
+```
+
+
 ## Project Structure
 
 ```
@@ -792,6 +976,12 @@ daylily-tapdb/
 │   │   └── dispatcher.py    # ActionDispatcher
 │   ├── validation/
 │   │   └── instantiation_layouts.py  # Pydantic schema for json_addl.instantiation_layouts
+│   ├── aurora/              # Aurora PostgreSQL (AWS) support
+│   │   ├── cfn_template.py  # CloudFormation template generator
+│   │   ├── config.py        # AuroraConfig dataclass
+│   │   ├── connection.py    # IAM + Secrets Manager auth
+│   │   ├── schema_deployer.py # Schema deployment to Aurora
+│   │   └── stack_manager.py # CloudFormation stack operations
 │   └── cli/
 │       └── __init__.py      # CLI entry point
 ├── admin/                   # FastAPI admin interface
@@ -832,5 +1022,5 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-**Daylily Informatics** — [daylilyinformatics.com](https://daylilyinformatics.com) 
- 
+**Daylily Informatics** — [daylilyinformatics.com](https://daylilyinformatics.com)
+
