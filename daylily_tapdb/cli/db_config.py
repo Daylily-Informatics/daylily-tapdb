@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import os
+import stat
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +46,18 @@ def get_config_paths() -> list[Path]:
 
 
 def _load_yaml_or_json(path: Path) -> dict[str, Any]:
+    # Warn if config file is readable by group or others
+    try:
+        file_stat = os.stat(path)
+        if file_stat.st_mode & (stat.S_IRGRP | stat.S_IROTH):
+            warnings.warn(
+                f"Config file {path} is readable by other users. "
+                f"Run: chmod 600 {path}",
+                stacklevel=2,
+            )
+    except OSError:
+        pass
+
     raw = path.read_text(encoding="utf-8")
 
     try:

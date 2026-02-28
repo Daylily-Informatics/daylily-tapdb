@@ -54,6 +54,14 @@ class TestAuroraConfigDefaults:
         cfg = AuroraConfig()
         assert cfg.ssl is True
 
+    def test_publicly_accessible_default_false(self):
+        cfg = AuroraConfig()
+        assert cfg.publicly_accessible is False
+
+    def test_deletion_protection_default_true(self):
+        cfg = AuroraConfig()
+        assert cfg.deletion_protection is True
+
 
 class TestAuroraConfigFromDict:
     def test_round_trip(self):

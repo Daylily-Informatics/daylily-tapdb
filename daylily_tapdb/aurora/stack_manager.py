@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import stat
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -48,6 +50,7 @@ def _save_metadata(data: dict[str, Any]) -> None:
     """Persist stack metadata to local cache."""
     STACK_METADATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     STACK_METADATA_PATH.write_text(json.dumps(data, indent=2, default=str) + "\n")
+    os.chmod(STACK_METADATA_PATH, stat.S_IRUSR | stat.S_IWUSR)  # 0600
 
 
 def _cfn_events_summary(cfn_client: Any, stack_name: str, limit: int = 10) -> str:
@@ -186,6 +189,10 @@ class AuroraStackManager:
             {
                 "ParameterKey": "PubliclyAccessible",
                 "ParameterValue": "true" if config.publicly_accessible else "false",
+            },
+            {
+                "ParameterKey": "DeletionProtection",
+                "ParameterValue": "true" if config.deletion_protection else "false",
             },
         ]
 

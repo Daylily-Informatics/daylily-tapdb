@@ -7,6 +7,8 @@ clusters via CloudFormation.
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 from typing import Optional
 
@@ -78,6 +80,7 @@ def _update_config_file(env: str, endpoint: str, port: str, region: str) -> None
     except ModuleNotFoundError:
         config_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
 
+    os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
     console.print(f"  Config updated: [dim]{config_path}[/dim]")
 
 
@@ -93,7 +96,7 @@ def aurora_create(
     ),
     vpc_id: str = typer.Option("", "--vpc-id", help="VPC ID to deploy into"),
     cidr: str = typer.Option(
-        "0.0.0.0/0", "--cidr", help="Ingress CIDR for security group"
+        "10.0.0.0/8", "--cidr", help="Ingress CIDR for security group"
     ),
     cost_center: str = typer.Option(
         "global", "--cost-center", help="LSMC cost center tag"
@@ -102,18 +105,30 @@ def aurora_create(
         None, "--project", help="LSMC project tag (default: tapdb-<region>)"
     ),
     publicly_accessible: bool = typer.Option(
-        True,
+        False,
         "--publicly-accessible/--no-publicly-accessible",
-        help="Whether the DB instance is publicly accessible (default: True)",
+        help="Whether the DB instance is publicly accessible (default: False)",
     ),
     no_iam_auth: bool = typer.Option(
         False, "--no-iam-auth", help="Disable IAM database authentication"
+    ),
+    no_deletion_protection: bool = typer.Option(
+        False,
+        "--no-deletion-protection",
+        help="Disable deletion protection (default: deletion protection ON)",
     ),
     background: bool = typer.Option(
         False, "--background", help="Fire-and-forget: initiate creation and exit"
     ),
 ):
     """Create an Aurora PostgreSQL cluster via CloudFormation."""
+    if cidr == "0.0.0.0/0" and publicly_accessible:
+        console.print(
+            "[yellow]⚠️  WARNING: Creating publicly accessible cluster open to "
+            "all IPs (0.0.0.0/0). Consider restricting --cidr to your IP.[/yellow]",
+            err=True,
+        )
+
     _ensure_boto3()
 
     from daylily_tapdb.aurora.config import AuroraConfig
@@ -130,6 +145,7 @@ def aurora_create(
         vpc_id=vpc_id,
         iam_auth=not no_iam_auth,
         publicly_accessible=publicly_accessible,
+        deletion_protection=not no_deletion_protection,
         tags=tags,
     )
 
@@ -237,7 +253,27 @@ def aurora_delete(
     console.print()
 
     try:
+        import boto3
+
         mgr = AuroraStackManager(region=region)
+
+        # Disable deletion protection before stack deletion
+        cluster_id = env
+        try:
+            rds = boto3.client("rds", region_name=region)
+            rds.modify_db_cluster(
+                DBClusterIdentifier=cluster_id,
+                DeletionProtection=False,
+                ApplyImmediately=True,
+            )
+            console.print(
+                f"  [dim]Disabled deletion protection on cluster {cluster_id}[/dim]"
+            )
+        except Exception as exc:
+            console.print(
+                f"  [dim]Could not disable deletion protection: {exc}[/dim]"
+            )
+
         result = mgr.delete_stack(stack_name, retain_networking=retain_networking)
     except RuntimeError as exc:
         console.print(f"[red]✗[/red] Stack deletion failed: {exc}")

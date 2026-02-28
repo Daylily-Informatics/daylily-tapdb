@@ -10,7 +10,7 @@ from typing import Any
 DEFAULT_INSTANCE_CLASS = "db.r6g.large"
 DEFAULT_ENGINE_VERSION = "16.6"
 DEFAULT_COST_CENTER = "global"
-DEFAULT_INGRESS_CIDR = "0.0.0.0/0"
+DEFAULT_INGRESS_CIDR = "10.0.0.0/8"
 
 
 def _build_tags(
@@ -69,9 +69,15 @@ def _parameters() -> dict[str, Any]:
         },
         "PubliclyAccessible": {
             "Type": "String",
-            "Default": "true",
+            "Default": "false",
             "AllowedValues": ["true", "false"],
             "Description": "Whether the DB instance is publicly accessible",
+        },
+        "DeletionProtection": {
+            "Type": "String",
+            "Default": "true",
+            "AllowedValues": ["true", "false"],
+            "Description": "Whether deletion protection is enabled on the cluster",
         },
         "CostCenter": {
             "Type": "String",
@@ -176,7 +182,9 @@ def _resources() -> dict[str, Any]:
                 ],
                 "EnableIAMDatabaseAuthentication": True,
                 "StorageEncrypted": True,
-                "DeletionProtection": False,
+                "DeletionProtection": {
+                    "Fn::If": ["IsDeletionProtectionEnabled", True, False]
+                },
                 "Tags": tags_with_refs,
             },
         },
@@ -233,6 +241,9 @@ def generate_template() -> dict[str, Any]:
             "HasProject": {"Fn::Not": [{"Fn::Equals": [{"Ref": "Project"}, ""]}]},
             "IsPubliclyAccessible": {
                 "Fn::Equals": [{"Ref": "PubliclyAccessible"}, "true"]
+            },
+            "IsDeletionProtectionEnabled": {
+                "Fn::Equals": [{"Ref": "DeletionProtection"}, "true"]
             },
         },
         "Parameters": _parameters(),

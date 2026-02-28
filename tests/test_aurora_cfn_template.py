@@ -54,6 +54,7 @@ class TestTemplateStructure:
     def test_has_conditions(self, template):
         assert "HasProject" in template["Conditions"]
         assert "IsPubliclyAccessible" in template["Conditions"]
+        assert "IsDeletionProtectionEnabled" in template["Conditions"]
 
 
 # --- Parameters ---
@@ -70,6 +71,7 @@ REQUIRED_PARAMS = [
     "CostCenter",
     "Project",
     "PubliclyAccessible",
+    "DeletionProtection",
 ]
 
 
@@ -158,6 +160,20 @@ class TestResources:
         props = template["Resources"]["WriterInstance"]["Properties"]
         pa = props["PubliclyAccessible"]
         assert pa == {"Fn::If": ["IsPubliclyAccessible", True, False]}
+
+    def test_cluster_deletion_protection_uses_condition(self, template):
+        props = template["Resources"]["AuroraCluster"]["Properties"]
+        dp = props["DeletionProtection"]
+        assert dp == {"Fn::If": ["IsDeletionProtectionEnabled", True, False]}
+
+    def test_publicly_accessible_default_false(self, template):
+        assert template["Parameters"]["PubliclyAccessible"]["Default"] == "false"
+
+    def test_ingress_cidr_default_restrictive(self, template):
+        assert template["Parameters"]["IngressCIDR"]["Default"] == "10.0.0.0/8"
+
+    def test_deletion_protection_default_true(self, template):
+        assert template["Parameters"]["DeletionProtection"]["Default"] == "true"
 
 
 # --- Tags ---

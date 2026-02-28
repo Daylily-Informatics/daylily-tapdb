@@ -45,7 +45,8 @@ class AuroraConfig:
     security_group_ids: list[str] = field(default_factory=list)
     iam_auth: bool = True
     ssl: bool = True
-    publicly_accessible: bool = True
+    publicly_accessible: bool = False
+    deletion_protection: bool = True
     tags: dict[str, str] = field(default_factory=_default_tags)
 
     def __post_init__(self) -> None:
