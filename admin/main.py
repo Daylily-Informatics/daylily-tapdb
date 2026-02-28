@@ -4,7 +4,7 @@ TAPDB Admin Application.
 FastAPI-based admin interface for managing TAPDB objects with Cytoscape DAG visualization.
 
 Usage:
-    uvicorn admin.main:app --reload --port 8000
+    uvicorn admin.main:app --reload --port 8911
 """
 import os
 import json
@@ -25,11 +25,18 @@ from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.cli.db_config import get_db_config_for_env
+from sqlalchemy.exc import IntegrityError
 
 from admin.auth import (
     get_current_user, require_auth, require_admin,
-    get_user_by_username, verify_password, update_last_login,
-    update_password, get_user_permissions,
+    get_user_by_username,
+    authenticate_with_cognito,
+    create_cognito_user_account,
+    get_or_create_user_from_email,
+    respond_to_new_password_challenge,
+    change_cognito_password,
+    update_last_login,
+    get_user_permissions,
     SESSION_COOKIE_NAME,
 )
 
@@ -90,7 +97,7 @@ if IS_PROD:
 else:
     if not allowed_origins:
         # Safe local dev defaults
-        allowed_origins = ["http://localhost:8000", "http://127.0.0.1:8000"]
+        allowed_origins = ["http://localhost:8911", "http://127.0.0.1:8911"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -130,6 +137,84 @@ def get_style() -> Dict[str, str]:
     return {"skin_css": "/static/css/style.css"}
 
 
+def _resolve_lineage_targets_or_raise(
+    session,
+    *,
+    parent_euids: List[str],
+    child_euids: List[str],
+) -> tuple[List[generic_instance], List[generic_instance]]:
+    """Resolve requested lineage targets or raise a validation error.
+
+    All requested parent/child EUIDs must exist. If any are missing, this
+    raises ``ValueError`` so callers can abort the entire create flow.
+    """
+    resolved_parents: List[generic_instance] = []
+    resolved_children: List[generic_instance] = []
+    missing_parents: List[str] = []
+    missing_children: List[str] = []
+
+    seen_parent_euids: set[str] = set()
+    for parent_euid in parent_euids:
+        if parent_euid in seen_parent_euids:
+            continue
+        seen_parent_euids.add(parent_euid)
+        parent_instance = session.query(generic_instance).filter_by(
+            euid=parent_euid, is_deleted=False
+        ).first()
+        if not parent_instance:
+            missing_parents.append(parent_euid)
+            continue
+        resolved_parents.append(parent_instance)
+
+    seen_child_euids: set[str] = set()
+    for child_euid in child_euids:
+        if child_euid in seen_child_euids:
+            continue
+        seen_child_euids.add(child_euid)
+        child_instance = session.query(generic_instance).filter_by(
+            euid=child_euid, is_deleted=False
+        ).first()
+        if not child_instance:
+            missing_children.append(child_euid)
+            continue
+        resolved_children.append(child_instance)
+
+    if missing_parents or missing_children:
+        parts: List[str] = []
+        if missing_parents:
+            parts.append(f"missing parent EUID(s): {', '.join(missing_parents)}")
+        if missing_children:
+            parts.append(f"missing child EUID(s): {', '.join(missing_children)}")
+        raise ValueError("; ".join(parts))
+
+    return resolved_parents, resolved_children
+
+
+def _new_graph_lineage(
+    *,
+    parent: generic_instance,
+    child: generic_instance,
+    relationship_type: str,
+) -> generic_instance_lineage:
+    """Build a lineage row with all non-null base fields populated."""
+    rel = (relationship_type or "").strip() or "generic"
+    return generic_instance_lineage(
+        name=f"{parent.euid}->{child.euid}:{rel}",
+        polymorphic_discriminator="generic_instance_lineage",
+        category="lineage",
+        type="lineage",
+        subtype="generic",
+        version="1.0",
+        bstatus="active",
+        parent_instance_uuid=parent.uuid,
+        child_instance_uuid=child.uuid,
+        relationship_type=rel,
+        parent_type=parent.polymorphic_discriminator,
+        child_type=child.polymorphic_discriminator,
+        json_addl={},
+    )
+
+
 # ============================================================================
 # Authentication Routes
 # ============================================================================
@@ -139,7 +224,9 @@ async def login_page(request: Request, error: Optional[str] = None):
     """Login page."""
     # If already logged in, redirect to home
     user = await get_current_user(request)
-    if user and not user.get("require_password_change"):
+    if user:
+        if user.get("require_password_change"):
+            return RedirectResponse("/change-password", status_code=302)
         return RedirectResponse("/", status_code=302)
 
     content = templates.get_template("login.html").render(
@@ -153,19 +240,66 @@ async def login_page(request: Request, error: Optional[str] = None):
 @app.post("/login", response_class=HTMLResponse)
 async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
     """Handle login form submission."""
-    user = get_user_by_username(username)
+    identity = (username or "").strip()
+    user = get_user_by_username(identity)
+    cognito_username = (user.get("email") if user else identity) or identity
 
-    if not user or not verify_password(password, user.get("password_hash", "")):
+    try:
+        auth_result = authenticate_with_cognito(cognito_username, password)
+    except ValueError:
         content = templates.get_template("login.html").render(
             request=request,
             style=get_style(),
             error="Invalid username or password",
         )
         return HTMLResponse(content=content)
+    except Exception as e:
+        content = templates.get_template("login.html").render(
+            request=request,
+            style=get_style(),
+            error=f"Authentication error: {e}",
+        )
+        return HTMLResponse(content=content)
 
-    # Set session
+    # Provision DB user row on first successful Cognito authentication.
+    if not user:
+        try:
+            user = get_or_create_user_from_email(cognito_username)
+        except Exception as e:
+            content = templates.get_template("login.html").render(
+                request=request,
+                style=get_style(),
+                error=(
+                    "Authenticated with Cognito, but failed to provision TAPDB user: "
+                    f"{e}"
+                ),
+            )
+            return HTMLResponse(content=content)
+
+    # Set session (used for app auth/authorization)
     request.session["user_uuid"] = user["uuid"]
+    request.session["cognito_username"] = cognito_username
     update_last_login(user["uuid"])
+
+    if auth_result.get("challenge") == "NEW_PASSWORD_REQUIRED":
+        request.session["cognito_challenge"] = "NEW_PASSWORD_REQUIRED"
+        request.session["cognito_challenge_session"] = auth_result.get("session", "")
+        logger.info(f"User requires new Cognito password: {cognito_username}")
+        return RedirectResponse("/change-password", status_code=302)
+
+    access_token = auth_result.get("access_token")
+    if not access_token:
+        request.session.clear()
+        content = templates.get_template("login.html").render(
+            request=request,
+            style=get_style(),
+            error="Authentication failed: no access token returned",
+        )
+        return HTMLResponse(content=content)
+
+    request.session["cognito_access_token"] = access_token
+    request.session.pop("cognito_challenge", None)
+    request.session.pop("cognito_challenge_session", None)
 
     logger.info(f"User logged in: {username}")
 
@@ -173,6 +307,126 @@ async def login_submit(request: Request, username: str = Form(...), password: st
     if user.get("require_password_change"):
         return RedirectResponse("/change-password", status_code=302)
 
+    return RedirectResponse("/", status_code=302)
+
+
+@app.get("/signup", response_class=HTMLResponse)
+async def signup_page(
+    request: Request,
+    error: Optional[str] = None,
+):
+    """Account creation page."""
+    user = await get_current_user(request)
+    if user:
+        return RedirectResponse("/", status_code=302)
+
+    content = templates.get_template("signup.html").render(
+        request=request,
+        style=get_style(),
+        error=error,
+    )
+    return HTMLResponse(content=content)
+
+
+@app.post("/signup", response_class=HTMLResponse)
+async def signup_submit(
+    request: Request,
+    email: str = Form(...),
+    display_name: Optional[str] = Form(None),
+    password: str = Form(...),
+    confirm_password: str = Form(...),
+):
+    """Create Cognito account and provision TAPDB user row."""
+    normalized_email = (email or "").strip().lower()
+    if not normalized_email or "@" not in normalized_email:
+        content = templates.get_template("signup.html").render(
+            request=request,
+            style=get_style(),
+            error="Valid email is required",
+        )
+        return HTMLResponse(content=content)
+
+    if len(password) < 8:
+        content = templates.get_template("signup.html").render(
+            request=request,
+            style=get_style(),
+            error="Password must be at least 8 characters",
+        )
+        return HTMLResponse(content=content)
+
+    if password != confirm_password:
+        content = templates.get_template("signup.html").render(
+            request=request,
+            style=get_style(),
+            error="Passwords do not match",
+        )
+        return HTMLResponse(content=content)
+
+    try:
+        create_cognito_user_account(
+            normalized_email,
+            password,
+            display_name=display_name,
+        )
+    except ValueError as e:
+        content = templates.get_template("signup.html").render(
+            request=request,
+            style=get_style(),
+            error=str(e),
+        )
+        return HTMLResponse(content=content)
+    except Exception as e:
+        content = templates.get_template("signup.html").render(
+            request=request,
+            style=get_style(),
+            error=f"Account creation failed: {e}",
+        )
+        return HTMLResponse(content=content)
+
+    try:
+        user = get_or_create_user_from_email(
+            normalized_email,
+            display_name=display_name,
+            role="user",
+        )
+    except Exception as e:
+        content = templates.get_template("signup.html").render(
+            request=request,
+            style=get_style(),
+            error=(
+                "Cognito account created, but TAPDB user provisioning failed: "
+                f"{e}"
+            ),
+        )
+        return HTMLResponse(content=content)
+
+    try:
+        auth_result = authenticate_with_cognito(normalized_email, password)
+    except Exception as e:
+        content = templates.get_template("login.html").render(
+            request=request,
+            style=get_style(),
+            error=(
+                "Account created but auto-login failed. Please sign in manually. "
+                f"Details: {e}"
+            ),
+        )
+        return HTMLResponse(content=content)
+
+    request.session["user_uuid"] = user["uuid"]
+    request.session["cognito_username"] = normalized_email
+    update_last_login(user["uuid"])
+
+    if auth_result.get("challenge") == "NEW_PASSWORD_REQUIRED":
+        request.session["cognito_challenge"] = "NEW_PASSWORD_REQUIRED"
+        request.session["cognito_challenge_session"] = auth_result.get("session", "")
+        return RedirectResponse("/change-password", status_code=302)
+
+    access_token = auth_result.get("access_token")
+    if access_token:
+        request.session["cognito_access_token"] = access_token
+    request.session.pop("cognito_challenge", None)
+    request.session.pop("cognito_challenge_session", None)
     return RedirectResponse("/", status_code=302)
 
 
@@ -190,11 +444,15 @@ async def change_password_page(request: Request, error: Optional[str] = None, su
     if not user:
         return RedirectResponse("/login", status_code=302)
 
+    challenge_required = (
+        request.session.get("cognito_challenge") == "NEW_PASSWORD_REQUIRED"
+    )
     content = templates.get_template("change_password.html").render(
         request=request,
         style=get_style(),
         user=user,
         required=user.get("require_password_change", False),
+        challenge_required=challenge_required,
         error=error,
         success=success,
     )
@@ -204,7 +462,7 @@ async def change_password_page(request: Request, error: Optional[str] = None, su
 @app.post("/change-password", response_class=HTMLResponse)
 async def change_password_submit(
     request: Request,
-    current_password: str = Form(...),
+    current_password: Optional[str] = Form(None),
     new_password: str = Form(...),
     confirm_password: str = Form(...),
 ):
@@ -213,20 +471,6 @@ async def change_password_submit(
     if not user:
         return RedirectResponse("/login", status_code=302)
 
-    # Get full user with password hash
-    full_user = get_user_by_username(user["username"])
-
-    # Validate current password
-    if not verify_password(current_password, full_user.get("password_hash", "")):
-        content = templates.get_template("change_password.html").render(
-            request=request,
-            style=get_style(),
-            user=user,
-            required=user.get("require_password_change", False),
-            error="Current password is incorrect",
-        )
-        return HTMLResponse(content=content)
-
     # Validate new password
     if len(new_password) < 8:
         content = templates.get_template("change_password.html").render(
@@ -234,6 +478,9 @@ async def change_password_submit(
             style=get_style(),
             user=user,
             required=user.get("require_password_change", False),
+            challenge_required=(
+                request.session.get("cognito_challenge") == "NEW_PASSWORD_REQUIRED"
+            ),
             error="New password must be at least 8 characters",
         )
         return HTMLResponse(content=content)
@@ -244,13 +491,115 @@ async def change_password_submit(
             style=get_style(),
             user=user,
             required=user.get("require_password_change", False),
+            challenge_required=(
+                request.session.get("cognito_challenge") == "NEW_PASSWORD_REQUIRED"
+            ),
             error="New passwords do not match",
         )
         return HTMLResponse(content=content)
 
-    # Update password
-    update_password(user["uuid"], new_password)
-    logger.info(f"Password changed for user: {user['username']}")
+    challenge_required = (
+        request.session.get("cognito_challenge") == "NEW_PASSWORD_REQUIRED"
+    )
+    if challenge_required:
+        challenge_session = request.session.get("cognito_challenge_session", "")
+        if not challenge_session:
+            content = templates.get_template("change_password.html").render(
+                request=request,
+                style=get_style(),
+                user=user,
+                required=True,
+                challenge_required=True,
+                error="Missing Cognito challenge session. Please sign in again.",
+            )
+            return HTMLResponse(content=content)
+
+        cognito_username = (
+            request.session.get("cognito_username")
+            or user.get("email")
+            or user.get("username")
+        )
+
+        try:
+            auth_result = respond_to_new_password_challenge(
+                cognito_username,
+                new_password,
+                challenge_session,
+            )
+            access_token = auth_result.get("access_token")
+            if access_token:
+                request.session["cognito_access_token"] = access_token
+            request.session.pop("cognito_challenge", None)
+            request.session.pop("cognito_challenge_session", None)
+            logger.info(f"Cognito NEW_PASSWORD_REQUIRED completed: {cognito_username}")
+            return RedirectResponse("/", status_code=302)
+        except ValueError as e:
+            content = templates.get_template("change_password.html").render(
+                request=request,
+                style=get_style(),
+                user=user,
+                required=True,
+                challenge_required=True,
+                error=str(e),
+            )
+            return HTMLResponse(content=content)
+        except Exception as e:
+            content = templates.get_template("change_password.html").render(
+                request=request,
+                style=get_style(),
+                user=user,
+                required=True,
+                challenge_required=True,
+                error=f"Password update failed: {e}",
+            )
+            return HTMLResponse(content=content)
+
+    if not current_password:
+        content = templates.get_template("change_password.html").render(
+            request=request,
+            style=get_style(),
+            user=user,
+            required=user.get("require_password_change", False),
+            challenge_required=False,
+            error="Current password is required",
+        )
+        return HTMLResponse(content=content)
+
+    access_token = request.session.get("cognito_access_token")
+    if not access_token:
+        content = templates.get_template("change_password.html").render(
+            request=request,
+            style=get_style(),
+            user=user,
+            required=user.get("require_password_change", False),
+            challenge_required=False,
+            error="Session missing Cognito access token. Please sign in again.",
+        )
+        return HTMLResponse(content=content)
+
+    try:
+        change_cognito_password(access_token, current_password, new_password)
+        logger.info(f"Password changed for user: {user['username']}")
+    except ValueError as e:
+        content = templates.get_template("change_password.html").render(
+            request=request,
+            style=get_style(),
+            user=user,
+            required=user.get("require_password_change", False),
+            challenge_required=False,
+            error=str(e),
+        )
+        return HTMLResponse(content=content)
+    except Exception as e:
+        content = templates.get_template("change_password.html").render(
+            request=request,
+            style=get_style(),
+            user=user,
+            required=user.get("require_password_change", False),
+            challenge_required=False,
+            error=f"Password update failed: {e}",
+        )
+        return HTMLResponse(content=content)
 
     # If was required, redirect to home. Otherwise show success.
     if user.get("require_password_change"):
@@ -261,6 +610,7 @@ async def change_password_submit(
         style=get_style(),
         user=user,
         required=False,
+        challenge_required=False,
         success="Password changed successfully",
     )
     return HTMLResponse(content=content)
@@ -639,6 +989,12 @@ async def create_instance_submit(request: Request, template_euid: str):
                 template_manager = TemplateManager()
                 factory = InstanceFactory(template_manager)
 
+                parent_instances, child_instances = _resolve_lineage_targets_or_raise(
+                    session,
+                    parent_euids=parent_euids,
+                    child_euids=child_euids,
+                )
+
                 instance = factory.create_instance(
                     session=session,
                     template_code=template_code,
@@ -649,37 +1005,25 @@ async def create_instance_submit(request: Request, template_euid: str):
 
                 # Create lineage relationships for parent instances
                 linked_parents = []
-                for parent_euid in parent_euids:
-                    parent_instance = session.query(generic_instance).filter_by(
-                        euid=parent_euid, is_deleted=False
-                    ).first()
-                    if parent_instance:
-                        factory.link_instances(
-                            session=session,
-                            parent=parent_instance,
-                            child=instance,
-                            relationship_type=relationship_type,
-                        )
-                        linked_parents.append(parent_euid)
-                    else:
-                        logger.warning(f"Parent instance not found: {parent_euid}")
+                for parent_instance in parent_instances:
+                    factory.link_instances(
+                        session=session,
+                        parent=parent_instance,
+                        child=instance,
+                        relationship_type=relationship_type,
+                    )
+                    linked_parents.append(parent_instance.euid)
 
                 # Create lineage relationships for child instances
                 linked_children = []
-                for child_euid in child_euids:
-                    child_instance = session.query(generic_instance).filter_by(
-                        euid=child_euid, is_deleted=False
-                    ).first()
-                    if child_instance:
-                        factory.link_instances(
-                            session=session,
-                            parent=instance,
-                            child=child_instance,
-                            relationship_type=relationship_type,
-                        )
-                        linked_children.append(child_euid)
-                    else:
-                        logger.warning(f"Child instance not found: {child_euid}")
+                for child_instance in child_instances:
+                    factory.link_instances(
+                        session=session,
+                        parent=instance,
+                        child=child_instance,
+                        relationship_type=relationship_type,
+                    )
+                    linked_children.append(child_instance.euid)
 
                 # Capture EUID before exiting context (session may close)
                 instance_euid = instance.euid
@@ -982,7 +1326,7 @@ async def api_create_lineage(request: Request):
     data = await request.json()
     parent_euid = data.get("parent_euid")
     child_euid = data.get("child_euid")
-    relationship_type = data.get("relationship_type", "related")
+    relationship_type = (data.get("relationship_type") or "").strip() or "generic"
 
     if not parent_euid or not child_euid:
         raise HTTPException(status_code=400, detail="parent_euid and child_euid required")
@@ -999,15 +1343,40 @@ async def api_create_lineage(request: Request):
             if not child:
                 raise HTTPException(status_code=404, detail=f"Child not found: {child_euid}")
 
-            lineage = generic_instance_lineage(
+            existing = session.query(generic_instance_lineage).filter_by(
                 parent_instance_uuid=parent.uuid,
                 child_instance_uuid=child.uuid,
                 relationship_type=relationship_type,
-                parent_type=parent.polymorphic_discriminator,
-                child_type=child.polymorphic_discriminator,
+                is_deleted=False,
+            ).first()
+            if existing:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Lineage already exists for "
+                        f"{child_euid} -> {parent_euid} ({relationship_type})"
+                    ),
+                )
+
+            lineage = _new_graph_lineage(
+                parent=parent,
+                child=child,
+                relationship_type=relationship_type,
             )
             session.add(lineage)
-            session.flush()
+            try:
+                session.flush()
+            except IntegrityError as exc:
+                # Keep duplicate edge inserts as a clear client error.
+                if "idx_lineage_unique_edge" in str(exc) or "duplicate key" in str(exc).lower():
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Lineage already exists for "
+                            f"{child_euid} -> {parent_euid} ({relationship_type})"
+                        ),
+                    ) from exc
+                raise
 
             return {"success": True, "euid": lineage.euid, "uuid": str(lineage.uuid)}
 
@@ -1033,4 +1402,3 @@ async def api_delete_object(request: Request, euid: str, hard_delete: bool = Fal
             session.flush()
 
             return {"success": True, "message": f"Object {euid} soft-deleted"}
-

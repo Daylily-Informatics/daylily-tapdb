@@ -369,27 +369,135 @@ def _schema_exists(env: Environment) -> bool:
 # CLI Commands
 # ============================================================================
 
-db_app = typer.Typer(help="Database management commands")
+db_app = typer.Typer(help="Database lifecycle commands")
+schema_app = typer.Typer(help="Schema lifecycle commands")
+data_app = typer.Typer(help="Data operations")
+config_app = typer.Typer(help="Configuration validation commands")
+
+db_app.add_typer(schema_app, name="schema")
+db_app.add_typer(data_app, name="data")
+db_app.add_typer(config_app, name="config")
 
 
 @db_app.command("create")
 def db_create(
     env: Environment = typer.Argument(..., help="Target environment"),
-    create_db: bool = typer.Option(
-        True, "--create-db/--no-create-db", help="Create database if not exists"
+    owner: Optional[str] = typer.Option(
+        None, "--owner", "-o", help="Database owner (default: connection user)"
     ),
 ):
-    """Initialize TAPDB schema in the specified environment database."""
+    """Create the TAPDB database for the specified environment."""
+    cfg = _get_db_config(env)
+    db_name = cfg["database"]
+    db_owner = owner or cfg["user"]
+
+    console.print(
+        f"\n[bold cyan]━━━ Create TAPDB Database ({env.value}) ━━━[/bold cyan]"
+    )
+    console.print(f"  Host:     {cfg['host']}:{cfg['port']}")
+    console.print(f"  Database: {db_name}")
+    console.print(f"  Owner:    {db_owner}")
+
+    ok, out = _run_psql(env, sql="SELECT 1", database="postgres")
+    if not ok:
+        console.print("[red]✗[/red] Cannot connect to PostgreSQL for this environment")
+        console.print(f"  {out}")
+        raise typer.Exit(1)
+
+    if _check_db_exists(env, db_name):
+        console.print(f"[yellow]⚠[/yellow] Database '{db_name}' already exists")
+        return
+
+    console.print(f"[yellow]►[/yellow] Creating database '{db_name}'...")
+    sql = f'CREATE DATABASE "{db_name}" OWNER "{db_owner}"'
+    success, output = _run_psql(env, sql=sql, database="postgres")
+    if not success:
+        console.print("[red]✗[/red] Failed to create database")
+        console.print(f"  {output}")
+        raise typer.Exit(1)
+
+    console.print(f"[green]✓[/green] Database '{db_name}' created")
+    console.print(f"  Next: [cyan]tapdb db schema apply {env.value}[/cyan]")
+
+
+@db_app.command("delete")
+def db_delete(
+    env: Environment = typer.Argument(..., help="Target environment"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+):
+    """Delete the TAPDB database for the specified environment."""
+    cfg = _get_db_config(env)
+    db_name = cfg["database"]
+
+    ok, out = _run_psql(env, sql="SELECT 1", database="postgres")
+    if not ok:
+        console.print("[red]✗[/red] Cannot connect to PostgreSQL for this environment")
+        console.print(f"  {out}")
+        raise typer.Exit(1)
+
+    if not _check_db_exists(env, db_name):
+        console.print(f"[yellow]⚠[/yellow] Database '{db_name}' does not exist")
+        return
+
+    if not force:
+        console.print("\n[bold red]⚠️  WARNING: DESTRUCTIVE OPERATION[/bold red]")
+        console.print(f"This will permanently delete database: [bold]{db_name}[/bold]")
+        console.print("All data will be lost!\n")
+
+        if env == Environment.prod:
+            console.print("[bold red]🚨 THIS IS A PRODUCTION DATABASE! 🚨[/bold red]\n")
+
+        if not Confirm.ask(f"Delete database '{db_name}'?", default=False):
+            console.print("[dim]Aborted.[/dim]")
+            raise typer.Exit(0)
+
+        if env == Environment.prod:
+            typed = typer.prompt("Type the database name to confirm")
+            if typed != db_name:
+                console.print("[red]✗[/red] Name mismatch. Aborted.")
+                raise typer.Exit(1)
+
+    console.print(f"[yellow]►[/yellow] Deleting database '{db_name}'...")
+    term_sql = f"""
+    SELECT pg_terminate_backend(pid)
+    FROM pg_stat_activity
+    WHERE datname = '{db_name}' AND pid <> pg_backend_pid()
+    """
+    _run_psql(env, sql=term_sql, database="postgres")
+
+    success, output = _run_psql(
+        env, sql=f'DROP DATABASE "{db_name}"', database="postgres"
+    )
+    if not success:
+        console.print("[red]✗[/red] Failed to delete database")
+        console.print(f"  {output}")
+        raise typer.Exit(1)
+
+    console.print(f"[green]✓[/green] Database '{db_name}' deleted")
+
+
+@schema_app.command("apply")
+def db_schema_apply(
+    env: Environment = typer.Argument(..., help="Target environment"),
+    reinitialize: bool = typer.Option(
+        False, "--reinitialize", "-r", help="Reapply schema even if it already exists"
+    ),
+):
+    """Apply TAPDB schema to an existing database."""
     _ensure_dirs()
     cfg = _get_db_config(env)
 
-    console.print(f"\n[bold cyan]━━━ Create TAPDB Schema ({env.value}) ━━━[/bold cyan]")
+    console.print(f"\n[bold cyan]━━━ Apply TAPDB Schema ({env.value}) ━━━[/bold cyan]")
     console.print(f"  Host:     {cfg['host']}:{cfg['port']}")
     console.print(f"  Database: {cfg['database']}")
     console.print(f"  User:     {cfg['user']}")
     console.print()
 
-    # Find schema file
+    if not _check_db_exists(env, cfg["database"]):
+        console.print(f"[red]✗[/red] Database '{cfg['database']}' does not exist")
+        console.print(f"  Create with: [cyan]tapdb db create {env.value}[/cyan]")
+        raise typer.Exit(1)
+
     try:
         schema_file = _find_schema_file()
         console.print(f"[green]✓[/green] Schema file: {schema_file}")
@@ -397,61 +505,39 @@ def db_create(
         console.print(f"[red]✗[/red] {e}")
         raise typer.Exit(1)
 
-    # Create database if needed
-    if create_db:
-        if _check_db_exists(env, cfg["database"]):
-            console.print(f"[green]✓[/green] Database '{cfg['database']}' exists")
-        else:
-            console.print(
-                f"[yellow]►[/yellow] Creating database '{cfg['database']}'..."
-            )
-            success, output = _run_psql(
-                env, sql=f"CREATE DATABASE {cfg['database']}", database="postgres"
-            )
-            if not success:
-                console.print(f"[red]✗[/red] Failed to create database:\n{output}")
-                raise typer.Exit(1)
-            console.print("[green]✓[/green] Database created")
+    if _schema_exists(env) and not reinitialize:
+        console.print(
+            f"[dim]○[/dim] Schema already exists in {cfg['database']} (skipping apply)"
+        )
+        return
 
-    # Check if schema already exists
-    if _schema_exists(env):
-        console.print(f"[yellow]⚠[/yellow] Schema already exists in {cfg['database']}")
-        if not Confirm.ask("  Reinitialize schema?", default=False):
-            console.print("[dim]Aborted.[/dim]")
-            return
-
-    # Apply schema
     console.print("[yellow]►[/yellow] Applying schema...")
     success, output = _run_psql(env, file=schema_file)
-
-    if success:
-        _log_operation(env.value, "CREATE", f"Schema applied from {schema_file}")
-        console.print("[green]✓[/green] Schema created successfully")
-
-        # Write migration baseline so fresh installs don't try to re-apply migrations.
-        # (Migrations are only for evolving existing databases.)
-        try:
-            _write_migration_baseline(env)
-        except Exception as e:
-            console.print(f"[red]✗[/red] Failed to write migration baseline: {e}")
-            raise typer.Exit(1)
-
-        # Show table status
-        console.print("\n[bold]Tables created:[/bold]")
-        for table in [
-            "generic_template",
-            "generic_instance",
-            "generic_instance_lineage",
-            "audit_log",
-        ]:
-            console.print(f"  [green]✓[/green] {table}")
-    else:
-        console.print(f"[red]✗[/red] Schema creation failed:\n{output}")
-        _log_operation(env.value, "CREATE_FAILED", output[:200])
+    if not success:
+        console.print(f"[red]✗[/red] Schema apply failed:\n{output}")
+        _log_operation(env.value, "SCHEMA_APPLY_FAILED", output[:200])
         raise typer.Exit(1)
 
+    _log_operation(env.value, "SCHEMA_APPLY", f"Schema applied from {schema_file}")
+    console.print("[green]✓[/green] Schema applied successfully")
 
-@db_app.command("status")
+    try:
+        _write_migration_baseline(env)
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed to write migration baseline: {e}")
+        raise typer.Exit(1)
+
+    console.print("\n[bold]Tables available:[/bold]")
+    for table in [
+        "generic_template",
+        "generic_instance",
+        "generic_instance_lineage",
+        "audit_log",
+    ]:
+        console.print(f"  [green]✓[/green] {table}")
+
+
+@schema_app.command("status")
 def db_status(
     env: Environment = typer.Argument(..., help="Target environment"),
 ):
@@ -471,7 +557,9 @@ def db_status(
     # Check schema
     if not _schema_exists(env):
         console.print("[red]✗[/red] TAPDB schema not found")
-        console.print(f"\n  Initialize with: [cyan]tapdb db create {env.value}[/cyan]")
+        console.print(
+            f"\n  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]"
+        )
         raise typer.Exit(1)
 
     console.print("[green]✓[/green] Schema: installed")
@@ -505,7 +593,7 @@ def db_status(
     console.print(f"  URL:  [dim]{_get_connection_string(env)}[/dim]")
 
 
-@db_app.command("nuke")
+@schema_app.command("reset")
 def db_nuke(
     env: Environment = typer.Argument(..., help="Target environment"),
     force: bool = typer.Option(
@@ -661,14 +749,16 @@ def db_nuke(
     if success:
         _log_operation(env.value, "NUKE", f"Deleted {total_rows} rows from all tables")
         console.print("[green]✓[/green] TAPDB schema nuked successfully")
-        console.print(f"\n  Recreate with: [cyan]tapdb db create {env.value}[/cyan]")
+        console.print(
+            f"\n  Recreate with: [cyan]tapdb db schema apply {env.value}[/cyan]"
+        )
     else:
         console.print(f"[red]✗[/red] Nuke failed:\n{output}")
         _log_operation(env.value, "NUKE_FAILED", output[:200])
         raise typer.Exit(1)
 
 
-@db_app.command("migrate")
+@schema_app.command("migrate")
 def db_migrate(
     env: Environment = typer.Argument(..., help="Target environment"),
     dry_run: bool = typer.Option(
@@ -689,7 +779,8 @@ def db_migrate(
 
     if not _schema_exists(env):
         console.print(
-            "[red]✗[/red] TAPDB schema not found. Use 'tapdb db create' first."
+            "[red]✗[/red] TAPDB schema not found. "
+            "Use 'tapdb db schema apply' first."
         )
         raise typer.Exit(1)
 
@@ -767,7 +858,7 @@ def db_migrate(
     console.print("\n[green]✓[/green] All migrations applied successfully")
 
 
-@db_app.command("backup")
+@data_app.command("backup")
 def db_backup(
     env: Environment = typer.Argument(..., help="Target environment"),
     output: Optional[Path] = typer.Option(
@@ -850,7 +941,7 @@ def db_backup(
         raise typer.Exit(1)
 
 
-@db_app.command("restore")
+@data_app.command("restore")
 def db_restore(
     env: Environment = typer.Argument(..., help="Target environment"),
     input_file: Path = typer.Option(..., "--input", "-i", help="Input backup file"),
@@ -1345,7 +1436,7 @@ def _validate_template_configs(
     return templates, issues
 
 
-@db_app.command("validate-config")
+@config_app.command("validate")
 def db_validate_config(
     config_path: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to template config directory"
@@ -1603,7 +1694,7 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
         return False
 
 
-@db_app.command("seed")
+@data_app.command("seed")
 def db_seed(
     env: Environment = typer.Argument(..., help="Target environment"),
     config_path: Optional[Path] = typer.Option(
@@ -1658,7 +1749,9 @@ def db_seed(
 
     if not _schema_exists(env):
         console.print("[red]✗[/red] TAPDB schema not found")
-        console.print(f"  Initialize with: [cyan]tapdb db create {env.value}[/cyan]")
+        console.print(
+            f"  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]"
+        )
         raise typer.Exit(1)
 
     # Load templates
@@ -1773,7 +1866,7 @@ def db_setup(
     By default, seeds only CORE templates (generic, actor).
     Use --include-workflow to also seed workflow, workflow_step, and action templates.
 
-    Combines: tapdb pg create + tapdb db create + tapdb db seed
+    Combines: tapdb db create + tapdb db schema apply + tapdb db data seed
 
     For aurora environments, the database is already created by CloudFormation,
     so the "create database" step is skipped.
@@ -1791,100 +1884,33 @@ def db_setup(
         console.print("  SSL:      verify-full (enforced)")
     console.print(f"  Seed mode: {mode}")
 
-    # Step 1: Create database (skipped for aurora — CFN creates it)
-    console.print("\n[bold]Step 1/3: Create Database[/bold]")
-    if is_aurora:
-        console.print(
-            "  [green]✓[/green] Database managed by CloudFormation (skipping create)"
-        )
-    elif _check_db_exists(env, cfg["database"]):
-        if force:
-            console.print("  [yellow]►[/yellow] Database exists, recreating...")
-            # Use pg module functions
-            from daylily_tapdb.cli.pg import (
-                _get_db_config as pg_get_db_config,
-            )
-            from daylily_tapdb.cli.pg import (
-                _run_psql as pg_run_psql,
-            )
-
-            config = pg_get_db_config(env)
-            # Terminate connections
-            term_sql = f"""
-            SELECT pg_terminate_backend(pid)
-            FROM pg_stat_activity
-            WHERE datname = '{cfg["database"]}' AND pid <> pg_backend_pid()
-            """
-            pg_run_psql(term_sql, "postgres", config)
-            pg_run_psql(
-                f'DROP DATABASE IF EXISTS "{cfg["database"]}"', "postgres", config
-            )
-            pg_run_psql(f'CREATE DATABASE "{cfg["database"]}"', "postgres", config)
-            console.print("  [green]✓[/green] Database recreated")
-        else:
-            console.print("  [green]✓[/green] Database already exists")
-    else:
-        success, output = _run_psql(
-            env, sql=f'CREATE DATABASE "{cfg["database"]}"', database="postgres"
-        )
-        if success:
-            console.print("  [green]✓[/green] Database created")
-        else:
-            console.print(f"  [red]✗[/red] Failed: {output}")
-            raise typer.Exit(1)
+    # Step 1: Ensure database exists
+    console.print("\n[bold]Step 1/5: Ensure Database[/bold]")
+    if force and not is_aurora and _check_db_exists(env, cfg["database"]):
+        console.print("  [yellow]►[/yellow] --force requested; recreating database")
+        db_delete(env, force=True)
+    db_create(env, owner=None)
 
     # Step 2: Apply schema
-    console.print("\n[bold]Step 2/3: Apply Schema[/bold]")
-    try:
-        schema_file = _find_schema_file()
-        success, output = _run_psql(env, file=schema_file)
-        if success:
-            console.print("  [green]✓[/green] Schema applied")
-            # Ensure fresh installs never attempt to apply legacy migrations.
-            _write_migration_baseline(env)
-        else:
-            console.print(f"  [red]✗[/red] Failed: {output[:200]}")
-            raise typer.Exit(1)
-    except FileNotFoundError as e:
-        console.print(f"  [red]✗[/red] {e}")
-        raise typer.Exit(1)
+    console.print("\n[bold]Step 2/5: Apply Schema[/bold]")
+    db_schema_apply(env, reinitialize=force)
 
-    # Step 3: Seed templates
-    console.print("\n[bold]Step 3/4: Seed Templates[/bold]")
-    try:
-        config_dir = _find_config_dir()
-        templates = _load_template_configs(
-            config_dir, include_optional=include_workflow
-        )
+    # Step 3: Apply migrations
+    console.print("\n[bold]Step 3/5: Apply Migrations[/bold]")
+    db_migrate(env, dry_run=False)
 
-        # Ensure per-prefix instance sequences exist before
-        # anything starts inserting instances.
-        prefixes = sorted(
-            {
-                _normalize_instance_prefix(t.get("instance_prefix", "GX"))
-                for t in templates
-            }
-        )
-        for p in prefixes:
-            _ensure_instance_prefix_sequence(env, p)
+    # Step 4: Seed templates
+    console.print("\n[bold]Step 4/5: Seed Templates[/bold]")
+    db_seed(
+        env,
+        config_path=None,
+        include_workflow=include_workflow,
+        skip_existing=not force,
+        dry_run=False,
+    )
 
-        inserted = 0
-        skipped = 0
-        for template in templates:
-            ok, out = _upsert_template(env, template, overwrite=False)
-            if ok and (out or "").strip() == "1":
-                inserted += 1
-            elif ok:
-                skipped += 1
-
-        console.print(
-            f"  [green]✓[/green] Seeded {inserted} templates (skipped {skipped})"
-        )
-    except FileNotFoundError:
-        console.print("  [yellow]⚠[/yellow] No config directory found, skipping seed")
-
-    # Step 4: Create default admin user
-    console.print("\n[bold]Step 4/4: Create Admin User[/bold]")
+    # Step 5: Create default admin user
+    console.print("\n[bold]Step 5/5: Create Admin User[/bold]")
     created_admin = _create_default_admin(
         env, insecure_dev_defaults=insecure_dev_defaults
     )
@@ -1900,3 +1926,44 @@ def db_setup(
         console.print("  [dim](Password change required on first login)[/dim]")
 
     _log_operation(env.value, "SETUP", "Full setup completed")
+
+
+# Shared operation entry points used by orchestrators (e.g. bootstrap).
+def create_database(env: Environment, owner: Optional[str] = None) -> None:
+    db_create(env=env, owner=owner)
+
+
+def delete_database(env: Environment, force: bool = False) -> None:
+    db_delete(env=env, force=force)
+
+
+def apply_schema(env: Environment, reinitialize: bool = False) -> None:
+    db_schema_apply(env=env, reinitialize=reinitialize)
+
+
+def schema_status(env: Environment) -> None:
+    db_status(env=env)
+
+
+def reset_schema(env: Environment, force: bool = False) -> None:
+    db_nuke(env=env, force=force)
+
+
+def run_migrations(env: Environment, dry_run: bool = False) -> None:
+    db_migrate(env=env, dry_run=dry_run)
+
+
+def seed_templates(
+    env: Environment,
+    config_path: Optional[Path] = None,
+    include_workflow: bool = False,
+    skip_existing: bool = True,
+    dry_run: bool = False,
+) -> None:
+    db_seed(
+        env=env,
+        config_path=config_path,
+        include_workflow=include_workflow,
+        skip_existing=skip_existing,
+        dry_run=dry_run,
+    )
