@@ -51,6 +51,12 @@ cli = [
     "pyyaml",
 ]
 
+# Optional Aurora (AWS RDS Aurora) support.
+aurora = [
+    "boto3>=1.34",
+    "botocore",
+]
+
 # Optional Admin UI (FastAPI). Keep out of core installs.
 admin = [
     "fastapi",
