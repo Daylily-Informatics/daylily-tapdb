@@ -866,6 +866,8 @@ Delete an Aurora CloudFormation stack.
 | `--retain-networking` / `--no-retain-networking` | Retain VPC security group and subnet group (default: retain) |
 | `--force`, `-f` | Skip confirmation prompt |
 
+> `--force` bypasses all confirmation prompts — use with caution in scripts.
+
 ### Architecture
 
 The `tapdb aurora create` command deploys a CloudFormation stack containing:
@@ -952,6 +954,42 @@ tapdb aurora delete dev --region us-east-1 --no-retain-networking
 # Skip confirmation prompt
 tapdb aurora delete dev --region us-east-1 --force
 ```
+
+### Security Considerations
+
+#### Credential Passing (`PGPASSWORD`)
+
+TAPDB passes database credentials to `psql` via the `PGPASSWORD` environment variable — the standard PostgreSQL approach. On Linux, environment variables may be visible to other processes on the same system via `/proc/<pid>/environ`.
+
+**Mitigations:**
+- IAM auth tokens (the default for Aurora) are short-lived (~15 minutes)
+- For password-based auth, consider using a [`.pgpass` file](https://www.postgresql.org/docs/current/libpq-pgpass.html) as an alternative
+- The config file (`~/.config/tapdb/tapdb-config.yaml`) is written with `0600` permissions
+
+#### Network Security
+
+The Aurora security group created by CloudFormation:
+- **Ingress:** TCP port 5432 from the configured CIDR (default: `10.0.0.0/8`, VPC-only)
+- **Egress:** All outbound allowed (required for Aurora — S3 backups, CloudWatch metrics, RDS API)
+- **Public access:** Disabled by default (`--publicly-accessible` flag to override)
+
+For compliance environments requiring explicit egress rules, modify the security group manually after provisioning.
+
+#### Deletion Protection
+
+Deletion protection is **enabled by default**. Use `--no-deletion-protection` for dev/test clusters. The `tapdb aurora delete` command automatically disables deletion protection before stack deletion.
+
+> **Caution:** The `--force` flag bypasses all confirmation prompts. Use with care in automated scripts.
+
+#### Logging
+
+Debug-level logging may include infrastructure metadata (hostname, port, username). Ensure production deployments use logging level `INFO` or above:
+
+```bash
+export TAPDB_LOG_LEVEL=INFO
+```
+
+No credentials or IAM tokens are ever logged at any level.
 
 
 ## Project Structure
