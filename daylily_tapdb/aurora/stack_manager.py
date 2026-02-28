@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -73,7 +74,10 @@ class AuroraStackManager:
     """Manages CloudFormation stacks for Aurora PostgreSQL clusters."""
 
     def __init__(
-        self, cfn_client: Any | None = None, region: str = "us-west-2"
+        self,
+        cfn_client: Any | None = None,
+        ec2_client: Any | None = None,
+        region: str = "us-west-2",
     ) -> None:
         self.region = region
         if cfn_client is not None:
@@ -87,23 +91,78 @@ class AuroraStackManager:
                     "Install it with: pip install daylily-tapdb[aurora]"
                 ) from exc
             self._cfn = boto3.client("cloudformation", region_name=region)
+        if ec2_client is not None:
+            self._ec2 = ec2_client
+        else:
+            try:
+                import boto3
+            except ImportError as exc:
+                raise ImportError(
+                    "boto3 is required for Aurora support. "
+                    "Install it with: pip install daylily-tapdb[aurora]"
+                ) from exc
+            self._ec2 = boto3.client("ec2", region_name=region)
 
     # ------------------------------------------------------------------
     # create_stack
     # ------------------------------------------------------------------
 
-    def create_stack(self, config: AuroraConfig) -> dict[str, Any]:
-        """Create a CloudFormation stack for an Aurora cluster.
+    def _resolve_vpc_and_subnets(
+        self, config: AuroraConfig
+    ) -> tuple[str, list[str]]:
+        """Resolve VPC ID and subnet IDs from config or auto-discovery.
+
+        If ``config.vpc_id`` is set, use that VPC. Otherwise discover the
+        default VPC.  Then look up subnets for the resolved VPC.
+
+        Returns:
+            (vpc_id, subnet_ids)
+
+        Raises:
+            RuntimeError: If no VPC can be resolved or no subnets found.
+        """
+        vpc_id = config.vpc_id
+
+        if not vpc_id:
+            vpcs = self._ec2.describe_vpcs(
+                Filters=[{"Name": "isDefault", "Values": ["true"]}]
+            )
+            vpc_list = vpcs.get("Vpcs", [])
+            if not vpc_list:
+                raise RuntimeError(
+                    "No default VPC found and --vpc-id was not provided. "
+                    "Please specify a VPC with --vpc-id."
+                )
+            vpc_id = vpc_list[0]["VpcId"]
+            logger.info("Auto-discovered default VPC: %s", vpc_id)
+
+        subnets_resp = self._ec2.describe_subnets(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+        )
+        subnet_ids = [s["SubnetId"] for s in subnets_resp.get("Subnets", [])]
+        if not subnet_ids:
+            raise RuntimeError(
+                f"No subnets found for VPC {vpc_id}. "
+                "Ensure the VPC has at least two subnets."
+            )
+        return vpc_id, subnet_ids
+
+    def initiate_create_stack(
+        self, config: AuroraConfig
+    ) -> dict[str, str]:
+        """Start stack creation without waiting for completion.
 
         Args:
             config: Aurora configuration with cluster parameters.
 
         Returns:
-            dict with keys: stack_name, stack_id, outputs (after completion).
+            dict with keys: stack_name, stack_id, vpc_id.
 
         Raises:
-            RuntimeError: If stack creation fails.
+            RuntimeError: If VPC/subnets cannot be resolved.
         """
+        vpc_id, subnet_ids = self._resolve_vpc_and_subnets(config)
+
         stack_name = f"tapdb-{config.cluster_identifier}"
         template_body = json.dumps(generate_template())
 
@@ -117,7 +176,11 @@ class AuroraStackManager:
             },
             {"ParameterKey": "InstanceClass", "ParameterValue": config.instance_class},
             {"ParameterKey": "EngineVersion", "ParameterValue": config.engine_version},
-            {"ParameterKey": "VpcId", "ParameterValue": config.vpc_id},
+            {"ParameterKey": "VpcId", "ParameterValue": vpc_id},
+            {
+                "ParameterKey": "SubnetIds",
+                "ParameterValue": ",".join(subnet_ids),
+            },
             {"ParameterKey": "CostCenter", "ParameterValue": cost},
             {"ParameterKey": "Project", "ParameterValue": proj},
         ]
@@ -137,7 +200,36 @@ class AuroraStackManager:
         stack_id = resp["StackId"]
         logger.info("Stack creation initiated: %s", stack_id)
 
-        result = self.wait_for_stack(stack_name, "CREATE_COMPLETE")
+        return {
+            "stack_name": stack_name,
+            "stack_id": stack_id,
+            "vpc_id": vpc_id,
+        }
+
+    def create_stack(
+        self,
+        config: AuroraConfig,
+        callback: Callable[[str, float], None] | None = None,
+    ) -> dict[str, Any]:
+        """Create a CloudFormation stack and wait for completion.
+
+        Args:
+            config: Aurora configuration with cluster parameters.
+            callback: Optional progress callback ``(status, elapsed_secs)``.
+
+        Returns:
+            dict with keys: stack_name, stack_id, outputs (after completion).
+
+        Raises:
+            RuntimeError: If stack creation fails or VPC/subnets unresolvable.
+        """
+        initiated = self.initiate_create_stack(config)
+        stack_name = initiated["stack_name"]
+        stack_id = initiated["stack_id"]
+
+        result = self.wait_for_stack(
+            stack_name, "CREATE_COMPLETE", callback=callback
+        )
         if result["status"] != "CREATE_COMPLETE":
             events = _cfn_events_summary(self._cfn, stack_name)
             raise RuntimeError(
@@ -295,20 +387,21 @@ class AuroraStackManager:
         stack_name: str,
         target_status: str,
         timeout: int = 900,
+        callback: Callable[[str, float], None] | None = None,
     ) -> dict[str, Any]:
-        """Poll stack status with exponential backoff until terminal state.
+        """Poll stack status at a fixed 5-second interval until terminal state.
 
         Args:
             stack_name: Name of the CloudFormation stack.
             target_status: The desired terminal status (e.g. CREATE_COMPLETE).
             timeout: Maximum seconds to wait (default 900 = 15 min).
+            callback: Optional ``(status, elapsed_seconds)`` called each poll.
 
         Returns:
             dict with keys: status, outputs (if available).
         """
         start = time.monotonic()
         interval = 5.0
-        max_interval = 30.0
 
         while True:
             elapsed = time.monotonic() - start
@@ -330,6 +423,9 @@ class AuroraStackManager:
 
             logger.info("Stack %s: %s (%.0fs elapsed)", stack_name, status, elapsed)
 
+            if callback is not None:
+                callback(status, elapsed)
+
             if status == target_status:
                 return {"status": status, "outputs": info.get("outputs", {})}
 
@@ -337,4 +433,3 @@ class AuroraStackManager:
                 return {"status": status, "outputs": info.get("outputs", {})}
 
             time.sleep(interval)
-            interval = min(interval * 1.5, max_interval)

@@ -104,6 +104,9 @@ def aurora_create(
     no_iam_auth: bool = typer.Option(
         False, "--no-iam-auth", help="Disable IAM database authentication"
     ),
+    background: bool = typer.Option(
+        False, "--background", help="Fire-and-forget: initiate creation and exit"
+    ),
 ):
     """Create an Aurora PostgreSQL cluster via CloudFormation."""
     _ensure_boto3()
@@ -131,12 +134,43 @@ def aurora_create(
     console.print(f"  Instance: {instance_class}")
     console.print(f"  Engine:   PostgreSQL {engine_version}")
     console.print(f"  IAM Auth: {config.iam_auth}")
-    console.print(f"  VPC:      {vpc_id or '(default)'}")
+    console.print(f"  VPC:      {vpc_id or '(auto-discover default)'}")
     console.print()
 
     try:
         mgr = AuroraStackManager(region=region)
-        result = mgr.create_stack(config)
+
+        if background:
+            # Fire-and-forget: start creation, don't wait
+            initiated = mgr.initiate_create_stack(config)
+            console.print(
+                f"[green]✓[/green] Stack creation initiated "
+                f"(stack: [bold]{initiated['stack_name']}[/bold])."
+            )
+            console.print(
+                f"  Check progress with: "
+                f"[cyan]tapdb aurora status {env}[/cyan]"
+            )
+            return
+        else:
+            # Block with live progress using rich status spinner
+            from rich.status import Status
+
+            status_display = Status(
+                "Creating...", console=console, spinner="dots"
+            )
+
+            def _progress_callback(status: str, elapsed: float) -> None:
+                status_display.update(
+                    f"Creating... ({elapsed:.0f}s elapsed) — "
+                    f"Status: {status}"
+                )
+
+            status_display.start()
+            try:
+                result = mgr.create_stack(config, callback=_progress_callback)
+            finally:
+                status_display.stop()
     except RuntimeError as exc:
         console.print(f"[red]✗[/red] Stack creation failed: {exc}")
         raise typer.Exit(1)

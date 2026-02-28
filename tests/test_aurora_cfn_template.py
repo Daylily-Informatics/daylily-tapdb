@@ -62,6 +62,7 @@ REQUIRED_PARAMS = [
     "InstanceClass",
     "EngineVersion",
     "VpcId",
+    "SubnetIds",
     "MasterUsername",
     "DatabaseName",
     "IngressCIDR",
@@ -84,6 +85,12 @@ class TestParameters:
     def test_vpc_id_type(self, template):
         assert template["Parameters"]["VpcId"]["Type"] == "AWS::EC2::VPC::Id"
 
+    def test_subnet_ids_type(self, template):
+        assert (
+            template["Parameters"]["SubnetIds"]["Type"]
+            == "List<AWS::EC2::Subnet::Id>"
+        )
+
 
 # --- Resources ---
 
@@ -104,6 +111,16 @@ class TestResources:
     def test_subnet_group_type(self, template):
         r = template["Resources"]["DBSubnetGroup"]
         assert r["Type"] == "AWS::RDS::DBSubnetGroup"
+
+    def test_subnet_group_uses_ref(self, template):
+        """SubnetIds must use Ref (not Fn::ImportValue)."""
+        props = template["Resources"]["DBSubnetGroup"]["Properties"]
+        assert props["SubnetIds"] == {"Ref": "SubnetIds"}
+        # Verify no ImportValue anywhere in subnet group
+        import json
+
+        raw = json.dumps(props)
+        assert "ImportValue" not in raw
 
     def test_security_group_type(self, template):
         r = template["Resources"]["ClusterSecurityGroup"]

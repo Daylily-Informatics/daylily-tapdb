@@ -58,6 +58,10 @@ def _parameters() -> dict[str, Any]:
             "Default": "tapdb",
             "Description": "Name of the default database",
         },
+        "SubnetIds": {
+            "Type": "List<AWS::EC2::Subnet::Id>",
+            "Description": "Subnet IDs for the DB subnet group",
+        },
         "IngressCIDR": {
             "Type": "String",
             "Default": DEFAULT_INGRESS_CIDR,
@@ -101,9 +105,7 @@ def _resources() -> dict[str, Any]:
                 "DBSubnetGroupDescription": {
                     "Fn::Sub": "Subnet group for ${ClusterIdentifier}"
                 },
-                "SubnetIds": {
-                    "Fn::Split": [",", {"Fn::ImportValue": "DefaultVPCSubnets"}]
-                },
+                "SubnetIds": {"Ref": "SubnetIds"},
                 "Tags": tags_with_refs,
             },
         },
