@@ -7,8 +7,10 @@
 #
 # The CLI resolves config in this order:
 # 1) TAPDB_CONFIG_PATH
-# 2) ~/.config/tapdb/tapdb-config.yaml
-# 3) ./config/tapdb-config.yaml
+# 2) ~/.config/tapdb/tapdb-config-<database-name>.yaml (if TAPDB_DATABASE_NAME set)
+# 3) ~/.config/tapdb/tapdb-config.yaml
+# 4) ./config/tapdb-config-<database-name>.yaml (if TAPDB_DATABASE_NAME set)
+# 5) ./config/tapdb-config.yaml
 
 environments:
   dev:
@@ -17,6 +19,8 @@ environments:
     user: daylily
     password: ""
     database: tapdb_dev
+    # Optional: TAPDB Admin Cognito binding (pool details live in ~/.config/daycog/*.env)
+    cognito_user_pool_id: us-east-1_xxxxxxxxx
 
   test:
     host: localhost
@@ -24,6 +28,7 @@ environments:
     user: daylily
     password: ""
     database: tapdb_test
+    cognito_user_pool_id: us-east-1_xxxxxxxxx
 
   prod:
     host: example-prod-host
@@ -31,6 +36,7 @@ environments:
     user: tapdb_admin
     password: "CHANGEME"
     database: tapdb_prod
+    cognito_user_pool_id: us-east-1_xxxxxxxxx
 
   # Aurora (AWS RDS) environments use engine_type: aurora
   # and require additional aurora-specific fields.

@@ -65,7 +65,7 @@ TAPDB uses SQLAlchemy single-table inheritance. Each table has typed subclasses:
 - **Admin UI (optional)**: `pip install "daylily-tapdb[admin]"`
 - **Developer tooling (optional)**: `pip install "daylily-tapdb[dev]"`
 - **Aurora (AWS) support**: `pip install "daylily-tapdb[aurora]"` (adds boto3 for Aurora cluster management)
-- **CLI YAML config support (optional)**: `pip install "daylily-tapdb[cli]"` (adds PyYAML for `tapdb-config.yaml`; template config files remain JSON)
+- **CLI YAML config support (optional)**: `pip install "daylily-tapdb[cli]"` (adds PyYAML for TAPDB CLI config files like `tapdb-config*.yaml`; template config files remain JSON)
 
 ### Quick Start (recommended)
 
@@ -100,7 +100,8 @@ source tapdb_activate.sh
 
 ```bash
 # Using the CLI (recommended):
-tapdb db setup dev
+export TAPDB_ENV=dev
+tapdb bootstrap local
 
 # Or apply schema manually to an existing database:
 # psql -d your_database -f schema/tapdb_schema.sql
@@ -241,7 +242,7 @@ Example:
 
 You can run a **structure/format** validation pass over your `config/` JSON without connecting to a database:
 
-- `tapdb db validate-config` (auto-discovers `./config/` when run from the repo root)
+- `tapdb db config validate` (auto-discovers `./config/` when run from the repo root)
 
 What it checks (structural):
 - JSON parses and top-level shape (`{"templates": [...]}`)
@@ -395,7 +396,8 @@ Initialize the schema:
 
 ```bash
 # Using the CLI (recommended):
-tapdb db setup dev
+export TAPDB_ENV=dev
+tapdb bootstrap local
 
 # Or apply schema manually to an existing database:
 # psql -d your_database -f schema/tapdb_schema.sql
@@ -409,7 +411,9 @@ tapdb db setup dev
 |----------|-------------|---------|
 | `DATABASE_URL` | Full database URL (overrides component/env-style config) | — |
 | `TAPDB_ENV` | Active environment name used by the CLI (e.g. `dev`, `test`, `prod`) | — |
-| `TAPDB_CONFIG_PATH` | Path to `tapdb-config.yaml`/`.json` for CLI environment settings | — |
+| `TAPDB_DATABASE_NAME` | Optional config namespace key; when set, CLI prefers `tapdb-config-<name>.yaml` | — |
+| `TAPDB_<ENV>_COGNITO_USER_POOL_ID` | Optional override for env-bound Cognito pool ID | — |
+| `TAPDB_CONFIG_PATH` | Explicit path to TAPDB CLI config (`tapdb-config*.yaml`/`.json`) | — |
 | `TAPDB_TEST_DSN` | Postgres DSN enabling integration tests (`tests/test_integration.py`) | — |
 | `TAPDB_SESSION_SECRET` | **Prod admin UI required**: session secret | — |
 | `TAPDB_ADMIN_ALLOWED_ORIGINS` | **Prod admin UI required**: comma-separated CORS origins | — |
@@ -422,15 +426,27 @@ tapdb db setup dev
 
 The CLI can read per-environment DB settings from:
 
+- `~/.config/tapdb/tapdb-config-<database-name>.yaml` (when `--database-name` or `TAPDB_DATABASE_NAME` is set)
 - `~/.config/tapdb/tapdb-config.yaml` (default)
-- `./config/tapdb-config.yaml` (repo-local)
+- `./config/tapdb-config-<database-name>.yaml` (repo-local scoped config)
+- `./config/tapdb-config.yaml` (repo-local default)
 - or `TAPDB_CONFIG_PATH=/path/to/tapdb-config.yaml`
 
 Resolution order (highest precedence first):
 
 1. `TAPDB_<ENV>_*` environment variables (e.g. `TAPDB_DEV_HOST`)
 2. `PG*` environment variables
-3. `tapdb-config.yaml` (searched in: `~/.config/tapdb/`, then `./config/`)
+3. TAPDB config files in search order:
+   - `tapdb-config-<database-name>.yaml` (user then repo, when scoped name is set)
+   - `tapdb-config.yaml` (user then repo)
+
+To select a scoped config namespace:
+
+```bash
+tapdb --database-name atlas info
+# equivalent:
+TAPDB_DATABASE_NAME=atlas tapdb info
+```
 
 An example config is included at: `./config/tapdb-config-example.yaml`
 
@@ -443,12 +459,50 @@ environments:
     port: 5432
     user: daylily
     database: tapdb_dev
+    cognito_user_pool_id: us-east-1_xxxxxxxxx
 ```
 
 Supported file shapes:
 
 - `{"dev": {...}, "test": {...}, "prod": {...}}`
 - or `{"environments": {"dev": {...}}}`
+
+### Admin Auth (Cognito via daycog)
+
+TAPDB Admin login uses `daylily-cognito` and resolves Cognito runtime settings from
+daycog-managed env files:
+- `~/.config/daycog/<pool-name>.<region>.env` (pool-selected app context)
+- `~/.config/daycog/<pool-name>.<region>.<app-name>.env` (app-specific context)
+- `~/.config/daycog/default.env` (global default context)
+
+TAPDB config stores only:
+
+- `environments.<env>.cognito_user_pool_id`
+
+Typical setup:
+
+```bash
+# Create/reuse pool + app client and bind pool ID into tapdb config
+# (AWS profile must be provided via --profile or AWS_PROFILE)
+tapdb cognito setup dev \
+  --region us-east-1 \
+  --profile my-aws-profile \
+  --autoprovision \
+  --client-name tapdb-dev-users-client
+
+# Create user with permanent password
+tapdb cognito add-user dev user@example.com --password 'SecurePass123' --no-verify
+```
+
+`tapdb cognito` delegates lifecycle operations to `daycog` (0.1.21 patterns),
+so multiple apps on the same user account can coexist without config collisions.
+`tapdb cognito status` also reports daycog metadata including client name and
+callback/logout URLs when available.
+
+GUI behavior:
+- `/login` authenticates against Cognito.
+- `/signup` creates a Cognito user and automatically provisions `tapdb_user`.
+- First successful Cognito login auto-provisions `tapdb_user` when missing.
 
 ### Admin UI (prod hardening)
 
@@ -524,7 +578,7 @@ For a quick local Postgres (recommended):
 ```bash
 tapdb pg init test
 tapdb pg start-local test
-tapdb pg create test
+tapdb db create test
 
 export TAPDB_TEST_DSN="postgresql://$USER@localhost:5433/tapdb_test"
 ```
@@ -594,7 +648,7 @@ Or run in foreground with auto-reload for development:
 ```bash
 tapdb ui start --reload --foreground
 # Or directly:
-uvicorn admin.main:app --reload --port 8000
+uvicorn admin.main:app --reload --port 8911
 ```
 
 ### CLI Quickstart
@@ -605,21 +659,13 @@ The fastest way to get a local TAPDB instance running:
 # 1. Activate environment
 source tapdb_activate.sh
 
-# 2. Initialize and start local PostgreSQL
-# If initdb/pg_ctl are missing, install PostgreSQL tools via conda:
-#   conda install -c conda-forge postgresql
-tapdb pg init dev           # Creates ./postgres_data/dev/
-tapdb pg start-local dev    # Starts PostgreSQL on port 5432
+# 2. Set active target and bootstrap in one command
+export TAPDB_ENV=dev
+tapdb bootstrap local
 
-# 3. Create database, apply schema, and seed templates
-tapdb db setup dev
-
-# 4. Verify everything is working
-tapdb db status dev
-
-# 5. Start the admin UI (optional)
-tapdb ui start
-# Open http://localhost:8000 in your browser
+# 3. Verify everything is working
+tapdb db schema status dev
+# Open http://localhost:8911 in your browser
 ```
 
 To stop everything:
@@ -645,6 +691,11 @@ tapdb --help                 # Show all commands
 tapdb version                # Show version
 tapdb info                   # Show config and status
 
+# End-to-end bootstrap (TAPDB_ENV must be set)
+tapdb bootstrap local        # Local runtime + db + schema + seed + UI
+tapdb bootstrap local --no-gui
+tapdb bootstrap aurora --cluster tapdb-dev --region us-west-2
+
 # Local PostgreSQL (data-dir based; requires initdb/pg_ctl on PATH; conda recommended)
 tapdb pg init <env>          # Initialize data directory (dev/test only)
 tapdb pg start-local <env>   # Start local PostgreSQL instance
@@ -658,17 +709,17 @@ tapdb pg logs                # View logs (--follow/-f to tail)
 tapdb pg restart             # Restart system PostgreSQL
 
 # Database management (env: dev | test | prod)
-tapdb pg create <env>        # Create empty database (e.g., tapdb_dev)
-tapdb pg delete <env>        # Delete database (⚠️ destructive)
-tapdb db validate-config     # Validate template JSON config files (no database required)
-tapdb db create <env>        # Apply TAPDB schema to existing database
-tapdb db seed <env>          # Seed templates from config/ directory
+tapdb db create <env>        # Create empty database (e.g., tapdb_dev)
+tapdb db delete <env>        # Delete database (⚠️ destructive)
 tapdb db setup <env>         # Full setup: create db + schema + seed (recommended)
-tapdb db status <env>        # Check schema status and row counts
-tapdb db nuke <env>          # Drop all tables (⚠️ destructive)
-tapdb db backup <env>        # Backup database (--output/-o FILE)
-tapdb db restore <env>       # Restore from backup (--input/-i FILE)
-tapdb db migrate <env>       # Apply schema migrations
+tapdb db schema apply <env>  # Apply TAPDB schema to existing database
+tapdb db schema status <env> # Check schema status and row counts
+tapdb db schema reset <env>  # Drop TAPDB schema objects (⚠️ destructive)
+tapdb db schema migrate <env># Apply schema migrations
+tapdb db data seed <env>     # Seed templates from config/ directory
+tapdb db data backup <env>   # Backup database (--output/-o FILE)
+tapdb db data restore <env>  # Restore from backup (--input/-i FILE)
+tapdb db config validate     # Validate template JSON config files (no DB required)
 
 # User management
 tapdb user list              # List users
@@ -678,6 +729,24 @@ tapdb user deactivate        # Disable login
 tapdb user activate          # Re-enable login
 tapdb user set-password      # Set password
 tapdb user delete            # Permanently delete (⚠️ destructive)
+# Note: Admin UI authentication is Cognito-based; tapdb users are app roles/metadata.
+
+# Cognito integration (delegates to daycog; stores only pool-id in tapdb config)
+tapdb cognito setup <env>    # daycog 0.1.21 setup wrapper (pool/client/callback policy)
+tapdb cognito setup-with-google <env> [google flags]
+tapdb cognito bind <env>     # Bind existing pool ID to env
+tapdb cognito status <env>   # Show pool binding and mapped daycog env file
+tapdb cognito list-pools <env>
+tapdb cognito add-user <env> <email> --password <pw> [--role user|admin] [--no-verify]
+tapdb cognito list-apps <env>
+tapdb cognito add-app <env> --app-name <name> --callback-url <url> [--set-default]
+tapdb cognito edit-app <env> (--app-name <name>|--client-id <id>) [--new-app-name <name>]
+tapdb cognito remove-app <env> (--app-name <name>|--client-id <id>) [--force]
+tapdb cognito add-google-idp <env> (--app-name <name>|--client-id <id>) [google creds flags]
+tapdb cognito fix-auth-flows <env>
+tapdb cognito config print <env>
+tapdb cognito config create <env>
+tapdb cognito config update <env>
 
 # Admin UI
 tapdb ui start               # Start admin UI (background)
@@ -694,12 +763,27 @@ tapdb aurora list            # List all tapdb Aurora stacks in a region
 tapdb aurora delete <env>    # Tear down Aurora CloudFormation stack
 ```
 
+### CLI Migration (Duplicate Commands Removed)
+
+| Old command | New canonical command |
+|-------------|-----------------------|
+| `tapdb pg create <env>` | `tapdb db create <env>` |
+| `tapdb pg delete <env>` | `tapdb db delete <env>` |
+| `tapdb db create <env>` (schema apply) | `tapdb db schema apply <env>` |
+| `tapdb db status <env>` | `tapdb db schema status <env>` |
+| `tapdb db nuke <env>` | `tapdb db schema reset <env>` |
+| `tapdb db migrate <env>` | `tapdb db schema migrate <env>` |
+| `tapdb db seed <env>` | `tapdb db data seed <env>` |
+| `tapdb db backup <env>` | `tapdb db data backup <env>` |
+| `tapdb db restore <env>` | `tapdb db data restore <env>` |
+| `tapdb db validate-config` | `tapdb db config validate` |
+
 ### Backup & Recovery
 
 TAPDB includes thin wrappers around PostgreSQL client tools:
 
-- `tapdb db backup <env>` uses `pg_dump` and writes an **SQL** file
-- `tapdb db restore <env>` replays that file using `psql` (`ON_ERROR_STOP=1`)
+- `tapdb db data backup <env>` uses `pg_dump` and writes an **SQL** file
+- `tapdb db data restore <env>` replays that file using `psql` (`ON_ERROR_STOP=1`)
 
 What is included by default (table-limited logical backup):
 - `generic_template`
@@ -710,10 +794,10 @@ What is included by default (table-limited logical backup):
 Notes / operational guidance:
 - These commands require `pg_dump` / `psql` on your `PATH` (PostgreSQL client install).
 - For most workflows, prefer **data-only** backups and restore into an existing TAPDB schema:
-  - Backup: `tapdb db backup <env> --data-only -o tapdb_<env>.sql`
-  - Ensure schema exists: `tapdb db create <env>` (or `tapdb db setup <env>`)
-  - Restore: `tapdb db restore <env> -i tapdb_<env>.sql --force`
-- `restore` does not automatically drop tables; for a clean restore, run `tapdb db nuke <env>` (or recreate the database) before restoring.
+  - Backup: `tapdb db data backup <env> --data-only -o tapdb_<env>.sql`
+  - Ensure schema exists: `tapdb db schema apply <env>` (or `tapdb db setup <env>`)
+  - Restore: `tapdb db data restore <env> -i tapdb_<env>.sql --force`
+- `restore` does not automatically drop tables; for a clean restore, run `tapdb db schema reset <env>` (or recreate the database) before restoring.
 
 ### Environments
 
@@ -793,20 +877,17 @@ TAPDB can provision and manage Aurora PostgreSQL clusters on AWS via CloudFormat
 ### Aurora Quick Start
 
 ```bash
-# 1. Provision an Aurora cluster (takes ~10-15 minutes)
-tapdb aurora create dev --region us-east-1 --instance-class db.t4g.medium
+# 1. Set active TAPDB target
+export TAPDB_ENV=dev
 
-# 2. Check cluster status and get endpoint
-tapdb aurora status dev --region us-east-1
+# 2. Bootstrap Aurora end-to-end (provision + schema + seed + UI)
+tapdb bootstrap aurora --cluster tapdb-dev --region us-east-1
 
-# 3. Deploy TAPDB schema to the Aurora cluster
-tapdb db setup dev
-
-# 4. Verify schema and row counts
-tapdb db status dev
+# 3. Verify schema and row counts
+tapdb db schema status dev
 ```
 
-The `create` command provisions a full CloudFormation stack, waits for completion, and writes connection details to `~/.config/tapdb/tapdb-config.yaml`.
+The `create` command provisions a full CloudFormation stack, waits for completion, and writes connection details to the active TAPDB config path (for example `~/.config/tapdb/tapdb-config.yaml`, or `tapdb-config-<database-name>.yaml` when scoped).
 
 ### Aurora CLI Command Reference
 
@@ -911,7 +992,7 @@ daylily_tapdb/aurora/
 - Use `--no-publicly-accessible` for VPC-only access
 
 **Credential storage:**
-- Connection config written to `~/.config/tapdb/tapdb-config.yaml`
+- Connection config written to the active TAPDB config file (default: `~/.config/tapdb/tapdb-config.yaml`, or scoped `tapdb-config-<database-name>.yaml`)
 - Secrets Manager ARN stored in CloudFormation outputs (no plaintext passwords on disk)
 
 ### Cost Considerations
@@ -965,7 +1046,7 @@ TAPDB passes database credentials to `psql` via the `PGPASSWORD` environment var
 **Mitigations:**
 - IAM auth tokens (the default for Aurora) are short-lived (~15 minutes)
 - For password-based auth, consider using a [`.pgpass` file](https://www.postgresql.org/docs/current/libpq-pgpass.html) as an alternative
-- The config file (`~/.config/tapdb/tapdb-config.yaml`) is written with `0600` permissions
+- The TAPDB config file is written with `0600` permissions
 
 #### Network Security
 
@@ -1062,4 +1143,3 @@ MIT License — see [LICENSE](LICENSE) for details.
 ---
 
 **Daylily Informatics** — [daylilyinformatics.com](https://daylilyinformatics.com)
-

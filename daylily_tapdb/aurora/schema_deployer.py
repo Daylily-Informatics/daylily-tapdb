@@ -111,23 +111,23 @@ class AuroraSchemaDeployer:
         Returns:
             Tuple of (success, output).
         """
-        cmd, env_vars = cls._build_psql_env(
-            host=host,
-            port=port,
-            user=user,
-            database=database,
-            region=region,
-            iam_auth=iam_auth,
-            secret_arn=secret_arn,
-            password=password,
-        )
-
-        if file:
-            cmd.extend(["-f", str(file)])
-        elif sql:
-            cmd.extend(["-c", sql])
-
         try:
+            cmd, env_vars = cls._build_psql_env(
+                host=host,
+                port=port,
+                user=user,
+                database=database,
+                region=region,
+                iam_auth=iam_auth,
+                secret_arn=secret_arn,
+                password=password,
+            )
+
+            if file:
+                cmd.extend(["-f", str(file)])
+            elif sql:
+                cmd.extend(["-c", sql])
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,

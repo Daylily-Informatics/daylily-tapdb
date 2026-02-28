@@ -2,8 +2,10 @@
 
 Config search order:
 1) TAPDB_CONFIG_PATH (explicit override)
-2) ~/.config/tapdb/tapdb-config.yaml
-3) ./config/tapdb-config.yaml (repo-local)
+2) ~/.config/tapdb/tapdb-config-<database_name>.yaml (if set)
+3) ~/.config/tapdb/tapdb-config.yaml
+4) ./config/tapdb-config-<database_name>.yaml (if set, repo-local)
+5) ./config/tapdb-config.yaml (repo-local)
 
 Notes:
 - We intentionally support JSON content inside the .yaml file (valid YAML 1.2),
@@ -20,8 +22,36 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "tapdb" / "tapdb-config.yaml"
-REPO_CONFIG_PATH = Path.cwd() / "config" / "tapdb-config.yaml"
+DEFAULT_CONFIG_FILENAME = "tapdb-config.yaml"
+
+
+def _default_config_path() -> Path:
+    """Return the user-level TAPDB config path for the current HOME."""
+    return Path.home() / ".config" / "tapdb" / DEFAULT_CONFIG_FILENAME
+
+
+def _repo_config_path() -> Path:
+    """Return the repo-local TAPDB config path for the current CWD."""
+    return Path.cwd() / "config" / DEFAULT_CONFIG_FILENAME
+
+
+def _database_name_for_config() -> str | None:
+    """Return optional database name key for scoped config filenames."""
+    val = os.environ.get("TAPDB_DATABASE_NAME")
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    return s
+
+
+def _scoped_config_paths(database_name: str) -> list[Path]:
+    suffix = f"tapdb-config-{database_name}.yaml"
+    return [
+        Path.home() / ".config" / "tapdb" / suffix,
+        Path.cwd() / "config" / suffix,
+    ]
 
 
 def get_config_path() -> Path:
@@ -42,7 +72,20 @@ def get_config_paths() -> list[Path]:
     override = os.environ.get("TAPDB_CONFIG_PATH")
     if override:
         return [Path(override).expanduser()]
-    return [DEFAULT_CONFIG_PATH, REPO_CONFIG_PATH]
+
+    default_user = _default_config_path()
+    default_repo = _repo_config_path()
+    db_name = _database_name_for_config()
+    if db_name:
+        user_scoped, repo_scoped = _scoped_config_paths(db_name)
+        return [
+            user_scoped,
+            default_user,
+            repo_scoped,
+            default_repo,
+        ]
+
+    return [default_user, default_repo]
 
 
 def _load_yaml_or_json(path: Path) -> dict[str, Any]:
@@ -102,8 +145,11 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
     - ``"local"`` (default) for standard PostgreSQL environments
     - ``"aurora"`` when the config file sets ``engine_type: aurora``
 
-    Aurora environments additionally return ``region``,
-    ``cluster_identifier``, ``iam_auth``, and ``ssl`` keys.
+    Optional authentication integration fields:
+    - ``cognito_user_pool_id`` for TAPDB Admin Cognito auth binding.
+
+    Aurora environments additionally return ``region``, ``cluster_identifier``,
+    ``iam_auth``, and ``ssl`` keys.
     """
 
     env_key = env_name.lower()
@@ -147,6 +193,10 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
         ),
         "database": os.environ.get(
             f"{env_prefix}DATABASE", _file_str("database") or f"tapdb_{env_key}"
+        ),
+        "cognito_user_pool_id": os.environ.get(
+            f"{env_prefix}COGNITO_USER_POOL_ID",
+            _file_str("cognito_user_pool_id") or "",
         ),
     }
 

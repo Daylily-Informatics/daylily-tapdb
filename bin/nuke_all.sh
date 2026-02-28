@@ -9,7 +9,7 @@
 #   - unset AWS env vars (does NOT delete AWS resources)
 #
 # Optional FULL deletion (explicit flags + double confirmation required):
-#   - remote DB deletion via `tapdb pg delete <env>`
+#   - remote DB deletion via `tapdb db delete <env>`
 #   - AWS deletions (RDS/Secrets/S3) ONLY for explicit IDs you provide
 
 # This script is intended to run from either bash or zsh.
@@ -38,7 +38,7 @@ Modes:
   --full          Full deletion: local reset + remote DB deletion + AWS deletion
 
 Full deletion sub-flags (you can also use these without --full):
-  --remote-db     Run `tapdb pg delete` for selected envs (default envs: dev test; prod requires explicit opt-in)
+  --remote-db     Run `tapdb db delete` for selected envs (default envs: dev test; prod requires explicit opt-in)
   --aws           Delete AWS resources for explicit IDs provided via env vars
 
 Other flags:
@@ -214,14 +214,14 @@ if [ "${_tapdb_do_remote_db}" -eq 1 ]; then
   for _tapdb_env in ${_tapdb_pg_envs}; do
     if [ "${_tapdb_env}" = "prod" ]; then
       _tapdb_warn "PRODUCTION ENV SELECTED"
-      if ! _tapdb_double_confirm "Run 'tapdb pg delete prod'?"; then
+      if ! _tapdb_double_confirm "Run 'tapdb db delete prod'?"; then
         _tapdb_warn "Skipping prod."
         continue
       fi
     fi
-    _tapdb_warn "About to run: tapdb pg delete ${_tapdb_env}"
-    if _tapdb_confirm "Delete configured database for env '${_tapdb_env}' via tapdb pg delete?"; then
-      _tapdb_run tapdb pg delete "${_tapdb_env}"
+    _tapdb_warn "About to run: tapdb db delete ${_tapdb_env}"
+    if _tapdb_confirm "Delete configured database for env '${_tapdb_env}' via tapdb db delete?"; then
+      _tapdb_run tapdb db delete "${_tapdb_env}"
     fi
   done
 fi

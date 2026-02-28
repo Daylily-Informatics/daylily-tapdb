@@ -4,29 +4,16 @@ import os
 import platform
 import shutil
 import subprocess
-from enum import Enum
 from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.prompt import Confirm
 
-from daylily_tapdb.cli.db_config import get_db_config_for_env
+from daylily_tapdb.cli.db import Environment, _get_project_root
 
 console = Console()
 
 pg_app = typer.Typer(help="PostgreSQL service management commands")
-
-
-def _get_project_root() -> Path:
-    """Get the project root directory."""
-    # Try to find project root by looking for pyproject.toml
-    current = Path(__file__).resolve()
-    for parent in current.parents:
-        if (parent / "pyproject.toml").exists():
-            return parent
-    # Fall back to cwd
-    return Path.cwd()
 
 
 def _get_postgres_data_dir(env: "Environment") -> Path:
@@ -42,72 +29,6 @@ def _get_postgres_data_dir(env: "Environment") -> Path:
         # dev/test use project-local data directory
         return _get_project_root() / "postgres_data" / env.value
 
-
-# Environment enum (mirrors db.py)
-class Environment(str, Enum):
-    dev = "dev"
-    test = "test"
-    prod = "prod"
-
-
-def _get_db_config(env: Environment) -> dict:
-    """Get database configuration for environment."""
-    return get_db_config_for_env(env.value)
-
-
-def _run_psql(
-    sql: str, database: str = "postgres", config: dict = None
-) -> tuple[bool, str]:
-    """Run a SQL command via psql. Returns (success, output)."""
-    if config is None:
-        config = {
-            "host": "localhost",
-            "port": "5432",
-            "user": os.environ.get("USER", "postgres"),
-        }
-
-    env = os.environ.copy()
-    if config.get("password"):
-        env["PGPASSWORD"] = config["password"]
-
-    cmd = [
-        "psql",
-        "-X",  # do not read ~/.psqlrc
-        "-q",  # quiet
-        "-t",  # tuples only
-        "-A",  # unaligned
-        "-h",
-        config["host"],
-        "-p",
-        str(config["port"]),
-        "-U",
-        config["user"],
-        "-d",
-        database,
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-c",
-        sql,
-    ]
-
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, env=env, timeout=30
-        )
-        return result.returncode == 0, result.stdout.strip() or result.stderr.strip()
-    except FileNotFoundError:
-        return False, "psql not found. Install PostgreSQL client tools."
-    except subprocess.TimeoutExpired:
-        return False, "Command timed out"
-    except Exception as e:
-        return False, str(e)
-
-
-def _database_exists(db_name: str, config: dict) -> bool:
-    """Check if a database exists."""
-    sql = f"SELECT 1 FROM pg_database WHERE datname = '{db_name}'"
-    success, output = _run_psql(sql, "postgres", config)
-    return success and output.strip() == "1"
 
 
 def _get_pg_service_cmd() -> tuple[str, list[str], list[str], Path]:
@@ -430,146 +351,6 @@ def pg_restart():
 
     time.sleep(2)
     pg_start()
-
-
-@pg_app.command("create")
-def pg_create(
-    env: Environment = typer.Argument(..., help="Target environment"),
-    owner: str = typer.Option(
-        None, "--owner", "-o", help="Database owner (default: connection user)"
-    ),
-):
-    """Create the TAPDB database for the specified environment.
-
-    Creates an empty PostgreSQL database named tapdb_<env> (e.g., tapdb_dev).
-    Use 'tapdb db create <env>' to initialize the schema after creating the database.
-    """
-    config = _get_db_config(env)
-    db_name = config["database"]
-    db_owner = owner or config["user"]
-
-    # Check connectivity to the configured server
-    ok, out = _run_psql("SELECT 1", "postgres", config)
-    if not ok:
-        console.print("[red]✗[/red] Cannot connect to PostgreSQL for this environment")
-        console.print(f"  {out}")
-        if env in (Environment.dev, Environment.test):
-            console.print(
-                "  If using local dev/test:"
-                f" [cyan]tapdb pg start-local {env.value}[/cyan]"
-            )
-            console.print(
-                "  If tools are missing:"
-                " [cyan]conda install -c conda-forge"
-                " postgresql[/cyan]"
-            )
-        else:
-            console.print(
-                "  Verify TAPDB_PROD_* connection settings and network access"
-            )
-        raise typer.Exit(1)
-
-    # Check if database already exists
-    if _database_exists(db_name, config):
-        console.print(f"[yellow]⚠[/yellow] Database '{db_name}' already exists")
-        return
-
-    console.print(f"[yellow]►[/yellow] Creating database '{db_name}'...")
-
-    # Create the database
-    sql = f'CREATE DATABASE "{db_name}" OWNER "{db_owner}"'
-    success, output = _run_psql(sql, "postgres", config)
-
-    if success:
-        console.print(f"[green]✓[/green] Database '{db_name}' created")
-        console.print(f"  Owner: {db_owner}")
-        console.print(
-            f"\n  Next: [cyan]tapdb db create {env.value}[/cyan] to initialize schema"
-        )
-    else:
-        console.print("[red]✗[/red] Failed to create database")
-        console.print(f"  {output}")
-        raise typer.Exit(1)
-
-
-@pg_app.command("delete")
-def pg_delete(
-    env: Environment = typer.Argument(..., help="Target environment"),
-    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
-):
-    """Delete the TAPDB database for the specified environment.
-
-    ⚠️  DESTRUCTIVE: This permanently deletes the database and all its data!
-    """
-    config = _get_db_config(env)
-    db_name = config["database"]
-
-    # Check connectivity to the configured server
-    ok, out = _run_psql("SELECT 1", "postgres", config)
-    if not ok:
-        console.print("[red]✗[/red] Cannot connect to PostgreSQL for this environment")
-        console.print(f"  {out}")
-        if env in (Environment.dev, Environment.test):
-            console.print(
-                "  If using local dev/test:"
-                f" [cyan]tapdb pg start-local {env.value}[/cyan]"
-            )
-            console.print(
-                "  If tools are missing:"
-                " [cyan]conda install -c conda-forge"
-                " postgresql[/cyan]"
-            )
-        else:
-            console.print(
-                "  Verify TAPDB_PROD_* connection settings and network access"
-            )
-        raise typer.Exit(1)
-
-    # Check if database exists
-    if not _database_exists(db_name, config):
-        console.print(f"[yellow]⚠[/yellow] Database '{db_name}' does not exist")
-        return
-
-    # Safety confirmation for non-dev environments
-    if not force:
-        console.print("\n[bold red]⚠️  WARNING: DESTRUCTIVE OPERATION[/bold red]")
-        console.print(f"This will permanently delete database: [bold]{db_name}[/bold]")
-        console.print("All data will be lost!\n")
-
-        if env == Environment.prod:
-            console.print("[bold red]🚨 THIS IS A PRODUCTION DATABASE! 🚨[/bold red]\n")
-
-        if not Confirm.ask(f"Delete database '{db_name}'?", default=False):
-            console.print("[dim]Aborted.[/dim]")
-            raise typer.Exit(0)
-
-        # Second confirmation for prod
-        if env == Environment.prod:
-            typed = typer.prompt("Type the database name to confirm")
-            if typed != db_name:
-                console.print("[red]✗[/red] Name mismatch. Aborted.")
-                raise typer.Exit(1)
-
-    console.print(f"[yellow]►[/yellow] Deleting database '{db_name}'...")
-
-    # Terminate existing connections
-    term_sql = f"""
-    SELECT pg_terminate_backend(pid)
-    FROM pg_stat_activity
-    WHERE datname = '{db_name}' AND pid <> pg_backend_pid()
-    """
-    _run_psql(term_sql, "postgres", config)
-
-    # Drop the database
-    sql = f'DROP DATABASE "{db_name}"'
-    success, output = _run_psql(sql, "postgres", config)
-
-    if success:
-        console.print(f"[green]✓[/green] Database '{db_name}' deleted")
-    else:
-        console.print("[red]✗[/red] Failed to delete database")
-        console.print(f"  {output}")
-        raise typer.Exit(1)
 
 
 @pg_app.command("init")

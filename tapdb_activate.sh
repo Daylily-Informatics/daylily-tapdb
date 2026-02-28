@@ -171,20 +171,22 @@ printf "${_tapdb_bold}Available Commands:${_tapdb_reset}\n"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg init <env>" "Initialize local PostgreSQL data dir"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg start-local <env>" "Start local PostgreSQL (dev/test)"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg stop-local <env>" "Stop local PostgreSQL"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg create <env>" "Create empty database"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg delete <env>" "Delete database (⚠️ destructive)"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg start|stop|status" "Manage system PostgreSQL"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db create <env>" "Initialize TAPDB schema"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db seed <env>" "Seed templates from config/"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db setup <env>" "Full setup (create+schema+seed)"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db status <env>" "Check schema status"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db nuke <env>" "Drop all tables (⚠️ destructive)"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db backup <env>" "Backup database"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb bootstrap local" "One-command local bootstrap"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db create <env>" "Create empty database"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db delete <env>" "Delete database (⚠️ destructive)"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db schema apply <env>" "Apply TAPDB schema"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db data seed <env>" "Seed templates from config/"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db schema status <env>" "Check schema status"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db schema reset <env>" "Drop schema objects (⚠️ destructive)"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db data backup <env>" "Backup database data"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb cognito setup <env>" "Setup Cognito pool + bind pool-id"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb cognito add-user <env> <email>" "Create Cognito user"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb ui start|stop|status" "Manage admin UI server"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb --help" "Full help"
 printf "\n"
 printf "${_tapdb_bold}Environments:${_tapdb_reset} dev | test | prod\n"
-printf "${_tapdb_bold}Quick Start:${_tapdb_reset}  tapdb pg init dev && tapdb pg start-local dev && tapdb db setup dev\n"
+printf "${_tapdb_bold}Quick Start:${_tapdb_reset}  export TAPDB_ENV=dev && tapdb bootstrap local\n"
 printf "\n"
 
 # Show UI status if running
@@ -192,7 +194,7 @@ if [ "${_tapdb_smoke}" != "1" ] && [ -x "${_tapdb_tapdb}" ]; then
     _tapdb_ui_status=$(${_tapdb_tapdb} ui status 2>/dev/null)
     if echo "$_tapdb_ui_status" | grep -q "running"; then
         printf "${_tapdb_green}●${_tapdb_reset} UI Server: ${_tapdb_green}running${_tapdb_reset}\n"
-        printf "  URL: ${_tapdb_cyan}http://127.0.0.1:8000${_tapdb_reset}\n"
+        printf "  URL: ${_tapdb_cyan}http://127.0.0.1:8911${_tapdb_reset}\n"
     else
         printf "${_tapdb_yellow}○${_tapdb_reset} UI Server: not running (start with: ${_tapdb_cyan}tapdb ui start${_tapdb_reset})\n"
     fi
@@ -206,4 +208,3 @@ unset _tapdb_bin_dir _tapdb_tapdb
 unset _tapdb_arg _tapdb_smoke _tapdb_is_interactive
 unset _tapdb_find_repo_root
 unset _tapdb_red _tapdb_green _tapdb_cyan _tapdb_yellow _tapdb_bold _tapdb_reset
-

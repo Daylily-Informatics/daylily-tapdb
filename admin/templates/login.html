@@ -93,6 +93,16 @@
             margin-bottom: 1rem;
             text-align: center;
         }
+        .signup-link {
+            display: block;
+            text-align: center;
+            margin-top: 1rem;
+            color: var(--text-muted);
+            text-decoration: none;
+        }
+        .signup-link:hover {
+            color: var(--secondary-color);
+        }
     </style>
 </head>
 <body>
@@ -108,8 +118,8 @@
         
         <form method="POST" action="/login">
             <div class="form-group">
-                <label for="username">Username</label>
-                <input type="text" id="username" name="username" required autofocus>
+                <label for="username">Email or Username</label>
+                <input type="text" id="username" name="username" required autofocus placeholder="email or username">
             </div>
             <div class="form-group">
                 <label for="password">Password</label>
@@ -117,7 +127,7 @@
             </div>
             <button type="submit" class="btn-login">Sign In</button>
         </form>
+        <a href="/signup" class="signup-link">Create account</a>
     </div>
 </body>
 </html>
-

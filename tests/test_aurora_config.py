@@ -169,3 +169,27 @@ class TestGetDbConfigEngineType:
             assert key in cfg
         assert cfg["host"] == "localhost"
         assert cfg["database"] == "tapdb_dev"
+
+
+class TestConfigPathScoping:
+    def test_database_name_scoped_paths(self, monkeypatch: pytest.MonkeyPatch):
+        from daylily_tapdb.cli.db_config import get_config_paths
+
+        monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
+        monkeypatch.setenv("TAPDB_DATABASE_NAME", "atlas")
+
+        paths = get_config_paths()
+        assert paths[0].name == "tapdb-config-atlas.yaml"
+        assert any(p.name == "tapdb-config.yaml" for p in paths)
+
+    def test_explicit_config_override_beats_scoping(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from daylily_tapdb.cli.db_config import get_config_paths
+
+        override = tmp_path / "custom.yaml"
+        monkeypatch.setenv("TAPDB_DATABASE_NAME", "atlas")
+        monkeypatch.setenv("TAPDB_CONFIG_PATH", str(override))
+
+        paths = get_config_paths()
+        assert paths == [override]
