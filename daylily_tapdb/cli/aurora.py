@@ -93,13 +93,18 @@ def aurora_create(
     ),
     vpc_id: str = typer.Option("", "--vpc-id", help="VPC ID to deploy into"),
     cidr: str = typer.Option(
-        "10.0.0.0/8", "--cidr", help="Ingress CIDR for security group"
+        "0.0.0.0/0", "--cidr", help="Ingress CIDR for security group"
     ),
     cost_center: str = typer.Option(
         "global", "--cost-center", help="LSMC cost center tag"
     ),
     project: Optional[str] = typer.Option(
         None, "--project", help="LSMC project tag (default: tapdb-<region>)"
+    ),
+    publicly_accessible: bool = typer.Option(
+        True,
+        "--publicly-accessible/--no-publicly-accessible",
+        help="Whether the DB instance is publicly accessible (default: True)",
     ),
     no_iam_auth: bool = typer.Option(
         False, "--no-iam-auth", help="Disable IAM database authentication"
@@ -124,6 +129,7 @@ def aurora_create(
         engine_version=engine_version,
         vpc_id=vpc_id,
         iam_auth=not no_iam_auth,
+        publicly_accessible=publicly_accessible,
         tags=tags,
     )
 

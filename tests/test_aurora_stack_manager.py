@@ -261,6 +261,7 @@ class TestCreateStack:
         assert "ClusterIdentifier" in param_keys
         assert "VpcId" in param_keys
         assert "SubnetIds" in param_keys
+        assert "PubliclyAccessible" in param_keys
 
         # SubnetIds should be comma-separated
         subnet_param = next(
@@ -268,6 +269,14 @@ class TestCreateStack:
         )
         assert "subnet-aaa" in subnet_param["ParameterValue"]
         assert "subnet-bbb" in subnet_param["ParameterValue"]
+
+        # PubliclyAccessible defaults to "true"
+        pa_param = next(
+            p
+            for p in call_kwargs["Parameters"]
+            if p["ParameterKey"] == "PubliclyAccessible"
+        )
+        assert pa_param["ParameterValue"] == "true"
 
 
 # ------------------------------------------------------------------

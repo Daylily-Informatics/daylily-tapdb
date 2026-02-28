@@ -8,9 +8,9 @@ from typing import Any
 
 # Defaults
 DEFAULT_INSTANCE_CLASS = "db.r6g.large"
-DEFAULT_ENGINE_VERSION = "15.4"
+DEFAULT_ENGINE_VERSION = "16.6"
 DEFAULT_COST_CENTER = "global"
-DEFAULT_INGRESS_CIDR = "10.0.0.0/8"
+DEFAULT_INGRESS_CIDR = "0.0.0.0/0"
 
 
 def _build_tags(
@@ -66,6 +66,12 @@ def _parameters() -> dict[str, Any]:
             "Type": "String",
             "Default": DEFAULT_INGRESS_CIDR,
             "Description": "CIDR block allowed to connect on port 5432",
+        },
+        "PubliclyAccessible": {
+            "Type": "String",
+            "Default": "true",
+            "AllowedValues": ["true", "false"],
+            "Description": "Whether the DB instance is publicly accessible",
         },
         "CostCenter": {
             "Type": "String",
@@ -181,7 +187,9 @@ def _resources() -> dict[str, Any]:
                 "DBInstanceIdentifier": {"Fn::Sub": "${ClusterIdentifier}-writer"},
                 "DBInstanceClass": {"Ref": "InstanceClass"},
                 "Engine": "aurora-postgresql",
-                "PubliclyAccessible": False,
+                "PubliclyAccessible": {
+                    "Fn::If": ["IsPubliclyAccessible", True, False]
+                },
                 "Tags": tags_with_refs,
             },
         },
@@ -222,7 +230,10 @@ def generate_template() -> dict[str, Any]:
         "AWSTemplateFormatVersion": "2010-09-09",
         "Description": "Aurora PostgreSQL cluster for TAPDB",
         "Conditions": {
-            "HasProject": {"Fn::Not": [{"Fn::Equals": [{"Ref": "Project"}, ""]}]}
+            "HasProject": {"Fn::Not": [{"Fn::Equals": [{"Ref": "Project"}, ""]}]},
+            "IsPubliclyAccessible": {
+                "Fn::Equals": [{"Ref": "PubliclyAccessible"}, "true"]
+            },
         },
         "Parameters": _parameters(),
         "Resources": _resources(),
