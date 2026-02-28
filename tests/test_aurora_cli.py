@@ -115,8 +115,9 @@ class TestAuroraCreate:
 
 
 class TestAuroraDelete:
+    @patch("boto3.client")
     @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_delete_force(self, mock_mgr_cls, app):
+    def test_delete_force(self, mock_mgr_cls, mock_boto3_client, app):
         mock_mgr = _mock_stack_manager()
         mock_mgr_cls.return_value = mock_mgr
 
@@ -126,8 +127,9 @@ class TestAuroraDelete:
             "tapdb-dev", retain_networking=True
         )
 
+    @patch("boto3.client")
     @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_delete_no_retain(self, mock_mgr_cls, app):
+    def test_delete_no_retain(self, mock_mgr_cls, mock_boto3_client, app):
         mock_mgr = _mock_stack_manager()
         mock_mgr_cls.return_value = mock_mgr
 
@@ -139,8 +141,9 @@ class TestAuroraDelete:
             "tapdb-dev", retain_networking=False
         )
 
+    @patch("boto3.client")
     @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_delete_failure(self, mock_mgr_cls, app):
+    def test_delete_failure(self, mock_mgr_cls, mock_boto3_client, app):
         mock_mgr_cls.return_value.delete_stack.side_effect = RuntimeError("boom")
         result = runner.invoke(app, ["aurora", "delete", "dev", "--force"])
         assert result.exit_code == 1
