@@ -167,6 +167,7 @@ For Hosted UI domain control (daycog 0.1.22+), use:
 ### Admin UI (`tapdb ui`)
 ```sh
 tapdb ui start
+tapdb ui mkcert
 tapdb ui stop
 tapdb ui status
 tapdb ui logs
@@ -174,6 +175,21 @@ tapdb ui restart
 ```
 
 Default UI port is `8911`.
+
+UI is HTTPS-first. For browser-trusted local certs:
+
+```sh
+tapdb ui mkcert
+tapdb ui restart --port 8911
+```
+
+Defaults:
+- cert: `~/.tapdb/certs/localhost.crt`
+- key: `~/.tapdb/certs/localhost.key`
+
+Override paths (if needed):
+- `TAPDB_UI_SSL_CERT`
+- `TAPDB_UI_SSL_KEY`
 
 ### Aurora infra (`tapdb aurora`)
 ```sh
