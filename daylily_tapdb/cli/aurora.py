@@ -40,9 +40,20 @@ def _stack_name_for_env(env: str) -> str:
     return f"tapdb-{env}"
 
 
-def _update_config_file(env: str, endpoint: str, port: str, region: str) -> None:
-    """Update ~/.config/tapdb/tapdb-config.yaml with Aurora endpoint info."""
-    config_path = Path.home() / ".config" / "tapdb" / "tapdb-config.yaml"
+def _update_config_file(
+    env: str,
+    endpoint: str,
+    port: str,
+    region: str,
+    cluster_identifier: str | None = None,
+) -> None:
+    """Update TAPDB config file with Aurora endpoint info.
+
+    Honors TAPDB_CONFIG_PATH override and TAPDB_DATABASE_NAME scoping.
+    """
+    from daylily_tapdb.cli.db_config import get_config_paths
+
+    config_path = get_config_paths()[0]
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing: dict = {}
@@ -65,7 +76,7 @@ def _update_config_file(env: str, endpoint: str, port: str, region: str) -> None
         "database": f"tapdb_{env}",
         "user": "tapdb_admin",
         "region": region,
-        "cluster_identifier": env,
+        "cluster_identifier": cluster_identifier or env,
         "iam_auth": "true",
         "ssl": "true",
     }

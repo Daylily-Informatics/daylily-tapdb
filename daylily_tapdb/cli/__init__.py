@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -12,11 +13,90 @@ from typing import Optional
 # PID file location
 PID_FILE = Path.home() / ".tapdb" / "ui.pid"
 LOG_FILE = Path.home() / ".tapdb" / "ui.log"
+DEFAULT_UI_PORT = 8911
+DEFAULT_UI_SCHEME = "https"
+DEFAULT_UI_TLS_DIR = Path.home() / ".tapdb" / "certs"
+DEFAULT_UI_TLS_CERT = DEFAULT_UI_TLS_DIR / "localhost.crt"
+DEFAULT_UI_TLS_KEY = DEFAULT_UI_TLS_DIR / "localhost.key"
 
 
 def _ensure_dir():
     """Ensure .tapdb directory exists."""
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _resolve_tls_paths() -> tuple[Path, Path]:
+    """Resolve TLS cert/key paths, allowing env overrides."""
+    cert = Path(os.environ.get("TAPDB_UI_SSL_CERT", str(DEFAULT_UI_TLS_CERT)))
+    key = Path(os.environ.get("TAPDB_UI_SSL_KEY", str(DEFAULT_UI_TLS_KEY)))
+    return cert, key
+
+
+def _ensure_tls_certificates(host: str) -> tuple[Path, Path]:
+    """Ensure TLS cert/key exist for HTTPS UI startup."""
+    cert_path, key_path = _resolve_tls_paths()
+    if cert_path.exists() and key_path.exists():
+        return cert_path, key_path
+
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    openssl = shutil.which("openssl")
+    if not openssl:
+        raise RuntimeError(
+            "openssl is required to start the UI over HTTPS. "
+            "Install openssl or set TAPDB_UI_SSL_CERT/TAPDB_UI_SSL_KEY."
+        )
+
+    san = f"DNS:localhost,IP:127.0.0.1,DNS:{host}"
+    cmd = [
+        openssl,
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-sha256",
+        "-days",
+        "3650",
+        "-nodes",
+        "-subj",
+        "/CN=localhost",
+        "-addext",
+        f"subjectAltName={san}",
+        "-keyout",
+        str(key_path),
+        "-out",
+        str(cert_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        # Fallback for older OpenSSL builds without -addext support.
+        fallback_cmd = [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-sha256",
+            "-days",
+            "3650",
+            "-nodes",
+            "-subj",
+            "/CN=localhost",
+            "-keyout",
+            str(key_path),
+            "-out",
+            str(cert_path),
+        ]
+        fallback = subprocess.run(fallback_cmd, capture_output=True, text=True)
+        if fallback.returncode != 0:
+            msg = (fallback.stderr or fallback.stdout or "").strip()
+            raise RuntimeError(f"Failed to generate TLS certificate with openssl: {msg}")
+
+    try:
+        os.chmod(key_path, 0o600)
+    except OSError:
+        pass
+    return cert_path, key_path
 
 
 def _get_pid() -> Optional[int]:
@@ -73,8 +153,19 @@ def build_app():
     console = Console()
 
     # Import subcommand modules (require Typer/Rich)
-    from daylily_tapdb.cli.db import db_app
-    from daylily_tapdb.cli.pg import pg_app
+    from daylily_tapdb.cli.db import (
+        Environment as DbEnvironment,
+    )
+    from daylily_tapdb.cli.db import (
+        _create_default_admin,
+        apply_schema,
+        create_database,
+        db_app,
+        run_migrations,
+        seed_templates,
+    )
+    from daylily_tapdb.cli.cognito import cognito_app
+    from daylily_tapdb.cli.pg import pg_app, pg_init, pg_start_local
     from daylily_tapdb.cli.user import user_app
 
     app = typer.Typer(
@@ -83,11 +174,29 @@ def build_app():
         add_completion=True,
     )
 
+    @app.callback()
+    def _root_callback(
+        database_name: Optional[str] = typer.Option(
+            None,
+            "--database-name",
+            help=(
+                "Use database-scoped config file names"
+                " (e.g., ~/.config/tapdb/tapdb-config-<name>.yaml)."
+            ),
+        ),
+    ):
+        """Set global CLI context options."""
+        if database_name:
+            os.environ["TAPDB_DATABASE_NAME"] = database_name
+
+    bootstrap_app = typer.Typer(help="One-command environment bootstrap")
     ui_app = typer.Typer(help="Admin UI management commands")
+    app.add_typer(bootstrap_app, name="bootstrap")
     app.add_typer(ui_app, name="ui")
     app.add_typer(db_app, name="db")
     app.add_typer(pg_app, name="pg")
     app.add_typer(user_app, name="user")
+    app.add_typer(cognito_app, name="cognito")
 
     # Aurora subcommand — always visible, but requires boto3
     _has_boto3 = False
@@ -120,7 +229,7 @@ def build_app():
     @ui_app.command("start")
     def ui_start(
         port: int = typer.Option(
-            8000, "--port", "-p", help="Port to run the server on"
+            DEFAULT_UI_PORT, "--port", "-p", help="Port to run the server on"
         ),
         host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
         reload: bool = typer.Option(False, "--reload", "-r", help="Enable auto-reload"),
@@ -143,12 +252,18 @@ def build_app():
         pid = _get_pid()
         if pid:
             console.print(f"[yellow]⚠[/yellow]  UI server already running (PID {pid})")
-            console.print(f"   URL: [cyan]http://{host}:{port}[/cyan]")
+            console.print(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
             return
 
         try:
             admin_module = _find_admin_module()
         except ValueError as e:
+            console.print(f"[red]✗[/red]  {e}")
+            raise typer.Exit(1)
+
+        try:
+            cert_path, key_path = _ensure_tls_certificates(host)
+        except RuntimeError as e:
             console.print(f"[red]✗[/red]  {e}")
             raise typer.Exit(1)
 
@@ -161,6 +276,10 @@ def build_app():
             host,
             "--port",
             str(port),
+            "--ssl-keyfile",
+            str(key_path),
+            "--ssl-certfile",
+            str(cert_path),
         ]
         if reload:
             cmd.append("--reload")
@@ -182,17 +301,86 @@ def build_app():
 
             PID_FILE.write_text(str(proc.pid))
             console.print(f"[green]✓[/green]  UI server started (PID {proc.pid})")
-            console.print(f"   URL: [cyan]http://{host}:{port}[/cyan]")
+            console.print(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
             console.print(f"   Logs: [dim]{LOG_FILE}[/dim]")
         else:
             console.print(
-                f"[green]✓[/green]  Starting UI server on [cyan]http://{host}:{port}[/cyan]"
+                f"[green]✓[/green]  Starting UI server on "
+                f"[cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]"
             )
             console.print("   Press Ctrl+C to stop\n")
             try:
                 subprocess.run(cmd)
             except KeyboardInterrupt:
                 console.print("\n[yellow]⚠[/yellow]  Server stopped")
+
+    @ui_app.command("mkcert")
+    def ui_mkcert(
+        cert_file: Path = typer.Option(
+            DEFAULT_UI_TLS_CERT,
+            "--cert-file",
+            help="Path to write mkcert-generated TLS certificate",
+        ),
+        key_file: Path = typer.Option(
+            DEFAULT_UI_TLS_KEY,
+            "--key-file",
+            help="Path to write mkcert-generated TLS private key",
+        ),
+    ):
+        """Install mkcert local CA and generate localhost TLS certs for the UI."""
+        mkcert = shutil.which("mkcert")
+        if not mkcert:
+            console.print("[red]✗[/red] mkcert is required for trusted local HTTPS certs.")
+            console.print("  Install mkcert first, then rerun [cyan]tapdb ui mkcert[/cyan].")
+            raise typer.Exit(1)
+
+        cert_path = cert_file.expanduser()
+        key_path = key_file.expanduser()
+        cert_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+
+        install_cmd = [mkcert, "-install"]
+        install_result = subprocess.run(install_cmd, capture_output=True, text=True)
+        if install_result.returncode != 0:
+            msg = (install_result.stderr or install_result.stdout or "").strip()
+            console.print("[red]✗[/red] Failed to install mkcert local CA.")
+            if msg:
+                console.print(f"  [dim]{msg}[/dim]")
+            raise typer.Exit(1)
+
+        generate_cmd = [
+            mkcert,
+            "-cert-file",
+            str(cert_path),
+            "-key-file",
+            str(key_path),
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        ]
+        generate_result = subprocess.run(generate_cmd, capture_output=True, text=True)
+        if generate_result.returncode != 0:
+            msg = (generate_result.stderr or generate_result.stdout or "").strip()
+            console.print("[red]✗[/red] Failed to generate mkcert TLS files.")
+            if msg:
+                console.print(f"  [dim]{msg}[/dim]")
+            raise typer.Exit(1)
+
+        try:
+            os.chmod(key_path, 0o600)
+        except OSError:
+            pass
+
+        console.print("[green]✓[/green] mkcert certificate ready for TAPDB UI HTTPS")
+        console.print(f"   Cert: [dim]{cert_path}[/dim]")
+        console.print(f"   Key:  [dim]{key_path}[/dim]")
+        if cert_path != DEFAULT_UI_TLS_CERT or key_path != DEFAULT_UI_TLS_KEY:
+            console.print("   Set env overrides before start:")
+            console.print(f"   [cyan]export TAPDB_UI_SSL_CERT={cert_path}[/cyan]")
+            console.print(f"   [cyan]export TAPDB_UI_SSL_KEY={key_path}[/cyan]")
+        console.print(
+            f"   Restart UI: [cyan]tapdb ui restart --port {DEFAULT_UI_PORT}[/cyan]"
+        )
 
     @ui_app.command("stop")
     def ui_stop():
@@ -269,7 +457,7 @@ def build_app():
     @ui_app.command("restart")
     def ui_restart(
         port: int = typer.Option(
-            8000, "--port", "-p", help="Port to run the server on"
+            DEFAULT_UI_PORT, "--port", "-p", help="Port to run the server on"
         ),
         host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
     ):
@@ -277,6 +465,214 @@ def build_app():
         ui_stop()
         time.sleep(1)
         ui_start(port=port, host=host, reload=False, background=True)
+
+    def _resolve_bootstrap_env() -> DbEnvironment:
+        raw = (os.environ.get("TAPDB_ENV") or "").strip().lower()
+        if not raw:
+            console.print("[red]✗[/red] TAPDB_ENV must be set for bootstrap")
+            console.print("  Example: [cyan]export TAPDB_ENV=dev[/cyan]")
+            raise typer.Exit(1)
+        try:
+            return DbEnvironment(raw)
+        except ValueError:
+            console.print(f"[red]✗[/red] Unsupported TAPDB_ENV '{raw}'")
+            console.print("  Supported values: dev, test, prod")
+            raise typer.Exit(1)
+
+    def _maybe_start_ui_after_bootstrap(no_gui: bool) -> None:
+        if no_gui:
+            console.print("  [dim]○[/dim] UI start skipped (--no-gui)")
+            return
+        try:
+            ui_start(
+                port=DEFAULT_UI_PORT,
+                host="127.0.0.1",
+                reload=False,
+                background=True,
+            )
+        except Exception as e:
+            console.print(f"[yellow]⚠[/yellow] DB is ready, but UI start failed: {e}")
+            console.print(
+                "  Recover with: "
+                f"[cyan]tapdb ui start --background --port {DEFAULT_UI_PORT}[/cyan]"
+            )
+
+    @bootstrap_app.command("local")
+    def bootstrap_local(
+        no_gui: bool = typer.Option(
+            False, "--no-gui", help="Skip starting TAPDB Admin UI"
+        ),
+        include_workflow: bool = typer.Option(
+            False,
+            "--include-workflow",
+            "-w",
+            help="Include workflow/action templates",
+        ),
+        insecure_dev_defaults: bool = typer.Option(
+            False,
+            "--insecure-dev-defaults",
+            help="DEV ONLY: create default admin user (tapdb_admin/passw0rd)",
+        ),
+    ):
+        """Bootstrap local TAPDB runtime, database, schema, and seed data."""
+        from daylily_tapdb.cli.db_config import get_db_config_for_env
+
+        env = _resolve_bootstrap_env()
+        cfg = get_db_config_for_env(env.value)
+        if cfg.get("engine_type") == "aurora":
+            console.print("[red]✗[/red] Active target is Aurora; use bootstrap aurora")
+            raise typer.Exit(1)
+
+        console.print(f"\n[bold cyan]━━━ Bootstrap Local ({env.value}) ━━━[/bold cyan]")
+
+        if env in (DbEnvironment.dev, DbEnvironment.test):
+            console.print("\n[bold]Step 1/6: Ensure local PostgreSQL runtime[/bold]")
+            pg_init(env=env, force=False)
+            pg_start_local(env=env, port=None)
+        else:
+            console.print("\n[bold]Step 1/6: Local runtime management[/bold]")
+            console.print(
+                "  [dim]○[/dim] Skipping local runtime management for prod target"
+            )
+
+        console.print("\n[bold]Step 2/6: Ensure database exists[/bold]")
+        create_database(env=env, owner=None)
+
+        console.print("\n[bold]Step 3/6: Apply schema[/bold]")
+        apply_schema(env=env, reinitialize=False)
+
+        console.print("\n[bold]Step 4/6: Run migrations[/bold]")
+        run_migrations(env=env, dry_run=False)
+
+        console.print("\n[bold]Step 5/6: Seed templates[/bold]")
+        seed_templates(
+            env=env,
+            config_path=None,
+            include_workflow=include_workflow,
+            skip_existing=True,
+            dry_run=False,
+        )
+
+        console.print("\n[bold]Step 6/6: Ensure admin user[/bold]")
+        _create_default_admin(env=env, insecure_dev_defaults=insecure_dev_defaults)
+
+        console.print("\n[bold]UI startup[/bold]")
+        _maybe_start_ui_after_bootstrap(no_gui=no_gui)
+
+        console.print("\n[bold green]✓ Local bootstrap complete[/bold green]")
+
+    @bootstrap_app.command("aurora")
+    def bootstrap_aurora(
+        cluster: str = typer.Option(
+            ...,
+            "--cluster",
+            help="Aurora cluster identifier to provision/reuse",
+        ),
+        region: str = typer.Option("us-west-2", "--region", "-r", help="AWS region"),
+        no_gui: bool = typer.Option(
+            False, "--no-gui", help="Skip starting TAPDB Admin UI"
+        ),
+        include_workflow: bool = typer.Option(
+            False,
+            "--include-workflow",
+            "-w",
+            help="Include workflow/action templates",
+        ),
+        insecure_dev_defaults: bool = typer.Option(
+            False,
+            "--insecure-dev-defaults",
+            help="DEV ONLY: create default admin user (tapdb_admin/passw0rd)",
+        ),
+    ):
+        """Bootstrap Aurora TAPDB stack (infra + DB + schema + seed + optional UI)."""
+        from daylily_tapdb.aurora.config import AuroraConfig
+        from daylily_tapdb.aurora.stack_manager import AuroraStackManager
+        from daylily_tapdb.cli.aurora import (
+            _ensure_boto3,
+            _stack_name_for_env,
+            _update_config_file,
+        )
+
+        _ensure_boto3()
+        env = _resolve_bootstrap_env()
+        stack_name = _stack_name_for_env(cluster)
+
+        console.print(
+            f"\n[bold cyan]━━━ Bootstrap Aurora ({env.value} -> {cluster})"
+            " ━━━[/bold cyan]"
+        )
+
+        console.print("\n[bold]Step 1/7: Ensure Aurora cluster[/bold]")
+        mgr = AuroraStackManager(region=region)
+        try:
+            info = mgr.get_stack_status(stack_name)
+            console.print(f"  [green]✓[/green] Reusing existing stack {stack_name}")
+        except RuntimeError:
+            config = AuroraConfig(
+                region=region,
+                cluster_identifier=cluster,
+                instance_class="db.r6g.large",
+                engine_version="16.6",
+                vpc_id="",
+                iam_auth=True,
+                publicly_accessible=False,
+                deletion_protection=True,
+                tags={
+                    "lsmc-cost-center": "global",
+                    "lsmc-project": f"tapdb-{region}",
+                },
+            )
+            info = mgr.create_stack(config)
+            console.print(f"  [green]✓[/green] Created Aurora stack {stack_name}")
+
+        outputs = info.get("outputs", {})
+        endpoint = outputs.get("ClusterEndpoint", "")
+        port = str(outputs.get("ClusterPort", "5432"))
+        if not endpoint:
+            info = mgr.get_stack_status(stack_name)
+            outputs = info.get("outputs", {})
+            endpoint = outputs.get("ClusterEndpoint", "")
+            port = str(outputs.get("ClusterPort", "5432"))
+        if not endpoint:
+            console.print(
+                f"[red]✗[/red] Aurora endpoint not available for {stack_name}"
+            )
+            raise typer.Exit(1)
+
+        console.print("\n[bold]Step 2/7: Update TAPDB target config[/bold]")
+        _update_config_file(
+            env.value,
+            endpoint,
+            port,
+            region,
+            cluster_identifier=cluster,
+        )
+
+        console.print("\n[bold]Step 3/7: Ensure database exists[/bold]")
+        create_database(env=env, owner=None)
+
+        console.print("\n[bold]Step 4/7: Apply schema[/bold]")
+        apply_schema(env=env, reinitialize=False)
+
+        console.print("\n[bold]Step 5/7: Run migrations[/bold]")
+        run_migrations(env=env, dry_run=False)
+
+        console.print("\n[bold]Step 6/7: Seed templates[/bold]")
+        seed_templates(
+            env=env,
+            config_path=None,
+            include_workflow=include_workflow,
+            skip_existing=True,
+            dry_run=False,
+        )
+
+        console.print("\n[bold]Step 7/7: Ensure admin user[/bold]")
+        _create_default_admin(env=env, insecure_dev_defaults=insecure_dev_defaults)
+
+        console.print("\n[bold]UI startup[/bold]")
+        _maybe_start_ui_after_bootstrap(no_gui=no_gui)
+
+        console.print("\n[bold green]✓ Aurora bootstrap complete[/bold green]")
 
     @app.command("version")
     def version():
