@@ -14,6 +14,8 @@ from daylily_tapdb.cli.db import Environment, _get_project_root
 console = Console()
 
 pg_app = typer.Typer(help="PostgreSQL service management commands")
+DEFAULT_DEV_POSTGRES_PORT = 5533
+DEFAULT_TEST_POSTGRES_PORT = 5534
 
 
 def _get_postgres_data_dir(env: "Environment") -> Path:
@@ -230,7 +232,7 @@ def pg_status():
 
     # Connection info
     host = os.environ.get("PGHOST", "localhost")
-    port = os.environ.get("PGPORT", "5432")
+    port = os.environ.get("PGPORT", str(DEFAULT_DEV_POSTGRES_PORT))
     user = os.environ.get("PGUSER", os.environ.get("USER", "postgres"))
 
     console.print("\n[bold]Connection Info:[/bold]")
@@ -437,7 +439,10 @@ def pg_init(
 def pg_start_local(
     env: Environment = typer.Argument(..., help="Target environment (dev/test only)"),
     port: int = typer.Option(
-        None, "--port", "-p", help="Port (default: 5432 for dev, 5433 for test)"
+        None,
+        "--port",
+        "-p",
+        help="Port (default: 5533 for dev, 5534 for test)",
     ),
 ):
     """Start a local PostgreSQL instance for dev/test.
@@ -455,9 +460,13 @@ def pg_start_local(
         console.print(f"  Run: [cyan]tapdb pg init {env.value}[/cyan]")
         raise typer.Exit(1)
 
-    # Default ports: dev=5432, test=5433
+    # Default ports: dev=5533, test=5534
     if port is None:
-        port = 5432 if env == Environment.dev else 5433
+        port = (
+            DEFAULT_DEV_POSTGRES_PORT
+            if env == Environment.dev
+            else DEFAULT_TEST_POSTGRES_PORT
+        )
 
     # Find pg_ctl (must be in PATH)
     pg_ctl_path = shutil.which("pg_ctl")
