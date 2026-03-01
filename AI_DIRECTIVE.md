@@ -160,6 +160,10 @@ tapdb cognito config create <env>
 tapdb cognito config update <env>
 ```
 
+For Hosted UI domain control (daycog 0.1.22+), use:
+- `--domain-prefix <prefix>`
+- `--attach-domain` / `--no-attach-domain`
+
 ### Admin UI (`tapdb ui`)
 ```sh
 tapdb ui start

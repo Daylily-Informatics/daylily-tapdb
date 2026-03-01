@@ -97,7 +97,7 @@ if IS_PROD:
 else:
     if not allowed_origins:
         # Safe local dev defaults
-        allowed_origins = ["http://localhost:8911", "http://127.0.0.1:8911"]
+        allowed_origins = ["https://localhost:8911", "https://127.0.0.1:8911"]
 
 app.add_middleware(
     CORSMiddleware,

@@ -129,9 +129,68 @@ class TestCLIUI:
         result = runner.invoke(app, ["ui", "--help"])
         assert result.exit_code == 0
         assert "start" in result.output
+        assert "mkcert" in result.output
         assert "stop" in result.output
         assert "status" in result.output
         assert "logs" in result.output
+
+    def test_ui_mkcert_missing_binary(self, monkeypatch):
+        """Test ui mkcert fails clearly when mkcert is not installed."""
+        monkeypatch.setattr(cli_mod.shutil, "which", lambda _name: None)
+        result = runner.invoke(app, ["ui", "mkcert"])
+        assert result.exit_code == 1
+        assert "mkcert is required" in _strip_ansi(result.output)
+
+    def test_ui_mkcert_generates_cert_files(self, tmp_path, monkeypatch):
+        """Test ui mkcert installs CA and generates cert/key files."""
+        cert = tmp_path / "tls" / "localhost.crt"
+        key = tmp_path / "tls" / "localhost.key"
+        commands: list[list[str]] = []
+
+        def _fake_run(cmd, capture_output=True, text=True):
+            commands.append(list(cmd))
+            if "-cert-file" in cmd:
+                cert_idx = cmd.index("-cert-file") + 1
+                key_idx = cmd.index("-key-file") + 1
+                cert_path = Path(cmd[cert_idx])
+                key_path = Path(cmd[key_idx])
+                cert_path.parent.mkdir(parents=True, exist_ok=True)
+                key_path.parent.mkdir(parents=True, exist_ok=True)
+                cert_path.write_text("fake-cert", encoding="utf-8")
+                key_path.write_text("fake-key", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(
+            cli_mod.shutil, "which", lambda name: "/opt/homebrew/bin/mkcert"
+        )
+        monkeypatch.setattr(cli_mod.subprocess, "run", _fake_run)
+
+        result = runner.invoke(
+            app,
+            [
+                "ui",
+                "mkcert",
+                "--cert-file",
+                str(cert),
+                "--key-file",
+                str(key),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert cert.exists()
+        assert key.exists()
+        assert commands[0] == ["/opt/homebrew/bin/mkcert", "-install"]
+        assert commands[1][:5] == [
+            "/opt/homebrew/bin/mkcert",
+            "-cert-file",
+            str(cert),
+            "-key-file",
+            str(key),
+        ]
+        assert "localhost" in commands[1]
+        assert "127.0.0.1" in commands[1]
+        assert "::1" in commands[1]
 
     def test_ui_status_not_running(self):
         """Test ui status when server is not running."""
@@ -190,7 +249,7 @@ class TestCLICognito:
         assert "cognito_user_pool_id" in content
         assert "us-east-1_TESTPOOL" in content
 
-    def test_cognito_setup_uses_daycog_021_flags(self, tmp_path, monkeypatch):
+    def test_cognito_setup_uses_daycog_022_flags(self, tmp_path, monkeypatch):
         pool_name = "tapdb-dev-users"
         cfg_dir = tmp_path / ".config" / "daycog"
         cfg_dir.mkdir(parents=True, exist_ok=True)
@@ -233,9 +292,54 @@ class TestCLICognito:
         assert "--autoprovision" in args
         assert "--client-name" not in args  # optional unless explicitly provided
         assert "--callback-path" in args
+        assert "--attach-domain" in args
+        assert "--domain-prefix" not in args
         assert "--oauth-flows" in args
         assert "--scopes" in args
         assert "--idp" in args
+
+    def test_cognito_setup_with_domain_flags_routes_to_daycog(self, tmp_path, monkeypatch):
+        pool_name = "tapdb-dev-users"
+        cfg_dir = tmp_path / ".config" / "daycog"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / f"{pool_name}.us-east-1.env").write_text(
+            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n",
+            encoding="utf-8",
+        )
+
+        captured: dict[str, list[str]] = {}
+
+        def _fake_run_daycog(args, env=None):
+            captured["args"] = list(args)
+            return ""
+
+        monkeypatch.setattr("daylily_tapdb.cli.cognito._daycog_config_dir", lambda: cfg_dir)
+        monkeypatch.setattr("daylily_tapdb.cli.cognito._run_daycog", _fake_run_daycog)
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito._write_pool_id_to_tapdb_config",
+            lambda *_args, **_kwargs: tmp_path / "tapdb-config.yaml",
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "cognito",
+                "setup",
+                "dev",
+                "--pool-name",
+                pool_name,
+                "--region",
+                "us-east-1",
+                "--domain-prefix",
+                "tapdb-dev-domain",
+                "--no-attach-domain",
+            ],
+        )
+        assert result.exit_code == 0
+        args = captured["args"]
+        assert "--domain-prefix" in args
+        assert "tapdb-dev-domain" in args
+        assert "--no-attach-domain" in args
 
     def test_cognito_setup_with_google_routes_to_daycog(self, tmp_path, monkeypatch):
         pool_name = "tapdb-dev-users"
@@ -361,7 +465,7 @@ class TestCLICognito:
                 "--app-name",
                 "web-app",
                 "--callback-url",
-                "http://localhost:8911/auth/callback",
+                "https://localhost:8911/auth/callback",
                 "--set-default",
             ],
         )
@@ -397,7 +501,7 @@ class TestCLICognito:
         assert "--region" in args
         assert "--profile" in args
 
-    def test_cognito_status_shows_daycog_021_fields(self, monkeypatch):
+    def test_cognito_status_shows_daycog_022_fields(self, monkeypatch):
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito.get_db_config_for_env",
             lambda _env: {"cognito_user_pool_id": "us-east-1_TESTPOOL"},
@@ -413,8 +517,9 @@ class TestCLICognito:
                     "COGNITO_USER_POOL_ID": "us-east-1_TESTPOOL",
                     "COGNITO_APP_CLIENT_ID": "cid123",
                     "COGNITO_CLIENT_NAME": "tapdb-dev-users-client",
-                    "COGNITO_CALLBACK_URL": "http://localhost:8911/auth/callback",
-                    "COGNITO_LOGOUT_URL": "http://localhost:8911/",
+                    "COGNITO_DOMAIN": "tapdb-dev-users.auth.us-east-1.amazoncognito.com",
+                    "COGNITO_CALLBACK_URL": "https://localhost:8911/auth/callback",
+                    "COGNITO_LOGOUT_URL": "https://localhost:8911/",
                 },
             ),
         )
@@ -423,6 +528,7 @@ class TestCLICognito:
         assert result.exit_code == 0
         out = _strip_ansi(result.output)
         assert "Client:" in out
+        assert "Domain:" in out
         assert "Callback:" in out
         assert "Logout:" in out
 

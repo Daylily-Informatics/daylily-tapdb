@@ -137,7 +137,7 @@ def _resolve_daycog_pool_id_after_setup(
     region: str,
     client_name: str,
 ) -> tuple[str, Path]:
-    """Resolve pool ID from daycog 0.1.21+ config file naming."""
+    """Resolve pool ID from daycog 0.1.22+ config file naming."""
     cfg_dir = _daycog_config_dir()
     pool_env = cfg_dir / f"{pool_name}.{region}.env"
     app_env = cfg_dir / f"{pool_name}.{region}.{_sanitize_filename_part(client_name)}.env"
@@ -223,6 +223,8 @@ def _build_daycog_setup_args(
     command: str,
     selected_pool_name: str,
     region: str,
+    domain_prefix: Optional[str],
+    attach_domain: bool,
     port: int,
     callback_path: str,
     oauth_flows: str,
@@ -242,6 +244,10 @@ def _build_daycog_setup_args(
     require_symbols: bool,
     tags: Optional[str],
 ) -> list[str]:
+    path = callback_path if callback_path.startswith("/") else f"/{callback_path}"
+    resolved_callback_url = callback_url or f"https://localhost:{port}{path}"
+    resolved_logout_url = logout_url or f"https://localhost:{port}/"
+
     args = [
         command,
         "--name",
@@ -251,7 +257,11 @@ def _build_daycog_setup_args(
         "--port",
         str(port),
         "--callback-path",
-        callback_path,
+        path,
+        "--callback-url",
+        resolved_callback_url,
+        "--logout-url",
+        resolved_logout_url,
         "--oauth-flows",
         oauth_flows,
         "--scopes",
@@ -263,14 +273,16 @@ def _build_daycog_setup_args(
         "--mfa",
         mfa,
     ]
+    if domain_prefix:
+        args.extend(["--domain-prefix", domain_prefix])
+    if attach_domain:
+        args.append("--attach-domain")
+    else:
+        args.append("--no-attach-domain")
     if profile:
         args.extend(["--profile", profile])
     if client_name:
         args.extend(["--client-name", client_name])
-    if callback_url:
-        args.extend(["--callback-url", callback_url])
-    if logout_url:
-        args.extend(["--logout-url", logout_url])
     if autoprovision:
         args.append("--autoprovision")
     if generate_secret:
@@ -429,6 +441,16 @@ def cognito_setup(
         None, "--profile", help="AWS profile (fallback: AWS_PROFILE env var)"
     ),
     region: str = typer.Option("us-east-1", "--region", "-r", help="AWS region"),
+    domain_prefix: Optional[str] = typer.Option(
+        None,
+        "--domain-prefix",
+        help="Hosted UI domain prefix (default: pool name)",
+    ),
+    attach_domain: bool = typer.Option(
+        True,
+        "--attach-domain/--no-attach-domain",
+        help="Attach/ensure Cognito Hosted UI domain",
+    ),
     port: int = typer.Option(
         DEFAULT_COGNITO_CALLBACK_PORT,
         "--port",
@@ -505,6 +527,8 @@ def cognito_setup(
         command="setup",
         selected_pool_name=selected_pool_name,
         region=region,
+        domain_prefix=domain_prefix,
+        attach_domain=attach_domain,
         port=port,
         callback_path=callback_path,
         oauth_flows=oauth_flows,
@@ -549,6 +573,16 @@ def cognito_setup_with_google(
         None, "--profile", help="AWS profile (fallback: AWS_PROFILE env var)"
     ),
     region: str = typer.Option("us-east-1", "--region", "-r", help="AWS region"),
+    domain_prefix: Optional[str] = typer.Option(
+        None,
+        "--domain-prefix",
+        help="Hosted UI domain prefix (default: pool name)",
+    ),
+    attach_domain: bool = typer.Option(
+        True,
+        "--attach-domain/--no-attach-domain",
+        help="Attach/ensure Cognito Hosted UI domain",
+    ),
     port: int = typer.Option(
         DEFAULT_COGNITO_CALLBACK_PORT,
         "--port",
@@ -637,6 +671,8 @@ def cognito_setup_with_google(
         command="setup-with-google",
         selected_pool_name=selected_pool_name,
         region=region,
+        domain_prefix=domain_prefix,
+        attach_domain=attach_domain,
         port=port,
         callback_path=callback_path,
         oauth_flows=oauth_flows,
@@ -700,6 +736,7 @@ def cognito_status(
     region = values.get("COGNITO_REGION") or values.get("AWS_REGION") or "(missing)"
     client_id = values.get("COGNITO_APP_CLIENT_ID") or "(missing)"
     client_name = values.get("COGNITO_CLIENT_NAME") or "(missing)"
+    domain = values.get("COGNITO_DOMAIN") or "(not set)"
     callback_url = values.get("COGNITO_CALLBACK_URL") or "(missing)"
     logout_url = values.get("COGNITO_LOGOUT_URL") or "(not set)"
     profile = values.get("AWS_PROFILE") or "(missing)"
@@ -709,6 +746,7 @@ def cognito_status(
     console.print(f"[green]✓[/green] Region:     {region}")
     console.print(f"[green]✓[/green] Client ID:  {client_id}")
     console.print(f"[green]✓[/green] Client:     {client_name}")
+    console.print(f"[green]✓[/green] Domain:     {domain}")
     console.print(f"[green]✓[/green] Callback:   {callback_url}")
     console.print(f"[green]✓[/green] Logout:     {logout_url}")
     console.print(f"[green]✓[/green] Profile:    {profile}")
