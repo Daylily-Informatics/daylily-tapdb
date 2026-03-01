@@ -5,8 +5,7 @@ Defines the generic_instance_lineage table and typed lineage subclasses.
 Lineages represent directed edges between instances (parent -> child).
 """
 
-from sqlalchemy import Column, FetchedValue, ForeignKey, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import BIGINT, Column, FetchedValue, ForeignKey, Text
 
 from daylily_tapdb.models.base import tapdb_core
 
@@ -16,8 +15,8 @@ class generic_instance_lineage(tapdb_core):
     Lineage table - directed edges between instances.
 
     Lineages connect instances in a DAG (Directed Acyclic Graph):
-    - parent_instance_uuid: The parent instance
-    - child_instance_uuid: The child instance
+    - parent_instance_uuid: The parent instance ID
+    - child_instance_uuid: The child instance ID
     - relationship_type: Type of relationship (e.g., "contains", "derived_from")
     - parent_type/child_type: Cached polymorphic types for query optimization
 
@@ -39,10 +38,10 @@ class generic_instance_lineage(tapdb_core):
     relationship_type = Column(Text, nullable=False, server_default=FetchedValue())
 
     parent_instance_uuid = Column(
-        UUID, ForeignKey("generic_instance.uuid"), nullable=False
+        BIGINT, ForeignKey("generic_instance.uuid"), nullable=False
     )
     child_instance_uuid = Column(
-        UUID, ForeignKey("generic_instance.uuid"), nullable=False
+        BIGINT, ForeignKey("generic_instance.uuid"), nullable=False
     )
 
 

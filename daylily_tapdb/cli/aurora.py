@@ -69,7 +69,9 @@ def _update_config_file(
     if "environments" not in existing:
         existing["environments"] = {}
 
+    env_cfg = existing["environments"].get(env, {}) or {}
     existing["environments"][env] = {
+        **env_cfg,
         "engine_type": "aurora",
         "host": endpoint,
         "port": port,

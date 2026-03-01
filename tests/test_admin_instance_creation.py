@@ -81,12 +81,12 @@ def test_resolve_lineage_targets_or_raise_missing_parent_and_child_raises():
 
 def test_new_graph_lineage_populates_required_non_null_fields():
     parent = SimpleNamespace(
-        uuid="parent-uuid",
+        uuid=101,
         euid="ACT-P",
         polymorphic_discriminator="actor_instance",
     )
     child = SimpleNamespace(
-        uuid="child-uuid",
+        uuid=202,
         euid="ACT-C",
         polymorphic_discriminator="actor_instance",
     )
@@ -107,19 +107,19 @@ def test_new_graph_lineage_populates_required_non_null_fields():
     assert lineage.relationship_type == "depends_on"
     assert lineage.parent_type == "actor_instance"
     assert lineage.child_type == "actor_instance"
-    assert lineage.parent_instance_uuid == "parent-uuid"
-    assert lineage.child_instance_uuid == "child-uuid"
+    assert lineage.parent_instance_uuid == 101
+    assert lineage.child_instance_uuid == 202
     assert lineage.json_addl == {}
 
 
 def test_new_graph_lineage_defaults_blank_relationship_to_generic():
     parent = SimpleNamespace(
-        uuid="parent-uuid",
+        uuid=101,
         euid="ACT-P",
         polymorphic_discriminator="actor_instance",
     )
     child = SimpleNamespace(
-        uuid="child-uuid",
+        uuid=202,
         euid="ACT-C",
         polymorphic_discriminator="actor_instance",
     )

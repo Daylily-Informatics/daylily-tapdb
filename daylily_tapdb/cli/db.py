@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +25,9 @@ from daylily_tapdb.validation.instantiation_layouts import (
 
 console = Console()
 
+_MERIDIAN_PREFIX_RE = re.compile(r"^[A-HJ-KMNP-TV-Z]{2,3}$")
+_RESERVED_PREFIXES = {"GT", "GX", "GN", "WX", "WSX", "XX", "AY"}
+
 
 def _normalize_instance_prefix(prefix: str) -> str:
     """Normalize/validate an instance_prefix.
@@ -39,6 +43,69 @@ def _normalize_instance_prefix(prefix: str) -> str:
     if not normalized.isalpha():
         raise ValueError(f"instance_prefix must be letters only (A-Z), got: {prefix!r}")
     return normalized
+
+
+def _normalize_meridian_prefix(prefix: str, field_name: str) -> str:
+    """Normalize/validate Meridian-safe EUID prefixes."""
+    if prefix is None:
+        raise ValueError(f"{field_name} cannot be None")
+    normalized = str(prefix).strip().upper()
+    if not normalized:
+        raise ValueError(f"{field_name} cannot be empty")
+    if not _MERIDIAN_PREFIX_RE.match(normalized):
+        raise ValueError(
+            f"{field_name} must match ^[A-HJ-KMNP-TV-Z]{{2,3}}$, got: {prefix!r}"
+        )
+    if normalized in _RESERVED_PREFIXES:
+        raise ValueError(
+            f"{field_name} cannot reuse reserved TAPDB prefix {normalized!r}"
+        )
+    return normalized
+
+
+def _required_identity_prefixes(env: "Environment") -> tuple[str, str]:
+    """Return validated (tapdb_user_prefix, audit_log_prefix) for env config."""
+    cfg = _get_db_config(env)
+    user_prefix = _normalize_meridian_prefix(
+        cfg.get("tapdb_user_euid_prefix", ""),
+        "tapdb_user_euid_prefix",
+    )
+    audit_prefix = _normalize_meridian_prefix(
+        cfg.get("audit_log_euid_prefix", ""),
+        "audit_log_euid_prefix",
+    )
+    if user_prefix == audit_prefix:
+        raise ValueError(
+            "tapdb_user_euid_prefix and audit_log_euid_prefix must be different"
+        )
+    return user_prefix, audit_prefix
+
+
+def _sync_identity_prefix_config(env: "Environment") -> None:
+    """Persist required identity prefixes into database config and ensure sequences."""
+    user_prefix, audit_prefix = _required_identity_prefixes(env)
+    user_seq = f"{user_prefix.lower()}_user_seq"
+    audit_seq = f"{audit_prefix.lower()}_audit_seq"
+    sql = f"""
+    INSERT INTO tapdb_identity_prefix_config(entity, prefix)
+    VALUES ('tapdb_user', '{user_prefix}')
+    ON CONFLICT (entity) DO UPDATE
+      SET prefix = EXCLUDED.prefix, updated_dt = NOW();
+
+    INSERT INTO tapdb_identity_prefix_config(entity, prefix)
+    VALUES ('audit_log', '{audit_prefix}')
+    ON CONFLICT (entity) DO UPDATE
+      SET prefix = EXCLUDED.prefix, updated_dt = NOW();
+
+    CREATE SEQUENCE IF NOT EXISTS "{user_seq}";
+    CREATE SEQUENCE IF NOT EXISTS "{audit_seq}";
+    """
+    success, output = _run_psql(env, sql=sql)
+    if not success:
+        raise RuntimeError(
+            "Failed to sync identity prefix config for user/audit tables: "
+            f"{output[:200]}"
+        )
 
 
 def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
@@ -65,9 +132,9 @@ def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
         SELECT
           COALESCE(
             (
-              SELECT max(NULLIF(regexp_replace(euid, '[^0-9]', '', 'g'), '')::bigint)
+              SELECT max(euid_seq)
               FROM generic_instance
-              WHERE euid LIKE '{prefix}%'
+              WHERE euid_prefix = '{prefix}'
             ),
             0
           ) + 1 AS next_val
@@ -334,6 +401,8 @@ def _get_table_counts(env: Environment) -> dict:
         "generic_instance",
         "generic_instance_lineage",
         "audit_log",
+        "tapdb_user",
+        "tapdb_identity_prefix_config",
     ]
     counts = {}
     for table in tables:
@@ -509,6 +578,16 @@ def db_schema_apply(
         console.print(
             f"[dim]○[/dim] Schema already exists in {cfg['database']} (skipping apply)"
         )
+        console.print(
+            "[yellow]►[/yellow] Syncing required identity prefixes "
+            "(tapdb_user/audit_log)..."
+        )
+        try:
+            _sync_identity_prefix_config(env)
+            console.print("[green]✓[/green] Identity prefixes synced")
+        except (ValueError, RuntimeError) as e:
+            console.print(f"[red]✗[/red] {e}")
+            raise typer.Exit(1)
         return
 
     console.print("[yellow]►[/yellow] Applying schema...")
@@ -520,6 +599,16 @@ def db_schema_apply(
 
     _log_operation(env.value, "SCHEMA_APPLY", f"Schema applied from {schema_file}")
     console.print("[green]✓[/green] Schema applied successfully")
+    console.print(
+        "[yellow]►[/yellow] Syncing required identity prefixes "
+        "(tapdb_user/audit_log)..."
+    )
+    try:
+        _sync_identity_prefix_config(env)
+        console.print("[green]✓[/green] Identity prefixes synced")
+    except (ValueError, RuntimeError) as e:
+        console.print(f"[red]✗[/red] {e}")
+        raise typer.Exit(1)
 
     try:
         _write_migration_baseline(env)
@@ -533,6 +622,8 @@ def db_schema_apply(
         "generic_instance",
         "generic_instance_lineage",
         "audit_log",
+        "tapdb_user",
+        "tapdb_identity_prefix_config",
     ]:
         console.print(f"  [green]✓[/green] {table}")
 
@@ -644,6 +735,9 @@ def db_nuke(
             f"{counts.get('generic_instance_lineage', '?')}"
             f" rows\n"
             f"  • audit_log:                {counts.get('audit_log', '?')} rows\n"
+            f"  • tapdb_user:               {counts.get('tapdb_user', '?')} rows\n"
+            f"  • tapdb_identity_prefix_config: "
+            f"{counts.get('tapdb_identity_prefix_config', '?')} rows\n"
             f"  • All sequences, triggers, and functions\n\n"
             f"[bold]Total: {total_rows} rows[/bold]",
             title="[red]DATABASE NUKE[/red]",
@@ -722,22 +816,32 @@ def db_nuke(
 
     -- Drop tables (order matters for FK constraints)
     DROP TABLE IF EXISTS audit_log CASCADE;
+    DROP TABLE IF EXISTS tapdb_user CASCADE;
     DROP TABLE IF EXISTS generic_instance_lineage CASCADE;
     DROP TABLE IF EXISTS generic_instance CASCADE;
     DROP TABLE IF EXISTS generic_template CASCADE;
+    DROP TABLE IF EXISTS tapdb_identity_prefix_config CASCADE;
 
     -- Drop sequences
     DROP SEQUENCE IF EXISTS generic_template_seq;
     DROP SEQUENCE IF EXISTS gx_instance_seq;
-    DROP SEQUENCE IF EXISTS generic_instance_seq;
     DROP SEQUENCE IF EXISTS generic_instance_lineage_seq;
-    DROP SEQUENCE IF EXISTS audit_log_seq;
     DROP SEQUENCE IF EXISTS wx_instance_seq;
     DROP SEQUENCE IF EXISTS wsx_instance_seq;
     DROP SEQUENCE IF EXISTS xx_instance_seq;
+    DROP SEQUENCE IF EXISTS ay_instance_seq;
 
     -- Drop functions
+    DROP FUNCTION IF EXISTS set_generic_template_euid();
     DROP FUNCTION IF EXISTS set_generic_instance_euid();
+    DROP FUNCTION IF EXISTS set_generic_instance_lineage_euid();
+    DROP FUNCTION IF EXISTS set_tapdb_user_euid();
+    DROP FUNCTION IF EXISTS set_audit_log_euid();
+    DROP FUNCTION IF EXISTS tapdb_get_identity_prefix(TEXT);
+    DROP FUNCTION IF EXISTS tapdb_validate_meridian_prefix(TEXT);
+    DROP FUNCTION IF EXISTS meridian_euid_prefix(TEXT);
+    DROP FUNCTION IF EXISTS meridian_euid_seq_from_euid(TEXT);
+    DROP FUNCTION IF EXISTS crockford_base32_decode(TEXT);
     DROP FUNCTION IF EXISTS soft_delete_row();
     DROP FUNCTION IF EXISTS record_update();
     DROP FUNCTION IF EXISTS record_insert();
@@ -905,6 +1009,8 @@ def db_backup(
         "generic_instance",
         "generic_instance_lineage",
         "audit_log",
+        "tapdb_user",
+        "tapdb_identity_prefix_config",
     ]
     for table in tables:
         cmd.extend(["-t", table])

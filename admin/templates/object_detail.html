@@ -21,7 +21,7 @@
 <div class="card">
     <h2 class="card-title">Object Details</h2>
     <table>
-        <tr><th style="width: 200px;">UUID</th><td>{{ obj.uuid }}</td></tr>
+        <tr><th style="width: 200px;">ID</th><td>{{ obj.uuid }}</td></tr>
         <tr><th>EUID</th><td>{{ obj.euid }}</td></tr>
         <tr><th>Object Type</th><td><span class="badge badge-{{ obj.category }}">{{ obj_type }}</span></td></tr>
         <tr><th>Name</th><td>{{ obj.name or '-' }}</td></tr>
@@ -139,4 +139,3 @@ function deleteObject(euid) {
 }
 </script>
 {% endblock %}
-

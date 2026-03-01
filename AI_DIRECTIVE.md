@@ -27,6 +27,12 @@ TAPDB command routing depends on explicit context:
 
 For bootstrap commands, `TAPDB_ENV` is required.
 
+Identity prefix config is required for schema/bootstrap writes:
+- `tapdb_user_euid_prefix`
+- `audit_log_euid_prefix`
+
+Both must match Meridian prefix format: `^[A-HJ-KMNP-TV-Z]{2,3}$`.
+
 ## Multi-App / Same User Account Isolation (Critical)
 If multiple apps use TAPDB under the same OS user account, you MUST isolate configuration and identity context per app.
 
@@ -34,6 +40,11 @@ If multiple apps use TAPDB under the same OS user account, you MUST isolate conf
 Use database-scoped config filenames:
 - `~/.config/tapdb/tapdb-config-<database-name>.yaml`
 - `./config/tapdb-config-<database-name>.yaml` (repo-local override)
+
+Each scoped config should define app-specific identity prefixes to avoid
+cross-app collisions in shared accounts:
+- `tapdb_user_euid_prefix`
+- `audit_log_euid_prefix`
 
 Set one of:
 

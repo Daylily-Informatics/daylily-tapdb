@@ -60,7 +60,7 @@ def get_user_by_username(username: str) -> Optional[dict]:
 
         if result:
             return {
-                "uuid": str(result[0]),
+                "uuid": int(result[0]),
                 "username": result[1],
                 "email": result[2],
                 "display_name": result[3],
@@ -122,7 +122,7 @@ def get_or_create_user_from_email(
         raise RuntimeError(f"Failed to provision TAPDB user row for {normalized}")
 
     return {
-        "uuid": str(result[0]),
+        "uuid": int(result[0]),
         "username": result[1],
         "email": result[2],
         "display_name": result[3],
@@ -132,8 +132,8 @@ def get_or_create_user_from_email(
     }
 
 
-def get_user_by_uuid(user_uuid: str) -> Optional[dict]:
-    """Fetch user from database by UUID."""
+def get_user_by_uuid(user_uuid: int | str) -> Optional[dict]:
+    """Fetch user from database by integer primary key."""
     with get_db() as conn:
         conn.app_username = "system"
         with conn.session_scope() as session:
@@ -149,7 +149,7 @@ def get_user_by_uuid(user_uuid: str) -> Optional[dict]:
 
         if result:
             return {
-                "uuid": str(result[0]),
+                "uuid": int(result[0]),
                 "username": result[1],
                 "email": result[2],
                 "display_name": result[3],
@@ -231,7 +231,7 @@ def change_cognito_password(
     )
 
 
-def update_last_login(user_uuid: str) -> None:
+def update_last_login(user_uuid: int | str) -> None:
     """Update user's last login timestamp."""
     with get_db() as conn:
         conn.app_username = "system"

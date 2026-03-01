@@ -19,6 +19,8 @@ environments:
     user: daylily
     password: ""
     database: tapdb_dev
+    tapdb_user_euid_prefix: TP
+    audit_log_euid_prefix: AD
     # Optional: TAPDB Admin Cognito binding (pool details live in ~/.config/daycog/*.env)
     cognito_user_pool_id: us-east-1_xxxxxxxxx
 
@@ -28,6 +30,8 @@ environments:
     user: daylily
     password: ""
     database: tapdb_test
+    tapdb_user_euid_prefix: TP
+    audit_log_euid_prefix: AD
     cognito_user_pool_id: us-east-1_xxxxxxxxx
 
   prod:
@@ -36,6 +40,8 @@ environments:
     user: tapdb_admin
     password: "CHANGEME"
     database: tapdb_prod
+    tapdb_user_euid_prefix: TP
+    audit_log_euid_prefix: AD
     cognito_user_pool_id: us-east-1_xxxxxxxxx
 
   # Aurora (AWS RDS) environments use engine_type: aurora
@@ -47,6 +53,8 @@ environments:
     user: tapdb_admin
     password: ""
     database: tapdb_dev
+    tapdb_user_euid_prefix: TP
+    audit_log_euid_prefix: AD
     region: us-west-2
     cluster_identifier: tapdb-dev-cluster
     iam_auth: true

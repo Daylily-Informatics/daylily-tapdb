@@ -26,6 +26,8 @@ class TestTapdbCore:
         expected = [
             "uuid",
             "euid",
+            "euid_prefix",
+            "euid_seq",
             "name",
             "created_dt",
             "modified_dt",
