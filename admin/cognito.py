@@ -3,7 +3,7 @@
 TAPDB stores only ``cognito_user_pool_id`` in tapdb config. Runtime Cognito
 details (app client ID, region, AWS profile) are resolved from daycog env
 files in ``~/.config/daycog/*.env`` with preference for pool-scoped
-``<pool>.<region>.env`` entries (daycog 0.1.21+).
+``<pool>.<region>.env`` entries (daycog 0.1.22+).
 """
 
 from __future__ import annotations

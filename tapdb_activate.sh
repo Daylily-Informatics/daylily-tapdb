@@ -194,7 +194,7 @@ if [ "${_tapdb_smoke}" != "1" ] && [ -x "${_tapdb_tapdb}" ]; then
     _tapdb_ui_status=$(${_tapdb_tapdb} ui status 2>/dev/null)
     if echo "$_tapdb_ui_status" | grep -q "running"; then
         printf "${_tapdb_green}●${_tapdb_reset} UI Server: ${_tapdb_green}running${_tapdb_reset}\n"
-        printf "  URL: ${_tapdb_cyan}http://127.0.0.1:8911${_tapdb_reset}\n"
+        printf "  URL: ${_tapdb_cyan}https://127.0.0.1:8911${_tapdb_reset}\n"
     else
         printf "${_tapdb_yellow}○${_tapdb_reset} UI Server: not running (start with: ${_tapdb_cyan}tapdb ui start${_tapdb_reset})\n"
     fi

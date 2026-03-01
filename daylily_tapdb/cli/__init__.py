@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -13,11 +14,89 @@ from typing import Optional
 PID_FILE = Path.home() / ".tapdb" / "ui.pid"
 LOG_FILE = Path.home() / ".tapdb" / "ui.log"
 DEFAULT_UI_PORT = 8911
+DEFAULT_UI_SCHEME = "https"
+DEFAULT_UI_TLS_DIR = Path.home() / ".tapdb" / "certs"
+DEFAULT_UI_TLS_CERT = DEFAULT_UI_TLS_DIR / "localhost.crt"
+DEFAULT_UI_TLS_KEY = DEFAULT_UI_TLS_DIR / "localhost.key"
 
 
 def _ensure_dir():
     """Ensure .tapdb directory exists."""
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _resolve_tls_paths() -> tuple[Path, Path]:
+    """Resolve TLS cert/key paths, allowing env overrides."""
+    cert = Path(os.environ.get("TAPDB_UI_SSL_CERT", str(DEFAULT_UI_TLS_CERT)))
+    key = Path(os.environ.get("TAPDB_UI_SSL_KEY", str(DEFAULT_UI_TLS_KEY)))
+    return cert, key
+
+
+def _ensure_tls_certificates(host: str) -> tuple[Path, Path]:
+    """Ensure TLS cert/key exist for HTTPS UI startup."""
+    cert_path, key_path = _resolve_tls_paths()
+    if cert_path.exists() and key_path.exists():
+        return cert_path, key_path
+
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    openssl = shutil.which("openssl")
+    if not openssl:
+        raise RuntimeError(
+            "openssl is required to start the UI over HTTPS. "
+            "Install openssl or set TAPDB_UI_SSL_CERT/TAPDB_UI_SSL_KEY."
+        )
+
+    san = f"DNS:localhost,IP:127.0.0.1,DNS:{host}"
+    cmd = [
+        openssl,
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-sha256",
+        "-days",
+        "3650",
+        "-nodes",
+        "-subj",
+        "/CN=localhost",
+        "-addext",
+        f"subjectAltName={san}",
+        "-keyout",
+        str(key_path),
+        "-out",
+        str(cert_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        # Fallback for older OpenSSL builds without -addext support.
+        fallback_cmd = [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-sha256",
+            "-days",
+            "3650",
+            "-nodes",
+            "-subj",
+            "/CN=localhost",
+            "-keyout",
+            str(key_path),
+            "-out",
+            str(cert_path),
+        ]
+        fallback = subprocess.run(fallback_cmd, capture_output=True, text=True)
+        if fallback.returncode != 0:
+            msg = (fallback.stderr or fallback.stdout or "").strip()
+            raise RuntimeError(f"Failed to generate TLS certificate with openssl: {msg}")
+
+    try:
+        os.chmod(key_path, 0o600)
+    except OSError:
+        pass
+    return cert_path, key_path
 
 
 def _get_pid() -> Optional[int]:
@@ -173,12 +252,18 @@ def build_app():
         pid = _get_pid()
         if pid:
             console.print(f"[yellow]⚠[/yellow]  UI server already running (PID {pid})")
-            console.print(f"   URL: [cyan]http://{host}:{port}[/cyan]")
+            console.print(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
             return
 
         try:
             admin_module = _find_admin_module()
         except ValueError as e:
+            console.print(f"[red]✗[/red]  {e}")
+            raise typer.Exit(1)
+
+        try:
+            cert_path, key_path = _ensure_tls_certificates(host)
+        except RuntimeError as e:
             console.print(f"[red]✗[/red]  {e}")
             raise typer.Exit(1)
 
@@ -191,6 +276,10 @@ def build_app():
             host,
             "--port",
             str(port),
+            "--ssl-keyfile",
+            str(key_path),
+            "--ssl-certfile",
+            str(cert_path),
         ]
         if reload:
             cmd.append("--reload")
@@ -212,17 +301,86 @@ def build_app():
 
             PID_FILE.write_text(str(proc.pid))
             console.print(f"[green]✓[/green]  UI server started (PID {proc.pid})")
-            console.print(f"   URL: [cyan]http://{host}:{port}[/cyan]")
+            console.print(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
             console.print(f"   Logs: [dim]{LOG_FILE}[/dim]")
         else:
             console.print(
-                f"[green]✓[/green]  Starting UI server on [cyan]http://{host}:{port}[/cyan]"
+                f"[green]✓[/green]  Starting UI server on "
+                f"[cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]"
             )
             console.print("   Press Ctrl+C to stop\n")
             try:
                 subprocess.run(cmd)
             except KeyboardInterrupt:
                 console.print("\n[yellow]⚠[/yellow]  Server stopped")
+
+    @ui_app.command("mkcert")
+    def ui_mkcert(
+        cert_file: Path = typer.Option(
+            DEFAULT_UI_TLS_CERT,
+            "--cert-file",
+            help="Path to write mkcert-generated TLS certificate",
+        ),
+        key_file: Path = typer.Option(
+            DEFAULT_UI_TLS_KEY,
+            "--key-file",
+            help="Path to write mkcert-generated TLS private key",
+        ),
+    ):
+        """Install mkcert local CA and generate localhost TLS certs for the UI."""
+        mkcert = shutil.which("mkcert")
+        if not mkcert:
+            console.print("[red]✗[/red] mkcert is required for trusted local HTTPS certs.")
+            console.print("  Install mkcert first, then rerun [cyan]tapdb ui mkcert[/cyan].")
+            raise typer.Exit(1)
+
+        cert_path = cert_file.expanduser()
+        key_path = key_file.expanduser()
+        cert_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+
+        install_cmd = [mkcert, "-install"]
+        install_result = subprocess.run(install_cmd, capture_output=True, text=True)
+        if install_result.returncode != 0:
+            msg = (install_result.stderr or install_result.stdout or "").strip()
+            console.print("[red]✗[/red] Failed to install mkcert local CA.")
+            if msg:
+                console.print(f"  [dim]{msg}[/dim]")
+            raise typer.Exit(1)
+
+        generate_cmd = [
+            mkcert,
+            "-cert-file",
+            str(cert_path),
+            "-key-file",
+            str(key_path),
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        ]
+        generate_result = subprocess.run(generate_cmd, capture_output=True, text=True)
+        if generate_result.returncode != 0:
+            msg = (generate_result.stderr or generate_result.stdout or "").strip()
+            console.print("[red]✗[/red] Failed to generate mkcert TLS files.")
+            if msg:
+                console.print(f"  [dim]{msg}[/dim]")
+            raise typer.Exit(1)
+
+        try:
+            os.chmod(key_path, 0o600)
+        except OSError:
+            pass
+
+        console.print("[green]✓[/green] mkcert certificate ready for TAPDB UI HTTPS")
+        console.print(f"   Cert: [dim]{cert_path}[/dim]")
+        console.print(f"   Key:  [dim]{key_path}[/dim]")
+        if cert_path != DEFAULT_UI_TLS_CERT or key_path != DEFAULT_UI_TLS_KEY:
+            console.print("   Set env overrides before start:")
+            console.print(f"   [cyan]export TAPDB_UI_SSL_CERT={cert_path}[/cyan]")
+            console.print(f"   [cyan]export TAPDB_UI_SSL_KEY={key_path}[/cyan]")
+        console.print(
+            f"   Restart UI: [cyan]tapdb ui restart --port {DEFAULT_UI_PORT}[/cyan]"
+        )
 
     @ui_app.command("stop")
     def ui_stop():

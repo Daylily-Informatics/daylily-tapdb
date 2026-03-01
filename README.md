@@ -487,6 +487,7 @@ Typical setup:
 tapdb cognito setup dev \
   --region us-east-1 \
   --profile my-aws-profile \
+  --domain-prefix tapdb-dev-users \
   --autoprovision \
   --client-name tapdb-dev-users-client
 
@@ -494,10 +495,10 @@ tapdb cognito setup dev \
 tapdb cognito add-user dev user@example.com --password 'SecurePass123' --no-verify
 ```
 
-`tapdb cognito` delegates lifecycle operations to `daycog` (0.1.21 patterns),
+`tapdb cognito` delegates lifecycle operations to `daycog` (0.1.22 patterns),
 so multiple apps on the same user account can coexist without config collisions.
 `tapdb cognito status` also reports daycog metadata including client name and
-callback/logout URLs when available.
+domain/callback/logout URLs when available.
 
 GUI behavior:
 - `/login` authenticates against Cognito.
@@ -643,6 +644,29 @@ tapdb ui logs -f
 tapdb ui stop
 ```
 
+### Trusted Local HTTPS with mkcert (recommended)
+
+`tapdb ui start` always serves HTTPS. For browser-trusted local certs, use `mkcert`:
+
+```bash
+# One command: install local CA and generate certs TAPDB uses by default
+tapdb ui mkcert
+
+# Restart UI to use the generated certs
+tapdb ui restart --port 8911
+```
+
+Manual fallback (if you prefer to run mkcert yourself):
+
+```bash
+mkcert -install
+mkcert -cert-file ~/.tapdb/certs/localhost.crt \
+  -key-file ~/.tapdb/certs/localhost.key \
+  localhost 127.0.0.1 ::1
+```
+
+Then open [https://localhost:8911](https://localhost:8911).
+
 Or run in foreground with auto-reload for development:
 
 ```bash
@@ -665,7 +689,7 @@ tapdb bootstrap local
 
 # 3. Verify everything is working
 tapdb db schema status dev
-# Open http://localhost:8911 in your browser
+# Open https://localhost:8911 in your browser
 ```
 
 To stop everything:
@@ -732,7 +756,7 @@ tapdb user delete            # Permanently delete (⚠️ destructive)
 # Note: Admin UI authentication is Cognito-based; tapdb users are app roles/metadata.
 
 # Cognito integration (delegates to daycog; stores only pool-id in tapdb config)
-tapdb cognito setup <env>    # daycog 0.1.21 setup wrapper (pool/client/callback policy)
+tapdb cognito setup <env>    # daycog 0.1.22 setup wrapper (pool/client/callback policy)
 tapdb cognito setup-with-google <env> [google flags]
 tapdb cognito bind <env>     # Bind existing pool ID to env
 tapdb cognito status <env>   # Show pool binding and mapped daycog env file
@@ -750,6 +774,7 @@ tapdb cognito config update <env>
 
 # Admin UI
 tapdb ui start               # Start admin UI (background)
+tapdb ui mkcert             # Install mkcert CA + generate trusted localhost cert/key
 tapdb ui stop                # Stop admin UI
 tapdb ui status              # Check if running
 tapdb ui logs                # View logs (--follow/-f to tail)
