@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_CONFIG_FILENAME = "tapdb-config.yaml"
+DEFAULT_TAPDB_POSTGRES_PORT = "5533"
 
 
 def _default_config_path() -> Path:
@@ -181,7 +182,8 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
             os.environ.get("PGHOST", _file_str("host") or "localhost"),
         ),
         "port": os.environ.get(
-            f"{env_prefix}PORT", os.environ.get("PGPORT", _file_str("port") or "5432")
+            f"{env_prefix}PORT",
+            os.environ.get("PGPORT", _file_str("port") or DEFAULT_TAPDB_POSTGRES_PORT),
         ),
         "user": os.environ.get(
             f"{env_prefix}USER",

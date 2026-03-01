@@ -498,30 +498,173 @@ function initCytoscape(container, elements) {
     return cy;
 }
 
-function showNodeInfo(data) {
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function prettyJson(value) {
+    if (value === undefined) {
+        return '{}';
+    }
+    return JSON.stringify(value === null ? {} : value, null, 2);
+}
+
+function topLevelRowValue(key, value) {
+    if (value === null || value === undefined || value === '') {
+        return '<span style="color: var(--text-muted);">-</span>';
+    }
+    if (key === 'json_addl') {
+        return '<span style="color: var(--text-muted);">See JSON section below</span>';
+    }
+    if (typeof value === 'object') {
+        return `<code>${escapeHtml(JSON.stringify(value))}</code>`;
+    }
+    return escapeHtml(String(value));
+}
+
+function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
     const content = document.getElementById('node-info-content');
+    if (!content) {
+        return;
+    }
+
+    const merged = { ...(objectData || {}) };
+    if (!Object.prototype.hasOwnProperty.call(merged, 'euid')) {
+        merged.euid = euid;
+    }
+
+    const preferredKeys = [
+        'uuid',
+        'euid',
+        'name',
+        'type',
+        'obj_type',
+        'category',
+        'subtype',
+        'version',
+        'bstatus',
+        'source',
+        'target',
+        'relationship_type',
+        'created_dt',
+        'json_addl',
+    ];
+    const remainingKeys = Object.keys(merged)
+        .filter((k) => !preferredKeys.includes(k))
+        .sort();
+    const keys = preferredKeys.filter((k) => Object.prototype.hasOwnProperty.call(merged, k)).concat(remainingKeys);
+
+    const topLevelRows = keys.map((key) => `
+        <div class="detail-key">${escapeHtml(key)}</div>
+        <div class="detail-value">${topLevelRowValue(key, merged[key])}</div>
+    `).join('');
+
+    const rawObjectPayload = objectData || {};
+    const graphPayload = graphData || {};
+    const jsonPayload = Object.prototype.hasOwnProperty.call(merged, 'json_addl')
+        ? merged.json_addl
+        : {};
+
+    const actions = `
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem;">
+            <a href="/object/${encodeURIComponent(euid)}" class="btn">View Details</a>
+            ${
+                isNode
+                    ? `<button onclick="centerOnNode('${escapeHtml(euid)}')" class="btn">Center on Node</button>`
+                    : ''
+            }
+        </div>
+    `;
+
     content.innerHTML = `
-        <p><strong>EUID:</strong> <a href="/object/${data.id}">${data.id}</a></p>
-        <p><strong>Name:</strong> ${data.name || '-'}</p>
-        <p><strong>Category:</strong> ${data.category || '-'}</p>
-        <p><strong>Type:</strong> ${data.type || '-'}</p>
-        <p><strong>Subtype:</strong> ${data.subtype || '-'}</p>
-        <hr style="border-color: var(--border-color); margin: 0.75rem 0;">
-        <a href="/object/${data.id}" class="btn" style="width: 100%; text-align: center;">View Details</a>
-        <button onclick="centerOnNode('${data.id}')" class="btn" style="width: 100%; margin-top: 0.5rem;">Center on Node</button>
+        ${actions}
+        <div class="details-section-title">Top-Level Properties</div>
+        <div class="details-grid">${topLevelRows || '<span style="color: var(--text-muted);">No properties.</span>'}</div>
+        <div class="details-section-title">Raw Object JSON</div>
+        <pre class="json-block">${escapeHtml(prettyJson(rawObjectPayload))}</pre>
+        <div class="details-section-title">JSON (json_addl)</div>
+        <pre class="json-block">${escapeHtml(prettyJson(jsonPayload))}</pre>
+        <div class="details-section-title">Graph Payload</div>
+        <pre class="json-block">${escapeHtml(prettyJson(graphPayload))}</pre>
     `;
 }
 
-function showEdgeInfo(data) {
+async function fetchObjectData(euid) {
+    const response = await fetch(`/api/object/${encodeURIComponent(euid)}`, {
+        headers: {
+            Accept: 'application/json',
+        },
+    });
+    if (!response.ok) {
+        throw new Error(`Failed to load object details (${response.status})`);
+    }
+    return response.json();
+}
+
+async function showNodeInfo(data) {
     const content = document.getElementById('node-info-content');
-    content.innerHTML = `
-        <p><strong>Lineage EUID:</strong> <a href="/object/${data.id}">${data.id}</a></p>
-        <p><strong>Child (source):</strong> <a href="/object/${data.source}">${data.source}</a></p>
-        <p><strong>Parent (target):</strong> <a href="/object/${data.target}">${data.target}</a></p>
-        <p><strong>Relationship:</strong> ${data.relationship_type || 'related'}</p>
-        <hr style="border-color: var(--border-color); margin: 0.75rem 0;">
-        <a href="/object/${data.id}" class="btn" style="width: 100%; text-align: center;">View Lineage</a>
-    `;
+    if (content) {
+        content.innerHTML = '<p style="color: var(--text-muted);">Loading node details...</p>';
+    }
+    try {
+        const objectData = await fetchObjectData(data.id);
+        renderDetailsPanel({
+            euid: data.id,
+            objectData,
+            graphData: data,
+            isNode: true,
+        });
+    } catch (error) {
+        console.error('Failed to load node details:', error);
+        renderDetailsPanel({
+            euid: data.id,
+            objectData: {
+                euid: data.id,
+                name: data.name,
+                category: data.category,
+                type: data.type,
+                subtype: data.subtype,
+            },
+            graphData: data,
+            isNode: true,
+        });
+        setStatus(`Could not load full node details: ${error.message}`, 'warn');
+    }
+}
+
+async function showEdgeInfo(data) {
+    const content = document.getElementById('node-info-content');
+    if (content) {
+        content.innerHTML = '<p style="color: var(--text-muted);">Loading edge details...</p>';
+    }
+    try {
+        const objectData = await fetchObjectData(data.id);
+        renderDetailsPanel({
+            euid: data.id,
+            objectData,
+            graphData: data,
+            isNode: false,
+        });
+    } catch (error) {
+        console.error('Failed to load edge details:', error);
+        renderDetailsPanel({
+            euid: data.id,
+            objectData: {
+                euid: data.id,
+                source: data.source,
+                target: data.target,
+                relationship_type: data.relationship_type || 'related',
+            },
+            graphData: data,
+            isNode: false,
+        });
+        setStatus(`Could not load full edge details: ${error.message}`, 'warn');
+    }
 }
 
 function centerOnNode(nodeId) {

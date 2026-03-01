@@ -664,7 +664,7 @@ class TestCLIDB:
             config = _get_db_config(Environment.dev)
             assert config["database"] == "tapdb_dev"
             assert config["host"] == "localhost"
-            assert config["port"] == "5432"
+            assert config["port"] == "5533"
 
     def test_get_db_config_env_override(self):
         """Test _get_db_config respects environment variables."""
