@@ -6,8 +6,8 @@ The `audit_log` table is populated by Postgres triggers and should be treated as
 Phase 2 spec: audit log is trigger-based but ORM-available for querying/display.
 """
 
-from sqlalchemy import Boolean, Column, DateTime, FetchedValue, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import BIGINT, Boolean, Column, DateTime, FetchedValue, Text
+from sqlalchemy.dialects.postgresql import JSONB
 
 from daylily_tapdb.models.base import Base
 
@@ -17,12 +17,15 @@ class audit_log(Base):
 
     __tablename__ = "audit_log"
 
-    uuid = Column(UUID, primary_key=True, nullable=False, server_default=FetchedValue())
+    uuid = Column(BIGINT, primary_key=True, nullable=False, server_default=FetchedValue())
+    euid = Column(Text, nullable=False, server_default=FetchedValue())
+    euid_prefix = Column(Text, nullable=False, server_default=FetchedValue())
+    euid_seq = Column(BIGINT, nullable=False, server_default=FetchedValue())
 
     rel_table_name = Column(Text, nullable=False)
     column_name = Column(Text, nullable=True)
 
-    rel_table_uuid_fk = Column(UUID, nullable=False)
+    rel_table_uuid_fk = Column(BIGINT, nullable=False)
     rel_table_euid_fk = Column(Text, nullable=False)
 
     old_value = Column(Text, nullable=True)

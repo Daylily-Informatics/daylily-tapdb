@@ -47,7 +47,11 @@ TAPDB provides a reusable foundation for applications that need:
 | `generic_template` | Blueprints defining how instances should be created | `GT` |
 | `generic_instance` | Concrete objects created from templates | Configurable per template |
 | `generic_instance_lineage` | Directed edges between instances (DAG) | `GN` |
-| `audit_log` | Automatic change tracking | — |
+| `tapdb_user` | TAPDB admin/auth user records | Configurable (`tapdb_user_euid_prefix`) |
+| `audit_log` | Automatic change tracking | Configurable (`audit_log_euid_prefix`) |
+| `tapdb_identity_prefix_config` | Prefix registry for non-template identity domains | N/A |
+
+Internal primary keys are sequence-backed `BIGINT` columns (historical column name: `uuid`), while public identity remains EUID-based.
 
 ### Type Hierarchy
 
@@ -413,6 +417,8 @@ tapdb bootstrap local
 | `TAPDB_ENV` | Active environment name used by the CLI (e.g. `dev`, `test`, `prod`) | — |
 | `TAPDB_DATABASE_NAME` | Optional config namespace key; when set, CLI prefers `tapdb-config-<name>.yaml` | — |
 | `TAPDB_<ENV>_COGNITO_USER_POOL_ID` | Optional override for env-bound Cognito pool ID | — |
+| `TAPDB_<ENV>_TAPDB_USER_EUID_PREFIX` | Required for schema/bootstrap writes; prefix for `tapdb_user` EUIDs | — |
+| `TAPDB_<ENV>_AUDIT_LOG_EUID_PREFIX` | Required for schema/bootstrap writes; prefix for `audit_log` EUIDs | — |
 | `TAPDB_CONFIG_PATH` | Explicit path to TAPDB CLI config (`tapdb-config*.yaml`/`.json`) | — |
 | `TAPDB_TEST_DSN` | Postgres DSN enabling integration tests (`tests/test_integration.py`) | — |
 | `TAPDB_SESSION_SECRET` | **Prod admin UI required**: session secret | — |
@@ -455,12 +461,18 @@ Example config:
 ```yaml
 environments:
   dev:
+    engine_type: local
     host: localhost
     port: 5432
     user: daylily
+    password: ""
     database: tapdb_dev
     cognito_user_pool_id: us-east-1_xxxxxxxxx
+    tapdb_user_euid_prefix: TUS
+    audit_log_euid_prefix: TAD
 ```
+
+`tapdb_user_euid_prefix` and `audit_log_euid_prefix` must be valid Meridian prefixes (`^[A-HJ-KMNP-TV-Z]{2,3}$`).
 
 Supported file shapes:
 
@@ -1149,7 +1161,7 @@ daylily-tapdb/
 ## Requirements
 
 - **Python:** 3.10+
-- **PostgreSQL:** 13+ (for built-in `gen_random_uuid()`)
+- **PostgreSQL:** 13+
 - **SQLAlchemy:** 2.0+
 - **psycopg2-binary:** 2.9+
 

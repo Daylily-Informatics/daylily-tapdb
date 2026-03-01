@@ -7,8 +7,7 @@ Instances are concrete objects created from templates.
 
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Column, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import BIGINT, Column, ForeignKey
 from sqlalchemy.orm import backref, relationship
 
 from daylily_tapdb.models.base import tapdb_core
@@ -35,7 +34,7 @@ class generic_instance(tapdb_core):
         "confirm_deleted_rows": False,
     }
 
-    template_uuid = Column(UUID, ForeignKey("generic_template.uuid"), nullable=False)
+    template_uuid = Column(BIGINT, ForeignKey("generic_template.uuid"), nullable=False)
 
     # Lineage relationships
     parent_of_lineages = relationship(

@@ -54,7 +54,7 @@ def materialize_actions(
         # so ActionDispatcher can persist action_instance rows against the action
         # template (ensuring XX prefix), not against the target instance template.
         action_groups[group_name][action_key] = {
-            "action_template_uuid": str(action_tmpl.uuid),
+            "action_template_uuid": action_tmpl.uuid,
             "action_template_euid": action_tmpl.euid,
             "action_template_code": template_code,
             **action_tmpl.json_addl.get("action_definition", {}),
@@ -164,7 +164,7 @@ class InstanceFactory:
         )
 
         session.add(instance)
-        session.flush()  # Get UUID/EUID assigned
+        session.flush()  # Get ID/EUID assigned
 
         # Create children if requested
         if create_children:

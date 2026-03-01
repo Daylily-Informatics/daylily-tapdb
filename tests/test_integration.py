@@ -9,7 +9,6 @@ import json
 import os
 import random
 import time
-import uuid
 from pathlib import Path
 
 import pytest
@@ -220,12 +219,12 @@ def test_postgres_schema_install_is_idempotent():
         _drop_schema(dsn, schema_name)
 
 
-def test_postgres_restricted_role_schema_install_and_uuid_fallback():
-    """Production-like behavior:
+def test_postgres_restricted_role_schema_install_and_identity_triggers():
+    """Production-like behavior under restricted role privileges.
 
     - Connect as a non-superuser role to a fresh DB
-    - Schema install must not fail if pgcrypto can't be installed
-    - tapdb_gen_uuid() must still work (fallback UUID generation)
+    - Schema install succeeds without UUID extension helpers
+    - Identity/EUID triggers produce bigint ID + Meridian EUID fields
     """
     dsn = os.environ.get("TAPDB_TEST_DSN")
     if not dsn:
@@ -241,7 +240,7 @@ def test_postgres_restricted_role_schema_install_and_uuid_fallback():
     repo_root = Path(__file__).resolve().parents[1]
     schema_sql_path = repo_root / "schema" / "tapdb_schema.sql"
 
-    suffix = uuid.uuid4().hex[:10]
+    suffix = f"{int(time.time())}{random.randint(1, 1_000_000)}"[-10:]
     role = f"tapdb_restricted_{suffix}"
     db = f"tapdb_restricted_db_{suffix}"
     pwd = f"pw_{suffix}"
@@ -323,22 +322,26 @@ def test_postgres_restricted_role_schema_install_and_uuid_fallback():
                 psql.SQL("SET search_path TO {};").format(psql.Identifier(schema_name))
             )
 
-            # Force the tapdb_gen_uuid() fallback branch in a portable way even
-            # if the cluster provides gen_random_uuid() (via pgcrypto or otherwise).
             role_cur.execute(
                 """
-                CREATE OR REPLACE FUNCTION gen_random_uuid()
-                RETURNS uuid AS $$
-                BEGIN
-                    RAISE EXCEPTION 'blocked for test' USING ERRCODE = '0A000';
-                END;
-                $$ LANGUAGE plpgsql;
+                INSERT INTO generic_template (
+                    name, polymorphic_discriminator, category, type, subtype, version,
+                    instance_prefix, bstatus
+                ) VALUES (
+                    'restricted-template', 'generic_template',
+                    'generic', 'test', 'restricted', '1.0',
+                    'GX', 'active'
+                )
+                RETURNING uuid, euid, euid_prefix, euid_seq;
                 """
             )
-
-            role_cur.execute("SELECT tapdb_gen_uuid()::text;")
-            (uuid_txt,) = role_cur.fetchone()
-            uuid.UUID(uuid_txt)
+            row = role_cur.fetchone()
+            assert row is not None
+            assert isinstance(row[0], int)
+            assert row[0] > 0
+            assert isinstance(row[1], str) and row[1].startswith("GT-")
+            assert row[2] == "GT"
+            assert isinstance(row[3], int) and row[3] > 0
         finally:
             role_cur.close()
             role_conn.close()

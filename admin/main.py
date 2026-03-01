@@ -1234,7 +1234,7 @@ async def api_list_templates(
             return {
                 "items": [
                     {
-                        "uuid": str(t.uuid),
+                        "uuid": t.uuid,
                         "euid": t.euid,
                         "name": t.name,
                         "category": t.category,
@@ -1269,7 +1269,7 @@ async def api_list_instances(
             return {
                 "items": [
                     {
-                        "uuid": str(i.uuid),
+                        "uuid": i.uuid,
                         "euid": i.euid,
                         "name": i.name,
                         "category": i.category,
@@ -1305,7 +1305,7 @@ async def api_get_object(euid: str):
                 raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
 
             return {
-                "uuid": str(obj.uuid),
+                "uuid": obj.uuid,
                 "euid": obj.euid,
                 "name": obj.name,
                 "type": obj_type,
@@ -1378,7 +1378,7 @@ async def api_create_lineage(request: Request):
                     ) from exc
                 raise
 
-            return {"success": True, "euid": lineage.euid, "uuid": str(lineage.uuid)}
+            return {"success": True, "euid": lineage.euid, "uuid": lineage.uuid}
 
 
 @app.delete("/api/object/{euid}")
