@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - TAPDB Admin</title>
+    <title>Create Account - TAPDB Admin</title>
     <link rel="stylesheet" type="text/css" href="{{ style.skin_css }}">
     <style>
         :root {
@@ -27,24 +27,24 @@
             align-items: center;
             justify-content: center;
         }
-        .login-container {
+        .signup-container {
             background: var(--card-bg);
             padding: 2rem;
             border-radius: 8px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.3);
             width: 100%;
-            max-width: 400px;
+            max-width: 420px;
         }
-        .login-header {
+        .signup-header {
             text-align: center;
-            margin-bottom: 2rem;
+            margin-bottom: 1.5rem;
         }
-        .login-header h1 {
+        .signup-header h1 {
             margin: 0;
-            font-size: 1.8rem;
+            font-size: 1.7rem;
             color: var(--secondary-color);
         }
-        .login-header p {
+        .signup-header p {
             color: var(--text-muted);
             margin-top: 0.5rem;
         }
@@ -70,7 +70,7 @@
             outline: none;
             border-color: var(--secondary-color);
         }
-        .btn-login {
+        .btn-signup {
             width: 100%;
             padding: 0.75rem;
             background: var(--secondary-color);
@@ -81,7 +81,7 @@
             cursor: pointer;
             transition: background 0.2s;
         }
-        .btn-login:hover {
+        .btn-signup:hover {
             background: #2980b9;
         }
         .error-message {
@@ -93,41 +93,50 @@
             margin-bottom: 1rem;
             text-align: center;
         }
-        .signup-link {
+        .login-link {
             display: block;
             text-align: center;
             margin-top: 1rem;
             color: var(--text-muted);
             text-decoration: none;
         }
-        .signup-link:hover {
+        .login-link:hover {
             color: var(--secondary-color);
         }
     </style>
 </head>
 <body>
-    <div class="login-container">
-        <div class="login-header">
-            <h1>🗄️ TAPDB Admin</h1>
-            <p>Templated Abstract Polymorphic Database</p>
+    <div class="signup-container">
+        <div class="signup-header">
+            <h1>🗄️ TAPDB Account</h1>
+            <p>Create Cognito-backed account</p>
         </div>
-        
+
         {% if error %}
         <div class="error-message">{{ error }}</div>
         {% endif %}
-        
-        <form method="POST" action="/login">
+
+        <form method="POST" action="/signup">
             <div class="form-group">
-                <label for="username">Email or Username</label>
-                <input type="text" id="username" name="username" required autofocus placeholder="email or username">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" required autofocus>
+            </div>
+            <div class="form-group">
+                <label for="display_name">Display Name (optional)</label>
+                <input type="text" id="display_name" name="display_name">
             </div>
             <div class="form-group">
                 <label for="password">Password</label>
-                <input type="password" id="password" name="password" required>
+                <input type="password" id="password" name="password" required minlength="8">
             </div>
-            <button type="submit" class="btn-login">Sign In</button>
+            <div class="form-group">
+                <label for="confirm_password">Confirm Password</label>
+                <input type="password" id="confirm_password" name="confirm_password" required minlength="8">
+            </div>
+            <button type="submit" class="btn-signup">Create Account</button>
         </form>
-        <a href="/signup" class="signup-link">Create account</a>
+
+        <a href="/login" class="login-link">Already have an account? Sign in</a>
     </div>
 </body>
 </html>

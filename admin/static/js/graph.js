@@ -3,6 +3,17 @@
  */
 
 let cy = null;
+let keyboardHandlersInstalled = false;
+let pendingLineageChildId = null;
+const tapTracker = new Map();
+const keyState = {
+    d: false,
+    l: false,
+};
+
+const TAP_SEQUENCE_MS = 700;
+const WAVE_STEP_MS = 260;
+const WAVE_GLOW_MS = 520;
 
 const cytoscapeStyle = [
     {
@@ -22,6 +33,11 @@ const cytoscapeStyle = [
             'border-color': '#333',
             'text-outline-color': '#000',
             'text-outline-width': '2px',
+            'shadow-color': '#000',
+            'shadow-opacity': 0.25,
+            'shadow-blur': 4,
+            'transition-property': 'background-color, border-color, border-width, shadow-color, shadow-opacity, shadow-blur',
+            'transition-duration': '420ms',
         }
     },
     {
@@ -33,21 +49,53 @@ const cytoscapeStyle = [
         }
     },
     {
+        selector: 'node.link-anchor',
+        style: {
+            'border-color': '#ffe47a',
+            'border-width': '5px',
+            'shadow-color': '#ffe47a',
+            'shadow-opacity': 0.95,
+            'shadow-blur': 22,
+        }
+    },
+    {
+        selector: 'node.wave-child',
+        style: {
+            'background-color': '#ff4fa3',
+            'border-color': '#ffd7ea',
+            'border-width': '5px',
+            'shadow-color': '#ff4fa3',
+            'shadow-opacity': 0.9,
+            'shadow-blur': 26,
+        }
+    },
+    {
+        selector: 'node.wave-parent',
+        style: {
+            'background-color': '#26d9ff',
+            'border-color': '#cbf7ff',
+            'border-width': '5px',
+            'shadow-color': '#26d9ff',
+            'shadow-opacity': 0.9,
+            'shadow-blur': 26,
+        }
+    },
+    {
         selector: 'edge',
         style: {
-			// Directed edges: always render arrowhead on the *target* end.
-			// Extra endpoint/distance settings keep arrowheads visible outside node borders.
-			'width': 2,
-			'line-color': '#666',
-			'curve-style': 'bezier',
-			'source-arrow-shape': 'none',
-			'target-arrow-shape': 'triangle',
-			'target-arrow-fill': 'filled',
-			'target-arrow-color': '#666',
-			'source-endpoint': 'outside-to-node',
-			'target-endpoint': 'outside-to-node',
-			'target-distance-from-node': 6,
-			'arrow-scale': 1.6,
+            // Directed edges: always render arrowhead on the *target* end.
+            // Extra endpoint/distance settings keep arrowheads visible outside node borders.
+            'width': 2,
+            'line-color': '#666',
+            'curve-style': 'bezier',
+            'source-arrow-shape': 'none',
+            'target-arrow-shape': 'triangle',
+            'target-arrow-fill': 'filled',
+            'target-arrow-color': '#666',
+            'source-endpoint': 'outside-to-node',
+            'target-endpoint': 'outside-to-node',
+            'target-distance-from-node': 6,
+            'arrow-scale': 1.6,
         }
     },
     {
@@ -60,36 +108,393 @@ const cytoscapeStyle = [
     }
 ];
 
+function setStatus(message, level = '') {
+    const el = document.getElementById('graph-mode-status');
+    if (!el) {
+        return;
+    }
+    el.textContent = message;
+    el.className = '';
+    if (level) {
+        el.classList.add(level);
+    }
+}
+
+function installKeyboardHandlers() {
+    if (keyboardHandlersInstalled) {
+        return;
+    }
+    keyboardHandlersInstalled = true;
+
+    document.addEventListener('keydown', (evt) => {
+        const key = (evt.key || '').toLowerCase();
+        if (key === 'd') {
+            keyState.d = true;
+        }
+        if (key === 'l') {
+            keyState.l = true;
+            if (!pendingLineageChildId) {
+                setStatus('Link mode: hold L and click a child node.', 'warn');
+            }
+        }
+        if (key === 'escape') {
+            clearPendingLineageSelection();
+            setStatus('Cleared selection.', 'warn');
+        }
+    });
+
+    document.addEventListener('keyup', (evt) => {
+        const key = (evt.key || '').toLowerCase();
+        if (key === 'd') {
+            keyState.d = false;
+        }
+        if (key === 'l') {
+            keyState.l = false;
+        }
+    });
+}
+
+function registerTapSequence(nodeId, button) {
+    const key = `${nodeId}|${button}`;
+    const now = Date.now();
+    const prev = tapTracker.get(key);
+
+    let count = 1;
+    if (prev && now - prev.lastTs <= TAP_SEQUENCE_MS) {
+        count = prev.count + 1;
+    }
+
+    tapTracker.set(key, { count, lastTs: now });
+
+    if (count >= 3) {
+        tapTracker.set(key, { count: 0, lastTs: now });
+        return true;
+    }
+    return false;
+}
+
+function clearPendingLineageSelection() {
+    if (!pendingLineageChildId || !cy) {
+        pendingLineageChildId = null;
+        return;
+    }
+    const node = cy.getElementById(pendingLineageChildId);
+    if (node && node.length > 0) {
+        node.removeClass('link-anchor');
+    }
+    pendingLineageChildId = null;
+}
+
+function setPendingLineageChild(node) {
+    clearPendingLineageSelection();
+    pendingLineageChildId = node.id();
+    node.addClass('link-anchor');
+    setStatus(`Link mode: child ${pendingLineageChildId} selected. Click parent node.`, 'warn');
+}
+
+function collectWaveLevels(startNode, direction) {
+    const levels = [];
+    const visited = new Set([startNode.id()]);
+    let frontier = cy.collection(startNode);
+
+    while (frontier.length > 0) {
+        let next = cy.collection();
+
+        frontier.forEach((node) => {
+            const neighbors = direction === 'children'
+                ? node.incomers('edge').sources()
+                : node.outgoers('edge').targets();
+
+            neighbors.forEach((neighbor) => {
+                const nid = neighbor.id();
+                if (!visited.has(nid)) {
+                    visited.add(nid);
+                    next = next.add(neighbor);
+                }
+            });
+        });
+
+        if (next.length === 0) {
+            break;
+        }
+
+        levels.push(next);
+        frontier = next;
+    }
+
+    return levels;
+}
+
+function runWaveFromNode(startNode, direction) {
+    if (!cy || !startNode) {
+        return;
+    }
+
+    const levels = collectWaveLevels(startNode, direction);
+    if (levels.length === 0) {
+        setStatus(`No ${direction} found for ${startNode.id()}.`, 'warn');
+        return;
+    }
+
+    const className = direction === 'children' ? 'wave-child' : 'wave-parent';
+    const colorName = direction === 'children' ? 'pink' : 'aqua';
+    setStatus(`Running ${direction} wave (${colorName}) from ${startNode.id()}...`, 'ok');
+
+    levels.forEach((nodes, index) => {
+        window.setTimeout(() => {
+            nodes.addClass(className);
+            window.setTimeout(() => {
+                nodes.removeClass(className);
+            }, WAVE_GLOW_MS);
+        }, index * WAVE_STEP_MS);
+    });
+}
+
+async function deleteGraphObject(ele) {
+    const objectId = ele.data('id');
+    const typeLabel = ele.isNode() ? 'node' : 'edge';
+
+    try {
+        const response = await fetch(`/api/object/${encodeURIComponent(objectId)}`, {
+            method: 'DELETE',
+            headers: {
+                'Accept': 'application/json',
+            },
+        });
+
+        let payload = {};
+        try {
+            payload = await response.json();
+        } catch (_err) {
+            // Non-JSON responses still handled by HTTP status.
+        }
+
+        if (!response.ok) {
+            throw new Error(payload.detail || payload.message || `Failed to delete ${typeLabel}`);
+        }
+
+        // Remove clicked element locally for immediate feedback.
+        if (ele && ele.length > 0) {
+            ele.remove();
+        }
+
+        refreshLegendFromCurrentGraph();
+        setStatus(`Deleted ${typeLabel} ${objectId}.`, 'ok');
+    } catch (error) {
+        console.error('Delete failed:', error);
+        setStatus(`Delete failed: ${error.message}`, 'error');
+    }
+}
+
+function pickRelationshipType(childId, parentId) {
+    const dialog = document.getElementById('relationship-dialog');
+    const selectEl = document.getElementById('relationship-type-select');
+    const contextEl = document.getElementById('relationship-dialog-context');
+    const cancelBtn = document.getElementById('relationship-dialog-cancel');
+    const createBtn = document.getElementById('relationship-dialog-create');
+
+    if (!dialog || !selectEl || !cancelBtn || !createBtn || typeof dialog.showModal !== 'function') {
+        const entered = window.prompt(
+            `Relationship type for child ${childId} -> parent ${parentId}:`,
+            'generic'
+        );
+        const trimmed = (entered || '').trim();
+        return Promise.resolve(trimmed || null);
+    }
+
+    contextEl.textContent = `Child: ${childId} -> Parent: ${parentId}`;
+    selectEl.value = 'generic';
+
+    return new Promise((resolve) => {
+        const cleanup = () => {
+            cancelBtn.removeEventListener('click', onCancel);
+            createBtn.removeEventListener('click', onCreate);
+            dialog.removeEventListener('cancel', onCancel);
+        };
+
+        const onCancel = () => {
+            cleanup();
+            dialog.close();
+            resolve(null);
+        };
+
+        const onCreate = () => {
+            const value = (selectEl.value || '').trim();
+            cleanup();
+            dialog.close();
+            resolve(value || 'generic');
+        };
+
+        cancelBtn.addEventListener('click', onCancel);
+        createBtn.addEventListener('click', onCreate);
+        dialog.addEventListener('cancel', onCancel);
+        dialog.showModal();
+    });
+}
+
+async function createLineageEdge(childId, parentId, relationshipType) {
+    const response = await fetch('/api/lineage', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+        },
+        body: JSON.stringify({
+            child_euid: childId,
+            parent_euid: parentId,
+            relationship_type: relationshipType || 'generic',
+        }),
+    });
+
+    let payload = {};
+    try {
+        payload = await response.json();
+    } catch (_err) {
+        // Non-JSON responses still handled by HTTP status.
+    }
+
+    if (!response.ok) {
+        throw new Error(payload.detail || payload.message || `Failed to create edge (${response.status})`);
+    }
+
+    const edgeId = payload.euid || `edge-${Date.now()}`;
+    cy.add({
+        group: 'edges',
+        data: {
+            id: edgeId,
+            source: childId,
+            target: parentId,
+            relationship_type: relationshipType || 'generic',
+        },
+    });
+
+    refreshLegendFromCurrentGraph();
+    setStatus(`Created edge ${childId} -> ${parentId} (${relationshipType || 'generic'}).`, 'ok');
+}
+
+function refreshLegendFromCurrentGraph() {
+    if (!cy) {
+        return;
+    }
+    const typesInGraph = {};
+    cy.nodes().forEach((node) => {
+        const data = node.data();
+        const category = data.category;
+        const color = data.color;
+        if (category && color && !typesInGraph[category]) {
+            typesInGraph[category] = color;
+        }
+    });
+    updateLegend(typesInGraph);
+}
+
 function initCytoscape(container, elements) {
+    if (cy) {
+        cy.destroy();
+    }
+
+    installKeyboardHandlers();
+    clearPendingLineageSelection();
+
+    container.addEventListener('contextmenu', (evt) => {
+        evt.preventDefault();
+    });
+
     cy = cytoscape({
         container: container,
         elements: elements,
         style: cytoscapeStyle,
-		// With child->parent directionality, use bottom-to-top so parents tend to render above children.
-		layout: { name: 'dagre', rankDir: 'BT', nodeSep: 50, rankSep: 80 },
+        // With child->parent directionality, use bottom-to-top so parents tend to render above children.
+        layout: { name: 'dagre', rankDir: 'BT', nodeSep: 50, rankSep: 80 },
         minZoom: 0.1,
         maxZoom: 3,
         wheelSensitivity: 0.3,
     });
 
-    // Node click handler
-    cy.on('tap', 'node', function(evt) {
+    // Left click on node.
+    cy.on('tap', 'node', async function(evt) {
         const node = evt.target;
         showNodeInfo(node.data());
+
+        if (pendingLineageChildId) {
+            const childId = pendingLineageChildId;
+            const parentId = node.id();
+
+            if (childId === parentId) {
+                setStatus('Child and parent cannot be the same node.', 'warn');
+                clearPendingLineageSelection();
+                return;
+            }
+
+            const relationshipType = await pickRelationshipType(childId, parentId);
+            if (!relationshipType) {
+                clearPendingLineageSelection();
+                setStatus('Edge creation cancelled.', 'warn');
+                return;
+            }
+
+            try {
+                await createLineageEdge(childId, parentId, relationshipType);
+            } catch (error) {
+                console.error('Edge creation failed:', error);
+                setStatus(`Edge creation failed: ${error.message}`, 'error');
+            } finally {
+                clearPendingLineageSelection();
+            }
+            return;
+        }
+
+        if (keyState.l) {
+            setPendingLineageChild(node);
+            return;
+        }
+
+        if (registerTapSequence(node.id(), 'left')) {
+            runWaveFromNode(node, 'children');
+        }
     });
 
-    // Edge click handler
+    // Right click on node.
+    cy.on('cxttap', 'node', async function(evt) {
+        const node = evt.target;
+
+        if (keyState.d) {
+            await deleteGraphObject(node);
+            return;
+        }
+
+        showNodeInfo(node.data());
+
+        if (registerTapSequence(node.id(), 'right')) {
+            runWaveFromNode(node, 'parents');
+        }
+    });
+
+    // Left click on edge.
     cy.on('tap', 'edge', function(evt) {
         const edge = evt.target;
         showEdgeInfo(edge.data());
     });
 
-    // Double-click to navigate
+    // Right click on edge.
+    cy.on('cxttap', 'edge', async function(evt) {
+        const edge = evt.target;
+
+        if (keyState.d) {
+            await deleteGraphObject(edge);
+            return;
+        }
+
+        showEdgeInfo(edge.data());
+    });
+
+    // Double-click to navigate.
     cy.on('dbltap', 'node', function(evt) {
         const euid = evt.target.data('id');
         window.location.href = '/object/' + euid;
     });
 
+    setStatus('Ready.', '');
     return cy;
 }
 
@@ -111,8 +516,8 @@ function showEdgeInfo(data) {
     const content = document.getElementById('node-info-content');
     content.innerHTML = `
         <p><strong>Lineage EUID:</strong> <a href="/object/${data.id}">${data.id}</a></p>
-		<p><strong>Child (source):</strong> <a href="/object/${data.source}">${data.source}</a></p>
-		<p><strong>Parent (target):</strong> <a href="/object/${data.target}">${data.target}</a></p>
+        <p><strong>Child (source):</strong> <a href="/object/${data.source}">${data.source}</a></p>
+        <p><strong>Parent (target):</strong> <a href="/object/${data.target}">${data.target}</a></p>
         <p><strong>Relationship:</strong> ${data.relationship_type || 'related'}</p>
         <hr style="border-color: var(--border-color); margin: 0.75rem 0;">
         <a href="/object/${data.id}" class="btn" style="width: 100%; text-align: center;">View Lineage</a>
@@ -131,15 +536,19 @@ function centerOnNode(nodeId) {
 }
 
 function applyLayout() {
+    if (!cy) {
+        return;
+    }
+
     const layoutName = document.getElementById('layout-select').value;
     const layoutOptions = {
-		dagre: { name: 'dagre', rankDir: 'BT', nodeSep: 50, rankSep: 80 },
+        dagre: { name: 'dagre', rankDir: 'BT', nodeSep: 50, rankSep: 80 },
         cose: { name: 'cose', animate: true, animationDuration: 500 },
         breadthfirst: { name: 'breadthfirst', directed: true, spacingFactor: 1.5 },
         circle: { name: 'circle' },
         grid: { name: 'grid' },
     };
-    
+
     cy.layout(layoutOptions[layoutName] || { name: layoutName }).run();
 }
 
@@ -162,15 +571,16 @@ async function loadGraph() {
         if (data.elements.nodes.length === 0) {
             container.innerHTML = '<div class="loading">No data found. Try a different EUID or leave empty for all.</div>';
             updateLegend({});
+            setStatus('No graph data found for this query.', 'warn');
             return;
         }
 
         container.innerHTML = '';
         initCytoscape(container, data.elements);
 
-        // Build dynamic legend from node categories in the graph
+        // Build dynamic legend from node categories in the graph.
         const typesInGraph = {};
-        data.elements.nodes.forEach(node => {
+        data.elements.nodes.forEach((node) => {
             const category = node.data.category;
             const color = node.data.color;
             if (category && !typesInGraph[category]) {
@@ -179,7 +589,7 @@ async function loadGraph() {
         });
         updateLegend(typesInGraph);
 
-        // Update URL without reload
+        // Update URL without reload.
         const newUrl = '/graph?start_euid=' + encodeURIComponent(startEuid) + '&depth=' + depth;
         window.history.replaceState({}, '', newUrl);
 
@@ -187,26 +597,28 @@ async function loadGraph() {
         console.error('Error loading graph:', error);
         container.innerHTML = '<div class="loading">Error loading graph: ' + error.message + '</div>';
         updateLegend({});
+        setStatus(`Load failed: ${error.message}`, 'error');
     }
 }
 
 function updateLegend(typesInGraph) {
     const legendContainer = document.getElementById('legend-items');
-    if (!legendContainer) return;
+    if (!legendContainer) {
+        return;
+    }
 
     if (Object.keys(typesInGraph).length === 0) {
         legendContainer.innerHTML = '<span style="color: var(--text-muted); font-size: 0.85rem;">No nodes in graph</span>';
         return;
     }
 
-    // Sort types alphabetically
+    // Sort types alphabetically.
     const sortedTypes = Object.keys(typesInGraph).sort();
 
-    legendContainer.innerHTML = sortedTypes.map(type => `
+    legendContainer.innerHTML = sortedTypes.map((type) => `
         <div class="legend-item">
             <div class="legend-color" style="background:${typesInGraph[type]}"></div>
             ${type}
         </div>
     `).join('');
 }
-

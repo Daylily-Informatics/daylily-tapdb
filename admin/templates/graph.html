@@ -71,6 +71,62 @@
     #node-info-content strong {
         color: var(--text-muted);
     }
+    #graph-mode-status {
+        margin-top: 0.6rem;
+        padding: 0.5rem 0.6rem;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        min-height: 2.1rem;
+    }
+    #graph-mode-status.ok {
+        color: #c9ffd9;
+        border-color: #2f7a4a;
+    }
+    #graph-mode-status.warn {
+        color: #ffd7a8;
+        border-color: #8d6b2f;
+    }
+    #graph-mode-status.error {
+        color: #ffd0d0;
+        border-color: #8b3d3d;
+    }
+    #relationship-dialog {
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background: var(--card-bg);
+        color: var(--text-color);
+        width: min(92vw, 440px);
+    }
+    #relationship-dialog::backdrop {
+        background: rgba(0, 0, 0, 0.45);
+    }
+    #relationship-dialog h3 {
+        margin: 0 0 0.6rem 0;
+        color: var(--secondary-color);
+    }
+    #relationship-dialog p {
+        margin: 0.35rem 0 0.75rem 0;
+        color: var(--text-muted);
+    }
+    #relationship-dialog select {
+        width: 100%;
+        margin-bottom: 0.9rem;
+        padding: 0.5rem;
+        border-radius: 4px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-color);
+        color: var(--text-color);
+    }
+    #relationship-dialog .dialog-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+    }
+    #relationship-dialog button {
+        padding: 0.45rem 0.7rem;
+    }
     .legend {
         display: flex;
         flex-wrap: wrap;
@@ -133,6 +189,17 @@
         </div>
 
         <div class="control-panel">
+            <h3>⌨️ Graph Gestures</h3>
+            <div style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.45;">
+                <div><strong>D + right click</strong>: delete node or edge</div>
+                <div><strong>3x left click node</strong>: child-wave glow (pink)</div>
+                <div><strong>3x right click node</strong>: parent-wave glow (aqua)</div>
+                <div><strong>L + left click node</strong>: pick child, then click parent to create edge</div>
+            </div>
+            <div id="graph-mode-status">Ready.</div>
+        </div>
+
+        <div class="control-panel">
             <h3>🎨 Legend</h3>
             <div class="legend" id="legend-items">
                 <span style="color: var(--text-muted); font-size: 0.85rem;">Loading...</span>
@@ -147,6 +214,26 @@
         </div>
     </div>
 </div>
+
+<dialog id="relationship-dialog">
+    <h3>Create Lineage Edge</h3>
+    <p id="relationship-dialog-context"></p>
+    <label for="relationship-type-select" style="font-size: 0.85rem; color: var(--text-muted);">Relationship Type</label>
+    <select id="relationship-type-select">
+        <option value="contains">contains</option>
+        <option value="derived_from">derived_from</option>
+        <option value="references">references</option>
+        <option value="depends_on">depends_on</option>
+        <option value="produces">produces</option>
+        <option value="consumes">consumes</option>
+        <option value="generic" selected>generic</option>
+        <option value="related">related</option>
+    </select>
+    <div class="dialog-actions">
+        <button id="relationship-dialog-cancel" type="button" class="btn">Cancel</button>
+        <button id="relationship-dialog-create" type="button" class="btn btn-success">Create Edge</button>
+    </div>
+</dialog>
 {% endblock %}
 
 {% block scripts %}
@@ -157,4 +244,3 @@
     });
 </script>
 {% endblock %}
-
