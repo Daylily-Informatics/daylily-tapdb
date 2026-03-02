@@ -254,7 +254,8 @@ class TestCLICognito:
         cfg_dir = tmp_path / ".config" / "daycog"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / f"{pool_name}.us-east-1.env").write_text(
-            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n",
+            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
+            "COGNITO_CLIENT_NAME=tapdb\n",
             encoding="utf-8",
         )
 
@@ -290,7 +291,8 @@ class TestCLICognito:
         args = captured["args"]
         assert args[:2] == ["setup", "--name"]
         assert "--autoprovision" in args
-        assert "--client-name" not in args  # optional unless explicitly provided
+        assert "--client-name" in args
+        assert "tapdb" in args
         assert "--callback-path" in args
         assert "--attach-domain" in args
         assert "--domain-prefix" not in args
@@ -303,7 +305,8 @@ class TestCLICognito:
         cfg_dir = tmp_path / ".config" / "daycog"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / f"{pool_name}.us-east-1.env").write_text(
-            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n",
+            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
+            "COGNITO_CLIENT_NAME=tapdb\n",
             encoding="utf-8",
         )
 
@@ -346,7 +349,8 @@ class TestCLICognito:
         cfg_dir = tmp_path / ".config" / "daycog"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / f"{pool_name}.us-east-1.env").write_text(
-            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n",
+            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
+            "COGNITO_CLIENT_NAME=tapdb\n",
             encoding="utf-8",
         )
 
@@ -508,7 +512,7 @@ class TestCLICognito:
         )
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito._find_pool_env_file_by_id",
-            lambda _pool_id: (
+            lambda _pool_id, **_kwargs: (
                 Path("/tmp/testpool.env"),
                 {
                     "AWS_PROFILE": "test",
@@ -516,7 +520,7 @@ class TestCLICognito:
                     "COGNITO_REGION": "us-east-1",
                     "COGNITO_USER_POOL_ID": "us-east-1_TESTPOOL",
                     "COGNITO_APP_CLIENT_ID": "cid123",
-                    "COGNITO_CLIENT_NAME": "tapdb-dev-users-client",
+                    "COGNITO_CLIENT_NAME": "tapdb",
                     "COGNITO_DOMAIN": "tapdb-dev-users.auth.us-east-1.amazoncognito.com",
                     "COGNITO_CALLBACK_URL": "https://localhost:8911/auth/callback",
                     "COGNITO_LOGOUT_URL": "https://localhost:8911/",
@@ -532,14 +536,14 @@ class TestCLICognito:
         assert "Callback:" in out
         assert "Logout:" in out
 
-    def test_cognito_add_user_creates_tapdb_user_row(self, monkeypatch):
+    def test_cognito_status_fails_on_local_uri_port_mismatch(self, monkeypatch):
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito.get_db_config_for_env",
             lambda _env: {"cognito_user_pool_id": "us-east-1_TESTPOOL"},
         )
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito._find_pool_env_file_by_id",
-            lambda _pool_id: (
+            lambda _pool_id, **_kwargs: (
                 Path("/tmp/testpool.env"),
                 {
                     "AWS_PROFILE": "test",
@@ -547,6 +551,115 @@ class TestCLICognito:
                     "COGNITO_REGION": "us-east-1",
                     "COGNITO_USER_POOL_ID": "us-east-1_TESTPOOL",
                     "COGNITO_APP_CLIENT_ID": "cid123",
+                    "COGNITO_CLIENT_NAME": "tapdb",
+                    "COGNITO_CALLBACK_URL": "https://localhost:9999/auth/callback",
+                    "COGNITO_LOGOUT_URL": "https://localhost:9999/",
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito._resolve_expected_ui_port",
+            lambda: (8911, "test"),
+        )
+
+        result = runner.invoke(app, ["cognito", "status", "dev"])
+        assert result.exit_code != 0
+        out = _strip_ansi(result.output)
+        assert "Cognito URI validation failed" in out
+        assert "does not match TAPDB UI port 8911" in out
+
+    def test_cognito_status_fails_on_non_https_uri(self, monkeypatch):
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito.get_db_config_for_env",
+            lambda _env: {"cognito_user_pool_id": "us-east-1_TESTPOOL"},
+        )
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito._find_pool_env_file_by_id",
+            lambda _pool_id, **_kwargs: (
+                Path("/tmp/testpool.env"),
+                {
+                    "AWS_PROFILE": "test",
+                    "AWS_REGION": "us-east-1",
+                    "COGNITO_REGION": "us-east-1",
+                    "COGNITO_USER_POOL_ID": "us-east-1_TESTPOOL",
+                    "COGNITO_APP_CLIENT_ID": "cid123",
+                    "COGNITO_CLIENT_NAME": "tapdb",
+                    "COGNITO_CALLBACK_URL": "http://localhost:8911/auth/callback",
+                    "COGNITO_LOGOUT_URL": "https://localhost:8911/",
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito._resolve_expected_ui_port",
+            lambda: (8911, "test"),
+        )
+
+        result = runner.invoke(app, ["cognito", "status", "dev"])
+        assert result.exit_code != 0
+        out = _strip_ansi(result.output)
+        assert "Cognito URI validation failed" in out
+        assert "must use https" in out
+
+    def test_cognito_status_fails_if_client_name_not_tapdb(self, monkeypatch):
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito.get_db_config_for_env",
+            lambda _env: {"cognito_user_pool_id": "us-east-1_TESTPOOL"},
+        )
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito._find_pool_env_file_by_id",
+            lambda _pool_id, **_kwargs: (
+                Path("/tmp/testpool.env"),
+                {
+                    "AWS_PROFILE": "test",
+                    "AWS_REGION": "us-east-1",
+                    "COGNITO_REGION": "us-east-1",
+                    "COGNITO_USER_POOL_ID": "us-east-1_TESTPOOL",
+                    "COGNITO_APP_CLIENT_ID": "cid123",
+                    "COGNITO_CLIENT_NAME": "wrong-client",
+                    "COGNITO_CALLBACK_URL": "https://localhost:8911/auth/callback",
+                    "COGNITO_LOGOUT_URL": "https://localhost:8911/",
+                },
+            ),
+        )
+
+        result = runner.invoke(app, ["cognito", "status", "dev"])
+        assert result.exit_code != 0
+        out = _strip_ansi(result.output)
+        assert "must select Cognito app client name 'tapdb'" in out
+
+    def test_cognito_setup_rejects_non_tapdb_client_name(self):
+        result = runner.invoke(
+            app,
+            [
+                "cognito",
+                "setup",
+                "dev",
+                "--pool-name",
+                "tapdb-dev-users",
+                "--client-name",
+                "custom-client",
+            ],
+        )
+        assert result.exit_code != 0
+        out = _strip_ansi(result.output)
+        assert "requires Cognito app client name 'tapdb'" in out
+
+    def test_cognito_add_user_creates_tapdb_user_row(self, monkeypatch):
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito.get_db_config_for_env",
+            lambda _env: {"cognito_user_pool_id": "us-east-1_TESTPOOL"},
+        )
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito._find_pool_env_file_by_id",
+            lambda _pool_id, **_kwargs: (
+                Path("/tmp/testpool.env"),
+                {
+                    "AWS_PROFILE": "test",
+                    "AWS_REGION": "us-east-1",
+                    "COGNITO_REGION": "us-east-1",
+                    "COGNITO_USER_POOL_ID": "us-east-1_TESTPOOL",
+                    "COGNITO_APP_CLIENT_ID": "cid123",
+                    "COGNITO_CLIENT_NAME": "tapdb",
                 },
             ),
         )
