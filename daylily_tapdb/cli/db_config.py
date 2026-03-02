@@ -150,6 +150,7 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
     - ``cognito_user_pool_id`` for TAPDB Admin Cognito auth binding.
     - ``tapdb_user_euid_prefix`` (required for schema/bootstrap writes)
     - ``audit_log_euid_prefix`` (required for schema/bootstrap writes)
+    - ``support_email`` for TAPDB Admin footer/help display.
 
     Aurora environments additionally return ``region``, ``cluster_identifier``,
     ``iam_auth``, and ``ssl`` keys.
@@ -209,6 +210,10 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
         "audit_log_euid_prefix": os.environ.get(
             f"{env_prefix}AUDIT_LOG_EUID_PREFIX",
             _file_str("audit_log_euid_prefix") or "",
+        ),
+        "support_email": os.environ.get(
+            f"{env_prefix}SUPPORT_EMAIL",
+            _file_str("support_email") or "",
         ),
     }
 

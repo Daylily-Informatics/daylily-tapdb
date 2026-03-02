@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}TAPDB Admin - Help{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Help</h1>
+
+<div class="card">
+    <h2 class="card-title">Getting Around</h2>
+    <p>Use the main navigation to browse templates, instances, lineage links, and the graph view.</p>
+    <ul style="margin-top: 0.75rem; padding-left: 1.1rem;">
+        <li><strong>Home</strong>: summary counts and quick links</li>
+        <li><strong>Templates</strong>: template catalog and template metadata</li>
+        <li><strong>Instances</strong>: instance list and object details</li>
+        <li><strong>Lineages</strong>: directed parent/child relationships</li>
+        <li><strong>Graph</strong>: interactive graph visualization and edge editing</li>
+    </ul>
+</div>
+
+<div class="card">
+    <h2 class="card-title">Graph Gestures</h2>
+    <ul style="padding-left: 1.1rem;">
+        <li><strong>D + right click</strong>: delete clicked node or edge</li>
+        <li><strong>3x left click on node</strong>: child-wave glow (pink)</li>
+        <li><strong>3x right click on node</strong>: parent-wave glow (aqua)</li>
+        <li><strong>L + left click on node</strong>: select child, then click parent to create edge</li>
+    </ul>
+</div>
+
+<div class="card">
+    <h2 class="card-title">Support</h2>
+    <p>
+        Contact support:
+        <a href="mailto:{{ tapdb_footer.support_email }}">{{ tapdb_footer.support_email }}</a>
+    </p>
+    <p style="margin-top: 0.5rem;">
+        Source repository:
+        <a href="{{ tapdb_footer.repo_url }}" target="_blank" rel="noopener noreferrer">{{ tapdb_footer.repo_url }}</a>
+    </p>
+</div>
+{% endblock %}

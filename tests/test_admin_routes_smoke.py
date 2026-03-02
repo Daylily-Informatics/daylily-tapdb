@@ -291,6 +291,8 @@ def test_auth_and_public_routes(route_client, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(admin_main, "get_current_user", _anon_main)
     resp = client.get("/login")
     assert resp.status_code == 200
+    resp = client.get("/help")
+    assert resp.status_code == 200
 
     # Login submit error path
     monkeypatch.setattr(admin_main, "authenticate_with_cognito", lambda *_: (_ for _ in ()).throw(ValueError("bad")))
