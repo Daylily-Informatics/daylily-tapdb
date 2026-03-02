@@ -12,10 +12,11 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 import re
+from typing import Optional
 
 from daylily_tapdb.cli.db_config import get_db_config_for_env
+from daylily_tapdb.cli.cognito import REQUIRED_COGNITO_CLIENT_NAME
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,8 @@ def _score_daycog_env_match(path: Path, values: dict[str, str]) -> tuple[int, st
         if name.endswith(f".{region}.{safe_client}.env"):
             # App-scoped file (<pool>.<region>.<app>.env) is secondary choice.
             score += 60
+    if client_name == REQUIRED_COGNITO_CLIENT_NAME:
+        score += 20
 
     return (score, name)
 
@@ -110,6 +113,7 @@ def _resolve_daycog_pool_config(pool_id: str) -> DaycogPoolConfig:
         )
         env_file, values = matches[0]
         app_client_id = values.get("COGNITO_APP_CLIENT_ID", "").strip()
+        client_name = values.get("COGNITO_CLIENT_NAME", "").strip()
         region = (
             values.get("COGNITO_REGION", "").strip()
             or values.get("AWS_REGION", "").strip()
@@ -125,6 +129,12 @@ def _resolve_daycog_pool_config(pool_id: str) -> DaycogPoolConfig:
             raise RuntimeError(
                 f"daycog config {env_file} is missing COGNITO_REGION/AWS_REGION "
                 f"for pool {pool_id}"
+            )
+        if client_name != REQUIRED_COGNITO_CLIENT_NAME:
+            display = client_name or "(missing)"
+            raise RuntimeError(
+                f"daycog config {env_file} must select app client "
+                f"'{REQUIRED_COGNITO_CLIENT_NAME}' (got: {display})"
             )
 
         return DaycogPoolConfig(

@@ -13,6 +13,7 @@ import stat
 import subprocess
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import typer
 from rich.console import Console
@@ -25,6 +26,115 @@ cognito_app = typer.Typer(help="Cognito auth integration commands (via daycog)")
 config_app = typer.Typer(help="daycog config file utilities")
 cognito_app.add_typer(config_app, name="config")
 DEFAULT_COGNITO_CALLBACK_PORT = 8911
+REQUIRED_COGNITO_CLIENT_NAME = "tapdb"
+UI_PID_FILE = Path.home() / ".tapdb" / "ui.pid"
+
+
+def _split_uri_values(raw: str) -> list[str]:
+    return [v for v in re.split(r"[,\s]+", raw.strip()) if v]
+
+
+def _iter_cognito_uri_values(values: dict[str, str]) -> list[tuple[str, str]]:
+    uri_keys = [
+        "COGNITO_CALLBACK_URL",
+        "COGNITO_LOGOUT_URL",
+        "COGNITO_CALLBACK_URLS",
+        "COGNITO_LOGOUT_URLS",
+        "COGNITO_REDIRECT_URI",
+        "COGNITO_REDIRECT_URIS",
+        "COGNITO_POST_LOGOUT_REDIRECT_URI",
+        "COGNITO_POST_LOGOUT_REDIRECT_URIS",
+    ]
+
+    pairs: list[tuple[str, str]] = []
+    for key in uri_keys:
+        raw = (values.get(key) or "").strip()
+        if not raw:
+            continue
+        for uri in _split_uri_values(raw):
+            pairs.append((key, uri))
+    return pairs
+
+
+def _detect_running_ui_port() -> tuple[Optional[int], str]:
+    """Best-effort detection of current TAPDB UI port from PID command line."""
+    if not UI_PID_FILE.exists():
+        return None, "ui not running"
+    try:
+        pid = int(UI_PID_FILE.read_text(encoding="utf-8").strip())
+        os.kill(pid, 0)
+    except Exception:
+        return None, "ui pid missing/stale"
+
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return None, "could not inspect ui process"
+    if proc.returncode != 0:
+        return None, "could not inspect ui process"
+
+    cmd = (proc.stdout or "").strip()
+    m = re.search(r"--port\s+(\d+)", cmd)
+    if not m:
+        return None, "ui process port not detected"
+    return int(m.group(1)), "running ui process"
+
+
+def _resolve_expected_ui_port() -> tuple[int, str]:
+    explicit = (os.environ.get("TAPDB_UI_PORT") or "").strip()
+    if explicit.isdigit():
+        return int(explicit), "TAPDB_UI_PORT"
+
+    running_port, source = _detect_running_ui_port()
+    if running_port is not None:
+        return running_port, source
+
+    return DEFAULT_COGNITO_CALLBACK_PORT, f"default ({source})"
+
+
+def _validate_bound_cognito_uris(values: dict[str, str]) -> tuple[int, str, list[str], list[str]]:
+    """Validate Cognito URI fields against TAPDB UI HTTPS + local port rules."""
+    expected_port, port_source = _resolve_expected_ui_port()
+    uri_pairs = _iter_cognito_uri_values(values)
+    if not uri_pairs:
+        return expected_port, port_source, [], []
+
+    local_hosts = {"localhost", "127.0.0.1", "::1"}
+    errors: list[str] = []
+    notices: list[str] = []
+
+    for key, uri in uri_pairs:
+        parsed = urlparse(uri)
+        if not parsed.scheme or not parsed.netloc:
+            errors.append(f"{key}: invalid URI: {uri}")
+            continue
+
+        scheme = parsed.scheme.lower()
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+        if port is None:
+            port = 443 if scheme == "https" else 80
+
+        if scheme != "https":
+            errors.append(f"{key}: must use https (got {scheme}): {uri}")
+            continue
+
+        # Enforce local callback/logout URI ports to match active TAPDB UI port.
+        if host in local_hosts and port != expected_port:
+            errors.append(
+                f"{key}: port {port} does not match TAPDB UI port "
+                f"{expected_port}: {uri}"
+            )
+            continue
+
+        notices.append(f"{key}: {uri}")
+
+    return expected_port, port_source, errors, notices
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -129,6 +239,21 @@ def _find_pool_env_file_by_id(
         f"{cfg_dir} (for example <pool>.<region>.env) with "
         f"COGNITO_USER_POOL_ID={pool_id}."
     )
+
+
+def _validate_required_client_name(
+    values: dict[str, str],
+    *,
+    context_label: str,
+) -> str:
+    actual = (values.get("COGNITO_CLIENT_NAME") or "").strip()
+    if actual != REQUIRED_COGNITO_CLIENT_NAME:
+        display = actual or "(missing)"
+        raise RuntimeError(
+            f"{context_label} must select Cognito app client name "
+            f"'{REQUIRED_COGNITO_CLIENT_NAME}' (got: {display})."
+        )
+    return actual
 
 
 def _resolve_daycog_pool_id_after_setup(
@@ -325,6 +450,21 @@ def _finalize_setup_binding(
         console.print(f"[red]✗[/red] {e}")
         raise typer.Exit(1)
 
+    # Ensure the selected daycog context is bound to the required TAPDB app client.
+    try:
+        _env_file, values = _find_pool_env_file_by_id(
+            pool_id,
+            prefer_region=region,
+            prefer_client_name=REQUIRED_COGNITO_CLIENT_NAME,
+        )
+        _validate_required_client_name(
+            values,
+            context_label="daycog bound context",
+        )
+    except RuntimeError as e:
+        console.print(f"[red]✗[/red] {e}")
+        raise typer.Exit(1)
+
     cfg_path = _write_pool_id_to_tapdb_config(env, pool_id)
     console.print(f"[green]✓[/green] Bound pool ID to tapdb config: {pool_id}")
     console.print(f"  TAPDB config: [dim]{cfg_path}[/dim]")
@@ -342,7 +482,11 @@ def _resolve_bound_daycog_context(
             f"Run: tapdb cognito setup {env.value}"
         )
 
-    env_file, values = _find_pool_env_file_by_id(pool_id)
+    env_file, values = _find_pool_env_file_by_id(
+        pool_id,
+        prefer_client_name=REQUIRED_COGNITO_CLIENT_NAME,
+    )
+    _validate_required_client_name(values, context_label=f"env {env.value}")
     proc_env = os.environ.copy()
     proc_env.update(values)
     return pool_id, env_file, values, proc_env
@@ -435,7 +579,7 @@ def cognito_setup(
     client_name: Optional[str] = typer.Option(
         None,
         "--client-name",
-        help="App client name (default from daycog: <pool-name>-client)",
+        help="App client name (must be 'tapdb'; default: tapdb)",
     ),
     profile: Optional[str] = typer.Option(
         None, "--profile", help="AWS profile (fallback: AWS_PROFILE env var)"
@@ -517,7 +661,13 @@ def cognito_setup(
 ) -> None:
     """Create/reuse Cognito pool via daycog and bind pool ID into tapdb config."""
     selected_pool_name = pool_name or _default_pool_name(env)
-    selected_client_name = client_name or f"{selected_pool_name}-client"
+    selected_client_name = client_name or REQUIRED_COGNITO_CLIENT_NAME
+    if selected_client_name != REQUIRED_COGNITO_CLIENT_NAME:
+        console.print(
+            "[red]✗[/red] TAPDB requires Cognito app client name "
+            f"'{REQUIRED_COGNITO_CLIENT_NAME}'."
+        )
+        raise typer.Exit(1)
     console.print(
         f"[cyan]Setting up Cognito pool[/cyan] [bold]{selected_pool_name}[/bold] "
         f"for env [bold]{env.value}[/bold]"
@@ -537,7 +687,7 @@ def cognito_setup(
         password_min_length=password_min_length,
         mfa=mfa,
         profile=profile,
-        client_name=client_name,
+        client_name=selected_client_name,
         callback_url=callback_url,
         logout_url=logout_url,
         autoprovision=autoprovision,
@@ -567,7 +717,7 @@ def cognito_setup_with_google(
     client_name: Optional[str] = typer.Option(
         None,
         "--client-name",
-        help="App client name (default from daycog: <pool-name>-client)",
+        help="App client name (must be 'tapdb'; default: tapdb)",
     ),
     profile: Optional[str] = typer.Option(
         None, "--profile", help="AWS profile (fallback: AWS_PROFILE env var)"
@@ -661,7 +811,13 @@ def cognito_setup_with_google(
 ) -> None:
     """Create/reuse Cognito pool+app and configure Google IdP; bind pool ID."""
     selected_pool_name = pool_name or _default_pool_name(env)
-    selected_client_name = client_name or f"{selected_pool_name}-client"
+    selected_client_name = client_name or REQUIRED_COGNITO_CLIENT_NAME
+    if selected_client_name != REQUIRED_COGNITO_CLIENT_NAME:
+        console.print(
+            "[red]✗[/red] TAPDB requires Cognito app client name "
+            f"'{REQUIRED_COGNITO_CLIENT_NAME}'."
+        )
+        raise typer.Exit(1)
     console.print(
         f"[cyan]Setting up Cognito (Google)[/cyan] [bold]{selected_pool_name}[/bold] "
         f"for env [bold]{env.value}[/bold]"
@@ -681,7 +837,7 @@ def cognito_setup_with_google(
         password_min_length=password_min_length,
         mfa=mfa,
         profile=profile,
-        client_name=client_name,
+        client_name=selected_client_name,
         callback_url=callback_url,
         logout_url=logout_url,
         autoprovision=autoprovision,
@@ -732,7 +888,15 @@ def cognito_status(
         console.print(f"[yellow]⚠[/yellow] No cognito_user_pool_id set for env {env.value}")
         raise typer.Exit(1)
 
-    env_file, values = _find_pool_env_file_by_id(pool_id)
+    env_file, values = _find_pool_env_file_by_id(
+        pool_id,
+        prefer_client_name=REQUIRED_COGNITO_CLIENT_NAME,
+    )
+    try:
+        _validate_required_client_name(values, context_label=f"env {env.value}")
+    except RuntimeError as e:
+        console.print(f"[red]✗[/red] {e}")
+        raise typer.Exit(1)
     region = values.get("COGNITO_REGION") or values.get("AWS_REGION") or "(missing)"
     client_id = values.get("COGNITO_APP_CLIENT_ID") or "(missing)"
     client_name = values.get("COGNITO_CLIENT_NAME") or "(missing)"
@@ -750,6 +914,20 @@ def cognito_status(
     console.print(f"[green]✓[/green] Callback:   {callback_url}")
     console.print(f"[green]✓[/green] Logout:     {logout_url}")
     console.print(f"[green]✓[/green] Profile:    {profile}")
+
+    expected_port, port_source, errors, notices = _validate_bound_cognito_uris(values)
+    console.print(
+        "[green]✓[/green] TAPDB UI port expectation: "
+        f"{expected_port} [dim]({port_source})[/dim]"
+    )
+    if notices:
+        console.print(f"[green]✓[/green] URI checks inspected: {len(notices)}")
+    if errors:
+        console.print("[red]✗[/red] Cognito URI validation failed:")
+        for msg in errors:
+            console.print(f"  - {msg}")
+        raise typer.Exit(1)
+    console.print("[green]✓[/green] Cognito URI validation passed")
 
 
 @cognito_app.command("list-pools")
