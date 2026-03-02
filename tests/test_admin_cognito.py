@@ -31,6 +31,7 @@ def test_resolve_tapdb_pool_config_from_daycog_env(monkeypatch: pytest.MonkeyPat
         "AWS_PROFILE=test-profile\n"
         "AWS_REGION=us-east-1\n"
         "COGNITO_REGION=us-east-1\n"
+        "COGNITO_CLIENT_NAME=tapdb\n"
         "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
         "COGNITO_APP_CLIENT_ID=client123\n",
     )
@@ -110,6 +111,7 @@ def test_resolve_tapdb_pool_config_prefers_pool_scoped_env_over_app_and_default(
         "AWS_PROFILE=default-profile\n"
         "AWS_REGION=us-east-1\n"
         "COGNITO_REGION=us-east-1\n"
+        "COGNITO_CLIENT_NAME=tapdb\n"
         "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
         "COGNITO_APP_CLIENT_ID=client-default\n",
     )
@@ -118,7 +120,7 @@ def test_resolve_tapdb_pool_config_prefers_pool_scoped_env_over_app_and_default(
         "AWS_PROFILE=app-profile\n"
         "AWS_REGION=us-east-1\n"
         "COGNITO_REGION=us-east-1\n"
-        "COGNITO_CLIENT_NAME=web-app\n"
+        "COGNITO_CLIENT_NAME=tapdb\n"
         "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
         "COGNITO_APP_CLIENT_ID=client-app\n",
     )
@@ -127,7 +129,7 @@ def test_resolve_tapdb_pool_config_prefers_pool_scoped_env_over_app_and_default(
         "AWS_PROFILE=pool-profile\n"
         "AWS_REGION=us-east-1\n"
         "COGNITO_REGION=us-east-1\n"
-        "COGNITO_CLIENT_NAME=selected-app\n"
+        "COGNITO_CLIENT_NAME=tapdb\n"
         "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
         "COGNITO_APP_CLIENT_ID=client-pool\n",
     )
@@ -136,3 +138,33 @@ def test_resolve_tapdb_pool_config_prefers_pool_scoped_env_over_app_and_default(
     assert cfg.app_client_id == "client-pool"
     assert cfg.aws_profile == "pool-profile"
     assert cfg.source_file.name == "tapdb-dev-users.us-east-1.env"
+
+
+def test_resolve_tapdb_pool_config_requires_tapdb_client_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
+
+    _write(
+        tmp_path / ".config" / "tapdb" / "tapdb-config.yaml",
+        "environments:\n"
+        "  dev:\n"
+        "    host: localhost\n"
+        "    port: 5432\n"
+        "    user: test\n"
+        "    database: tapdb_dev\n"
+        "    cognito_user_pool_id: us-east-1_TESTPOOL\n",
+    )
+    _write(
+        tmp_path / ".config" / "daycog" / "tapdb-dev-users.us-east-1.env",
+        "AWS_PROFILE=test-profile\n"
+        "AWS_REGION=us-east-1\n"
+        "COGNITO_REGION=us-east-1\n"
+        "COGNITO_CLIENT_NAME=wrong-client\n"
+        "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
+        "COGNITO_APP_CLIENT_ID=client123\n",
+    )
+
+    with pytest.raises(RuntimeError, match="must select app client 'tapdb'"):
+        resolve_tapdb_pool_config("dev")
