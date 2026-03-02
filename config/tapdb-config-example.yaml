@@ -21,6 +21,7 @@ environments:
     database: tapdb_dev
     tapdb_user_euid_prefix: TP
     audit_log_euid_prefix: AD
+    support_email: support@example.com
     # Optional: TAPDB Admin Cognito binding (pool details live in ~/.config/daycog/*.env)
     cognito_user_pool_id: us-east-1_xxxxxxxxx
 
@@ -32,6 +33,7 @@ environments:
     database: tapdb_test
     tapdb_user_euid_prefix: TP
     audit_log_euid_prefix: AD
+    support_email: support@example.com
     cognito_user_pool_id: us-east-1_xxxxxxxxx
 
   prod:
@@ -42,6 +44,7 @@ environments:
     database: tapdb_prod
     tapdb_user_euid_prefix: TP
     audit_log_euid_prefix: AD
+    support_email: support@example.com
     cognito_user_pool_id: us-east-1_xxxxxxxxx
 
   # Aurora (AWS RDS) environments use engine_type: aurora
@@ -55,6 +58,7 @@ environments:
     database: tapdb_dev
     tapdb_user_euid_prefix: TP
     audit_log_euid_prefix: AD
+    support_email: support@example.com
     region: us-west-2
     cluster_identifier: tapdb-dev-cluster
     iam_auth: true

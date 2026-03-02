@@ -10,6 +10,7 @@ import os
 import json
 import logging
 import secrets
+import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -20,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from jinja2 import Environment, FileSystemLoader
 
-from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory
+from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory, __version__
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
@@ -54,6 +55,65 @@ templates = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
 
 APP_ENV = os.environ.get("TAPDB_ENV", "dev").lower()
 IS_PROD = APP_ENV == "prod"
+DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
+DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/daylily-tapdb"
+
+
+def _git_output(*args: str) -> str:
+    """Best-effort git command output for footer metadata."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(BASE_DIR.parent),
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def _resolve_support_email() -> str:
+    """Resolve support email from env or TAPDB env config."""
+    env_override = (os.environ.get("TAPDB_SUPPORT_EMAIL") or "").strip()
+    if env_override:
+        return env_override
+
+    try:
+        cfg = get_db_config_for_env(APP_ENV)
+        cfg_email = (cfg.get("support_email") or "").strip()
+        if cfg_email:
+            return cfg_email
+    except Exception as exc:
+        logger.warning("Could not resolve support_email from config: %s", exc)
+
+    return DEFAULT_SUPPORT_EMAIL
+
+
+def _build_footer_metadata() -> Dict[str, str]:
+    """Build shared footer metadata visible on all admin pages."""
+    git_hash = _git_output("rev-parse", "--short", "HEAD") or "n/a"
+    git_branch = _git_output("rev-parse", "--abbrev-ref", "HEAD") or "n/a"
+    git_tag = _git_output("describe", "--tags", "--exact-match") or _git_output(
+        "describe", "--tags", "--abbrev=0"
+    )
+    if not git_tag:
+        git_tag = "n/a"
+
+    return {
+        "version": __version__,
+        "branch": git_branch,
+        "tag": git_tag,
+        "hash": git_hash,
+        "support_email": _resolve_support_email(),
+        "repo_url": os.environ.get("TAPDB_GITHUB_REPO_URL", DEFAULT_GITHUB_REPO_URL),
+    }
+
+
+templates.globals["tapdb_footer"] = _build_footer_metadata()
 
 # Session secret key
 if IS_PROD and not os.environ.get("TAPDB_SESSION_SECRET"):
@@ -612,6 +672,24 @@ async def change_password_submit(
         required=False,
         challenge_required=False,
         success="Password changed successfully",
+    )
+    return HTMLResponse(content=content)
+
+
+# ============================================================================
+# Help Route
+# ============================================================================
+
+@app.get("/help", response_class=HTMLResponse)
+async def help_page(request: Request):
+    """GUI help and support page."""
+    user = await get_current_user(request)
+    permissions = get_user_permissions(user)
+    content = templates.get_template("help.html").render(
+        request=request,
+        style=get_style(),
+        user=user,
+        permissions=permissions,
     )
     return HTMLResponse(content=content)
 
