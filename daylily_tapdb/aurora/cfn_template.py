@@ -223,7 +223,7 @@ def _resources() -> dict[str, Any]:
                                 "Fn::Sub": (
                                     "arn:aws:rds-db:${AWS::Region}:"
                                     "${AWS::AccountId}:dbuser:"
-                                    "${AuroraCluster.DbClusterResourceId}"
+                                    "${AuroraCluster.DBClusterResourceId}"
                                     "/${MasterUsername}"
                                 )
                             },

@@ -190,7 +190,7 @@ class TestResources:
         policy = template["Resources"]["DatabaseIAMPolicy"]["Properties"]
         resource = policy["PolicyDocument"]["Statement"][0]["Resource"]
         assert "Fn::Sub" in resource
-        assert "DbClusterResourceId" in resource["Fn::Sub"]
+        assert "DBClusterResourceId" in resource["Fn::Sub"]
 
 
 # --- Tags ---
