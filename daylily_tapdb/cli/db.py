@@ -241,21 +241,24 @@ class Environment(str, Enum):
     prod = "prod"
 
 
-# Config directory (Phase 3: ~/.config/tapdb/*)
-CONFIG_DIR = get_config_path().parent
+# Legacy compatibility constants; runtime code resolves active namespace paths lazily.
+# Keep these import-safe and context-free to avoid stale/incorrect values.
+CONFIG_DIR = Path.home() / ".config" / "tapdb"
 LOG_DIR = CONFIG_DIR / "logs"
 
 
 def _ensure_dirs():
     """Ensure config directories exist."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    config_dir = get_config_path().parent
+    log_dir = config_dir / "logs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _log_operation(env: str, operation: str, details: str = ""):
     """Log database operations for audit trail."""
     _ensure_dirs()
-    log_file = LOG_DIR / "db_operations.log"
+    log_file = (get_config_path().parent / "logs") / "db_operations.log"
     timestamp = datetime.now().isoformat()
     user = os.environ.get("USER", "unknown")
     with open(log_file, "a") as f:

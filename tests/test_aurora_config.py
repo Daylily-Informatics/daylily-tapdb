@@ -17,6 +17,14 @@ import pytest
 
 from daylily_tapdb.aurora.config import AuroraConfig
 
+
+@pytest.fixture(autouse=True)
+def _reset_namespace_env(monkeypatch):
+    monkeypatch.setenv("TAPDB_STRICT_NAMESPACE", "0")
+    monkeypatch.delenv("TAPDB_CLIENT_ID", raising=False)
+    monkeypatch.delenv("TAPDB_DATABASE_NAME", raising=False)
+
+
 # ---------------------------------------------------------------------------
 # AuroraConfig dataclass
 # ---------------------------------------------------------------------------

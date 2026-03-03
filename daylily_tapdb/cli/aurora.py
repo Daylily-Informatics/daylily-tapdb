@@ -16,6 +16,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from daylily_tapdb.cli.context import resolve_context
+
 console = Console()
 
 aurora_app = typer.Typer(help="Aurora PostgreSQL cluster management commands")
@@ -69,6 +71,17 @@ def _update_config_file(
     if "environments" not in existing:
         existing["environments"] = {}
 
+    try:
+        ctx = resolve_context(require_keys=False, env_name=env)
+    except RuntimeError:
+        ctx = None
+    if ctx:
+        existing["meta"] = {
+            "config_version": 2,
+            "client_id": ctx.client_id,
+            "database_name": ctx.database_name,
+        }
+
     env_cfg = existing["environments"].get(env, {}) or {}
     existing["environments"][env] = {
         **env_cfg,
@@ -81,6 +94,7 @@ def _update_config_file(
         "cluster_identifier": cluster_identifier or env,
         "iam_auth": "true",
         "ssl": "true",
+        "ui_port": str(env_cfg.get("ui_port") or "8911"),
     }
 
     try:
