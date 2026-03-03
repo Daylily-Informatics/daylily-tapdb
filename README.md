@@ -509,7 +509,7 @@ tapdb cognito setup dev \
 tapdb cognito add-user dev user@example.com --password 'SecurePass123' --no-verify
 ```
 
-`tapdb cognito` delegates lifecycle operations to `daycog` (0.1.22 patterns),
+`tapdb cognito` delegates lifecycle operations to `daycog` (0.1.24+ patterns),
 so multiple apps on the same user account can coexist without config collisions.
 `tapdb cognito status` also reports daycog metadata including client name and
 domain/callback/logout URLs when available.
@@ -784,7 +784,7 @@ tapdb user delete            # Permanently delete (⚠️ destructive)
 # Note: Admin UI authentication is Cognito-based; tapdb users are app roles/metadata.
 
 # Cognito integration (delegates to daycog; stores only pool-id in tapdb config)
-tapdb cognito setup <env>    # daycog 0.1.22 setup wrapper (pool/client/callback policy)
+tapdb cognito setup <env>    # daycog 0.1.24+ setup wrapper (pool/client/callback policy)
 tapdb cognito setup-with-google <env> [google flags]
 tapdb cognito bind <env>     # Bind existing pool ID to env
 tapdb cognito status <env>   # Show pool binding and mapped daycog env file
@@ -1129,6 +1129,29 @@ export TAPDB_LOG_LEVEL=INFO
 
 No credentials or IAM tokens are ever logged at any level.
 
+
+## Releasing
+
+Use the release build helper to ensure artifacts are built from the most recent
+semantic version tag (and not an untagged local commit).
+
+```bash
+make release-build
+```
+
+What this does:
+- resolves the latest semantic version tag (format like `0.1.17`)
+- creates a temporary detached git worktree at that tag
+- builds in that worktree
+- copies artifacts back to project `dist/`
+
+This works even if your current checkout is dirty or ahead of the tag.
+
+Direct script usage:
+
+```bash
+./bin/release_build.sh
+```
 
 ## Project Structure
 

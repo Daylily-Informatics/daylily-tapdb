@@ -64,7 +64,7 @@ admin = [
     "jinja2",
     "python-multipart",
     "itsdangerous",
-    "daylily-cognito[auth]>=0.1.22",
+    "daylily-cognito[auth]>=0.1.24",
     # passlib 1.7.x is not compatible with bcrypt>=4 (bcrypt enforces 72-byte
     # password max and passlib's backend self-test uses a longer sentinel).
     # Pin to bcrypt<4 to keep admin auth usable.
@@ -119,5 +119,6 @@ ignore_missing_imports = true
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
+git_describe_command = "git describe --dirty --tags --long --match [0-9]*"
 write_to = "daylily_tapdb/_version.py"
 write_to_template = "__version__ = \"{version}\"\n"
