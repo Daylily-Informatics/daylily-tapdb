@@ -1,35 +1,89 @@
 """PostgreSQL service management commands for TAPDB CLI."""
 
+import json
 import os
 import platform
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
 
-from daylily_tapdb.cli.db import Environment, _get_project_root
+from daylily_tapdb.cli.context import resolve_context
+from daylily_tapdb.cli.db import Environment
+from daylily_tapdb.cli.db_config import get_db_config_for_env
 
 console = Console()
 
 pg_app = typer.Typer(help="PostgreSQL service management commands")
-DEFAULT_DEV_POSTGRES_PORT = 5533
-DEFAULT_TEST_POSTGRES_PORT = 5534
 
 
 def _get_postgres_data_dir(env: "Environment") -> Path:
     """Get PostgreSQL data directory for environment.
 
-    dev/test: ./postgres_data/<env>
+    dev/test: ~/.config/tapdb/<client>/<database>/<env>/postgres/data
     prod: system default or PGDATA env var
     """
     if env.value == "prod":
         # Production uses system default
         return Path(os.environ.get("PGDATA", "/var/lib/postgresql/data"))
-    else:
-        # dev/test use project-local data directory
-        return _get_project_root() / "postgres_data" / env.value
+    ctx = resolve_context(require_keys=True, env_name=env.value)
+    return ctx.postgres_dir(env.value) / "data"
+
+
+def _get_postgres_log_file(env: "Environment") -> Path:
+    if env.value == "prod":
+        return Path("/var/log/postgresql/postgresql.log")
+    ctx = resolve_context(require_keys=True, env_name=env.value)
+    return ctx.postgres_dir(env.value) / "postgresql.log"
+
+
+def _get_instance_lock_file(env: "Environment") -> Path:
+    if env.value == "prod":
+        return Path("/tmp/tapdb-prod-instance.lock")
+    ctx = resolve_context(require_keys=True, env_name=env.value)
+    return ctx.lock_dir(env.value) / "instance.lock"
+
+
+def _port_conflict_details(port: int) -> str:
+    try:
+        proc = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return f"port {port} is already in use"
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        return f"port {port} is already in use"
+    lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return f"port {port} is already in use"
+    return f"port {port} is in use ({lines[1]})"
+
+
+def _is_port_available(port: int) -> bool:
+    try:
+        proc = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return True
+    return proc.returncode != 0 or not (proc.stdout or "").strip()
+
+
+def _active_env() -> Environment:
+    raw = (os.environ.get("TAPDB_ENV") or "dev").strip().lower()
+    try:
+        return Environment(raw)
+    except ValueError:
+        return Environment.dev
 
 
 
@@ -218,60 +272,46 @@ def pg_status():
     """Check if PostgreSQL is running and show connection info."""
     console.print("\n[bold cyan]━━━ PostgreSQL Status ━━━[/bold cyan]")
 
-    running, details = _is_pg_running()
-
-    if running:
-        console.print("[green]●[/green] PostgreSQL is [green]running[/green]")
-        console.print(f"  Version: {details}")
-    else:
-        console.print("[red]○[/red] PostgreSQL is [red]not running[/red]")
-        if details and details not in ("", "timeout"):
-            console.print(f"  Error: {details}")
-        console.print("\n  Start with: [cyan]tapdb pg start[/cyan]")
+    env = _active_env()
+    if env == Environment.prod:
+        running, details = _is_pg_running()
+        if running:
+            console.print("[green]●[/green] PostgreSQL is [green]running[/green]")
+            console.print(f"  Version: {details}")
+        else:
+            console.print("[red]○[/red] PostgreSQL is [red]not running[/red]")
+            if details and details not in ("", "timeout"):
+                console.print(f"  Error: {details}")
+            console.print("\n  Start with: [cyan]tapdb pg start[/cyan]")
         return
 
-    # Connection info
-    host = os.environ.get("PGHOST", "localhost")
-    port = os.environ.get("PGPORT", str(DEFAULT_DEV_POSTGRES_PORT))
-    user = os.environ.get("PGUSER", os.environ.get("USER", "postgres"))
+    cfg = get_db_config_for_env(env.value)
+    host = cfg["host"]
+    port = cfg["port"]
+    user = cfg["user"]
+    data_dir = _get_postgres_data_dir(env)
+    log_file = _get_postgres_log_file(env)
+    lock_file = _get_instance_lock_file(env)
 
-    console.print("\n[bold]Connection Info:[/bold]")
-    console.print(f"  Host: {host}")
-    console.print(f"  Port: {port}")
-    console.print(f"  User: {user}")
+    ready = subprocess.run(
+        ["pg_isready", "-h", host, "-p", str(port), "-q"],
+        capture_output=True,
+        timeout=5,
+    )
+    if ready.returncode == 0:
+        console.print("[green]●[/green] Local PostgreSQL is [green]running[/green]")
+    else:
+        console.print("[red]○[/red] Local PostgreSQL is [red]not running[/red]")
+        console.print(f"  Start with: [cyan]tapdb pg start-local {env.value}[/cyan]")
 
-    # List databases
-    try:
-        result = subprocess.run(
-            [
-                "psql",
-                "-t",
-                "-c",
-                "SELECT datname FROM pg_database"
-                " WHERE datistemplate = false"
-                " ORDER BY datname",
-            ],
-            capture_output=True,
-            text=True,
-            env={**os.environ, "PGDATABASE": "postgres"},
-            timeout=5,
-        )
-        if result.returncode == 0:
-            databases = [
-                db.strip() for db in result.stdout.strip().split("\n") if db.strip()
-            ]
-            tapdb_dbs = [db for db in databases if db.startswith("tapdb")]
-
-            console.print("\n[bold]TAPDB Databases:[/bold]")
-            if tapdb_dbs:
-                for db in tapdb_dbs:
-                    console.print(f"  [green]●[/green] {db}")
-            else:
-                console.print(
-                    "  [dim]None found (create with: tapdb db create dev)[/dim]"
-                )
-    except Exception:
-        pass
+    console.print("\n[bold]Local Runtime:[/bold]")
+    console.print(f"  Namespace: {resolve_context(require_keys=True, env_name=env.value).namespace_slug()}")
+    console.print(f"  Host:      {host}")
+    console.print(f"  Port:      {port}")
+    console.print(f"  User:      {user}")
+    console.print(f"  Data dir:  {data_dir}")
+    console.print(f"  Log file:  {log_file}")
+    console.print(f"  Lock file: {lock_file}")
 
 
 @pg_app.command("logs")
@@ -284,12 +324,14 @@ def pg_logs(
     """View PostgreSQL logs (tails by default, Ctrl+C to stop)."""
     method, _, _, log_path = _get_pg_service_cmd()
 
-    # Try to find log file - prioritize local postgres_data logs
-    project_root = Path(__file__).parent.parent.parent
-    local_logs = [
-        project_root / "postgres_data" / "dev" / "postgresql.log",
-        project_root / "postgres_data" / "test" / "postgresql.log",
-    ]
+    env = _active_env()
+    local_logs: list[Path] = []
+    try:
+        if env != Environment.prod:
+            local_logs.append(_get_postgres_log_file(env))
+    except RuntimeError:
+        # Namespace may be unresolved for non-local invocations.
+        pass
 
     possible_logs = local_logs + [
         log_path,
@@ -305,10 +347,9 @@ def pg_logs(
 
     if not log_file:
         console.print("[yellow]⚠[/yellow] PostgreSQL log file not found")
-        console.print(
-            "  Checked: ./postgres_data/dev/postgresql.log,"
-            " ./postgres_data/test/postgresql.log"
-        )
+        if local_logs:
+            for path in local_logs:
+                console.print(f"  Checked local: {path}")
 
         # Try journalctl on Linux
         if platform.system() == "Linux":
@@ -364,7 +405,8 @@ def pg_init(
 ):
     """Initialize a PostgreSQL data directory for dev/test.
 
-    Creates a local PostgreSQL data directory in ./postgres_data/<env>
+    Creates a local PostgreSQL data directory in:
+    ~/.config/tapdb/<client-id>/<database-name>/<env>/postgres/data
     for development and testing. Production uses system PostgreSQL.
 
     After init, start with: tapdb pg start-local <env>
@@ -438,11 +480,11 @@ def pg_init(
 @pg_app.command("start-local")
 def pg_start_local(
     env: Environment = typer.Argument(..., help="Target environment (dev/test only)"),
-    port: int = typer.Option(
+    port: Optional[int] = typer.Option(
         None,
         "--port",
         "-p",
-        help="Port (default: 5533 for dev, 5534 for test)",
+        help="Port override (must match configured environments.<env>.port)",
     ),
 ):
     """Start a local PostgreSQL instance for dev/test.
@@ -453,20 +495,37 @@ def pg_start_local(
         console.print("[red]✗[/red] Use 'tapdb pg start' for production")
         raise typer.Exit(1)
 
+    cfg = get_db_config_for_env(env.value)
+    configured_port = int(str(cfg.get("port") or "0"))
+    if configured_port < 1:
+        console.print(
+            f"[red]✗[/red] Missing/invalid configured port for env {env.value}."
+        )
+        console.print(
+            "  Set environments."
+            f"{env.value}.port in the namespaced TAPDB config."
+        )
+        raise typer.Exit(1)
+
+    if port is None:
+        port = configured_port
+    elif port != configured_port:
+        console.print(
+            "[red]✗[/red] --port override does not match configured TAPDB env port."
+        )
+        console.print(
+            f"  Configured environments.{env.value}.port = {configured_port}"
+        )
+        raise typer.Exit(1)
+
     data_dir = _get_postgres_data_dir(env)
+    lock_file = _get_instance_lock_file(env)
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
 
     if not data_dir.exists() or not (data_dir / "PG_VERSION").exists():
         console.print("[red]✗[/red] Data directory not initialized")
         console.print(f"  Run: [cyan]tapdb pg init {env.value}[/cyan]")
         raise typer.Exit(1)
-
-    # Default ports: dev=5533, test=5534
-    if port is None:
-        port = (
-            DEFAULT_DEV_POSTGRES_PORT
-            if env == Environment.dev
-            else DEFAULT_TEST_POSTGRES_PORT
-        )
 
     # Find pg_ctl (must be in PATH)
     pg_ctl_path = shutil.which("pg_ctl")
@@ -485,11 +544,20 @@ def pg_start_local(
         console.print(f"  PID file exists: {pid_file}")
         return
 
+    if not _is_port_available(port):
+        console.print(f"[red]✗[/red] {_port_conflict_details(port)}")
+        console.print(
+            "  Update environments."
+            f"{env.value}.port in the namespaced TAPDB config to a free port."
+        )
+        raise typer.Exit(1)
+
     console.print(
         f"[yellow]►[/yellow] Starting PostgreSQL ({env.value}) on port {port}..."
     )
 
-    log_file = data_dir / "postgresql.log"
+    log_file = _get_postgres_log_file(env)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         result = subprocess.run(
@@ -513,6 +581,14 @@ def pg_start_local(
             console.print(f"  Port: {port}")
             console.print(f"  Data: {data_dir}")
             console.print(f"  Log:  {log_file}")
+            lock_payload = {
+                "env": env.value,
+                "port": port,
+                "data_dir": str(data_dir),
+                "log_file": str(log_file),
+            }
+            lock_file.write_text(json.dumps(lock_payload, indent=2) + "\n", encoding="utf-8")
+            console.print(f"  Lock: {lock_file}")
 
             # Set env vars hint
             console.print("\n[bold]Set environment:[/bold]")
@@ -539,6 +615,7 @@ def pg_stop_local(
         raise typer.Exit(1)
 
     data_dir = _get_postgres_data_dir(env)
+    lock_file = _get_instance_lock_file(env)
 
     if not data_dir.exists():
         console.print(f"[yellow]⚠[/yellow] Data directory doesn't exist: {data_dir}")
@@ -564,6 +641,7 @@ def pg_stop_local(
 
         if result.returncode == 0:
             console.print("[green]✓[/green] PostgreSQL stopped")
+            lock_file.unlink(missing_ok=True)
         else:
             err = result.stderr.strip() or ("PostgreSQL may not be running")
             console.print(f"[yellow]⚠[/yellow] {err}")

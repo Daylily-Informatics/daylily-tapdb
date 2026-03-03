@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -293,6 +294,8 @@ def test_auth_and_public_routes(route_client, monkeypatch: pytest.MonkeyPatch):
     assert resp.status_code == 200
     resp = client.get("/help")
     assert resp.status_code == 200
+    resp = client.get("/info", follow_redirects=False)
+    assert resp.status_code == 302
 
     # Login submit error path
     monkeypatch.setattr(admin_main, "authenticate_with_cognito", lambda *_: (_ for _ in ()).throw(ValueError("bad")))
@@ -342,20 +345,20 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     assert client.get("/lineages").status_code == 200
     assert client.get("/object/GX12").status_code == 200
     assert client.get("/graph").status_code == 200
+    assert client.get("/info").status_code == 200
     assert client.get("/create-instance/GT1").status_code == 200
-    assert (
-        client.post(
-            "/create-instance/GT1",
-            data={
-                "instance_name": "",
-                "create_children": "false",
-                "parent_euids": "",
-                "child_euids": "",
-                "relationship_type": "contains",
-            },
-        ).status_code
-        == 200
+    create_instance_resp = client.post(
+        "/create-instance/GT1",
+        data={
+            "instance_name": "",
+            "create_children": "false",
+            "parent_euids": "",
+            "child_euids": "",
+            "relationship_type": "contains",
+        },
     )
+    assert create_instance_resp.status_code == 200
+    assert "Instance name is required." not in create_instance_resp.text
 
     # API routes (public)
     assert client.get("/api/graph/data").status_code == 200
@@ -372,3 +375,81 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     resp = client.delete("/api/object/GT1")
     assert resp.status_code == 200
     assert state["templates"][0].is_deleted is True
+
+
+def test_oauth_login_redirect_and_callback_success(
+    route_client, monkeypatch: pytest.MonkeyPatch
+):
+    client, _state = route_client
+
+    async def _anon(_request):
+        return None
+
+    monkeypatch.setattr(admin_main, "get_current_user", _anon)
+    monkeypatch.setattr(
+        admin_main,
+        "_resolve_cognito_oauth_runtime",
+        lambda _env: {
+            "domain": "example.auth.us-east-1.amazoncognito.com",
+            "callback_url": "https://localhost:8911/auth/callback",
+            "client_id": "client123",
+            "client_secret": "",
+            "scope": "openid email profile",
+        },
+    )
+    monkeypatch.setattr(
+        admin_main,
+        "_exchange_oauth_authorization_code",
+        lambda _runtime, _code: {"access_token": "at123", "id_token": "id123"},
+    )
+    monkeypatch.setattr(
+        admin_main,
+        "_resolve_oauth_user_profile",
+        lambda _env, _tokens, _runtime: {
+            "email": "google.user@example.com",
+            "display_name": "Google User",
+        },
+    )
+
+    login_resp = client.get("/auth/login", follow_redirects=False)
+    assert login_resp.status_code == 302
+    location = login_resp.headers["location"]
+    assert location.startswith("https://example.auth.us-east-1.amazoncognito.com/oauth2/authorize")
+    query = parse_qs(urlsplit(location).query)
+    assert query.get("identity_provider") == ["Google"]
+    assert "state" in query
+    state = query["state"][0]
+
+    cb_resp = client.get(
+        f"/auth/callback?code=abc123&state={state}",
+        follow_redirects=False,
+    )
+    assert cb_resp.status_code == 302
+    assert cb_resp.headers["location"] == "/"
+
+
+def test_oauth_callback_invalid_state_shows_error(
+    route_client, monkeypatch: pytest.MonkeyPatch
+):
+    client, _state = route_client
+
+    async def _anon(_request):
+        return None
+
+    monkeypatch.setattr(admin_main, "get_current_user", _anon)
+    monkeypatch.setattr(
+        admin_main,
+        "_resolve_cognito_oauth_runtime",
+        lambda _env: {
+            "domain": "example.auth.us-east-1.amazoncognito.com",
+            "callback_url": "https://localhost:8911/auth/callback",
+            "client_id": "client123",
+            "client_secret": "",
+            "scope": "openid email profile",
+        },
+    )
+
+    _ = client.get("/auth/login", follow_redirects=False)
+    bad_cb = client.get("/auth/callback?code=abc123&state=wrong")
+    assert bad_cb.status_code == 200
+    assert "TEMPLATE:login.html" in bad_cb.text
