@@ -415,7 +415,8 @@ tapdb bootstrap local
 |----------|-------------|---------|
 | `DATABASE_URL` | Full database URL (overrides component/env-style config) | — |
 | `TAPDB_ENV` | Active environment name used by the CLI (e.g. `dev`, `test`, `prod`) | — |
-| `TAPDB_DATABASE_NAME` | Optional config namespace key; when set, CLI prefers `tapdb-config-<name>.yaml` | — |
+| `TAPDB_CLIENT_ID` | **Required for runtime/DB commands**. Client/app namespace key | — |
+| `TAPDB_DATABASE_NAME` | **Required for runtime/DB commands**. Database namespace key | — |
 | `TAPDB_<ENV>_COGNITO_USER_POOL_ID` | Optional override for env-bound Cognito pool ID | — |
 | `TAPDB_<ENV>_TAPDB_USER_EUID_PREFIX` | Required for schema/bootstrap writes; prefix for `tapdb_user` EUIDs | — |
 | `TAPDB_<ENV>_AUDIT_LOG_EUID_PREFIX` | Required for schema/bootstrap writes; prefix for `audit_log` EUIDs | — |
@@ -424,55 +425,56 @@ tapdb bootstrap local
 | `TAPDB_SESSION_SECRET` | **Prod admin UI required**: session secret | — |
 | `TAPDB_ADMIN_ALLOWED_ORIGINS` | **Prod admin UI required**: comma-separated CORS origins | — |
 | `PGPASSWORD` | PostgreSQL password | — |
-| `PGPORT` | PostgreSQL port | `5432` |
+| `PGPORT` | PostgreSQL port | `5533` |
 | `USER` | Database user / audit username | System user |
 | `ECHO_SQL` | Log SQL statements (`true`/`1`/`yes`) | `false` |
 
-### CLI config file (recommended)
+### CLI config file (required for strict namespace mode)
 
-The CLI can read per-environment DB settings from:
+For runtime/DB commands, TAPDB resolves the active config at:
 
-- `~/.config/tapdb/tapdb-config-<database-name>.yaml` (when `--database-name` or `TAPDB_DATABASE_NAME` is set)
-- `~/.config/tapdb/tapdb-config.yaml` (default)
-- `./config/tapdb-config-<database-name>.yaml` (repo-local scoped config)
-- `./config/tapdb-config.yaml` (repo-local default)
-- or `TAPDB_CONFIG_PATH=/path/to/tapdb-config.yaml`
+- `~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml`
+- or explicit override: `TAPDB_CONFIG_PATH=/path/to/tapdb-config.yaml`
 
-Resolution order (highest precedence first):
-
-1. `TAPDB_<ENV>_*` environment variables (e.g. `TAPDB_DEV_HOST`)
-2. `PG*` environment variables
-3. TAPDB config files in search order:
-   - `tapdb-config-<database-name>.yaml` (user then repo, when scoped name is set)
-   - `tapdb-config.yaml` (user then repo)
-
-To select a scoped config namespace:
+Namespace keys are required:
 
 ```bash
-tapdb --database-name atlas info
+tapdb --client-id atlas --database-name app info
 # equivalent:
-TAPDB_DATABASE_NAME=atlas tapdb info
+TAPDB_CLIENT_ID=atlas TAPDB_DATABASE_NAME=app tapdb info
 ```
+
+Runtime state is isolated per namespace + env at:
+
+- `~/.config/tapdb/<client-id>/<database-name>/<env>/ui/...`
+- `~/.config/tapdb/<client-id>/<database-name>/<env>/postgres/...`
+- `~/.config/tapdb/<client-id>/<database-name>/<env>/locks/...`
 
 An example config is included at: `./config/tapdb-config-example.yaml`
 
 Example config:
 
 ```yaml
+meta:
+  config_version: 2
+  client_id: atlas
+  database_name: app
 environments:
   dev:
     engine_type: local
     host: localhost
-    port: 5432
+    port: 5533
+    ui_port: 8911
     user: daylily
     password: ""
-    database: tapdb_dev
+    database: tapdb_app_dev
     cognito_user_pool_id: us-east-1_xxxxxxxxx
     tapdb_user_euid_prefix: TUS
     audit_log_euid_prefix: TAD
 ```
 
 `tapdb_user_euid_prefix` and `audit_log_euid_prefix` must be valid Meridian prefixes (`^[A-HJ-KMNP-TV-Z]{2,3}$`).
+For `engine_type: local`, `host` must be exactly `localhost`.
 
 Supported file shapes:
 
@@ -589,11 +591,15 @@ TAPDB’s integration tests require a reachable PostgreSQL DSN.
 For a quick local Postgres (recommended):
 
 ```bash
+export TAPDB_CLIENT_ID=atlas
+export TAPDB_DATABASE_NAME=app
+export TAPDB_ENV=test
+
 tapdb pg init test
 tapdb pg start-local test
 tapdb db create test
 
-export TAPDB_TEST_DSN="postgresql://$USER@localhost:5433/tapdb_test"
+export TAPDB_TEST_DSN="postgresql://$USER@localhost:5534/tapdb_test"
 ```
 
 Or, point at any reachable Postgres:
@@ -665,26 +671,27 @@ tapdb ui stop
 tapdb ui mkcert
 
 # Restart UI to use the generated certs
-tapdb ui restart --port 8911
+tapdb ui restart
 ```
 
 Manual fallback (if you prefer to run mkcert yourself):
 
 ```bash
 mkcert -install
-mkcert -cert-file ~/.tapdb/certs/localhost.crt \
-  -key-file ~/.tapdb/certs/localhost.key \
-  localhost 127.0.0.1 ::1
+mkcert -cert-file ~/.config/tapdb/<client>/<database>/<env>/ui/certs/localhost.crt \
+  -key-file ~/.config/tapdb/<client>/<database>/<env>/ui/certs/localhost.key \
+  localhost
 ```
 
-Then open [https://localhost:8911](https://localhost:8911).
+Then open `https://localhost:<ui_port>` where `<ui_port>` comes from
+`environments.<env>.ui_port` in the namespaced config.
 
 Or run in foreground with auto-reload for development:
 
 ```bash
 tapdb ui start --reload --foreground
 # Or directly:
-uvicorn admin.main:app --reload --port 8911
+uvicorn admin.main:app --reload --port <ui_port>
 ```
 
 ### CLI Quickstart
@@ -696,12 +703,14 @@ The fastest way to get a local TAPDB instance running:
 source tapdb_activate.sh
 
 # 2. Set active target and bootstrap in one command
+export TAPDB_CLIENT_ID=atlas
+export TAPDB_DATABASE_NAME=app
 export TAPDB_ENV=dev
 tapdb bootstrap local
 
 # 3. Verify everything is working
 tapdb db schema status dev
-# Open https://localhost:8911 in your browser
+# Open https://localhost:<ui_port> from environments.dev.ui_port
 ```
 
 To stop everything:
@@ -722,10 +731,17 @@ source tapdb_deactivate.sh  # Stops PostgreSQL and deactivates .venv
 ### CLI Command Reference
 
 ```bash
+# Runtime/DB commands require namespace context:
+# tapdb --client-id <client> --database-name <db> <command>
+
 # General
 tapdb --help                 # Show all commands
 tapdb version                # Show version
 tapdb info                   # Show config and status
+
+# Config namespace management
+tapdb config init --client-id <id> --database-name <db> --env dev --db-port dev=5533 --ui-port dev=8911
+tapdb config migrate-legacy --client-id <id> --database-name <db>
 
 # End-to-end bootstrap (TAPDB_ENV must be set)
 tapdb bootstrap local        # Local runtime + db + schema + seed + UI
@@ -839,16 +855,18 @@ Notes / operational guidance:
 ### Environments
 
 TAPDB supports three environments: `dev`, `test`, and `prod`.
+In strict namespace mode, each environment must define explicit DB and UI ports in config.
 
-| Environment | Default Port | Database Name | Data Directory |
-|-------------|--------------|---------------|----------------|
-| `dev` | 5432 | `tapdb_dev` | `./postgres_data/dev/` |
-| `test` | 5433 | `tapdb_test` | `./postgres_data/test/` |
-| `prod` | 5432 | `tapdb_prod` | System PostgreSQL |
+| Environment | Example DB Port | Example UI Port | Runtime Root |
+|-------------|-----------------|-----------------|--------------|
+| `dev` | `5533` | `8911` | `~/.config/tapdb/<client>/<database>/dev/` |
+| `test` | `5534` | `8912` | `~/.config/tapdb/<client>/<database>/test/` |
+| `prod` | explicit in config | explicit in config | `~/.config/tapdb/<client>/<database>/prod/` |
 
 **Local vs Remote:**
 - `dev` and `test` can use local PostgreSQL (`tapdb pg init/start-local`)
-- `prod` requires an external PostgreSQL instance (AWS RDS, system install, etc.)
+- `prod` can use remote PostgreSQL/Aurora (recommended) or local by explicit config
+- For `engine_type: local`, `host` must be exactly `localhost`
 
 For local/manual PostgreSQL, bring your own Postgres instance, database, credentials, and network access. For automated AWS provisioning, see [Aurora PostgreSQL (AWS)](#aurora-postgresql-aws).
 
@@ -870,13 +888,14 @@ Database connections are configured via environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TAPDB_DEV_HOST` | Dev database host | `localhost` |
-| `TAPDB_DEV_PORT` | Dev database port | `5432` |
+| `TAPDB_DEV_HOST` | Dev database host | from config (`localhost` for local engine) |
+| `TAPDB_DEV_PORT` | Dev database port | from config (required in strict mode) |
+| `TAPDB_DEV_UI_PORT` | Dev UI HTTPS port | from config (required in strict mode for local engine) |
 | `TAPDB_DEV_USER` | Dev database user | `$USER` |
 | `TAPDB_DEV_PASSWORD` | Dev database password | — |
 | `TAPDB_DEV_DATABASE` | Dev database name | `tapdb_dev` |
 
-Replace `DEV` with `TEST` or `PROD` for other environments. Falls back to `PGHOST`, `PGPORT`, etc. if environment-specific vars are not set.
+Replace `DEV` with `TEST` or `PROD` for other environments. Environment variables override config values; TAPDB does not auto-select alternative ports on conflicts.
 
 ### Admin Features
 
@@ -924,7 +943,7 @@ tapdb bootstrap aurora --cluster tapdb-dev --region us-east-1
 tapdb db schema status dev
 ```
 
-The `create` command provisions a full CloudFormation stack, waits for completion, and writes connection details to the active TAPDB config path (for example `~/.config/tapdb/tapdb-config.yaml`, or `tapdb-config-<database-name>.yaml` when scoped).
+The `create` command provisions a full CloudFormation stack, waits for completion, and writes connection details to the active namespaced TAPDB config path (`~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml`).
 
 ### Aurora CLI Command Reference
 
@@ -1029,7 +1048,7 @@ daylily_tapdb/aurora/
 - Use `--no-publicly-accessible` for VPC-only access
 
 **Credential storage:**
-- Connection config written to the active TAPDB config file (default: `~/.config/tapdb/tapdb-config.yaml`, or scoped `tapdb-config-<database-name>.yaml`)
+- Connection config written to the active namespaced TAPDB config file (`~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml`)
 - Secrets Manager ARN stored in CloudFormation outputs (no plaintext passwords on disk)
 
 ### Cost Considerations

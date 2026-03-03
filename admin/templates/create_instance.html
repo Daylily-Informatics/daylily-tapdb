@@ -41,10 +41,10 @@
     <h2 class="card-title">Instance Details</h2>
     <form method="POST" action="/create-instance/{{ template.euid }}" id="create-instance-form">
         <div style="margin-bottom: 1rem;">
-            <label for="instance_name" style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Instance Name <span style="color: var(--accent-color);">*</span></label>
-            <input type="text" id="instance_name" name="instance_name" required 
+            <label for="instance_name" style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Instance Name</label>
+            <input type="text" id="instance_name" name="instance_name"
                    style="width: 100%; padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);"
-                   placeholder="Enter a name for this instance" value="{{ form_data.instance_name if form_data else '' }}">
+                   placeholder="Optional name for this instance" value="{{ form_data.instance_name if form_data else '' }}">
         </div>
 
         {% if has_instantiation_layouts %}
@@ -152,4 +152,3 @@ document.getElementById('create-instance-form').addEventListener('submit', funct
 });
 </script>
 {% endblock %}
-

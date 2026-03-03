@@ -18,6 +18,14 @@ def _strip(s: str) -> str:
     return _ANSI_RE.sub("", s)
 
 
+@pytest.fixture(autouse=True)
+def _namespace_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("TAPDB_CLIENT_ID", "testclient")
+    monkeypatch.setenv("TAPDB_DATABASE_NAME", "testdb")
+    monkeypatch.setenv("TAPDB_STRICT_NAMESPACE", "0")
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+
 @pytest.fixture()
 def app():
     """Build a fresh Typer app for each test."""
@@ -271,7 +279,14 @@ class TestConfigUpdate:
         result = runner.invoke(app, ["aurora", "create", "staging"])
         assert result.exit_code == 0
 
-        config_path = tmp_path / ".config" / "tapdb" / "tapdb-config.yaml"
+        config_path = (
+            tmp_path
+            / ".config"
+            / "tapdb"
+            / "testclient"
+            / "testdb"
+            / "tapdb-config.yaml"
+        )
         assert config_path.exists()
         raw = config_path.read_text()
         # Should contain the environment entry

@@ -84,6 +84,23 @@
         .btn-login:hover {
             background: #2980b9;
         }
+        .btn-google {
+            display: block;
+            width: 100%;
+            margin-top: 0.75rem;
+            padding: 0.75rem;
+            background: #ffffff;
+            color: #1f1f1f;
+            border: 1px solid #d2d2d2;
+            border-radius: 4px;
+            text-align: center;
+            text-decoration: none;
+            font-size: 0.95rem;
+            box-sizing: border-box;
+        }
+        .btn-google:hover {
+            background: #f3f3f3;
+        }
         .error-message {
             background: rgba(231, 76, 60, 0.2);
             border: 1px solid var(--accent-color);
@@ -126,6 +143,7 @@
                 <input type="password" id="password" name="password" required>
             </div>
             <button type="submit" class="btn-login">Sign In</button>
+            <a href="/auth/login" class="btn-google">Continue with Google</a>
         </form>
         <a href="/signup" class="signup-link">Create account</a>
     </div>

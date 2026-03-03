@@ -11,8 +11,12 @@ import json
 import logging
 import secrets
 import subprocess
+import base64
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request as UrlRequest, urlopen
+from urllib.error import HTTPError, URLError
 
 from fastapi import FastAPI, Request, Query, HTTPException, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -25,8 +29,9 @@ from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory, __v
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
-from daylily_tapdb.cli.db_config import get_db_config_for_env
+from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
 from sqlalchemy.exc import IntegrityError
+from admin.cognito import resolve_tapdb_pool_config, get_cognito_auth
 
 from admin.auth import (
     get_current_user, require_auth, require_admin,
@@ -156,8 +161,13 @@ if IS_PROD:
         raise RuntimeError("Refusing to start in prod with wildcard CORS origin '*'")
 else:
     if not allowed_origins:
-        # Safe local dev defaults
-        allowed_origins = ["https://localhost:8911", "https://127.0.0.1:8911"]
+        # Safe local dev defaults derived from TAPDB env config.
+        try:
+            cfg = get_db_config_for_env(APP_ENV)
+            ui_port = int(str(cfg.get("ui_port") or "8911"))
+        except Exception:
+            ui_port = 8911
+        allowed_origins = [f"https://localhost:{ui_port}"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -183,18 +193,205 @@ def get_db() -> TAPDBConnection:
     """
     env = os.environ.get("TAPDB_ENV", "dev").lower()
     cfg = get_db_config_for_env(env)
+    engine_type = (cfg.get("engine_type") or "local").strip().lower()
+    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+    region = (cfg.get("region") or "us-west-2").strip()
 
     return TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_user=cfg["user"],
-        db_pass=cfg["password"],
+        db_pass=cfg.get("password") or None,
         db_name=cfg["database"],
+        engine_type=engine_type,
+        region=region,
+        iam_auth=iam_auth,
     )
 
 
 def get_style() -> Dict[str, str]:
     """Get default style configuration."""
     return {"skin_css": "/static/css/style.css"}
+
+
+def _read_env_file_values(path: Path) -> Dict[str, str]:
+    """Parse KEY=VALUE pairs from a simple .env file."""
+    values: Dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        if key:
+            values[key] = value
+    return values
+
+
+def _mask_sensitive_value(key: str, value: str) -> str:
+    """Redact sensitive values for safe UI display."""
+    key_u = key.upper()
+    if any(token in key_u for token in ("PASSWORD", "SECRET", "TOKEN")):
+        return "(redacted)"
+    return value or "(empty)"
+
+
+def _normalize_cognito_domain(raw_domain: str) -> str:
+    """Normalize configured Cognito domain to hostname-only form."""
+    domain = (raw_domain or "").strip()
+    if not domain:
+        raise RuntimeError("COGNITO_DOMAIN is not configured")
+    probe = domain if "://" in domain else f"https://{domain}"
+    parts = urlsplit(probe)
+    if not parts.netloc:
+        raise RuntimeError(f"Invalid COGNITO_DOMAIN value: {raw_domain!r}")
+    return parts.netloc
+
+
+def _resolve_cognito_oauth_runtime(env_name: str) -> Dict[str, str]:
+    """Resolve OAuth/Hosted-UI settings from daycog context."""
+    pool_cfg = resolve_tapdb_pool_config(env_name)
+    values = _read_env_file_values(pool_cfg.source_file)
+    domain = _normalize_cognito_domain(values.get("COGNITO_DOMAIN", ""))
+    callback_url = (values.get("COGNITO_CALLBACK_URL") or "").strip()
+    if not callback_url:
+        raise RuntimeError("COGNITO_CALLBACK_URL is missing in daycog config")
+    client_id = (values.get("COGNITO_APP_CLIENT_ID") or pool_cfg.app_client_id or "").strip()
+    if not client_id:
+        raise RuntimeError("COGNITO_APP_CLIENT_ID is missing in daycog config")
+    return {
+        "domain": domain,
+        "callback_url": callback_url,
+        "client_id": client_id,
+        "client_secret": (values.get("COGNITO_APP_CLIENT_SECRET") or "").strip(),
+        "scope": (values.get("COGNITO_SCOPES") or "openid email profile").strip(),
+    }
+
+
+def _build_cognito_authorize_url(runtime: Dict[str, str], state: str) -> str:
+    """Build Hosted UI authorize URL targeting Google IdP."""
+    query = urlencode(
+        {
+            "response_type": "code",
+            "client_id": runtime["client_id"],
+            "redirect_uri": runtime["callback_url"],
+            "scope": runtime["scope"],
+            "state": state,
+            "identity_provider": "Google",
+        }
+    )
+    return f"https://{runtime['domain']}/oauth2/authorize?{query}"
+
+
+def _exchange_oauth_authorization_code(runtime: Dict[str, str], code: str) -> Dict[str, Any]:
+    """Exchange Hosted UI auth code for Cognito tokens."""
+    token_url = f"https://{runtime['domain']}/oauth2/token"
+    payload = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": runtime["callback_url"],
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    client_secret = runtime.get("client_secret") or ""
+    if client_secret:
+        creds = f"{runtime['client_id']}:{client_secret}".encode("utf-8")
+        headers["Authorization"] = f"Basic {base64.b64encode(creds).decode('ascii')}"
+    else:
+        payload["client_id"] = runtime["client_id"]
+
+    req = UrlRequest(
+        token_url,
+        data=urlencode(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8")
+    except HTTPError as exc:
+        details = ""
+        try:
+            details = exc.read().decode("utf-8").strip()
+        except Exception:
+            details = ""
+        reason = details or str(exc)
+        raise RuntimeError(f"Cognito token exchange failed: {reason}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Cognito token endpoint is unreachable: {exc}") from exc
+
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Cognito token response was not valid JSON") from exc
+
+    if "error" in data:
+        msg = data.get("error_description") or data["error"]
+        raise RuntimeError(f"Cognito token exchange failed: {msg}")
+    return data
+
+
+def _fetch_oauth_userinfo(runtime: Dict[str, str], access_token: str) -> Dict[str, Any]:
+    """Fetch user claims from Cognito userInfo endpoint."""
+    url = f"https://{runtime['domain']}/oauth2/userInfo"
+    req = UrlRequest(
+        url,
+        headers={"Authorization": f"Bearer {access_token}"},
+        method="GET",
+    )
+    with urlopen(req, timeout=15) as resp:
+        body = resp.read().decode("utf-8")
+    return json.loads(body)
+
+
+def _resolve_oauth_user_profile(
+    env_name: str,
+    tokens: Dict[str, Any],
+    runtime: Dict[str, str],
+) -> Dict[str, str]:
+    """Resolve normalized user profile (email/display_name) from OAuth tokens."""
+    claims: Dict[str, Any] = {}
+    access_token = str(tokens.get("access_token") or "")
+    id_token = str(tokens.get("id_token") or "")
+
+    if access_token:
+        try:
+            claims.update(_fetch_oauth_userinfo(runtime, access_token))
+        except Exception as exc:
+            logger.warning("Failed to fetch Cognito userInfo claims: %s", exc)
+
+    if (not claims or not claims.get("email")) and id_token:
+        try:
+            claims.update(get_cognito_auth(env_name).verify_token(id_token))
+        except Exception as exc:
+            logger.warning("Failed to verify id_token claims: %s", exc)
+
+    email = (
+        str(claims.get("email") or claims.get("cognito:username") or claims.get("username") or "")
+        .strip()
+        .lower()
+    )
+    if not email:
+        raise RuntimeError("OAuth login succeeded but no email/username claim was returned")
+
+    display_name = (
+        str(
+            claims.get("name")
+            or claims.get("preferred_username")
+            or claims.get("given_name")
+            or ""
+        ).strip()
+        or None
+    )
+    return {"email": email, "display_name": display_name or ""}
 
 
 def _resolve_lineage_targets_or_raise(
@@ -278,6 +475,100 @@ def _new_graph_lineage(
 # ============================================================================
 # Authentication Routes
 # ============================================================================
+
+@app.get("/auth/login")
+async def oauth_login(
+    request: Request,
+    next: str = Query("/", description="Post-auth redirect path"),
+):
+    """Start Cognito Hosted UI login flow (Google IdP)."""
+    user = await get_current_user(request)
+    if user:
+        return RedirectResponse("/", status_code=302)
+
+    env_name = os.environ.get("TAPDB_ENV", "dev").lower()
+    try:
+        runtime = _resolve_cognito_oauth_runtime(env_name)
+    except Exception as exc:
+        content = templates.get_template("login.html").render(
+            request=request,
+            style=get_style(),
+            error=f"OAuth login is not configured: {exc}",
+        )
+        return HTMLResponse(content=content)
+
+    state = secrets.token_urlsafe(32)
+    request.session["oauth_state"] = state
+    request.session["oauth_next"] = next if isinstance(next, str) and next.startswith("/") else "/"
+    return RedirectResponse(_build_cognito_authorize_url(runtime, state), status_code=302)
+
+
+@app.get("/auth/callback")
+async def oauth_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+):
+    """Handle Cognito Hosted UI OAuth callback."""
+    env_name = os.environ.get("TAPDB_ENV", "dev").lower()
+    if error:
+        details = error_description or error
+        content = templates.get_template("login.html").render(
+            request=request,
+            style=get_style(),
+            error=f"OAuth login failed: {details}",
+        )
+        return HTMLResponse(content=content)
+
+    expected_state = request.session.pop("oauth_state", None)
+    if not expected_state or not state or state != expected_state:
+        content = templates.get_template("login.html").render(
+            request=request,
+            style=get_style(),
+            error="OAuth login failed: invalid state",
+        )
+        return HTMLResponse(content=content)
+
+    if not code:
+        content = templates.get_template("login.html").render(
+            request=request,
+            style=get_style(),
+            error="OAuth login failed: missing authorization code",
+        )
+        return HTMLResponse(content=content)
+
+    try:
+        runtime = _resolve_cognito_oauth_runtime(env_name)
+        tokens = _exchange_oauth_authorization_code(runtime, code)
+        profile = _resolve_oauth_user_profile(env_name, tokens, runtime)
+        user = get_or_create_user_from_email(
+            profile["email"],
+            display_name=profile.get("display_name") or None,
+            role="user",
+        )
+    except Exception as exc:
+        content = templates.get_template("login.html").render(
+            request=request,
+            style=get_style(),
+            error=f"OAuth login failed: {exc}",
+        )
+        return HTMLResponse(content=content)
+
+    request.session["user_uuid"] = user["uuid"]
+    request.session["cognito_username"] = profile["email"]
+    if tokens.get("access_token"):
+        request.session["cognito_access_token"] = tokens["access_token"]
+    request.session.pop("cognito_challenge", None)
+    request.session.pop("cognito_challenge_session", None)
+    update_last_login(user["uuid"])
+
+    next_path = request.session.pop("oauth_next", "/")
+    if not isinstance(next_path, str) or not next_path.startswith("/"):
+        next_path = "/"
+    return RedirectResponse(next_path, status_code=302)
+
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: Optional[str] = None):
@@ -694,6 +985,58 @@ async def help_page(request: Request):
     return HTMLResponse(content=content)
 
 
+@app.get("/info", response_class=HTMLResponse)
+@require_auth
+async def info_page(request: Request):
+    """Runtime info page with DB and Cognito connection details."""
+    user = request.state.user
+    permissions = get_user_permissions(user)
+    env = os.environ.get("TAPDB_ENV", "dev").lower()
+    cfg = get_db_config_for_env(env)
+
+    db_rows: List[tuple[str, str]] = [
+        ("environment", env),
+        ("config_path", str(get_config_path())),
+    ]
+    for key in sorted(cfg.keys()):
+        if key == "password":
+            continue
+        db_rows.append((key, _mask_sensitive_value(key, str(cfg.get(key, "")))))
+    db_rows.append(("password_configured", "yes" if bool(cfg.get("password")) else "no"))
+
+    cognito_summary_rows: List[tuple[str, str]] = []
+    cognito_env_rows: List[tuple[str, str]] = []
+    cognito_error: Optional[str] = None
+    try:
+        pool_cfg = resolve_tapdb_pool_config(env)
+        cognito_summary_rows = [
+            ("pool_id", pool_cfg.pool_id),
+            ("app_client_id", pool_cfg.app_client_id),
+            ("region", pool_cfg.region),
+            ("aws_profile", pool_cfg.aws_profile or "(not set)"),
+            ("source_file", str(pool_cfg.source_file)),
+        ]
+        values = _read_env_file_values(pool_cfg.source_file)
+        for key in sorted(values.keys()):
+            if not (key.startswith("COGNITO_") or key.startswith("AWS_")):
+                continue
+            cognito_env_rows.append((key, _mask_sensitive_value(key, values[key])))
+    except Exception as exc:
+        cognito_error = str(exc)
+
+    content = templates.get_template("info.html").render(
+        request=request,
+        style=get_style(),
+        user=user,
+        permissions=permissions,
+        db_rows=db_rows,
+        cognito_summary_rows=cognito_summary_rows,
+        cognito_env_rows=cognito_env_rows,
+        cognito_error=cognito_error,
+    )
+    return HTMLResponse(content=content)
+
+
 # ============================================================================
 # HTML Routes (Protected)
 # ============================================================================
@@ -1043,23 +1386,6 @@ async def create_instance_submit(request: Request, template_euid: str):
             default_properties = template.json_addl or {}
             has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))
             template_code = f"{template.category}/{template.type}/{template.subtype}/{template.version}/"
-
-            # Validate required fields
-            if not instance_name:
-                content = templates.get_template("create_instance.html").render(
-                    request=request,
-                    style=get_style(),
-                    user=user,
-                    permissions=permissions,
-                    template=template,
-                    default_properties=default_properties,
-                    has_instantiation_layouts=has_instantiation_layouts,
-                    form_data=form_data,
-                    error="Instance name is required.",
-                    success=None,
-                    created_instance=None,
-                )
-                return HTMLResponse(content=content)
 
         # Create instance using InstanceFactory
         try:

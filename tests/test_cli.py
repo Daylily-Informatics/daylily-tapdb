@@ -13,7 +13,6 @@ from typer.testing import CliRunner
 import daylily_tapdb.cli as cli_mod
 from daylily_tapdb.cli import app
 from daylily_tapdb.cli.db import (
-    CONFIG_DIR,
     Environment,
     _ensure_dirs,
     _find_config_dir,
@@ -21,6 +20,7 @@ from daylily_tapdb.cli.db import (
     _get_db_config,
     _load_template_configs,
 )
+from daylily_tapdb.cli.db_config import get_config_path
 
 runner = CliRunner()
 
@@ -46,8 +46,54 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     - Avoid probing unexpected environments (e.g. TAPDB_ENV=prod in a dev shell).
     """
     monkeypatch.setenv("TAPDB_ENV", "dev")
+    monkeypatch.setenv("TAPDB_CLIENT_ID", "testclient")
+    monkeypatch.setenv("TAPDB_DATABASE_NAME", "testdb")
+    monkeypatch.setenv("TAPDB_STRICT_NAMESPACE", "0")
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("TAPDB_TEST_DSN", raising=False)
     monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
+    cfg_path = (
+        tmp_path
+        / ".config"
+        / "tapdb"
+        / "testclient"
+        / "testdb"
+        / "tapdb-config.yaml"
+    )
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        "meta:\n"
+        "  config_version: 2\n"
+        "  client_id: testclient\n"
+        "  database_name: testdb\n"
+        "environments:\n"
+        "  dev:\n"
+        "    engine_type: local\n"
+        "    host: localhost\n"
+        "    port: 5533\n"
+        "    ui_port: 8911\n"
+        "    user: test\n"
+        "    password: \"\"\n"
+        "    database: tapdb_dev\n"
+        "  test:\n"
+        "    engine_type: local\n"
+        "    host: localhost\n"
+        "    port: 5534\n"
+        "    ui_port: 8912\n"
+        "    user: test\n"
+        "    password: \"\"\n"
+        "    database: tapdb_test\n"
+        "  prod:\n"
+        "    engine_type: local\n"
+        "    host: localhost\n"
+        "    port: 5535\n"
+        "    ui_port: 8913\n"
+        "    user: test\n"
+        "    password: \"\"\n"
+        "    database: tapdb_prod\n",
+        encoding="utf-8",
+    )
+    os.chmod(cfg_path, 0o600)
     monkeypatch.setattr(cli_mod, "PID_FILE", tmp_path / "ui.pid")
     monkeypatch.setattr(cli_mod, "LOG_FILE", tmp_path / "ui.log")
 
@@ -117,8 +163,20 @@ class TestCLIMain:
         payload = json.loads(result.output)
         paths = payload["paths"]["config_search_order"]
         assert any(
-            "tapdb-config-atlas.yaml" in entry["path"] for entry in paths
+            "/testclient/atlas/tapdb-config.yaml" in entry["path"] for entry in paths
         ), paths
+
+    def test_context_missing_client_id_fails(self, monkeypatch):
+        monkeypatch.delenv("TAPDB_CLIENT_ID", raising=False)
+        result = runner.invoke(app, ["db", "create", "dev"])
+        assert result.exit_code != 0
+        assert "client-id" in _strip_ansi(result.output)
+
+    def test_context_missing_database_name_fails(self, monkeypatch):
+        monkeypatch.delenv("TAPDB_DATABASE_NAME", raising=False)
+        result = runner.invoke(app, ["ui", "status"])
+        assert result.exit_code != 0
+        assert "database-name" in _strip_ansi(result.output)
 
 
 class TestCLIUI:
@@ -189,8 +247,6 @@ class TestCLIUI:
             str(key),
         ]
         assert "localhost" in commands[1]
-        assert "127.0.0.1" in commands[1]
-        assert "::1" in commands[1]
 
     def test_ui_status_not_running(self):
         """Test ui status when server is not running."""
@@ -559,7 +615,7 @@ class TestCLICognito:
         )
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito._resolve_expected_ui_port",
-            lambda: (8911, "test"),
+            lambda _env: (8911, "test"),
         )
 
         result = runner.invoke(app, ["cognito", "status", "dev"])
@@ -591,7 +647,7 @@ class TestCLICognito:
         )
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito._resolve_expected_ui_port",
-            lambda: (8911, "test"),
+            lambda _env: (8911, "test"),
         )
 
         result = runner.invoke(app, ["cognito", "status", "dev"])
@@ -780,7 +836,7 @@ class TestCLIDB:
             assert config["port"] == "5533"
 
     def test_get_db_config_env_override(self):
-        """Test _get_db_config respects environment variables."""
+        """Test local host policy rejects non-local host overrides."""
         # Mock load_config to isolate from real config file.
         with (
             patch("daylily_tapdb.cli.db_config.load_config", return_value={}),
@@ -793,10 +849,8 @@ class TestCLIDB:
                 },
             ),
         ):
-            config = _get_db_config(Environment.test)
-            assert config["host"] == "testhost"
-            assert config["port"] == "5433"
-            assert config["database"] == "my_test_db"
+            with pytest.raises(RuntimeError, match="Local TAPDB must use host 'localhost'"):
+                _get_db_config(Environment.test)
 
     def test_find_schema_file(self):
         """Test _find_schema_file locates the schema."""
@@ -807,7 +861,7 @@ class TestCLIDB:
     def test_ensure_dirs_creates_config(self):
         """Test _ensure_dirs creates config directory."""
         _ensure_dirs()
-        assert CONFIG_DIR.exists()
+        assert get_config_path().parent.exists()
 
     def test_db_status_no_psql(self):
         """Test db status handles missing psql gracefully."""
