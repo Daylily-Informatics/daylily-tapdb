@@ -12,6 +12,7 @@ import logging
 import secrets
 import subprocess
 import base64
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlencode, urlsplit
@@ -26,6 +27,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from jinja2 import Environment, FileSystemLoader
 
 from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory, __version__
+from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
@@ -1041,12 +1043,288 @@ async def info_page(request: Request):
 # HTML Routes (Protected)
 # ============================================================================
 
+
+_HOME_QUERY_SCOPES = {"all", "template", "instance", "lineage"}
+_HOME_AUDIT_OPS = {"ALL", "INSERT", "UPDATE", "DELETE"}
+_COMPLEX_QUERY_KINDS = {"all", "template", "instance", "lineage"}
+
+
+def _normalize_home_limit(value: Any) -> int:
+    """Normalize list/query limit for home query + audit panels."""
+    try:
+        parsed = int(str(value or "20").strip())
+    except Exception:
+        parsed = 20
+    return max(1, min(100, parsed))
+
+
+def _normalize_home_scope(value: Any) -> str:
+    scope = str(value or "all").strip().lower()
+    if scope not in _HOME_QUERY_SCOPES:
+        return "all"
+    return scope
+
+
+def _normalize_home_op(value: Any) -> str:
+    op = str(value or "ALL").strip().upper()
+    if op not in _HOME_AUDIT_OPS:
+        return "ALL"
+    return op
+
+
+def _match_object_query(obj: Any, query: str) -> bool:
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    euid = str(getattr(obj, "euid", "") or "")
+    name = str(getattr(obj, "name", "") or "")
+    return q in f"{euid} {name}".lower()
+
+
+def _to_object_result(kind: str, obj: Any) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "euid": getattr(obj, "euid", None),
+        "name": getattr(obj, "name", None),
+        "category": getattr(obj, "category", None),
+        "type": getattr(obj, "type", None),
+        "subtype": getattr(obj, "subtype", None),
+        "version": getattr(obj, "version", None),
+        "created_dt": getattr(obj, "created_dt", None),
+    }
+
+
+def _timestamp_rank(value: Any) -> float:
+    if value is None:
+        return 0.0
+    try:
+        return float(value.timestamp())
+    except Exception:
+        return 0.0
+
+
+def _normalize_complex_kind(value: Any) -> str:
+    kind = str(value or "all").strip().lower()
+    if kind not in _COMPLEX_QUERY_KINDS:
+        return "all"
+    return kind
+
+
+def _run_complex_query(
+    session: Any,
+    kind: str,
+    category: str,
+    type_name: str,
+    subtype: str,
+    name_like: str,
+    euid_like: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Run advanced object search using multi-field filters."""
+    scope_models = {
+        "template": (generic_template, "template"),
+        "instance": (generic_instance, "instance"),
+        "lineage": (generic_instance_lineage, "lineage"),
+    }
+    selected_scopes = (
+        list(scope_models.keys()) if kind == "all" else [kind]
+    )
+    category_q = (category or "").strip().lower()
+    type_q = (type_name or "").strip().lower()
+    subtype_q = (subtype or "").strip().lower()
+    name_q = (name_like or "").strip().lower()
+    euid_q = (euid_like or "").strip().lower()
+
+    results: list[dict[str, Any]] = []
+    for selected in selected_scopes:
+        model, row_kind = scope_models[selected]
+        rows = session.query(model).filter_by(is_deleted=False).all()
+        for row in rows:
+            row_category = str(getattr(row, "category", "") or "").lower()
+            row_type = str(getattr(row, "type", "") or "").lower()
+            row_subtype = str(getattr(row, "subtype", "") or "").lower()
+            row_name = str(getattr(row, "name", "") or "").lower()
+            row_euid = str(getattr(row, "euid", "") or "").lower()
+            if category_q and category_q != row_category:
+                continue
+            if type_q and type_q != row_type:
+                continue
+            if subtype_q and subtype_q != row_subtype:
+                continue
+            if name_q and name_q not in row_name:
+                continue
+            if euid_q and euid_q not in row_euid:
+                continue
+            results.append(_to_object_result(row_kind, row))
+
+    results.sort(
+        key=lambda r: (
+            -_timestamp_rank(r.get("created_dt")),
+            str(r.get("kind") or ""),
+            str(r.get("euid") or ""),
+        )
+    )
+    return results[:limit]
+
+
+def _run_simple_object_query(
+    session: Any,
+    q: str,
+    scope: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Run simple text query across templates/instances/lineages."""
+    normalized_q = (q or "").strip()
+    if not normalized_q:
+        return []
+
+    results: list[dict[str, Any]] = []
+    scope_models = {
+        "template": (generic_template, "template"),
+        "instance": (generic_instance, "instance"),
+        "lineage": (generic_instance_lineage, "lineage"),
+    }
+    selected_scopes = (
+        list(scope_models.keys()) if scope == "all" else [scope]
+    )
+
+    for selected in selected_scopes:
+        model, kind = scope_models[selected]
+        rows = session.query(model).filter_by(is_deleted=False).all()
+        for row in rows:
+            if _match_object_query(row, normalized_q):
+                results.append(_to_object_result(kind, row))
+
+    results.sort(
+        key=lambda r: (
+            -_timestamp_rank(r.get("created_dt")),
+            str(r.get("kind") or ""),
+            str(r.get("euid") or ""),
+        )
+    )
+    return results[:limit]
+
+
+def _load_object_audit(
+    session: Any,
+    object_euid: str,
+    op: str,
+    limit: int,
+) -> list[SimpleNamespace]:
+    """Load per-object audit trail rows."""
+    target = (object_euid or "").strip().lower()
+    if not target:
+        return []
+    rows = session.query(audit_log).filter_by(is_deleted=False).all()
+    filtered: list[SimpleNamespace] = []
+    for raw in rows:
+        rel_euid = str(getattr(raw, "rel_table_euid_fk", "") or "").strip().lower()
+        if rel_euid != target:
+            continue
+        if op != "ALL" and str(getattr(raw, "operation_type", "") or "").upper() != op:
+            continue
+        # Materialize rows before session closes to avoid detached-instance access in templates.
+        filtered.append(
+            SimpleNamespace(
+                uuid=getattr(raw, "uuid", None),
+                euid=getattr(raw, "euid", None),
+                rel_table_name=getattr(raw, "rel_table_name", None),
+                column_name=getattr(raw, "column_name", None),
+                rel_table_uuid_fk=getattr(raw, "rel_table_uuid_fk", None),
+                rel_table_euid_fk=getattr(raw, "rel_table_euid_fk", None),
+                old_value=getattr(raw, "old_value", None),
+                new_value=getattr(raw, "new_value", None),
+                changed_by=getattr(raw, "changed_by", None),
+                changed_at=getattr(raw, "changed_at", None),
+                operation_type=getattr(raw, "operation_type", None),
+            )
+        )
+    filtered.sort(key=lambda r: -_timestamp_rank(getattr(r, "changed_at", None)))
+    return filtered[:limit]
+
+
+def _load_user_audit(
+    session: Any,
+    requested_user: str,
+    op: str,
+    limit: int,
+) -> list[SimpleNamespace]:
+    """Load per-user audit trail rows."""
+    target = (requested_user or "").strip().lower()
+    if not target:
+        return []
+    rows = session.query(audit_log).filter_by(is_deleted=False).all()
+    filtered: list[SimpleNamespace] = []
+    for raw in rows:
+        changed_by = str(getattr(raw, "changed_by", "") or "").strip().lower()
+        if changed_by != target:
+            continue
+        if op != "ALL" and str(getattr(raw, "operation_type", "") or "").upper() != op:
+            continue
+        filtered.append(
+            SimpleNamespace(
+                uuid=getattr(raw, "uuid", None),
+                euid=getattr(raw, "euid", None),
+                rel_table_name=getattr(raw, "rel_table_name", None),
+                column_name=getattr(raw, "column_name", None),
+                rel_table_uuid_fk=getattr(raw, "rel_table_uuid_fk", None),
+                rel_table_euid_fk=getattr(raw, "rel_table_euid_fk", None),
+                old_value=getattr(raw, "old_value", None),
+                new_value=getattr(raw, "new_value", None),
+                changed_by=getattr(raw, "changed_by", None),
+                changed_at=getattr(raw, "changed_at", None),
+                operation_type=getattr(raw, "operation_type", None),
+            )
+        )
+    filtered.sort(key=lambda r: -_timestamp_rank(getattr(r, "changed_at", None)))
+    return filtered[:limit]
+
+
+def _resolve_effective_audit_user(
+    current_user: dict[str, Any],
+    requested_user: str,
+    permissions: dict[str, Any],
+) -> tuple[str, Optional[str]]:
+    """Resolve requested audit user with mixed-role access policy."""
+    current_identifier = (
+        str(current_user.get("username") or current_user.get("email") or "")
+        .strip()
+        .lower()
+    )
+    requested = (requested_user or "").strip().lower()
+    effective = requested or current_identifier
+
+    is_admin = str(current_user.get("role") or "").strip().lower() == "admin"
+    can_manage_users = bool((permissions or {}).get("can_manage_users")) or is_admin
+    if not can_manage_users and effective != current_identifier:
+        return current_identifier, (
+            "You can view only your own user audit trail. Showing your activity."
+        )
+    return effective, None
+
+
 @app.get("/", response_class=HTMLResponse)
 @require_auth
-async def index(request: Request):
-    """Home page with overview."""
+async def index(
+    request: Request,
+    q: str = Query("", description="Simple object query text"),
+    scope: str = Query("all", description="Query scope: all|template|instance|lineage"),
+    object_euid: str = Query("", description="EUID for per-object audit trail"),
+    audit_user: str = Query("", description="User identifier for per-user audit trail"),
+    op: str = Query("ALL", description="Audit operation filter: INSERT|UPDATE|DELETE|ALL"),
+    limit: int = Query(20, description="Result row limit"),
+):
+    """Home page with overview, simple query, and audit trail panels."""
     user = request.state.user
     permissions = get_user_permissions(user)
+    query_params = {
+        "q": (q or "").strip(),
+        "scope": _normalize_home_scope(scope),
+        "object_euid": (object_euid or "").strip(),
+        "audit_user": (audit_user or "").strip(),
+        "op": _normalize_home_op(op),
+        "limit": _normalize_home_limit(limit),
+    }
 
     with get_db() as conn:
         conn.app_username = user.get("username")
@@ -1054,6 +1332,29 @@ async def index(request: Request):
             template_count = session.query(generic_template).filter_by(is_deleted=False).count()
             instance_count = session.query(generic_instance).filter_by(is_deleted=False).count()
             lineage_count = session.query(generic_instance_lineage).filter_by(is_deleted=False).count()
+            object_results = _run_simple_object_query(
+                session=session,
+                q=query_params["q"],
+                scope=query_params["scope"],
+                limit=query_params["limit"],
+            )
+            object_audit_rows = _load_object_audit(
+                session=session,
+                object_euid=query_params["object_euid"],
+                op=query_params["op"],
+                limit=query_params["limit"],
+            )
+            audit_user_effective, audit_warning = _resolve_effective_audit_user(
+                current_user=user,
+                requested_user=query_params["audit_user"],
+                permissions=permissions,
+            )
+            user_audit_rows = _load_user_audit(
+                session=session,
+                requested_user=audit_user_effective,
+                op=query_params["op"],
+                limit=query_params["limit"],
+            )
 
     content = templates.get_template("index.html").render(
         request=request,
@@ -1063,6 +1364,77 @@ async def index(request: Request):
         template_count=template_count,
         instance_count=instance_count,
         lineage_count=lineage_count,
+        query_params=query_params,
+        object_results=object_results,
+        object_audit_rows=object_audit_rows,
+        user_audit_rows=user_audit_rows,
+        audit_warning=audit_warning,
+        audit_user_effective=audit_user_effective,
+    )
+    return HTMLResponse(content=content)
+
+
+@app.get("/query", response_class=HTMLResponse)
+@require_auth
+async def complex_query_page(
+    request: Request,
+    kind: str = Query("all", description="Object kind: all|template|instance|lineage"),
+    category: str = Query("", description="Exact category filter"),
+    type_: str = Query("", alias="type", description="Exact type filter"),
+    subtype: str = Query("", description="Exact subtype filter"),
+    name_like: str = Query("", description="Case-insensitive name contains"),
+    euid_like: str = Query("", description="Case-insensitive EUID contains"),
+    limit: int = Query(50, description="Result row limit"),
+):
+    """Advanced multi-field object query page."""
+    user = request.state.user
+    permissions = get_user_permissions(user)
+
+    query_params = {
+        "kind": _normalize_complex_kind(kind),
+        "category": (category or "").strip(),
+        "type": (type_ or "").strip(),
+        "subtype": (subtype or "").strip(),
+        "name_like": (name_like or "").strip(),
+        "euid_like": (euid_like or "").strip(),
+        "limit": _normalize_home_limit(limit),
+    }
+    has_filters = any(
+        [
+            query_params["category"],
+            query_params["type"],
+            query_params["subtype"],
+            query_params["name_like"],
+            query_params["euid_like"],
+        ]
+    )
+    should_run = has_filters or query_params["kind"] != "all"
+
+    results: list[dict[str, Any]] = []
+    if should_run:
+        with get_db() as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope() as session:
+                results = _run_complex_query(
+                    session=session,
+                    kind=query_params["kind"],
+                    category=query_params["category"],
+                    type_name=query_params["type"],
+                    subtype=query_params["subtype"],
+                    name_like=query_params["name_like"],
+                    euid_like=query_params["euid_like"],
+                    limit=query_params["limit"],
+                )
+
+    content = templates.get_template("complex_query.html").render(
+        request=request,
+        style=get_style(),
+        user=user,
+        permissions=permissions,
+        query_params=query_params,
+        has_filters=has_filters,
+        should_run=should_run,
+        results=results,
     )
     return HTMLResponse(content=content)
 

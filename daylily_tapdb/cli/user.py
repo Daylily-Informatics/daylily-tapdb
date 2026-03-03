@@ -4,17 +4,68 @@ TAPDB User Management CLI.
 Commands for managing TAPDB application users.
 """
 
+from __future__ import annotations
+
+from datetime import datetime
 from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from daylily_tapdb.cli.db import Environment, _run_psql
+from daylily_tapdb import TAPDBConnection
+from daylily_tapdb.cli.db import Environment
+from daylily_tapdb.cli.db_config import get_db_config_for_env
 from daylily_tapdb.passwords import hash_password as _hash_password
+from daylily_tapdb.user_store import (
+    create_or_get,
+    list_users,
+    set_active,
+    set_password_hash,
+    set_role,
+    soft_delete,
+)
 
 user_app = typer.Typer(help="User management commands")
 console = Console()
+
+
+def _open_connection(env: Environment, *, app_username: str) -> TAPDBConnection:
+    cfg = get_db_config_for_env(env.value)
+    engine_type = (cfg.get("engine_type") or "local").strip().lower()
+    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+    region = (cfg.get("region") or "us-west-2").strip()
+    return TAPDBConnection(
+        db_hostname=f"{cfg['host']}:{cfg['port']}",
+        db_user=cfg["user"],
+        db_pass=cfg.get("password") or None,
+        db_name=cfg["database"],
+        engine_type=engine_type,
+        region=region,
+        iam_auth=iam_auth,
+        app_username=app_username,
+    )
+
+
+def _format_date(value: object, *, include_time: bool = False) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M" if include_time else "%Y-%m-%d")
+    raw = str(value).strip()
+    if not raw:
+        return "-"
+    # Accept ISO strings persisted in json_addl.
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return parsed.strftime("%Y-%m-%d %H:%M" if include_time else "%Y-%m-%d")
+    except Exception:
+        return raw
 
 
 @user_app.command("list")
@@ -25,28 +76,15 @@ def user_list(
     ),
 ):
     """List all users."""
-    where = "" if show_inactive else "WHERE is_active = TRUE"
-    sql = f"""
-        SELECT username, email, display_name, role, is_active,
-               to_char(created_dt, 'YYYY-MM-DD') as created,
-               to_char(last_login_dt, 'YYYY-MM-DD HH24:MI') as last_login
-        FROM tapdb_user {where}
-        ORDER BY username
-    """
-    success, output = _run_psql(env, sql=sql)
-
-    if not success:
-        console.print(f"[red]✗[/red] Failed to list users: {output}")
+    try:
+        with _open_connection(env, app_username="tapdb_user_cli") as conn:
+            with conn.session_scope() as session:
+                users = list_users(session, include_inactive=show_inactive)
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed to list users: {e}")
         raise typer.Exit(1)
 
-    # Parse output and display as table
-    lines = [
-        line.strip()
-        for line in output.strip().split("\n")
-        if line.strip() and not line.startswith("(")
-    ]
-
-    if len(lines) <= 2:  # Header + separator only
+    if not users:
         console.print("[dim]No users found[/dim]")
         return
 
@@ -59,20 +97,18 @@ def user_list(
     table.add_column("Created")
     table.add_column("Last Login")
 
-    for line in lines[2:]:  # Skip header and separator
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 7:
-            role_style = "green" if parts[3] == "admin" else ""
-            active_icon = "✓" if parts[4].strip().lower() in ("t", "true") else "✗"
-            table.add_row(
-                parts[0],
-                parts[1],
-                parts[2],
-                f"[{role_style}]{parts[3]}[/{role_style}]" if role_style else parts[3],
-                active_icon,
-                parts[5],
-                parts[6] or "-",
-            )
+    for user in users:
+        role_style = "green" if user.role == "admin" else ""
+        active_icon = "✓" if user.is_active else "✗"
+        table.add_row(
+            user.username,
+            user.email or "",
+            user.display_name or "",
+            f"[{role_style}]{user.role}[/{role_style}]" if role_style else user.role,
+            active_icon,
+            _format_date(user.created_dt),
+            _format_date(user.last_login_dt, include_time=True),
+        )
 
     console.print(table)
 
@@ -95,7 +131,6 @@ def user_add(
         console.print(f"[red]✗[/red] Invalid role: {role}. Must be 'admin' or 'user'")
         raise typer.Exit(1)
 
-    # Hash password if provided
     pw_hash = None
     if password:
         try:
@@ -104,23 +139,27 @@ def user_add(
             console.print(f"[red]✗[/red] {e}")
             console.print("  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]")
             raise typer.Exit(1)
-    pw_sql = f"'{pw_hash}'" if pw_hash else "NULL"
-    email_sql = f"'{email}'" if email else "NULL"
-    name_sql = f"'{display_name}'" if display_name else "NULL"
 
-    sql = f"""
-        INSERT INTO tapdb_user (username, email, display_name, role, password_hash)
-        VALUES ('{username}', {email_sql}, {name_sql}, '{role}', {pw_sql})
-        RETURNING username, role
-    """
+    try:
+        with _open_connection(env, app_username=username) as conn:
+            with conn.session_scope(commit=True) as session:
+                _, created = create_or_get(
+                    session,
+                    login_identifier=username,
+                    email=email,
+                    display_name=display_name,
+                    role=role,
+                    is_active=True,
+                    require_password_change=False,
+                    password_hash=pw_hash,
+                    cognito_username=email or username,
+                )
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed to create user: {e}")
+        raise typer.Exit(1)
 
-    success, output = _run_psql(env, sql=sql)
-
-    if not success:
-        if "duplicate key" in output.lower():
-            console.print(f"[red]✗[/red] User '{username}' already exists")
-        else:
-            console.print(f"[red]✗[/red] Failed to create user: {output}")
+    if not created:
+        console.print(f"[red]✗[/red] User '{username}' already exists")
         raise typer.Exit(1)
 
     console.print(
@@ -140,16 +179,15 @@ def user_set_role(
     if role not in ("admin", "user"):
         console.print(f"[red]✗[/red] Invalid role: {role}. Must be 'admin' or 'user'")
         raise typer.Exit(1)
+    try:
+        with _open_connection(env, app_username=username) as conn:
+            with conn.session_scope(commit=True) as session:
+                updated = set_role(session, username, role)
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed to set role: {e}")
+        raise typer.Exit(1)
 
-    sql = (
-        f"UPDATE tapdb_user SET role = '{role}',"
-        f" modified_dt = NOW()"
-        f" WHERE username = '{username}'"
-        " RETURNING username"
-    )
-    success, output = _run_psql(env, sql=sql)
-
-    if not success or "UPDATE 0" in output:
+    if not updated:
         console.print(f"[red]✗[/red] User '{username}' not found")
         raise typer.Exit(1)
 
@@ -164,18 +202,16 @@ def user_deactivate(
     username: str = typer.Argument(..., help="Username to deactivate"),
 ):
     """Deactivate a user (soft disable)."""
-    sql = (
-        "UPDATE tapdb_user SET is_active = FALSE,"
-        " modified_dt = NOW()"
-        f" WHERE username = '{username}'"
-        " RETURNING username"
-    )
-    success, output = _run_psql(env, sql=sql)
-
-    if not success or "UPDATE 0" in output:
+    try:
+        with _open_connection(env, app_username=username) as conn:
+            with conn.session_scope(commit=True) as session:
+                updated = set_active(session, username, False)
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed to deactivate user: {e}")
+        raise typer.Exit(1)
+    if not updated:
         console.print(f"[red]✗[/red] User '{username}' not found")
         raise typer.Exit(1)
-
     console.print(f"[green]✓[/green] Deactivated user [cyan]{username}[/cyan]")
 
 
@@ -185,18 +221,16 @@ def user_activate(
     username: str = typer.Argument(..., help="Username to activate"),
 ):
     """Activate a user."""
-    sql = (
-        "UPDATE tapdb_user SET is_active = TRUE,"
-        " modified_dt = NOW()"
-        f" WHERE username = '{username}'"
-        " RETURNING username"
-    )
-    success, output = _run_psql(env, sql=sql)
-
-    if not success or "UPDATE 0" in output:
+    try:
+        with _open_connection(env, app_username=username) as conn:
+            with conn.session_scope(commit=True) as session:
+                updated = set_active(session, username, True)
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed to activate user: {e}")
+        raise typer.Exit(1)
+    if not updated:
         console.print(f"[red]✗[/red] User '{username}' not found")
         raise typer.Exit(1)
-
     console.print(f"[green]✓[/green] Activated user [cyan]{username}[/cyan]")
 
 
@@ -221,15 +255,21 @@ def user_set_password(
         console.print(f"[red]✗[/red] {e}")
         console.print("  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]")
         raise typer.Exit(1)
-    sql = (
-        f"UPDATE tapdb_user SET password_hash = '{pw_hash}',"
-        " modified_dt = NOW()"
-        f" WHERE username = '{username}'"
-        " RETURNING username"
-    )
-    success, output = _run_psql(env, sql=sql)
 
-    if not success or "UPDATE 0" in output:
+    try:
+        with _open_connection(env, app_username=username) as conn:
+            with conn.session_scope(commit=True) as session:
+                updated = set_password_hash(
+                    session,
+                    username,
+                    pw_hash,
+                    require_password_change=None,
+                )
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed to set password: {e}")
+        raise typer.Exit(1)
+
+    if not updated:
         console.print(f"[red]✗[/red] User '{username}' not found")
         raise typer.Exit(1)
 
@@ -242,17 +282,22 @@ def user_delete(
     username: str = typer.Argument(..., help="Username to delete"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ):
-    """Permanently delete a user."""
+    """Delete a user (soft delete)."""
     if not force:
         confirm = typer.confirm(f"Permanently delete user '{username}'?")
         if not confirm:
             console.print("[dim]Cancelled[/dim]")
             raise typer.Exit(0)
 
-    sql = f"DELETE FROM tapdb_user WHERE username = '{username}' RETURNING username"
-    success, output = _run_psql(env, sql=sql)
+    try:
+        with _open_connection(env, app_username=username) as conn:
+            with conn.session_scope(commit=True) as session:
+                deleted = soft_delete(session, username)
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed to delete user: {e}")
+        raise typer.Exit(1)
 
-    if not success or "DELETE 0" in output:
+    if not deleted:
         console.print(f"[red]✗[/red] User '{username}' not found")
         raise typer.Exit(1)
 

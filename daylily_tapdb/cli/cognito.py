@@ -18,9 +18,11 @@ from urllib.parse import urlparse
 import typer
 from rich.console import Console
 
+from daylily_tapdb import TAPDBConnection
 from daylily_tapdb.cli.context import resolve_context
-from daylily_tapdb.cli.db import Environment, _run_psql
+from daylily_tapdb.cli.db import Environment
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+from daylily_tapdb.user_store import create_or_get
 
 console = Console()
 cognito_app = typer.Typer(help="Cognito auth integration commands (via daycog)")
@@ -542,56 +544,53 @@ def _resolve_pool_command_context(
     return selected_pool, proc_env, selected_region or "us-east-1", selected_profile
 
 
-def _sql_quote(value: str) -> str:
-    return value.replace("'", "''")
-
-
-def _ensure_tapdb_user_row(
+def _ensure_actor_user_row(
     env: Environment,
     *,
     email: str,
     role: str = "user",
     display_name: Optional[str] = None,
 ) -> None:
-    """Ensure TAPDB has a local user row for the Cognito identity."""
+    """Ensure TAPDB has an actor-backed user row for the Cognito identity."""
     normalized_email = (email or "").strip().lower()
     if not normalized_email:
-        raise RuntimeError("email is required for tapdb user creation")
+        raise RuntimeError("email is required for TAPDB actor user creation")
     if role not in ("admin", "user"):
         raise RuntimeError(f"invalid role: {role}")
-
-    em = _sql_quote(normalized_email)
-    role_q = _sql_quote(role)
-    display_name_sql = (
-        f"'{_sql_quote(display_name.strip())}'"
-        if display_name and display_name.strip()
-        else "NULL"
+    cfg = get_db_config_for_env(env.value)
+    engine_type = (cfg.get("engine_type") or "local").strip().lower()
+    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
     )
-    insert_sql = f"""
-        INSERT INTO tapdb_user (
-            username, email, display_name, role,
-            is_active, require_password_change, password_hash
-        )
-        VALUES (
-            '{em}', '{em}', {display_name_sql}, '{role_q}',
-            TRUE, FALSE, NULL
-        )
-    """
-    ok, out = _run_psql(env, sql=insert_sql)
-    if ok:
-        return
+    region = (cfg.get("region") or "us-west-2").strip()
 
-    # If already present (username or email), treat as success.
-    check_sql = f"""
-        SELECT username
-        FROM tapdb_user
-        WHERE username = '{em}' OR email = '{em}'
-        LIMIT 1
-    """
-    check_ok, check_out = _run_psql(env, sql=check_sql)
-    if check_ok and check_out.strip():
-        return
-    raise RuntimeError(out.strip() or "Failed to create tapdb_user row")
+    with TAPDBConnection(
+        db_hostname=f"{cfg['host']}:{cfg['port']}",
+        db_user=cfg["user"],
+        db_pass=cfg.get("password") or None,
+        db_name=cfg["database"],
+        engine_type=engine_type,
+        region=region,
+        iam_auth=iam_auth,
+        app_username=normalized_email,
+    ) as conn:
+        with conn.session_scope(commit=True) as session:
+            user, _ = create_or_get(
+                session,
+                login_identifier=normalized_email,
+                email=normalized_email,
+                display_name=display_name,
+                role=role,
+                is_active=True,
+                require_password_change=False,
+                password_hash=None,
+                cognito_username=normalized_email,
+            )
+    if not user.is_active:
+        raise RuntimeError(f"TAPDB user {normalized_email} is inactive")
 
 
 @cognito_app.command("setup")
@@ -1408,7 +1407,7 @@ def cognito_add_user(
         None,
         "--name",
         "-n",
-        help="Optional display name for tapdb_user",
+        help="Optional display name for TAPDB actor user",
     ),
     no_verify: bool = typer.Option(
         True,
@@ -1433,7 +1432,7 @@ def cognito_add_user(
     _run_daycog(args, env=proc_env)
 
     try:
-        _ensure_tapdb_user_row(
+        _ensure_actor_user_row(
             env,
             email=email,
             role=role,
@@ -1441,7 +1440,7 @@ def cognito_add_user(
         )
     except Exception as e:
         console.print(
-            "[red]✗[/red] Cognito user created, but failed to create tapdb_user row: "
+            "[red]✗[/red] Cognito user created, but failed to provision TAPDB actor user: "
             f"{e}"
         )
         raise typer.Exit(1)

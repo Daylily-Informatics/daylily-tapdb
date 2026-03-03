@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}TAPDB Admin - Complex Query{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 2rem;">Complex Query</h1>
+
+<div class="card">
+    <h2 class="card-title">Advanced Object Search</h2>
+    <p style="color: var(--text-muted); margin-bottom: 1rem;">
+        Filter templates, instances, and lineages with multiple fields. Results are read-only links to object detail pages.
+    </p>
+
+    <form action="/query" method="get" class="filter-bar">
+        <select name="kind">
+            <option value="all" {% if query_params.kind == 'all' %}selected{% endif %}>All Kinds</option>
+            <option value="template" {% if query_params.kind == 'template' %}selected{% endif %}>Templates</option>
+            <option value="instance" {% if query_params.kind == 'instance' %}selected{% endif %}>Instances</option>
+            <option value="lineage" {% if query_params.kind == 'lineage' %}selected{% endif %}>Lineages</option>
+        </select>
+        <input type="text" name="category" value="{{ query_params.category }}" placeholder="Category (exact)">
+        <input type="text" name="type" value="{{ query_params.type }}" placeholder="Type (exact)">
+        <input type="text" name="subtype" value="{{ query_params.subtype }}" placeholder="Subtype (exact)">
+        <input type="text" name="name_like" value="{{ query_params.name_like }}" placeholder="Name contains">
+        <input type="text" name="euid_like" value="{{ query_params.euid_like }}" placeholder="EUID contains">
+        <input type="number" name="limit" min="1" max="100" value="{{ query_params.limit }}" style="width: 95px;">
+        <button type="submit" class="btn">Run</button>
+        <a href="/query" class="btn" style="background: #6c757d;">Clear</a>
+    </form>
+</div>
+
+<div class="card">
+    <h2 class="card-title">Results</h2>
+    {% if should_run %}
+        {% if results %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Kind</th>
+                    <th>EUID</th>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Type/Subtype</th>
+                    <th>Created</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in results %}
+                <tr>
+                    <td>{{ row.kind }}</td>
+                    <td><a href="/object/{{ row.euid }}">{{ row.euid }}</a></td>
+                    <td>{{ row.name or '-' }}</td>
+                    <td>{{ row.category or '-' }}</td>
+                    <td>{{ row.type or '-' }}/{{ row.subtype or '-' }}</td>
+                    <td>{{ row.created_dt.strftime('%Y-%m-%d %H:%M:%S') if row.created_dt else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: var(--text-muted);">No objects matched this query.</p>
+        {% endif %}
+    {% else %}
+    <p style="color: var(--text-muted);">Set at least one filter (or pick a specific kind) and run query.</p>
+    {% endif %}
+</div>
+{% endblock %}

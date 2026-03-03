@@ -27,6 +27,7 @@
     <h2 class="card-title">Quick Actions</h2>
     <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
         <a href="/graph" class="btn">🔗 View Object Graph</a>
+        <a href="/query" class="btn">🧠 Complex Query</a>
         <a href="/templates" class="btn">📋 Browse Templates</a>
         <a href="/instances" class="btn">📦 Browse Instances</a>
     </div>
@@ -41,9 +42,192 @@
 </div>
 
 <div class="card" style="margin-top: 2rem;">
+    <h2 class="card-title">Simple Query</h2>
+    <form action="/" method="get" class="filter-bar">
+        <input
+            type="text"
+            name="q"
+            value="{{ query_params.q }}"
+            placeholder="Search by EUID or name"
+            style="min-width: 320px; flex: 1;"
+        >
+        <select name="scope">
+            <option value="all" {% if query_params.scope == 'all' %}selected{% endif %}>All Objects</option>
+            <option value="template" {% if query_params.scope == 'template' %}selected{% endif %}>Templates</option>
+            <option value="instance" {% if query_params.scope == 'instance' %}selected{% endif %}>Instances</option>
+            <option value="lineage" {% if query_params.scope == 'lineage' %}selected{% endif %}>Lineages</option>
+        </select>
+        <input type="number" name="limit" min="1" max="100" value="{{ query_params.limit }}" style="width: 95px;">
+        <button type="submit" class="btn">Run Query</button>
+    </form>
+
+    {% if query_params.q %}
+        {% if object_results %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Kind</th>
+                    <th>EUID</th>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Type/Subtype</th>
+                    <th>Created</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in object_results %}
+                <tr>
+                    <td>{{ row.kind }}</td>
+                    <td><a href="/object/{{ row.euid }}">{{ row.euid }}</a></td>
+                    <td>{{ row.name or '-' }}</td>
+                    <td>{{ row.category or '-' }}</td>
+                    <td>{{ row.type or '-' }}/{{ row.subtype or '-' }}</td>
+                    <td>{{ row.created_dt.strftime('%Y-%m-%d %H:%M:%S') if row.created_dt else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: var(--text-muted); margin-top: 1rem;">No objects matched your query.</p>
+        {% endif %}
+    {% else %}
+    <p style="color: var(--text-muted); margin-top: 1rem;">Enter a query to search templates, instances, and lineages.</p>
+    {% endif %}
+</div>
+
+<div class="card" style="margin-top: 2rem;">
+    <h2 class="card-title">Object Audit Trail</h2>
+    <form action="/" method="get" class="filter-bar">
+        <input
+            type="text"
+            name="object_euid"
+            value="{{ query_params.object_euid }}"
+            placeholder="Object EUID (e.g., GX12)"
+            style="min-width: 280px; flex: 1;"
+        >
+        <select name="op">
+            <option value="ALL" {% if query_params.op == 'ALL' %}selected{% endif %}>All Ops</option>
+            <option value="INSERT" {% if query_params.op == 'INSERT' %}selected{% endif %}>INSERT</option>
+            <option value="UPDATE" {% if query_params.op == 'UPDATE' %}selected{% endif %}>UPDATE</option>
+            <option value="DELETE" {% if query_params.op == 'DELETE' %}selected{% endif %}>DELETE</option>
+        </select>
+        <input type="number" name="limit" min="1" max="100" value="{{ query_params.limit }}" style="width: 95px;">
+        <button type="submit" class="btn">Load Audit</button>
+    </form>
+
+    {% if query_params.object_euid %}
+        {% if object_audit_rows %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Changed At</th>
+                    <th>Operation</th>
+                    <th>Table</th>
+                    <th>Column</th>
+                    <th>Changed By</th>
+                    <th>Old</th>
+                    <th>New</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in object_audit_rows %}
+                <tr>
+                    <td>{{ row.changed_at.strftime('%Y-%m-%d %H:%M:%S') if row.changed_at else '-' }}</td>
+                    <td>{{ row.operation_type or '-' }}</td>
+                    <td>{{ row.rel_table_name or '-' }}</td>
+                    <td>{{ row.column_name or '-' }}</td>
+                    <td>{{ row.changed_by or '-' }}</td>
+                    {% set old_text = row.old_value or '-' %}
+                    {% set new_text = row.new_value or '-' %}
+                    <td title="{{ old_text }}">
+                        {{ (old_text[:120] ~ '...') if old_text|length > 120 else old_text }}
+                    </td>
+                    <td title="{{ new_text }}">
+                        {{ (new_text[:120] ~ '...') if new_text|length > 120 else new_text }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: var(--text-muted); margin-top: 1rem;">No audit rows found for this object.</p>
+        {% endif %}
+    {% else %}
+    <p style="color: var(--text-muted); margin-top: 1rem;">Enter an object EUID to load its audit trail.</p>
+    {% endif %}
+</div>
+
+<div class="card" style="margin-top: 2rem;">
+    <h2 class="card-title">User Audit Trail</h2>
+    {% if audit_warning %}
+    <div style="margin-bottom: 0.9rem; padding: 0.65rem 0.8rem; border-radius: 6px; background: rgba(231, 76, 60, 0.15); color: #ffb3a7;">
+        {{ audit_warning }}
+    </div>
+    {% endif %}
+
+    <form action="/" method="get" class="filter-bar">
+        <input
+            type="text"
+            name="audit_user"
+            value="{{ audit_user_effective }}"
+            placeholder="User identifier"
+            style="min-width: 280px; flex: 1;"
+            {% if not permissions.can_manage_users and user.role != 'admin' %}readonly{% endif %}
+        >
+        <select name="op">
+            <option value="ALL" {% if query_params.op == 'ALL' %}selected{% endif %}>All Ops</option>
+            <option value="INSERT" {% if query_params.op == 'INSERT' %}selected{% endif %}>INSERT</option>
+            <option value="UPDATE" {% if query_params.op == 'UPDATE' %}selected{% endif %}>UPDATE</option>
+            <option value="DELETE" {% if query_params.op == 'DELETE' %}selected{% endif %}>DELETE</option>
+        </select>
+        <input type="number" name="limit" min="1" max="100" value="{{ query_params.limit }}" style="width: 95px;">
+        <button type="submit" class="btn">Load Audit</button>
+    </form>
+
+    {% if user_audit_rows %}
+    <table>
+        <thead>
+            <tr>
+                <th>Changed At</th>
+                <th>Operation</th>
+                <th>Object</th>
+                <th>Table</th>
+                <th>Column</th>
+                <th>Changed By</th>
+                <th>Old</th>
+                <th>New</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in user_audit_rows %}
+            <tr>
+                <td>{{ row.changed_at.strftime('%Y-%m-%d %H:%M:%S') if row.changed_at else '-' }}</td>
+                <td>{{ row.operation_type or '-' }}</td>
+                <td><a href="/object/{{ row.rel_table_euid_fk }}">{{ row.rel_table_euid_fk or '-' }}</a></td>
+                <td>{{ row.rel_table_name or '-' }}</td>
+                <td>{{ row.column_name or '-' }}</td>
+                <td>{{ row.changed_by or '-' }}</td>
+                {% set old_text = row.old_value or '-' %}
+                {% set new_text = row.new_value or '-' %}
+                <td title="{{ old_text }}">
+                    {{ (old_text[:120] ~ '...') if old_text|length > 120 else old_text }}
+                </td>
+                <td title="{{ new_text }}">
+                    {{ (new_text[:120] ~ '...') if new_text|length > 120 else new_text }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-muted); margin-top: 1rem;">No user audit rows found for {{ audit_user_effective }}.</p>
+    {% endif %}
+</div>
+
+<div class="card" style="margin-top: 2rem;">
     <h2 class="card-title">About TAPDB</h2>
     <p style="color: var(--text-muted);">
-        TAPDB (Templated Abstract Polymorphic Database) is a flexible object model for building 
+        TAPDB (Templated Abstract Polymorphic Database) is a flexible object model for building
         database applications. It provides:
     </p>
     <ul style="margin-top: 1rem; margin-left: 1.5rem; color: var(--text-muted);">
@@ -54,4 +238,3 @@
     </ul>
 </div>
 {% endblock %}
-

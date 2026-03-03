@@ -151,6 +151,20 @@ Guidance:
 - On relationship validation failure, fail atomically (no partial writes).
 - Maintain current EUID behavior; do not introduce alternate ID formats.
 
+## Auth User Storage Policy
+TAPDB auth users are actor-backed objects, not a dedicated user table.
+
+Required model:
+1. Store auth users as `generic_instance` rows with:
+   - `polymorphic_discriminator='actor_instance'`
+   - `category='generic'`
+   - `type='actor'`
+   - `subtype='system_user'`
+   - `version='1.0'`
+2. Use template code: `generic/actor/system_user/1.0`.
+3. Keep canonical login identity in `json_addl.login_identifier` (lowercased).
+4. Keep role/active/password metadata in `json_addl` fields.
+
 ## EUID Requirements (Mandatory)
 Normative spec:
 - `../../lsmc/meridian-euid/SPEC.md`

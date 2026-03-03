@@ -238,10 +238,6 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
             f"{env_prefix}COGNITO_USER_POOL_ID",
             _file_str("cognito_user_pool_id") or "",
         ),
-        "tapdb_user_euid_prefix": os.environ.get(
-            f"{env_prefix}TAPDB_USER_EUID_PREFIX",
-            _file_str("tapdb_user_euid_prefix") or "",
-        ),
         "audit_log_euid_prefix": os.environ.get(
             f"{env_prefix}AUDIT_LOG_EUID_PREFIX",
             _file_str("audit_log_euid_prefix") or "",

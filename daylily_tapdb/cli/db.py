@@ -17,6 +17,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
+from daylily_tapdb import TAPDBConnection
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
 from daylily_tapdb.validation.instantiation_layouts import (
     format_validation_error,
@@ -63,48 +64,32 @@ def _normalize_meridian_prefix(prefix: str, field_name: str) -> str:
     return normalized
 
 
-def _required_identity_prefixes(env: "Environment") -> tuple[str, str]:
-    """Return validated (tapdb_user_prefix, audit_log_prefix) for env config."""
+def _required_identity_prefixes(env: "Environment") -> str:
+    """Return validated audit_log_prefix for env config."""
     cfg = _get_db_config(env)
-    user_prefix = _normalize_meridian_prefix(
-        cfg.get("tapdb_user_euid_prefix", ""),
-        "tapdb_user_euid_prefix",
-    )
     audit_prefix = _normalize_meridian_prefix(
         cfg.get("audit_log_euid_prefix", ""),
         "audit_log_euid_prefix",
     )
-    if user_prefix == audit_prefix:
-        raise ValueError(
-            "tapdb_user_euid_prefix and audit_log_euid_prefix must be different"
-        )
-    return user_prefix, audit_prefix
+    return audit_prefix
 
 
 def _sync_identity_prefix_config(env: "Environment") -> None:
-    """Persist required identity prefixes into database config and ensure sequences."""
-    user_prefix, audit_prefix = _required_identity_prefixes(env)
-    user_seq = f"{user_prefix.lower()}_user_seq"
+    """Persist required identity prefix config and ensure backing sequences."""
+    audit_prefix = _required_identity_prefixes(env)
     audit_seq = f"{audit_prefix.lower()}_audit_seq"
     sql = f"""
-    INSERT INTO tapdb_identity_prefix_config(entity, prefix)
-    VALUES ('tapdb_user', '{user_prefix}')
-    ON CONFLICT (entity) DO UPDATE
-      SET prefix = EXCLUDED.prefix, updated_dt = NOW();
-
     INSERT INTO tapdb_identity_prefix_config(entity, prefix)
     VALUES ('audit_log', '{audit_prefix}')
     ON CONFLICT (entity) DO UPDATE
       SET prefix = EXCLUDED.prefix, updated_dt = NOW();
 
-    CREATE SEQUENCE IF NOT EXISTS "{user_seq}";
     CREATE SEQUENCE IF NOT EXISTS "{audit_seq}";
     """
     success, output = _run_psql(env, sql=sql)
     if not success:
         raise RuntimeError(
-            "Failed to sync identity prefix config for user/audit tables: "
-            f"{output[:200]}"
+            "Failed to sync identity prefix config for audit_log: " f"{output[:200]}"
         )
 
 
@@ -404,7 +389,6 @@ def _get_table_counts(env: Environment) -> dict:
         "generic_instance",
         "generic_instance_lineage",
         "audit_log",
-        "tapdb_user",
         "tapdb_identity_prefix_config",
     ]
     counts = {}
@@ -583,7 +567,7 @@ def db_schema_apply(
         )
         console.print(
             "[yellow]►[/yellow] Syncing required identity prefixes "
-            "(tapdb_user/audit_log)..."
+            "(audit_log)..."
         )
         try:
             _sync_identity_prefix_config(env)
@@ -604,7 +588,7 @@ def db_schema_apply(
     console.print("[green]✓[/green] Schema applied successfully")
     console.print(
         "[yellow]►[/yellow] Syncing required identity prefixes "
-        "(tapdb_user/audit_log)..."
+        "(audit_log)..."
     )
     try:
         _sync_identity_prefix_config(env)
@@ -625,7 +609,6 @@ def db_schema_apply(
         "generic_instance",
         "generic_instance_lineage",
         "audit_log",
-        "tapdb_user",
         "tapdb_identity_prefix_config",
     ]:
         console.print(f"  [green]✓[/green] {table}")
@@ -738,7 +721,6 @@ def db_nuke(
             f"{counts.get('generic_instance_lineage', '?')}"
             f" rows\n"
             f"  • audit_log:                {counts.get('audit_log', '?')} rows\n"
-            f"  • tapdb_user:               {counts.get('tapdb_user', '?')} rows\n"
             f"  • tapdb_identity_prefix_config: "
             f"{counts.get('tapdb_identity_prefix_config', '?')} rows\n"
             f"  • All sequences, triggers, and functions\n\n"
@@ -819,7 +801,6 @@ def db_nuke(
 
     -- Drop tables (order matters for FK constraints)
     DROP TABLE IF EXISTS audit_log CASCADE;
-    DROP TABLE IF EXISTS tapdb_user CASCADE;
     DROP TABLE IF EXISTS generic_instance_lineage CASCADE;
     DROP TABLE IF EXISTS generic_instance CASCADE;
     DROP TABLE IF EXISTS generic_template CASCADE;
@@ -838,7 +819,6 @@ def db_nuke(
     DROP FUNCTION IF EXISTS set_generic_template_euid();
     DROP FUNCTION IF EXISTS set_generic_instance_euid();
     DROP FUNCTION IF EXISTS set_generic_instance_lineage_euid();
-    DROP FUNCTION IF EXISTS set_tapdb_user_euid();
     DROP FUNCTION IF EXISTS set_audit_log_euid();
     DROP FUNCTION IF EXISTS tapdb_get_identity_prefix(TEXT);
     DROP FUNCTION IF EXISTS tapdb_validate_meridian_prefix(TEXT);
@@ -1012,7 +992,6 @@ def db_backup(
         "generic_instance",
         "generic_instance_lineage",
         "audit_log",
-        "tapdb_user",
         "tapdb_identity_prefix_config",
     ]
     for table in tables:
@@ -1756,10 +1735,7 @@ def _upsert_template(
 
 
 def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool:
-    """Create default tapdb_admin user with password requiring change on first login.
-
-    Returns True if user was created, False if already exists.
-    """
+    """Create default actor-backed tapdb_admin user for development flows."""
     if not insecure_dev_defaults:
         console.print(
             "  [dim]○[/dim] Skipping default admin"
@@ -1771,35 +1747,51 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
         return False
 
     from daylily_tapdb.cli.user import _hash_password
+    from daylily_tapdb.user_store import create_or_get
 
-    # Check if user already exists
-    check_sql = "SELECT 1 FROM tapdb_user WHERE username = 'tapdb_admin'"
-    success, output = _run_psql(env, sql=check_sql)
+    cfg = _get_db_config(env)
+    engine_type = (cfg.get("engine_type") or "local").strip().lower()
+    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+    region = (cfg.get("region") or "us-west-2").strip()
+    db_pass = cfg.get("password") or None
 
-    if success and output.strip() == "1":
-        console.print("  [green]✓[/green] Admin user already exists")
+    try:
+        with TAPDBConnection(
+            db_hostname=f"{cfg['host']}:{cfg['port']}",
+            db_user=cfg["user"],
+            db_pass=db_pass,
+            db_name=cfg["database"],
+            engine_type=engine_type,
+            region=region,
+            iam_auth=iam_auth,
+            app_username="tapdb_admin",
+        ) as conn:
+            with conn.session_scope(commit=True) as session:
+                user, created = create_or_get(
+                    session,
+                    login_identifier="tapdb_admin",
+                    email="tapdb_admin",
+                    display_name="TAPDB Administrator",
+                    role="admin",
+                    is_active=True,
+                    require_password_change=True,
+                    password_hash=_hash_password("passw0rd"),
+                    cognito_username="tapdb_admin",
+                )
+        if created:
+            console.print("  [green]✓[/green] Created admin user: tapdb_admin")
+            return True
+        console.print(
+            f"  [green]✓[/green] Admin user already exists ({user.username})"
+        )
         return False
-
-    # Create admin user with default password
-    pw_hash = _hash_password("passw0rd")
-    sql = f"""
-        INSERT INTO tapdb_user (
-            username, display_name, role,
-            password_hash, require_password_change
-        )
-        VALUES (
-            'tapdb_admin', 'TAPDB Administrator',
-            'admin', '{pw_hash}', TRUE
-        )
-    """
-
-    success, output = _run_psql(env, sql=sql)
-
-    if success:
-        console.print("  [green]✓[/green] Created admin user: tapdb_admin")
-        return True
-    else:
-        console.print(f"  [red]✗[/red] Failed to create admin user: {output}")
+    except Exception as e:
+        console.print(f"  [red]✗[/red] Failed to create admin user: {e}")
         return False
 
 

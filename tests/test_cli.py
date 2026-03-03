@@ -700,10 +700,18 @@ class TestCLICognito:
         out = _strip_ansi(result.output)
         assert "requires Cognito app client name 'tapdb'" in out
 
-    def test_cognito_add_user_creates_tapdb_user_row(self, monkeypatch):
+    def test_cognito_add_user_provisions_actor_user(self, monkeypatch):
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito.get_db_config_for_env",
-            lambda _env: {"cognito_user_pool_id": "us-east-1_TESTPOOL"},
+            lambda _env: {
+                "cognito_user_pool_id": "us-east-1_TESTPOOL",
+                "engine_type": "local",
+                "host": "localhost",
+                "port": "5533",
+                "user": "test",
+                "password": "",
+                "database": "tapdb_dev",
+            },
         )
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito._find_pool_env_file_by_id",
@@ -723,9 +731,36 @@ class TestCLICognito:
             "daylily_tapdb.cli.cognito._run_daycog",
             lambda *_args, **_kwargs: "",
         )
+
+        class _FakeConn:
+            def __init__(self, *args, **kwargs):
+                _ = (args, kwargs)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            class _Scope:
+                def __enter__(self):
+                    return object()
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            def session_scope(self, commit=False):
+                _ = commit
+                return self._Scope()
+
+        monkeypatch.setattr("daylily_tapdb.cli.cognito.TAPDBConnection", _FakeConn)
+
+        class _FakeUser:
+            is_active = True
+
         monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._run_psql",
-            lambda *_args, **_kwargs: (True, "INSERT 0 1"),
+            "daylily_tapdb.cli.cognito.create_or_get",
+            lambda *_args, **_kwargs: (_FakeUser(), True),
         )
 
         result = runner.invoke(

@@ -19,12 +19,51 @@
           "external_id": "",
           "comments": ""
         },
-	        "action_imports": {
-	          "create_note": "action/core/create-note/1.0",
-	          "update_status": "action/core/update-status/1.0",
-	          "link_objects": "action/core/link-objects/1.0",
-	          "soft_delete": "action/core/soft-delete/1.0"
-	        },
+        "action_imports": {
+          "create_note": "action/core/create-note/1.0",
+          "update_status": "action/core/update-status/1.0",
+          "link_objects": "action/core/link-objects/1.0",
+          "soft_delete": "action/core/soft-delete/1.0"
+        },
+        "expected_inputs": [],
+        "expected_outputs": [],
+        "instantiation_layouts": [],
+        "cogs": {
+          "state": "active",
+          "cost": "0.00",
+          "allocation_type": ""
+        }
+      }
+    },
+    {
+      "name": "System User Actor",
+      "polymorphic_discriminator": "actor_template",
+      "category": "generic",
+      "type": "actor",
+      "subtype": "system_user",
+      "version": "1.0",
+      "instance_prefix": "ACT",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Dedicated actor template for TAPDB auth users",
+        "properties": {
+          "login_identifier": "",
+          "email": "",
+          "display_name": "",
+          "role": "user",
+          "is_active": true,
+          "require_password_change": false,
+          "password_hash": null,
+          "last_login_dt": null,
+          "cognito_username": ""
+        },
+        "action_imports": {
+          "create_note": "action/core/create-note/1.0",
+          "update_status": "action/core/update-status/1.0",
+          "link_objects": "action/core/link-objects/1.0",
+          "soft_delete": "action/core/soft-delete/1.0"
+        },
         "expected_inputs": [],
         "expected_outputs": [],
         "instantiation_layouts": [],
@@ -37,4 +76,3 @@
     }
   ]
 }
-
