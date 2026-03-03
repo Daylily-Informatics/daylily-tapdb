@@ -276,7 +276,7 @@ def _resolve_daycog_pool_id_after_setup(
     region: str,
     client_name: str,
 ) -> tuple[str, Path]:
-    """Resolve pool ID from daycog 0.1.22+ config file naming."""
+    """Resolve pool ID from daycog 0.1.24+ config file naming."""
     cfg_dir = _daycog_config_dir()
     pool_env = cfg_dir / f"{pool_name}.{region}.env"
     app_env = cfg_dir / f"{pool_name}.{region}.{_sanitize_filename_part(client_name)}.env"

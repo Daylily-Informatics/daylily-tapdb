@@ -305,7 +305,7 @@ class TestCLICognito:
         assert "cognito_user_pool_id" in content
         assert "us-east-1_TESTPOOL" in content
 
-    def test_cognito_setup_uses_daycog_022_flags(self, tmp_path, monkeypatch):
+    def test_cognito_setup_uses_daycog_024_flags(self, tmp_path, monkeypatch):
         pool_name = "tapdb-dev-users"
         cfg_dir = tmp_path / ".config" / "daycog"
         cfg_dir.mkdir(parents=True, exist_ok=True)
@@ -561,7 +561,7 @@ class TestCLICognito:
         assert "--region" in args
         assert "--profile" in args
 
-    def test_cognito_status_shows_daycog_022_fields(self, monkeypatch):
+    def test_cognito_status_shows_daycog_024_fields(self, monkeypatch):
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito.get_db_config_for_env",
             lambda _env: {"cognito_user_pool_id": "us-east-1_TESTPOOL"},
