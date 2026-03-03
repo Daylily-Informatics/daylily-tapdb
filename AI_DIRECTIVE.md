@@ -1,218 +1,131 @@
 # AI Directive: daylily-tapdb
 
-## Operational Policy
-Use TAPDB through the `tapdb` CLI for runtime, database, schema, seeding, UI, and Cognito operations.
+## Purpose
+This document instructs AI agents how to operate `daylily-tapdb` safely and predictably.
+Use it when you are building, running, or integrating TAPDB as:
+1. a Python library, and
+2. a CLI-managed database + service runtime.
 
-When this repository is designated as the operational path:
-- Prefer `tapdb` commands over ad-hoc scripts.
-- Do not use direct AWS Cognito commands (`aws cognito-idp ...`); use `tapdb cognito` (delegates to `daycog`).
-- Do not use direct CloudFormation/Aurora mutation commands for normal lifecycle; use `tapdb aurora` or `tapdb bootstrap aurora`.
+Primary goals:
+- preserve data integrity,
+- keep EUID behavior compliant with Meridian,
+- prevent runtime collisions when multiple TAPDB clients run under one OS account.
 
-## Environment Bootstrap
-From repo root, start with:
+## Operating Policy
+1. Prefer TAPDB public APIs and TAPDB CLI commands for lifecycle operations.
+2. Do not use ad-hoc SQL for standard create/schema/seed/bootstrap flows.
+3. Do not assume global shared runtime state.
+4. For local engine configs, host must be exactly `localhost`.
+5. Treat destructive operations as opt-in only.
 
-```sh
-source ./tapdb_activate.sh
-```
+## Required Context (Strict Namespace)
+TAPDB is namespace-isolated. For commands that touch config/runtime/db/ui/cognito/user/aurora/info, require both:
+- `client-id`
+- `database-name`
 
-This activates the environment and exposes the current TAPDB CLI command surface.
+Provide either by CLI flags or environment variables:
+- CLI: `--client-id <id> --database-name <name>`
+- env: `TAPDB_CLIENT_ID`, `TAPDB_DATABASE_NAME`
 
-## Required Runtime Context
-TAPDB command routing depends on explicit context:
+Environment selector:
+- `TAPDB_ENV` (`dev|test|prod`)
 
-1. `TAPDB_ENV` (target environment): `dev | test | prod`
-2. Optional database namespace (strongly recommended for multi-app use):
-   - `--database-name <name>` on each command, or
-   - `TAPDB_DATABASE_NAME=<name>` in the shell
+Resolution precedence:
+1. CLI flags
+2. env vars
+3. no fallback
 
-For bootstrap commands, `TAPDB_ENV` is required.
+If either key is missing, commands should fail with actionable guidance.
 
-Identity prefix config is required for schema/bootstrap writes:
-- `tapdb_user_euid_prefix`
-- `audit_log_euid_prefix`
+## Namespace Path Model
+Config root:
+- `~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml`
 
-Both must match Meridian prefix format: `^[A-HJ-KMNP-TV-Z]{2,3}$`.
+Runtime root per environment:
+- `~/.config/tapdb/<client-id>/<database-name>/<env>/`
 
-## Multi-App / Same User Account Isolation (Critical)
-If multiple apps use TAPDB under the same OS user account, you MUST isolate configuration and identity context per app.
+Runtime files:
+- UI PID: `.../<env>/ui/ui.pid`
+- UI logs: `.../<env>/ui/ui.log`
+- UI certs: `.../<env>/ui/certs/localhost.crt` and `localhost.key`
+- Postgres data: `.../<env>/postgres/data/`
+- Postgres log: `.../<env>/postgres/postgresql.log`
+- Lock metadata: `.../<env>/locks/instance.lock`
 
-### TAPDB config namespacing
-Use database-scoped config filenames:
-- `~/.config/tapdb/tapdb-config-<database-name>.yaml`
-- `./config/tapdb-config-<database-name>.yaml` (repo-local override)
+Never use shared global runtime files like `~/.tapdb/ui.pid` or `~/.tapdb/ui.log` for active flows.
 
-Each scoped config should define app-specific identity prefixes to avoid
-cross-app collisions in shared accounts:
-- `tapdb_user_euid_prefix`
-- `audit_log_euid_prefix`
+## Canonical Command Groups (No Overlap)
+Use these functional groups only:
 
-Set one of:
+1. `tapdb bootstrap`
+- Orchestration command.
+- Handles create/start/schema/seed and optionally GUI startup.
+- Main entry point for local and aurora setup.
 
-```sh
-export TAPDB_DATABASE_NAME=myapp
-```
+2. `tapdb pg`
+- Runtime/service control only.
+- Local Postgres init/start/stop/status/logs.
 
-or:
+3. `tapdb db`
+- Logical database operations only.
+- DB create/delete, schema apply/status/reset/migrate, data seed/backup/restore.
 
-```sh
-tapdb --database-name myapp info
-```
+4. `tapdb aurora`
+- Cloud infrastructure lifecycle only.
+- Provision/delete/status/list/connect for Aurora resources.
 
-Config search order (highest precedence first):
-1. `TAPDB_CONFIG_PATH`
-2. `~/.config/tapdb/tapdb-config-<database-name>.yaml` (if scoped)
-3. `~/.config/tapdb/tapdb-config.yaml`
-4. `./config/tapdb-config-<database-name>.yaml` (if scoped)
-5. `./config/tapdb-config.yaml`
+5. `tapdb ui`
+- Admin UI process lifecycle only.
+- start/stop/status/logs/restart, plus HTTPS cert helpers.
 
-### Cognito isolation
-Use unique pool names and app client names per TAPDB app namespace:
+6. `tapdb cognito`
+- Cognito lifecycle and validation flows.
+- Integrates TAPDB config with `daylily-cognito` (`daycog`) config files.
 
-```sh
-tapdb cognito setup dev --pool-name tapdb-myapp-dev-users --client-name tapdb-myapp-dev-client
-```
-
-`tapdb cognito` stores only `cognito_user_pool_id` in TAPDB config and uses daycog-managed env files:
-- `~/.config/daycog/<pool>.<region>.env`
-- `~/.config/daycog/<pool>.<region>.<app>.env`
-- `~/.config/daycog/default.env`
-
-Before making changes, verify active binding:
-
-```sh
-tapdb info
-tapdb cognito status dev
-```
-
-### Example: Two TAPDB apps in one account
-Use separate namespaces for each app:
+## Bootstrap-First Workflow
+Preferred setup path:
 
 ```sh
-# App A
-export TAPDB_DATABASE_NAME=appa
+export TAPDB_CLIENT_ID=<client>
+export TAPDB_DATABASE_NAME=<database>
 export TAPDB_ENV=dev
-tapdb bootstrap local
-tapdb cognito setup dev --pool-name tapdb-appa-dev-users --client-name tapdb-appa-dev-client
 
-# App B (same OS user, different namespace)
-export TAPDB_DATABASE_NAME=appb
-export TAPDB_ENV=dev
-tapdb bootstrap local
-tapdb cognito setup dev --pool-name tapdb-appb-dev-users --client-name tapdb-appb-dev-client
+# Local runtime + logical setup + optional GUI
+ tapdb bootstrap local
+
+# or Aurora infra + logical setup + optional GUI
+ tapdb bootstrap aurora --cluster <cluster-id> --region <region>
 ```
 
-This produces isolated config scopes and avoids cross-app collisions in:
-- TAPDB DB config files
-- Cognito pool/client bindings
-- daycog env context selection
+Use `--no-gui` when you need headless setup.
 
-## Required CLI Usage
+## Config Schema Expectations
+Namespace config (`tapdb-config.yaml`) should include:
 
-### End-to-end bootstrap
-```sh
-export TAPDB_ENV=dev
-tapdb bootstrap local
-tapdb bootstrap local --no-gui
-
-export TAPDB_ENV=dev
-tapdb bootstrap aurora --cluster <cluster-id> --region <aws-region>
-tapdb bootstrap aurora --cluster <cluster-id> --region <aws-region> --no-gui
+```yaml
+meta:
+  config_version: 2
+  client_id: <client-id>
+  database_name: <database-name>
+environments:
+  dev:
+    engine_type: local|aurora
+    host: localhost|<aurora-endpoint>
+    port: "<db-port>"
+    ui_port: "<https-port>"
+    user: <db-user>
+    password: <db-password>
+    database: <db-name>
+    cognito_user_pool_id: <pool-id>
 ```
 
-### PostgreSQL runtime/service (`tapdb pg`)
-```sh
-tapdb pg init <env>
-tapdb pg start-local <env>
-tapdb pg stop-local <env>
+Rules:
+- local engine must use `host: localhost`.
+- `port` and `ui_port` must be explicit per environment.
+- port conflicts are hard errors (no silent auto-reassignment).
 
-tapdb pg start
-tapdb pg stop
-tapdb pg restart
-tapdb pg status
-tapdb pg logs
-```
-
-### Logical DB/schema/data (`tapdb db`)
-```sh
-tapdb db create <env>
-tapdb db delete <env>
-tapdb db setup <env>
-
-tapdb db schema apply <env>
-tapdb db schema status <env>
-tapdb db schema reset <env>
-tapdb db schema migrate <env>
-
-tapdb db data seed <env>
-tapdb db data backup <env>
-tapdb db data restore <env>
-
-tapdb db config validate
-```
-
-### Cognito (`tapdb cognito`)
-```sh
-tapdb cognito setup <env>
-tapdb cognito setup-with-google <env>
-tapdb cognito bind <env> --pool-id <pool-id>
-tapdb cognito status <env>
-
-tapdb cognito list-pools <env>
-tapdb cognito list-apps <env>
-tapdb cognito add-app <env> --app-name <name> --callback-url <url>
-tapdb cognito edit-app <env> --app-name <name>
-tapdb cognito remove-app <env> --app-name <name> --force
-tapdb cognito add-google-idp <env> --app-name <name>
-tapdb cognito fix-auth-flows <env>
-tapdb cognito add-user <env> <email> --password <password>
-
-tapdb cognito config print <env>
-tapdb cognito config create <env>
-tapdb cognito config update <env>
-```
-
-For Hosted UI domain control (daycog 0.1.22+), use:
-- `--domain-prefix <prefix>`
-- `--attach-domain` / `--no-attach-domain`
-
-### Admin UI (`tapdb ui`)
-```sh
-tapdb ui start
-tapdb ui mkcert
-tapdb ui stop
-tapdb ui status
-tapdb ui logs
-tapdb ui restart
-```
-
-Default UI port is `8911`.
-
-UI is HTTPS-first. For browser-trusted local certs:
-
-```sh
-tapdb ui mkcert
-tapdb ui restart --port 8911
-```
-
-Defaults:
-- cert: `~/.tapdb/certs/localhost.crt`
-- key: `~/.tapdb/certs/localhost.key`
-
-Override paths (if needed):
-- `TAPDB_UI_SSL_CERT`
-- `TAPDB_UI_SSL_KEY`
-
-### Aurora infra (`tapdb aurora`)
-```sh
-tapdb aurora create <env>
-tapdb aurora status <env>
-tapdb aurora list
-tapdb aurora connect <env>
-tapdb aurora delete <env>
-```
-
-## TAPDB as a Client Library
-Use the public Python API for application code:
+## Python Library Usage
+Prefer TAPDB APIs over low-level SQL.
 
 ```python
 import os
@@ -222,7 +135,7 @@ from daylily_tapdb.cli.db_config import get_db_config_for_env
 env = os.environ.get("TAPDB_ENV", "dev")
 cfg = get_db_config_for_env(env)
 
-db = TAPDBConnection(
+conn = TAPDBConnection(
     db_hostname=f"{cfg['host']}:{cfg['port']}",
     db_user=cfg["user"],
     db_pass=cfg["password"],
@@ -231,43 +144,74 @@ db = TAPDBConnection(
 
 templates = TemplateManager()
 factory = InstanceFactory(templates)
-
-with db.session_scope(commit=True) as session:
-    instance = factory.create_instance(
-        session=session,
-        template_code="container/plate/fixed-plate-96/1.0/",
-        name="PLATE-001",
-    )
-    print(instance.euid)
 ```
 
 Guidance:
-- Prefer library methods (`TemplateManager`, `InstanceFactory`, `ActionDispatcher`) over writing raw SQL for core workflows.
-- Keep `TAPDB_ENV` and config namespace explicit in process startup.
+- Use transactional flows for multi-step writes.
+- On relationship validation failure, fail atomically (no partial writes).
+- Maintain current EUID behavior; do not introduce alternate ID formats.
 
-## Meridian EUID Requirements (Mandatory)
-Users of TAPDB MUST follow Meridian EUID spec:
+## EUID Requirements (Mandatory)
+Normative spec:
+- `../../lsmc/meridian-euid/SPEC.md`
 
-- Spec source: `../../lsmc/meridian-euid/SPEC.md`
-- Normative identity statement:
+Agent requirements:
+1. Keep Meridian-compatible EUID generation/validation intact.
+2. Use TAPDB EUID helpers where available.
+3. Do not replace EUIDs with UUID-only external identifiers.
+4. Preserve prefix + sequence behavior when creating new entities.
 
-> Meridian does not use UUIDs. Internal identity is sequence-based. External identity is EUID-based.
+## Cognito Integration Policy
+TAPDB config stores only the pool reference per environment:
+- `environments.<env>.cognito_user_pool_id`
 
-Conformance requirements:
-- EUIDs MUST be Meridian-conformant (syntax + checksum).
-- EUIDs MUST be uppercase ASCII with no whitespace.
-- Forbidden characters: `I`, `L`, `O`, `U`.
-- Production format: `CATEGORY-BODYCHECK`.
-- Sandbox format: `SANDBOX:CATEGORY-BODYCHECK`.
+All Cognito app/client/domain auth context is managed in daycog files under:
+- `~/.config/daycog/<pool>.<region>.env`
+- `~/.config/daycog/<pool>.<region>.<app>.env`
+- `~/.config/daycog/default.env`
 
-TAPDB includes helper functions in `daylily_tapdb.euid`:
-- `format_euid(...)`
-- `validate_euid(...)`
-- `meridian_checksum(...)`
+Operational requirements:
+1. Use app client name `tapdb` for TAPDB UI.
+2. Validate callback/logout URLs against TAPDB configured HTTPS UI port.
+3. Keep TAPDB and daycog in sync before testing login/signup.
 
-If your app generates or validates EUIDs outside DB triggers, you MUST use Meridian rules from the spec above.
+## HTTPS Policy
+TAPDB GUI should run on HTTPS with localhost certs.
 
-## Guardrails for Agents and Operators
-- Default to non-destructive operations.
-- Use destructive commands (`db delete`, `db schema reset`, `aurora delete`, `cognito remove-app`, user deletes) only when explicitly requested.
-- In shared user accounts, do not operate without confirming active namespace/context (`TAPDB_ENV`, `TAPDB_DATABASE_NAME`, `tapdb info`, `tapdb cognito status`).
+Preferred:
+
+```sh
+tapdb ui mkcert
+tapdb ui restart
+```
+
+Manual fallback:
+
+```sh
+mkcert -install
+mkcert -cert-file ~/.config/tapdb/<client>/<database>/<env>/ui/certs/localhost.crt \
+  -key-file ~/.config/tapdb/<client>/<database>/<env>/ui/certs/localhost.key \
+  localhost
+```
+
+## Multi-Client Safety Checklist
+Before running commands in shared OS accounts:
+1. Verify `TAPDB_CLIENT_ID`, `TAPDB_DATABASE_NAME`, `TAPDB_ENV`.
+2. Run `tapdb info` and confirm namespace paths.
+3. Confirm DB/UI ports are from active namespace config.
+4. Run `tapdb cognito status <env>` and verify pool/app/callback.
+
+## Destructive Operation Guardrails
+Only execute with explicit user intent:
+- `tapdb db delete`
+- `tapdb db schema reset`
+- `tapdb aurora delete`
+- Cognito delete operations
+- Manual removal of runtime data directories
+
+## Agent Delivery Expectations
+When making TAPDB changes:
+1. Explain what changed and why.
+2. Reference exact files modified.
+3. Run tests relevant to changed behavior (`pytest -q` preferred when feasible).
+4. Report remaining risk and known gaps.

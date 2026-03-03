@@ -1,40 +1,72 @@
 """CLI entry point for daylily-tapdb."""
 
 import importlib.util
+import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Optional
 
-# PID file location
+from daylily_tapdb.cli.context import TapdbContext, resolve_context
+
+DEFAULT_UI_PORT = 8911
+DEFAULT_UI_HOST = "localhost"
+DEFAULT_UI_SCHEME = "https"
+# Legacy module globals retained for compatibility with older tests/tools.
 PID_FILE = Path.home() / ".tapdb" / "ui.pid"
 LOG_FILE = Path.home() / ".tapdb" / "ui.log"
-DEFAULT_UI_PORT = 8911
-DEFAULT_UI_SCHEME = "https"
-DEFAULT_UI_TLS_DIR = Path.home() / ".tapdb" / "certs"
-DEFAULT_UI_TLS_CERT = DEFAULT_UI_TLS_DIR / "localhost.crt"
-DEFAULT_UI_TLS_KEY = DEFAULT_UI_TLS_DIR / "localhost.key"
+NAMESPACE_REQUIRED_TOPLEVEL = {
+    "bootstrap",
+    "db",
+    "pg",
+    "ui",
+    "cognito",
+    "user",
+    "aurora",
+    "info",
+}
 
 
-def _ensure_dir():
-    """Ensure .tapdb directory exists."""
-    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+def _active_env_name() -> str:
+    return (os.environ.get("TAPDB_ENV") or "dev").strip().lower()
 
 
-def _resolve_tls_paths() -> tuple[Path, Path]:
+def _require_context(*, env_name: Optional[str] = None) -> TapdbContext:
+    return resolve_context(
+        require_keys=True,
+        env_name=env_name if env_name is not None else _active_env_name(),
+    )
+
+
+def _ui_runtime_paths(env_name: Optional[str] = None) -> tuple[Path, Path, Path]:
+    ctx = _require_context(env_name=env_name)
+    ui_dir = ctx.ui_dir(env_name or _active_env_name())
+    return (
+        ui_dir / "ui.pid",
+        ui_dir / "ui.log",
+        ui_dir / "certs",
+    )
+
+
+def _resolve_tls_paths(env_name: Optional[str] = None) -> tuple[Path, Path]:
     """Resolve TLS cert/key paths, allowing env overrides."""
-    cert = Path(os.environ.get("TAPDB_UI_SSL_CERT", str(DEFAULT_UI_TLS_CERT)))
-    key = Path(os.environ.get("TAPDB_UI_SSL_KEY", str(DEFAULT_UI_TLS_KEY)))
+    pid_file, _, certs_dir = _ui_runtime_paths(env_name)
+    _ = pid_file  # path access validates context + env
+    default_cert = certs_dir / "localhost.crt"
+    default_key = certs_dir / "localhost.key"
+    cert = Path(os.environ.get("TAPDB_UI_SSL_CERT", str(default_cert)))
+    key = Path(os.environ.get("TAPDB_UI_SSL_KEY", str(default_key)))
     return cert, key
 
 
-def _ensure_tls_certificates(host: str) -> tuple[Path, Path]:
+def _ensure_tls_certificates(host: str, *, env_name: Optional[str] = None) -> tuple[Path, Path]:
     """Ensure TLS cert/key exist for HTTPS UI startup."""
-    cert_path, key_path = _resolve_tls_paths()
+    cert_path, key_path = _resolve_tls_paths(env_name)
     if cert_path.exists() and key_path.exists():
         return cert_path, key_path
 
@@ -47,7 +79,9 @@ def _ensure_tls_certificates(host: str) -> tuple[Path, Path]:
             "Install openssl or set TAPDB_UI_SSL_CERT/TAPDB_UI_SSL_KEY."
         )
 
-    san = f"DNS:localhost,IP:127.0.0.1,DNS:{host}"
+    san = "DNS:localhost"
+    if host and host != "localhost":
+        san = f"{san},DNS:{host}"
     cmd = [
         openssl,
         "req",
@@ -99,17 +133,42 @@ def _ensure_tls_certificates(host: str) -> tuple[Path, Path]:
     return cert_path, key_path
 
 
-def _get_pid() -> Optional[int]:
+def _get_pid(pid_file: Path) -> Optional[int]:
     """Get the running UI server PID if exists."""
-    if PID_FILE.exists():
+    if pid_file.exists():
         try:
-            pid = int(PID_FILE.read_text().strip())
+            pid = int(pid_file.read_text().strip())
             # Check if process is running
             os.kill(pid, 0)
             return pid
         except (ValueError, ProcessLookupError, PermissionError):
-            PID_FILE.unlink(missing_ok=True)
+            pid_file.unlink(missing_ok=True)
     return None
+
+
+def _port_is_available(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((host, port)) != 0
+
+
+def _port_conflict_details(port: int) -> str:
+    try:
+        proc = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return "port is already in use by another process"
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        return "port is already in use by another process"
+    lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return "port is already in use by another process"
+    first = lines[1]
+    return f"port {port} is in use ({first})"
 
 
 def _find_admin_module() -> str:
@@ -176,23 +235,56 @@ def build_app():
 
     @app.callback()
     def _root_callback(
+        ctx: typer.Context,
+        client_id: Optional[str] = typer.Option(
+            None,
+            "--client-id",
+            help=(
+                "Client/application namespace key. Required for runtime/DB commands."
+            ),
+        ),
         database_name: Optional[str] = typer.Option(
             None,
             "--database-name",
             help=(
-                "Use database-scoped config file names"
-                " (e.g., ~/.config/tapdb/tapdb-config-<name>.yaml)."
+                "Database namespace key. Required for runtime/DB commands."
             ),
         ),
     ):
         """Set global CLI context options."""
+        os.environ["TAPDB_STRICT_NAMESPACE"] = "0"
+        if ctx.resilient_parsing:
+            return
+        if client_id:
+            os.environ["TAPDB_CLIENT_ID"] = client_id
         if database_name:
             os.environ["TAPDB_DATABASE_NAME"] = database_name
 
+        if any(arg in ("--help", "-h") for arg in sys.argv[1:]):
+            return
+
+        invoked = (ctx.invoked_subcommand or "").strip().lower()
+        strict = invoked in NAMESPACE_REQUIRED_TOPLEVEL
+        os.environ["TAPDB_STRICT_NAMESPACE"] = "1" if strict else "0"
+        if not strict:
+            return
+
+        try:
+            _require_context()
+        except RuntimeError as exc:
+            console.print(f"[red]✗[/red] {exc}")
+            console.print(
+                "  Example: [cyan]tapdb --client-id atlas --database-name app "
+                "info[/cyan]"
+            )
+            raise typer.Exit(1)
+
     bootstrap_app = typer.Typer(help="One-command environment bootstrap")
     ui_app = typer.Typer(help="Admin UI management commands")
+    config_root_app = typer.Typer(help="TAPDB config namespace commands")
     app.add_typer(bootstrap_app, name="bootstrap")
     app.add_typer(ui_app, name="ui")
+    app.add_typer(config_root_app, name="config")
     app.add_typer(db_app, name="db")
     app.add_typer(pg_app, name="pg")
     app.add_typer(user_app, name="user")
@@ -228,17 +320,38 @@ def build_app():
 
     @ui_app.command("start")
     def ui_start(
-        port: int = typer.Option(
-            DEFAULT_UI_PORT, "--port", "-p", help="Port to run the server on"
+        port: Optional[int] = typer.Option(
+            None,
+            "--port",
+            "-p",
+            help="Port to run the server on (defaults to environments.<env>.ui_port)",
         ),
-        host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
+        host: str = typer.Option(DEFAULT_UI_HOST, "--host", "-h", help="Host to bind to"),
         reload: bool = typer.Option(False, "--reload", "-r", help="Enable auto-reload"),
         background: bool = typer.Option(
             True, "--background/--foreground", "-b/-f", help="Run in background"
         ),
     ):
         """Start the TAPDB Admin UI server."""
-        _ensure_dir()
+        from daylily_tapdb.cli.db_config import get_db_config_for_env
+
+        env_name = _active_env_name()
+        pid_file, log_file, _ = _ui_runtime_paths(env_name)
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        cfg = get_db_config_for_env(env_name)
+        configured_port = int(str(cfg.get("ui_port") or DEFAULT_UI_PORT))
+        if port is None:
+            port = configured_port
+        elif port != configured_port:
+            console.print(
+                "[red]✗[/red] UI port override is not allowed in strict mode."
+            )
+            console.print(
+                f"  Configured ui_port for env {env_name}: [cyan]{configured_port}[/cyan]"
+            )
+            raise typer.Exit(1)
 
         try:
             _require_admin_extras()
@@ -249,11 +362,23 @@ def build_app():
             )
             raise typer.Exit(1)
 
-        pid = _get_pid()
+        pid = _get_pid(pid_file)
         if pid:
             console.print(f"[yellow]⚠[/yellow]  UI server already running (PID {pid})")
             console.print(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
+            console.print(f"   PID file: [dim]{pid_file}[/dim]")
             return
+
+        if not _port_is_available(host, port):
+            console.print(f"[red]✗[/red] {_port_conflict_details(port)}")
+            console.print(
+                f"  Namespace: [dim]{_require_context(env_name=env_name).namespace_slug()}[/dim]"
+            )
+            console.print(
+                "  Update environments."
+                f"{env_name}.ui_port in the namespaced config to a free port."
+            )
+            raise typer.Exit(1)
 
         try:
             admin_module = _find_admin_module()
@@ -262,7 +387,7 @@ def build_app():
             raise typer.Exit(1)
 
         try:
-            cert_path, key_path = _ensure_tls_certificates(host)
+            cert_path, key_path = _ensure_tls_certificates(host, env_name=env_name)
         except RuntimeError as e:
             console.print(f"[red]✗[/red]  {e}")
             raise typer.Exit(1)
@@ -285,7 +410,7 @@ def build_app():
             cmd.append("--reload")
 
         if background:
-            with open(LOG_FILE, "w") as log_f:
+            with open(log_file, "w") as log_f:
                 proc = subprocess.Popen(
                     cmd,
                     stdout=log_f,
@@ -296,13 +421,14 @@ def build_app():
             time.sleep(1)
             if proc.poll() is not None:
                 console.print("[red]✗[/red]  Server failed to start. Check logs:")
-                console.print(f"   [dim]{LOG_FILE}[/dim]")
+                console.print(f"   [dim]{log_file}[/dim]")
                 raise typer.Exit(1)
 
-            PID_FILE.write_text(str(proc.pid))
+            pid_file.write_text(str(proc.pid))
             console.print(f"[green]✓[/green]  UI server started (PID {proc.pid})")
             console.print(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
-            console.print(f"   Logs: [dim]{LOG_FILE}[/dim]")
+            console.print(f"   Logs: [dim]{log_file}[/dim]")
+            console.print(f"   PID:  [dim]{pid_file}[/dim]")
         else:
             console.print(
                 f"[green]✓[/green]  Starting UI server on "
@@ -316,26 +442,28 @@ def build_app():
 
     @ui_app.command("mkcert")
     def ui_mkcert(
-        cert_file: Path = typer.Option(
-            DEFAULT_UI_TLS_CERT,
+        cert_file: Optional[Path] = typer.Option(
+            None,
             "--cert-file",
             help="Path to write mkcert-generated TLS certificate",
         ),
-        key_file: Path = typer.Option(
-            DEFAULT_UI_TLS_KEY,
+        key_file: Optional[Path] = typer.Option(
+            None,
             "--key-file",
             help="Path to write mkcert-generated TLS private key",
         ),
     ):
         """Install mkcert local CA and generate localhost TLS certs for the UI."""
+        env_name = _active_env_name()
         mkcert = shutil.which("mkcert")
         if not mkcert:
             console.print("[red]✗[/red] mkcert is required for trusted local HTTPS certs.")
             console.print("  Install mkcert first, then rerun [cyan]tapdb ui mkcert[/cyan].")
             raise typer.Exit(1)
 
-        cert_path = cert_file.expanduser()
-        key_path = key_file.expanduser()
+        default_cert, default_key = _resolve_tls_paths(env_name)
+        cert_path = (cert_file or default_cert).expanduser()
+        key_path = (key_file or default_key).expanduser()
         cert_path.parent.mkdir(parents=True, exist_ok=True)
         key_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -355,8 +483,6 @@ def build_app():
             "-key-file",
             str(key_path),
             "localhost",
-            "127.0.0.1",
-            "::1",
         ]
         generate_result = subprocess.run(generate_cmd, capture_output=True, text=True)
         if generate_result.returncode != 0:
@@ -374,18 +500,20 @@ def build_app():
         console.print("[green]✓[/green] mkcert certificate ready for TAPDB UI HTTPS")
         console.print(f"   Cert: [dim]{cert_path}[/dim]")
         console.print(f"   Key:  [dim]{key_path}[/dim]")
-        if cert_path != DEFAULT_UI_TLS_CERT or key_path != DEFAULT_UI_TLS_KEY:
+        if cert_file or key_file:
             console.print("   Set env overrides before start:")
             console.print(f"   [cyan]export TAPDB_UI_SSL_CERT={cert_path}[/cyan]")
             console.print(f"   [cyan]export TAPDB_UI_SSL_KEY={key_path}[/cyan]")
         console.print(
-            f"   Restart UI: [cyan]tapdb ui restart --port {DEFAULT_UI_PORT}[/cyan]"
+            "   Restart UI: [cyan]tapdb ui restart[/cyan]"
         )
 
     @ui_app.command("stop")
     def ui_stop():
         """Stop the TAPDB Admin UI server."""
-        pid = _get_pid()
+        env_name = _active_env_name()
+        pid_file, _, _ = _ui_runtime_paths(env_name)
+        pid = _get_pid(pid_file)
         if not pid:
             console.print("[yellow]⚠[/yellow]  No UI server running")
             return
@@ -401,10 +529,10 @@ def build_app():
             else:
                 os.kill(pid, signal.SIGKILL)
 
-            PID_FILE.unlink(missing_ok=True)
+            pid_file.unlink(missing_ok=True)
             console.print(f"[green]✓[/green]  UI server stopped (was PID {pid})")
         except ProcessLookupError:
-            PID_FILE.unlink(missing_ok=True)
+            pid_file.unlink(missing_ok=True)
             console.print("[yellow]⚠[/yellow]  Server was not running")
         except PermissionError:
             console.print(f"[red]✗[/red]  Permission denied stopping PID {pid}")
@@ -413,12 +541,15 @@ def build_app():
     @ui_app.command("status")
     def ui_status():
         """Check the status of the TAPDB Admin UI server."""
-        pid = _get_pid()
+        env_name = _active_env_name()
+        pid_file, log_file, _ = _ui_runtime_paths(env_name)
+        pid = _get_pid(pid_file)
         if pid:
             console.print(
                 f"[green]●[/green]  UI server is [green]running[/green] (PID {pid})"
             )
-            console.print(f"   Logs: [dim]{LOG_FILE}[/dim]")
+            console.print(f"   Logs: [dim]{log_file}[/dim]")
+            console.print(f"   PID:  [dim]{pid_file}[/dim]")
         else:
             console.print("[dim]○[/dim]  UI server is [dim]not running[/dim]")
 
@@ -433,21 +564,23 @@ def build_app():
         lines: int = typer.Option(50, "--lines", "-n", help="Number of lines to show"),
     ):
         """View TAPDB Admin UI server logs (tails by default, Ctrl+C to stop)."""
-        if not LOG_FILE.exists():
+        env_name = _active_env_name()
+        _, log_file, _ = _ui_runtime_paths(env_name)
+        if not log_file.exists():
             console.print(
                 "[yellow]⚠[/yellow]  No log file found. Start the server first."
             )
             return
 
         if follow:
-            console.print(f"[dim]Following {LOG_FILE} (Ctrl+C to stop)[/dim]\n")
+            console.print(f"[dim]Following {log_file} (Ctrl+C to stop)[/dim]\n")
             try:
-                subprocess.run(["tail", "-f", "-n", str(lines), str(LOG_FILE)])
+                subprocess.run(["tail", "-f", "-n", str(lines), str(log_file)])
             except KeyboardInterrupt:
                 console.print("\n[dim]Stopped.[/dim]")
         else:
             try:
-                with open(LOG_FILE, "r") as f:
+                with open(log_file, "r") as f:
                     all_lines = f.readlines()
                     for line in all_lines[-lines:]:
                         console.print(line.rstrip())
@@ -456,10 +589,10 @@ def build_app():
 
     @ui_app.command("restart")
     def ui_restart(
-        port: int = typer.Option(
-            DEFAULT_UI_PORT, "--port", "-p", help="Port to run the server on"
+        port: Optional[int] = typer.Option(
+            None, "--port", "-p", help="Port to run the server on"
         ),
-        host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
+        host: str = typer.Option(DEFAULT_UI_HOST, "--host", "-h", help="Host to bind to"),
     ):
         """Restart the TAPDB Admin UI server."""
         ui_stop()
@@ -480,13 +613,18 @@ def build_app():
             raise typer.Exit(1)
 
     def _maybe_start_ui_after_bootstrap(no_gui: bool) -> None:
+        from daylily_tapdb.cli.db_config import get_db_config_for_env
+
         if no_gui:
             console.print("  [dim]○[/dim] UI start skipped (--no-gui)")
             return
+        env_name = _active_env_name()
+        cfg = get_db_config_for_env(env_name)
+        ui_port = int(str(cfg.get("ui_port") or DEFAULT_UI_PORT))
         try:
             ui_start(
-                port=DEFAULT_UI_PORT,
-                host="127.0.0.1",
+                port=ui_port,
+                host=DEFAULT_UI_HOST,
                 reload=False,
                 background=True,
             )
@@ -494,7 +632,7 @@ def build_app():
             console.print(f"[yellow]⚠[/yellow] DB is ready, but UI start failed: {e}")
             console.print(
                 "  Recover with: "
-                f"[cyan]tapdb ui start --background --port {DEFAULT_UI_PORT}[/cyan]"
+                f"[cyan]tapdb ui start --background --port {ui_port}[/cyan]"
             )
 
     @bootstrap_app.command("local")
@@ -673,6 +811,294 @@ def build_app():
         _maybe_start_ui_after_bootstrap(no_gui=no_gui)
 
         console.print("\n[bold green]✓ Aurora bootstrap complete[/bold green]")
+
+    def _read_yaml_or_json_file(path: Path) -> dict:
+        if not path.exists():
+            return {}
+        raw = path.read_text(encoding="utf-8")
+        try:
+            import yaml  # type: ignore
+
+            return yaml.safe_load(raw) or {}
+        except ModuleNotFoundError:
+            return json.loads(raw) if raw.strip() else {}
+
+    def _write_yaml_or_json_file(path: Path, payload: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            import yaml  # type: ignore
+
+            path.write_text(
+                yaml.dump(payload, default_flow_style=False, sort_keys=False),
+                encoding="utf-8",
+            )
+        except ModuleNotFoundError:
+            path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.chmod(path, 0o600)
+
+    def _parse_env_port_pairs(values: list[str], *, flag: str) -> dict[str, int]:
+        parsed: dict[str, int] = {}
+        for raw in values:
+            text = str(raw).strip()
+            if not text:
+                continue
+            if "=" not in text:
+                raise RuntimeError(f"{flag} must be provided as ENV=PORT (got {raw!r})")
+            env_name, port_s = text.split("=", 1)
+            env_name = env_name.strip().lower()
+            port_s = port_s.strip()
+            if not env_name:
+                raise RuntimeError(f"{flag} missing environment in {raw!r}")
+            if not port_s.isdigit():
+                raise RuntimeError(f"{flag} has invalid port in {raw!r}")
+            port = int(port_s)
+            if port < 1 or port > 65535:
+                raise RuntimeError(f"{flag} port out of range in {raw!r}")
+            parsed[env_name] = port
+        return parsed
+
+    def _resolve_required_port(
+        *,
+        env_name: str,
+        field: str,
+        explicit_map: dict[str, int],
+        existing_env_cfg: dict,
+    ) -> int:
+        if env_name in explicit_map:
+            return explicit_map[env_name]
+
+        existing_raw = str(existing_env_cfg.get(field) or "").strip()
+        if existing_raw.isdigit():
+            return int(existing_raw)
+
+        if sys.stdin.isatty():
+            while True:
+                entered = typer.prompt(f"Enter {field} for {env_name}")
+                if entered.strip().isdigit():
+                    value = int(entered.strip())
+                    if 1 <= value <= 65535:
+                        return value
+                console.print(f"[red]✗[/red] Invalid {field} for {env_name}")
+
+        raise RuntimeError(
+            f"Missing required {field} for env {env_name}. "
+            f"Set via --db-port {env_name}=<port> or --ui-port {env_name}=<port>."
+        )
+
+    @config_root_app.command("init")
+    def config_init(
+        client_id: str = typer.Option(..., "--client-id", help="Client namespace key"),
+        database_name: str = typer.Option(
+            ..., "--database-name", help="Database namespace key"
+        ),
+        env: list[str] = typer.Option(
+            ["dev"],
+            "--env",
+            help="Environment to configure (repeat for multiple)",
+        ),
+        db_port: list[str] = typer.Option(
+            [],
+            "--db-port",
+            help="Per-env DB port mapping (ENV=PORT, repeatable)",
+        ),
+        ui_port: list[str] = typer.Option(
+            [],
+            "--ui-port",
+            help="Per-env UI port mapping (ENV=PORT, repeatable)",
+        ),
+        force: bool = typer.Option(
+            False, "--force", help="Overwrite existing config metadata if needed"
+        ),
+    ) -> None:
+        """Initialize a namespaced TAPDB v2 config."""
+        from daylily_tapdb.cli.db_config import get_config_path
+
+        os.environ["TAPDB_CLIENT_ID"] = client_id
+        os.environ["TAPDB_DATABASE_NAME"] = database_name
+        ctx = _require_context()
+        config_path = get_config_path()
+
+        env_names = sorted({e.strip().lower() for e in env if str(e).strip()})
+        if not env_names:
+            raise RuntimeError("At least one --env must be provided")
+
+        existing = _read_yaml_or_json_file(config_path)
+        existing_meta = existing.get("meta") if isinstance(existing, dict) else None
+        if isinstance(existing_meta, dict) and not force:
+            if (
+                str(existing_meta.get("client_id") or "") != client_id
+                or str(existing_meta.get("database_name") or "") != database_name
+            ):
+                raise RuntimeError(
+                    f"Config already exists for a different namespace: {config_path}. "
+                    "Use --force to overwrite."
+                )
+
+        db_ports = _parse_env_port_pairs(db_port, flag="--db-port")
+        ui_ports = _parse_env_port_pairs(ui_port, flag="--ui-port")
+
+        root = existing if isinstance(existing, dict) else {}
+        root["meta"] = {
+            "config_version": 2,
+            "client_id": client_id,
+            "database_name": database_name,
+        }
+        envs = root.setdefault("environments", {})
+        for env_name in env_names:
+            prior = envs.get(env_name, {}) or {}
+            resolved_db_port = _resolve_required_port(
+                env_name=env_name,
+                field="port",
+                explicit_map=db_ports,
+                existing_env_cfg=prior,
+            )
+            resolved_ui_port = _resolve_required_port(
+                env_name=env_name,
+                field="ui_port",
+                explicit_map=ui_ports,
+                existing_env_cfg=prior,
+            )
+            envs[env_name] = {
+                **prior,
+                "engine_type": str(prior.get("engine_type") or "local"),
+                "host": "localhost",
+                "port": str(resolved_db_port),
+                "ui_port": str(resolved_ui_port),
+                "user": str(prior.get("user") or os.environ.get("USER", "postgres")),
+                "password": str(prior.get("password") or ""),
+                "database": str(
+                    prior.get("database") or f"tapdb_{database_name}_{env_name}"
+                ),
+                "cognito_user_pool_id": str(prior.get("cognito_user_pool_id") or ""),
+                "tapdb_user_euid_prefix": str(
+                    prior.get("tapdb_user_euid_prefix") or ""
+                ),
+                "audit_log_euid_prefix": str(prior.get("audit_log_euid_prefix") or ""),
+                "support_email": str(prior.get("support_email") or ""),
+            }
+
+        _write_yaml_or_json_file(config_path, root)
+        console.print("[green]✓[/green] TAPDB namespaced config initialized")
+        console.print(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
+        console.print(f"  Path:      [dim]{config_path}[/dim]")
+        for env_name in env_names:
+            env_cfg = root["environments"][env_name]
+            console.print(
+                "  "
+                f"{env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}"
+            )
+
+    @config_root_app.command("migrate-legacy")
+    def config_migrate_legacy(
+        client_id: str = typer.Option(..., "--client-id", help="Client namespace key"),
+        database_name: str = typer.Option(
+            ..., "--database-name", help="Database namespace key"
+        ),
+        db_port: list[str] = typer.Option(
+            [],
+            "--db-port",
+            help="Per-env DB port mapping (ENV=PORT, repeatable)",
+        ),
+        ui_port: list[str] = typer.Option(
+            [],
+            "--ui-port",
+            help="Per-env UI port mapping (ENV=PORT, repeatable)",
+        ),
+        source: Optional[Path] = typer.Option(
+            None,
+            "--source",
+            help="Optional legacy config source path",
+        ),
+        force: bool = typer.Option(
+            False, "--force", help="Overwrite target if it already exists"
+        ),
+    ) -> None:
+        """Migrate a legacy TAPDB config into namespaced v2 format."""
+        from daylily_tapdb.cli.db_config import get_legacy_config_paths
+
+        os.environ["TAPDB_CLIENT_ID"] = client_id
+        os.environ["TAPDB_DATABASE_NAME"] = database_name
+        ctx = _require_context()
+        target_path = ctx.config_path()
+
+        if target_path.exists() and not force:
+            raise RuntimeError(
+                f"Target config already exists: {target_path}. Use --force to overwrite."
+            )
+
+        if source:
+            source_path = source.expanduser()
+            if not source_path.exists():
+                raise RuntimeError(f"Legacy source config not found: {source_path}")
+        else:
+            source_path = None
+            for candidate in get_legacy_config_paths(database_name=database_name):
+                if candidate.exists():
+                    source_path = candidate
+                    break
+            if source_path is None:
+                raise RuntimeError(
+                    "No legacy TAPDB config found to migrate. "
+                    "Use --source or run tapdb config init."
+                )
+
+        legacy = _read_yaml_or_json_file(source_path)
+        legacy_envs = legacy.get("environments") if isinstance(legacy, dict) else None
+        if not isinstance(legacy_envs, dict) or not legacy_envs:
+            raise RuntimeError(
+                f"Legacy config has no environments to migrate: {source_path}"
+            )
+
+        db_ports = _parse_env_port_pairs(db_port, flag="--db-port")
+        ui_ports = _parse_env_port_pairs(ui_port, flag="--ui-port")
+
+        migrated: dict = {
+            "meta": {
+                "config_version": 2,
+                "client_id": client_id,
+                "database_name": database_name,
+            },
+            "environments": {},
+        }
+        for env_name in sorted(legacy_envs.keys()):
+            env_key = str(env_name).strip().lower()
+            legacy_cfg = legacy_envs.get(env_name, {}) or {}
+            engine_type = str(legacy_cfg.get("engine_type") or "local").strip().lower()
+
+            resolved_db_port = _resolve_required_port(
+                env_name=env_key,
+                field="port",
+                explicit_map=db_ports,
+                existing_env_cfg=legacy_cfg,
+            )
+            resolved_ui_port = _resolve_required_port(
+                env_name=env_key,
+                field="ui_port",
+                explicit_map=ui_ports,
+                existing_env_cfg=legacy_cfg,
+            )
+            host = str(legacy_cfg.get("host") or "localhost")
+            if engine_type != "aurora":
+                host = "localhost"
+            migrated["environments"][env_key] = {
+                **legacy_cfg,
+                "engine_type": engine_type,
+                "host": host,
+                "port": str(resolved_db_port),
+                "ui_port": str(resolved_ui_port),
+            }
+
+        _write_yaml_or_json_file(target_path, migrated)
+        console.print("[green]✓[/green] Legacy config migrated to namespaced v2 format")
+        console.print(f"  Source: [dim]{source_path}[/dim]")
+        console.print(f"  Target: [dim]{target_path}[/dim]")
+        console.print(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
+        for env_name in sorted(migrated["environments"].keys()):
+            env_cfg = migrated["environments"][env_name]
+            console.print(
+                "  "
+                f"{env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}"
+            )
 
     @app.command("version")
     def version():
@@ -867,11 +1293,11 @@ def build_app():
 
         # NOTE: This function is nested inside build_app();
         # keep indentation purely spaces to avoid TabError.
+        ctx = _require_context(env_name=tapdb_env)
         config_paths = get_config_paths()
-        # get_config_path() returns None when no config file exists yet.
-        # For diagnostics, we still want to print a deterministic "effective" path.
-        effective_config = get_config_path()
-        effective_config_path = effective_config or config_paths[0]
+        effective_config_path = get_config_path()
+        ui_pid_file, ui_log_file, _ = _ui_runtime_paths(tapdb_env)
+        runtime_root = ctx.runtime_dir(tapdb_env)
 
         # Template JSON config dir (repo-local)
         template_config_dir: str | None = None
@@ -883,26 +1309,40 @@ def build_app():
         except Exception as e:
             template_config_error = str(e)
 
-        ui_pid = _get_pid()
+        ui_pid = _get_pid(ui_pid_file)
         ui_times: dict[str, object] | None = None
         if ui_pid:
             ui_times = _ui_process_times(ui_pid)
 
         pg_envs: dict[str, dict[str, object]] = {}
         for env_name in ["dev", "test", "prod"]:
-            cfg = get_db_config_for_env(env_name)
-            pg_envs[env_name] = _pg_probe(env_name, cfg)
+            try:
+                cfg = get_db_config_for_env(env_name)
+                pg_envs[env_name] = _pg_probe(env_name, cfg)
+            except Exception as e:
+                checked = check_all_envs or (env_name == tapdb_env)
+                pg_envs[env_name] = {
+                    "env": env_name,
+                    "url": "(unconfigured)",
+                    "password_set": False,
+                    "checked": checked,
+                    "status": "error" if checked else None,
+                    "error": str(e),
+                    "uptime": None,
+                }
 
         if as_json:
             payload: dict[str, object] = {
                 "version": __version__,
                 "python": sys.version.split()[0],
                 "tapdb_env": tapdb_env,
+                "client_id": ctx.client_id,
+                "database_name": ctx.database_name,
                 "check_all_envs": check_all_envs,
                 "tapdb_test_dsn": _sanitize_url(test_dsn) if test_dsn else None,
                 "paths": {
-                    "ui_pid_file": str(PID_FILE),
-                    "ui_log_file": str(LOG_FILE),
+                    "ui_pid_file": str(ui_pid_file),
+                    "ui_log_file": str(ui_log_file),
                     "config_search_order": [
                         {"path": str(p), "exists": p.exists()} for p in config_paths
                     ],
@@ -911,7 +1351,8 @@ def build_app():
                         "exists": effective_config_path.exists(),
                     },
                     "config_dir": str(effective_config_path.parent),
-                    "db_log_dir": str(effective_config_path.parent / "logs"),
+                    "runtime_root": str(runtime_root),
+                    "db_log_dir": str(runtime_root / "logs"),
                     "template_config_dir": template_config_dir,
                     "template_config_error": template_config_error,
                 },
@@ -932,6 +1373,9 @@ def build_app():
         general.add_row("Version", __version__)
         general.add_row("Python", sys.version.split()[0])
         general.add_row("TAPDB_ENV", tapdb_env)
+        general.add_row("Client ID", ctx.client_id)
+        general.add_row("Database Name", ctx.database_name)
+        general.add_row("Namespace", ctx.namespace_slug())
         general.add_row("DB probes", "all envs" if check_all_envs else "TAPDB_ENV only")
         if test_dsn:
             general.add_row("TAPDB_TEST_DSN", f"[dim]{_sanitize_url(test_dsn)}[/dim]")
@@ -940,8 +1384,8 @@ def build_app():
         if ui_times and ui_times.get("start_time"):
             general.add_row("UI Start Time", str(ui_times.get("start_time")))
             general.add_row("UI Uptime", str(ui_times.get("uptime_human") or "-"))
-        general.add_row("UI PID File", str(PID_FILE))
-        general.add_row("UI Log File", str(LOG_FILE))
+        general.add_row("UI PID File", str(ui_pid_file))
+        general.add_row("UI Log File", str(ui_log_file))
         console.print(general)
 
         # --- Config ---
@@ -962,7 +1406,8 @@ def build_app():
             f"{effective_config_path} ({exists_label})",
         )
         config_table.add_row("Config dir", str(effective_config_path.parent))
-        config_table.add_row("DB log dir", str(effective_config_path.parent / "logs"))
+        config_table.add_row("Runtime root", str(runtime_root))
+        config_table.add_row("DB log dir", str(runtime_root / "logs"))
 
         if template_config_dir:
             config_table.add_row("Template config dir", template_config_dir)

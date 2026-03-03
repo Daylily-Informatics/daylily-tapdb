@@ -33,12 +33,23 @@ def get_db() -> TAPDBConnection:
     """
     env = os.environ.get("TAPDB_ENV", "dev").lower()
     cfg = get_db_config_for_env(env)
+    engine_type = (cfg.get("engine_type") or "local").strip().lower()
+    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+    region = (cfg.get("region") or "us-west-2").strip()
 
     return TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_user=cfg["user"],
-        db_pass=cfg["password"],
+        db_pass=cfg.get("password") or None,
         db_name=cfg["database"],
+        engine_type=engine_type,
+        region=region,
+        iam_auth=iam_auth,
     )
 
 def get_user_by_username(username: str) -> Optional[dict]:

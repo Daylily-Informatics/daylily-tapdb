@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}TAPDB Admin - Info{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Info</h1>
+
+<div class="card">
+    <h2 class="card-title">Database Connection</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Key</th>
+                <th>Value</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for key, value in db_rows %}
+            <tr>
+                <td><code>{{ key }}</code></td>
+                <td><code>{{ value }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="margin-top: 0.75rem; color: var(--text-muted);">
+        Password values are never displayed.
+    </p>
+</div>
+
+<div class="card">
+    <h2 class="card-title">Cognito Summary</h2>
+    {% if cognito_error %}
+    <p style="color: #ff8a8a; margin-bottom: 0.75rem;">
+        Could not resolve Cognito details: {{ cognito_error }}
+    </p>
+    {% endif %}
+    {% if cognito_summary_rows %}
+    <table>
+        <thead>
+            <tr>
+                <th>Key</th>
+                <th>Value</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for key, value in cognito_summary_rows %}
+            <tr>
+                <td><code>{{ key }}</code></td>
+                <td><code>{{ value }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2 class="card-title">Cognito Runtime Values</h2>
+    {% if cognito_env_rows %}
+    <table>
+        <thead>
+            <tr>
+                <th>Key</th>
+                <th>Value</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for key, value in cognito_env_rows %}
+            <tr>
+                <td><code>{{ key }}</code></td>
+                <td><code>{{ value }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-muted);">No Cognito runtime values available.</p>
+    {% endif %}
+</div>
+{% endblock %}
