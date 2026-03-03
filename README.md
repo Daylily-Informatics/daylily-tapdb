@@ -47,9 +47,10 @@ TAPDB provides a reusable foundation for applications that need:
 | `generic_template` | Blueprints defining how instances should be created | `GT` |
 | `generic_instance` | Concrete objects created from templates | Configurable per template |
 | `generic_instance_lineage` | Directed edges between instances (DAG) | `GN` |
-| `tapdb_user` | TAPDB admin/auth user records | Configurable (`tapdb_user_euid_prefix`) |
 | `audit_log` | Automatic change tracking | Configurable (`audit_log_euid_prefix`) |
 | `tapdb_identity_prefix_config` | Prefix registry for non-template identity domains | N/A |
+
+TAPDB admin/auth users are actor-backed rows stored in `generic_instance` with `subtype=system_user`.
 
 Internal primary keys are sequence-backed `BIGINT` columns (historical column name: `uuid`), while public identity remains EUID-based.
 
@@ -418,7 +419,6 @@ tapdb bootstrap local
 | `TAPDB_CLIENT_ID` | **Required for runtime/DB commands**. Client/app namespace key | — |
 | `TAPDB_DATABASE_NAME` | **Required for runtime/DB commands**. Database namespace key | — |
 | `TAPDB_<ENV>_COGNITO_USER_POOL_ID` | Optional override for env-bound Cognito pool ID | — |
-| `TAPDB_<ENV>_TAPDB_USER_EUID_PREFIX` | Required for schema/bootstrap writes; prefix for `tapdb_user` EUIDs | — |
 | `TAPDB_<ENV>_AUDIT_LOG_EUID_PREFIX` | Required for schema/bootstrap writes; prefix for `audit_log` EUIDs | — |
 | `TAPDB_CONFIG_PATH` | Explicit path to TAPDB CLI config (`tapdb-config*.yaml`/`.json`) | — |
 | `TAPDB_TEST_DSN` | Postgres DSN enabling integration tests (`tests/test_integration.py`) | — |
@@ -469,11 +469,10 @@ environments:
     password: ""
     database: tapdb_app_dev
     cognito_user_pool_id: us-east-1_xxxxxxxxx
-    tapdb_user_euid_prefix: TUS
     audit_log_euid_prefix: TAD
 ```
 
-`tapdb_user_euid_prefix` and `audit_log_euid_prefix` must be valid Meridian prefixes (`^[A-HJ-KMNP-TV-Z]{2,3}$`).
+`audit_log_euid_prefix` must be a valid Meridian prefix (`^[A-HJ-KMNP-TV-Z]{2,3}$`).
 For `engine_type: local`, `host` must be exactly `localhost`.
 
 Supported file shapes:
@@ -516,8 +515,8 @@ domain/callback/logout URLs when available.
 
 GUI behavior:
 - `/login` authenticates against Cognito.
-- `/signup` creates a Cognito user and automatically provisions `tapdb_user`.
-- First successful Cognito login auto-provisions `tapdb_user` when missing.
+- `/signup` creates a Cognito user and automatically provisions an actor-backed `system_user`.
+- First successful Cognito login auto-provisions an actor-backed `system_user` when missing.
 
 ### Admin UI (prod hardening)
 

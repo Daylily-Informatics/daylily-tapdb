@@ -970,9 +970,6 @@ def build_app():
                     prior.get("database") or f"tapdb_{database_name}_{env_name}"
                 ),
                 "cognito_user_pool_id": str(prior.get("cognito_user_pool_id") or ""),
-                "tapdb_user_euid_prefix": str(
-                    prior.get("tapdb_user_euid_prefix") or ""
-                ),
                 "audit_log_euid_prefix": str(prior.get("audit_log_euid_prefix") or ""),
                 "support_email": str(prior.get("support_email") or ""),
             }
@@ -1080,13 +1077,16 @@ def build_app():
             host = str(legacy_cfg.get("host") or "localhost")
             if engine_type != "aurora":
                 host = "localhost"
-            migrated["environments"][env_key] = {
+            env_cfg = {
                 **legacy_cfg,
                 "engine_type": engine_type,
                 "host": host,
                 "port": str(resolved_db_port),
                 "ui_port": str(resolved_ui_port),
             }
+            # tapdb_user no longer exists; keep legacy configs readable but do not emit.
+            env_cfg.pop("tapdb_user_euid_prefix", None)
+            migrated["environments"][env_key] = env_cfg
 
         _write_yaml_or_json_file(target_path, migrated)
         console.print("[green]✓[/green] Legacy config migrated to namespaced v2 format")

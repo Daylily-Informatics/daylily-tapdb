@@ -19,10 +19,14 @@ import admin.main as admin_main
 
 
 class _FakeTemplateRender:
-    def __init__(self, name: str):
+    def __init__(self, name: str, state: dict):
         self.name = name
+        self._state = state
 
     def render(self, **_kwargs):
+        self._state.setdefault("render_calls", []).append(
+            {"template": self.name, "context": dict(_kwargs)}
+        )
         return f"TEMPLATE:{self.name}"
 
 
@@ -109,6 +113,8 @@ class _FakeSession:
             return _FakeQuery(self._state["instances"])
         if model is admin_main.generic_instance_lineage:
             return _FakeQuery(self._state["lineages"])
+        if model is admin_main.audit_log:
+            return _FakeQuery(self._state["audit_rows"])
         if model is admin_main.generic_template.category:
             rows = [(t.category,) for t in self._state["templates"]]
             return _FakeQuery(rows)
@@ -241,12 +247,57 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         "templates": [template],
         "instances": [parent, child],
         "lineages": [lineage],
+        "audit_rows": [
+            SimpleNamespace(
+                uuid=501,
+                euid="AD501",
+                rel_table_name="generic_instance",
+                column_name="name",
+                rel_table_uuid_fk=child.uuid,
+                rel_table_euid_fk=child.euid,
+                old_value="Child",
+                new_value="Child Updated",
+                changed_by="admin",
+                changed_at=now,
+                operation_type="UPDATE",
+                is_deleted=False,
+            ),
+            SimpleNamespace(
+                uuid=502,
+                euid="AD502",
+                rel_table_name="generic_instance",
+                column_name="bstatus",
+                rel_table_uuid_fk=child.uuid,
+                rel_table_euid_fk=child.euid,
+                old_value="active",
+                new_value="archived",
+                changed_by="other_user",
+                changed_at=now,
+                operation_type="UPDATE",
+                is_deleted=False,
+            ),
+            SimpleNamespace(
+                uuid=503,
+                euid="AD503",
+                rel_table_name="generic_template",
+                column_name="name",
+                rel_table_uuid_fk=template.uuid,
+                rel_table_euid_fk=template.euid,
+                old_value="Generic Template",
+                new_value="Generic Template v2",
+                changed_by="john@example.com",
+                changed_at=now,
+                operation_type="INSERT",
+                is_deleted=False,
+            ),
+        ],
+        "render_calls": [],
     }
 
     monkeypatch.setattr(
         admin_main.templates,
         "get_template",
-        lambda name: _FakeTemplateRender(name),
+        lambda name: _FakeTemplateRender(name, state),
     )
     monkeypatch.setattr(admin_main, "get_style", lambda: {"skin_css": "x.css"})
     monkeypatch.setattr(admin_main, "get_db", lambda: _FakeConn(state))
@@ -280,6 +331,13 @@ def _admin_user():
         "role": "admin",
         "require_password_change": False,
     }
+
+
+def _last_render_context(state: dict, template_name: str) -> dict:
+    for entry in reversed(state.get("render_calls", [])):
+        if entry.get("template") == template_name:
+            return entry.get("context") or {}
+    raise AssertionError(f"No render call found for {template_name}")
 
 
 def test_auth_and_public_routes(route_client, monkeypatch: pytest.MonkeyPatch):
@@ -345,6 +403,7 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     assert client.get("/lineages").status_code == 200
     assert client.get("/object/GX12").status_code == 200
     assert client.get("/graph").status_code == 200
+    assert client.get("/query").status_code == 200
     assert client.get("/info").status_code == 200
     assert client.get("/create-instance/GT1").status_code == 200
     create_instance_resp = client.post(
@@ -375,6 +434,103 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     resp = client.delete("/api/object/GT1")
     assert resp.status_code == 200
     assert state["templates"][0].is_deleted is True
+
+
+def test_home_query_and_audit_panels_admin(route_client, monkeypatch: pytest.MonkeyPatch):
+    client, state = route_client
+
+    async def _admin_auth_user(_request):
+        return _admin_user()
+
+    monkeypatch.setattr(auth_mod, "get_current_user", _admin_auth_user)
+
+    # Default load includes current admin user's audit activity.
+    resp = client.get("/")
+    assert resp.status_code == 200
+    ctx = _last_render_context(state, "index.html")
+    assert ctx["audit_user_effective"] == "admin"
+    assert ctx["user_audit_rows"]
+
+    # Simple object query by text.
+    resp = client.get("/?q=GX&scope=all")
+    assert resp.status_code == 200
+    ctx = _last_render_context(state, "index.html")
+    assert any(row["euid"] == "GX11" for row in ctx["object_results"])
+    assert any(row["euid"] == "GX12" for row in ctx["object_results"])
+
+    # Per-object audit trail by object EUID.
+    resp = client.get("/?object_euid=GX12")
+    assert resp.status_code == 200
+    ctx = _last_render_context(state, "index.html")
+    assert ctx["object_audit_rows"]
+    assert all(row.rel_table_euid_fk == "GX12" for row in ctx["object_audit_rows"])
+
+    # Admin can inspect another user's trail.
+    resp = client.get("/?audit_user=other_user")
+    assert resp.status_code == 200
+    ctx = _last_render_context(state, "index.html")
+    assert ctx["audit_user_effective"] == "other_user"
+    assert ctx["audit_warning"] is None
+    assert all((row.changed_by or "").lower() == "other_user" for row in ctx["user_audit_rows"])
+
+    # Operation filter applies to user audit.
+    resp = client.get("/?op=UPDATE")
+    assert resp.status_code == 200
+    ctx = _last_render_context(state, "index.html")
+    assert ctx["query_params"]["op"] == "UPDATE"
+    assert all((row.operation_type or "").upper() == "UPDATE" for row in ctx["user_audit_rows"])
+
+    # Limit is clamped server-side.
+    resp = client.get("/?limit=9999")
+    assert resp.status_code == 200
+    ctx = _last_render_context(state, "index.html")
+    assert ctx["query_params"]["limit"] == 100
+    assert len(ctx["user_audit_rows"]) <= 100
+
+
+def test_complex_query_page_filters(route_client, monkeypatch: pytest.MonkeyPatch):
+    client, state = route_client
+
+    async def _admin_auth_user(_request):
+        return _admin_user()
+
+    monkeypatch.setattr(auth_mod, "get_current_user", _admin_auth_user)
+
+    resp = client.get("/query?kind=instance&euid_like=GX")
+    assert resp.status_code == 200
+    ctx = _last_render_context(state, "complex_query.html")
+    assert ctx["query_params"]["kind"] == "instance"
+    assert ctx["should_run"] is True
+    assert ctx["results"]
+    assert all(row["kind"] == "instance" for row in ctx["results"])
+
+
+def test_home_user_audit_forces_non_admin_to_self(
+    route_client, monkeypatch: pytest.MonkeyPatch
+):
+    client, state = route_client
+
+    async def _user_auth(_request):
+        return {
+            "uuid": 44,
+            "username": "john@example.com",
+            "email": "john@example.com",
+            "role": "user",
+            "require_password_change": False,
+        }
+
+    monkeypatch.setattr(auth_mod, "get_current_user", _user_auth)
+
+    resp = client.get("/?audit_user=other_user")
+    assert resp.status_code == 200
+    ctx = _last_render_context(state, "index.html")
+    assert ctx["audit_user_effective"] == "john@example.com"
+    assert isinstance(ctx["audit_warning"], str)
+    assert "own user audit trail" in ctx["audit_warning"]
+    assert all(
+        (row.changed_by or "").lower() == "john@example.com"
+        for row in ctx["user_audit_rows"]
+    )
 
 
 def test_oauth_login_redirect_and_callback_success(

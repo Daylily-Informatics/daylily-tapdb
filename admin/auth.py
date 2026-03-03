@@ -10,11 +10,16 @@ from typing import Any, Callable, Optional
 
 from fastapi import Request, HTTPException
 from fastapi.responses import RedirectResponse
-from sqlalchemy import text
 
 from admin.cognito import get_cognito_auth
 from daylily_tapdb import TAPDBConnection
 from daylily_tapdb.cli.db_config import get_db_config_for_env
+from daylily_tapdb.user_store import (
+    create_or_get,
+    get_by_login_or_email,
+    get_by_uuid as get_actor_user_by_uuid,
+    set_last_login,
+)
 
 
 # Session cookie settings
@@ -58,27 +63,9 @@ def get_user_by_username(username: str) -> Optional[dict]:
         # Best-effort attribution for audit triggers.
         conn.app_username = username
         with conn.session_scope() as session:
-            result = session.execute(
-                text("""
-                    SELECT uuid, username, email, display_name, role, is_active,
-                           require_password_change
-                    FROM tapdb_user
-                    WHERE (username = :username OR email = :username)
-                      AND is_active = TRUE
-                """),
-                {"username": username}
-            ).fetchone()
-
-        if result:
-            return {
-                "uuid": int(result[0]),
-                "username": result[1],
-                "email": result[2],
-                "display_name": result[3],
-                "role": result[4],
-                "is_active": result[5],
-                "require_password_change": result[6],
-            }
+            user = get_by_login_or_email(session, username, include_inactive=False)
+        if user:
+            return user.to_session_user()
     return None
 
 
@@ -88,59 +75,30 @@ def get_or_create_user_from_email(
     display_name: Optional[str] = None,
     role: str = "user",
 ) -> dict:
-    """Ensure a TAPDB user row exists for a Cognito identity email."""
+    """Ensure an actor-backed TAPDB user row exists for a Cognito identity email."""
     normalized = (email or "").strip().lower()
     if not normalized:
         raise ValueError("email is required")
     if role not in ("admin", "user"):
         raise ValueError(f"invalid role: {role}")
 
-    existing = get_user_by_username(normalized)
-    if existing:
-        return existing
-
     with get_db() as conn:
         conn.app_username = normalized
         with conn.session_scope(commit=True) as session:
-            result = session.execute(
-                text(
-                    """
-                    INSERT INTO tapdb_user (
-                        username, email, display_name, role,
-                        is_active, require_password_change, password_hash
-                    )
-                    VALUES (
-                        :username, :email, :display_name, :role,
-                        TRUE, FALSE, NULL
-                    )
-                    RETURNING uuid, username, email, display_name, role, is_active,
-                              require_password_change
-                    """
-                ),
-                {
-                    "username": normalized,
-                    "email": normalized,
-                    "display_name": display_name,
-                    "role": role,
-                },
-            ).fetchone()
-
-    if not result:
-        # Fallback: another concurrent insert may have won.
-        existing = get_user_by_username(normalized)
-        if existing:
-            return existing
-        raise RuntimeError(f"Failed to provision TAPDB user row for {normalized}")
-
-    return {
-        "uuid": int(result[0]),
-        "username": result[1],
-        "email": result[2],
-        "display_name": result[3],
-        "role": result[4],
-        "is_active": result[5],
-        "require_password_change": result[6],
-    }
+            user, _ = create_or_get(
+                session,
+                login_identifier=normalized,
+                email=normalized,
+                display_name=display_name,
+                role=role,
+                is_active=True,
+                require_password_change=False,
+                password_hash=None,
+                cognito_username=normalized,
+            )
+        if not user.is_active:
+            raise RuntimeError(f"TAPDB user {normalized} is inactive")
+        return user.to_session_user()
 
 
 def get_user_by_uuid(user_uuid: int | str) -> Optional[dict]:
@@ -148,26 +106,9 @@ def get_user_by_uuid(user_uuid: int | str) -> Optional[dict]:
     with get_db() as conn:
         conn.app_username = "system"
         with conn.session_scope() as session:
-            result = session.execute(
-                text("""
-                    SELECT uuid, username, email, display_name, role, is_active,
-                           require_password_change
-                    FROM tapdb_user
-                    WHERE uuid = :uuid AND is_active = TRUE
-                """),
-                {"uuid": user_uuid}
-            ).fetchone()
-
-        if result:
-            return {
-                "uuid": int(result[0]),
-                "username": result[1],
-                "email": result[2],
-                "display_name": result[3],
-                "role": result[4],
-                "is_active": result[5],
-                "require_password_change": result[6],
-            }
+            user = get_actor_user_by_uuid(session, user_uuid, include_inactive=False)
+        if user:
+            return user.to_session_user()
     return None
 
 
@@ -247,10 +188,7 @@ def update_last_login(user_uuid: int | str) -> None:
     with get_db() as conn:
         conn.app_username = "system"
         with conn.session_scope(commit=True) as session:
-            session.execute(
-                text("UPDATE tapdb_user SET last_login_dt = NOW() WHERE uuid = :uuid"),
-                {"uuid": user_uuid}
-            )
+            set_last_login(session, user_uuid)
 
 
 async def get_current_user(request: Request) -> Optional[dict]:
