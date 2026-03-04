@@ -565,6 +565,20 @@ def test_home_user_audit_forces_non_admin_to_self(
     )
 
 
+def test_static_assets_and_openapi_are_served(route_client):
+    client, _state = route_client
+
+    # Static mount should serve core UI assets.
+    assert client.get("/static/css/style.css").status_code == 200
+    assert client.get("/static/js/graph.js").status_code == 200
+
+    # OpenAPI should be available for introspection/debugging.
+    resp = client.get("/openapi.json")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "/api/templates" in data.get("paths", {})
+
+
 def test_oauth_login_redirect_and_callback_success(
     route_client, monkeypatch: pytest.MonkeyPatch
 ):
