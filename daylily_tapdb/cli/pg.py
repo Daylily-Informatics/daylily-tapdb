@@ -305,7 +305,8 @@ def pg_status():
         console.print(f"  Start with: [cyan]tapdb pg start-local {env.value}[/cyan]")
 
     console.print("\n[bold]Local Runtime:[/bold]")
-    console.print(f"  Namespace: {resolve_context(require_keys=True, env_name=env.value).namespace_slug()}")
+    ctx = resolve_context(require_keys=True, env_name=env.value)
+    console.print(f"  Namespace: {ctx.namespace_slug()}")
     console.print(f"  Host:      {host}")
     console.print(f"  Port:      {port}")
     console.print(f"  User:      {user}")
@@ -587,7 +588,10 @@ def pg_start_local(
                 "data_dir": str(data_dir),
                 "log_file": str(log_file),
             }
-            lock_file.write_text(json.dumps(lock_payload, indent=2) + "\n", encoding="utf-8")
+            lock_file.write_text(
+                json.dumps(lock_payload, indent=2) + "\n",
+                encoding="utf-8",
+            )
             console.print(f"  Lock: {lock_file}")
 
             # Set env vars hint

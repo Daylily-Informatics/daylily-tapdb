@@ -304,8 +304,16 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(admin_main, "get_user_permissions", lambda _u: {"ok": True})
     monkeypatch.setattr(admin_main, "get_user_by_username", lambda _u: None)
     monkeypatch.setattr(admin_main, "update_last_login", lambda _u: None)
-    monkeypatch.setattr(admin_main, "authenticate_with_cognito", lambda *_: {"access_token": "tok"})
-    monkeypatch.setattr(admin_main, "create_cognito_user_account", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        admin_main,
+        "authenticate_with_cognito",
+        lambda *_: {"access_token": "tok"},
+    )
+    monkeypatch.setattr(
+        admin_main,
+        "create_cognito_user_account",
+        lambda *_a, **_k: None,
+    )
     monkeypatch.setattr(
         admin_main,
         "get_or_create_user_from_email",
@@ -317,7 +325,11 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
             "require_password_change": False,
         },
     )
-    monkeypatch.setattr(admin_main, "respond_to_new_password_challenge", lambda *_: {"access_token": "tok"})
+    monkeypatch.setattr(
+        admin_main,
+        "respond_to_new_password_challenge",
+        lambda *_: {"access_token": "tok"},
+    )
     monkeypatch.setattr(admin_main, "change_cognito_password", lambda *_: None)
 
     return TestClient(admin_main.app), state
@@ -356,10 +368,18 @@ def test_auth_and_public_routes(route_client, monkeypatch: pytest.MonkeyPatch):
     assert resp.status_code == 302
 
     # Login submit error path
-    monkeypatch.setattr(admin_main, "authenticate_with_cognito", lambda *_: (_ for _ in ()).throw(ValueError("bad")))
+    monkeypatch.setattr(
+        admin_main,
+        "authenticate_with_cognito",
+        lambda *_: (_ for _ in ()).throw(ValueError("bad")),
+    )
     resp = client.post("/login", data={"username": "u", "password": "p"})
     assert resp.status_code == 200
-    monkeypatch.setattr(admin_main, "authenticate_with_cognito", lambda *_: {"access_token": "tok"})
+    monkeypatch.setattr(
+        admin_main,
+        "authenticate_with_cognito",
+        lambda *_: {"access_token": "tok"},
+    )
 
     # Signup page + early validation path
     resp = client.get("/signup")
@@ -382,7 +402,11 @@ def test_auth_and_public_routes(route_client, monkeypatch: pytest.MonkeyPatch):
     assert resp.status_code == 302
     resp = client.post(
         "/change-password",
-        data={"current_password": "x", "new_password": "Password1!", "confirm_password": "Password1!"},
+        data={
+            "current_password": "x",
+            "new_password": "Password1!",
+            "confirm_password": "Password1!",
+        },
         follow_redirects=False,
     )
     assert resp.status_code == 302
@@ -436,7 +460,9 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     assert state["templates"][0].is_deleted is True
 
 
-def test_home_query_and_audit_panels_admin(route_client, monkeypatch: pytest.MonkeyPatch):
+def test_home_query_and_audit_panels_admin(
+    route_client, monkeypatch: pytest.MonkeyPatch
+):
     client, state = route_client
 
     async def _admin_auth_user(_request):
@@ -471,14 +497,20 @@ def test_home_query_and_audit_panels_admin(route_client, monkeypatch: pytest.Mon
     ctx = _last_render_context(state, "index.html")
     assert ctx["audit_user_effective"] == "other_user"
     assert ctx["audit_warning"] is None
-    assert all((row.changed_by or "").lower() == "other_user" for row in ctx["user_audit_rows"])
+    assert all(
+        (row.changed_by or "").lower() == "other_user"
+        for row in ctx["user_audit_rows"]
+    )
 
     # Operation filter applies to user audit.
     resp = client.get("/?op=UPDATE")
     assert resp.status_code == 200
     ctx = _last_render_context(state, "index.html")
     assert ctx["query_params"]["op"] == "UPDATE"
-    assert all((row.operation_type or "").upper() == "UPDATE" for row in ctx["user_audit_rows"])
+    assert all(
+        (row.operation_type or "").upper() == "UPDATE"
+        for row in ctx["user_audit_rows"]
+    )
 
     # Limit is clamped server-side.
     resp = client.get("/?limit=9999")
