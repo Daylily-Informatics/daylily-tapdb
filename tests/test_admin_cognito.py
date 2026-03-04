@@ -12,7 +12,9 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def test_resolve_tapdb_pool_config_from_daycog_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_resolve_tapdb_pool_config_from_daycog_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
 
@@ -44,7 +46,9 @@ def test_resolve_tapdb_pool_config_from_daycog_env(monkeypatch: pytest.MonkeyPat
     assert cfg.source_file.name == "tapdb-dev-users.us-east-1.env"
 
 
-def test_resolve_tapdb_pool_config_requires_pool_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_resolve_tapdb_pool_config_requires_pool_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
 

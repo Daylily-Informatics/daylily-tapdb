@@ -17,7 +17,9 @@ class audit_log(Base):
 
     __tablename__ = "audit_log"
 
-    uuid = Column(BIGINT, primary_key=True, nullable=False, server_default=FetchedValue())
+    uuid = Column(
+        BIGINT, primary_key=True, nullable=False, server_default=FetchedValue()
+    )
     euid = Column(Text, nullable=False, server_default=FetchedValue())
     euid_prefix = Column(Text, nullable=False, server_default=FetchedValue())
     euid_seq = Column(BIGINT, nullable=False, server_default=FetchedValue())
