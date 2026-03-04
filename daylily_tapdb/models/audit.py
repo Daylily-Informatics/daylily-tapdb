@@ -7,7 +7,7 @@ Phase 2 spec: audit log is trigger-based but ORM-available for querying/display.
 """
 
 from sqlalchemy import BIGINT, Boolean, Column, DateTime, FetchedValue, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from daylily_tapdb.models.base import Base
 
@@ -21,6 +21,8 @@ class audit_log(Base):
     euid = Column(Text, nullable=False, server_default=FetchedValue())
     euid_prefix = Column(Text, nullable=False, server_default=FetchedValue())
     euid_seq = Column(BIGINT, nullable=False, server_default=FetchedValue())
+
+    tenant_id = Column(UUID(as_uuid=True), nullable=True)
 
     rel_table_name = Column(Text, nullable=False)
     column_name = Column(Text, nullable=True)

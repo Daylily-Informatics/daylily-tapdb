@@ -2,6 +2,7 @@
 
 import copy
 import logging
+import uuid
 from typing import Any, Dict, Optional
 
 from pydantic import ValidationError
@@ -44,6 +45,19 @@ def materialize_actions(
         if action_tmpl is None:
             continue
 
+        definition = action_tmpl.json_addl.get("action_definition")
+        if not isinstance(definition, dict) or not definition:
+            legacy = action_tmpl.json_addl.get("action_template")
+            if isinstance(legacy, dict) and legacy:
+                # TODO: remove once Bloom action templates are migrated to action_definition.
+                logger.warning(
+                    "materialize_actions legacy fallback: %s (TODO remove after Bloom action migration)",
+                    template_code,
+                )
+                definition = legacy
+            else:
+                definition = {}
+
         # Canonical group naming: {type}_actions
         group_name = f"{action_tmpl.type}_actions"
         if group_name not in action_groups:
@@ -57,7 +71,7 @@ def materialize_actions(
             "action_template_uuid": action_tmpl.uuid,
             "action_template_euid": action_tmpl.euid,
             "action_template_code": template_code,
-            **action_tmpl.json_addl.get("action_definition", {}),
+            **definition,
             "action_executed": "0",
             "executed_datetime": [],
             "action_enabled": "1",
@@ -99,6 +113,7 @@ class InstanceFactory:
         create_children: bool = True,
         _depth: int = 0,
         _visited: Optional[set] = None,
+        tenant_id: Optional[uuid.UUID] = None,
     ) -> generic_instance:
         """
         Create an instance from a template.
@@ -110,6 +125,8 @@ class InstanceFactory:
             create_children: Whether to create child objects from instantiation_layouts.
             _depth: Internal recursion depth tracker.
             _visited: Internal visited set for cycle detection.
+            tenant_id: Optional tenant UUID; if provided, persists to the real column and
+                also to json_addl["properties"]["tenant_id"] for transition compatibility.
 
         Returns:
             The created instance.
@@ -147,10 +164,13 @@ class InstanceFactory:
 
         # Build json_addl
         json_addl = self._build_json_addl(session, template, properties)
+        if tenant_id is not None:
+            json_addl["properties"]["tenant_id"] = str(tenant_id)
 
         # Create instance
         instance = generic_instance(
             name=name,
+            tenant_id=tenant_id,
             polymorphic_discriminator=template.instance_polymorphic_identity
             or template.polymorphic_discriminator.replace("_template", "_instance"),
             category=template.category,
@@ -269,6 +289,7 @@ class InstanceFactory:
                         create_children=True,
                         _depth=depth + 1,
                         _visited=visited.copy(),
+                        tenant_id=getattr(parent, "tenant_id", None),
                     )
 
                     self._create_lineage(session, parent, child_obj, relationship_type)
@@ -293,6 +314,7 @@ class InstanceFactory:
         """
         lineage = generic_instance_lineage(
             name=f"{parent.euid}->{child.euid}",
+            tenant_id=getattr(parent, "tenant_id", None),
             polymorphic_discriminator="generic_instance_lineage",
             category="generic",
             type="lineage",
