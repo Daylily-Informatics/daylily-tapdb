@@ -56,13 +56,9 @@ Internal primary keys are sequence-backed `BIGINT` columns (historical column na
 
 ### Type Hierarchy
 
-TAPDB uses SQLAlchemy single-table inheritance. Each table has typed subclasses:
-
-**Templates:** `workflow_template`, `container_template`, `content_template`, `equipment_template`, `data_template`, `test_requisition_template`, `actor_template`, `action_template`, `health_event_template`, `file_template`, `subject_template`
-
-**Instances:** Corresponding `*_instance` classes for each template type
-
-**Lineages:** Corresponding `*_instance_lineage` classes for relationship tracking
+TAPDB uses SQLAlchemy single-table inheritance. The repository bundles only
+core template packs, while client applications can add domain-specific
+template subclasses and configs.
 
 ## Installation
 
@@ -170,27 +166,29 @@ TAPDB templates are typically seeded from JSON files under `./config/`. The cano
 
 - `config/_metadata.json`
 
-Each JSON file contains a top-level `templates` array:
+Each JSON file contains a top-level `templates` array.
 
-- `config/generic/generic.json`
-- `config/action/core.json`
-- `config/workflow/assay.json`
-- `config/workflow_step/queue.json`
+Bundled TAPDB core templates are:
+
+- `config/generic/generic.json` (`generic/generic/generic/1.0`, `generic/generic/external_object_link/1.0`)
+- `config/actor/actor.json` (`generic/actor/generic/1.0`, `generic/actor/system_user/1.0`)
+
+Non-core domain packs (workflow/action/content/etc.) are expected to live in
+client repositories or external config directories, not in TAPDB core.
 
 ### Canonical fields (v2)
 
 Each element in `templates` is a template definition with:
 
 - `name` (string)
-- `polymorphic_discriminator` (string; e.g. `generic_template`, `workflow_template`, `action_template`)
+- `polymorphic_discriminator` (string; e.g. `generic_template`, `actor_template`)
 - `category`, `type`, `subtype`, `version` (strings) — used to build the template code:
   - `{category}/{type}/{subtype}/{version}` (optional trailing `/`)
 - `instance_prefix` (string; EUID prefix for created instances)
 - `is_singleton` (bool)
 - `bstatus` (string; lifecycle status)
-- `json_addl` (object; template-specific data). Common subkeys seen in the repo examples:
+- `json_addl` (object; template-specific data). Common subkeys in core examples:
   - `properties` (object)
-  - `action_imports` (object mapping action keys → action template codes)
   - `expected_inputs` / `expected_outputs` (arrays)
   - `instantiation_layouts` (array)
   - `cogs` (object)
@@ -767,7 +765,8 @@ tapdb db schema apply <env>  # Apply TAPDB schema to existing database
 tapdb db schema status <env> # Check schema status and row counts
 tapdb db schema reset <env>  # Drop TAPDB schema objects (⚠️ destructive)
 tapdb db schema migrate <env># Apply schema migrations
-tapdb db data seed <env>     # Seed templates from config/ directory
+tapdb db data seed <env>     # Seed bundled core templates from config/
+tapdb db data seed <env> -w  # Include optional non-core packs if present
 tapdb db data backup <env>   # Backup database (--output/-o FILE)
 tapdb db data restore <env>  # Restore from backup (--input/-i FILE)
 tapdb db config validate     # Validate template JSON config files (no DB required)

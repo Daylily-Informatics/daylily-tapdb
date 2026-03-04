@@ -1,5 +1,5 @@
 {
-  "$comment": "TAPDB v2 Template: Generic base object",
+  "$comment": "TAPDB v2 Templates: Generic core objects",
   "templates": [
     {
       "name": "Generic Object",
@@ -17,12 +17,37 @@
           "name": "Generic Object",
           "comments": ""
         },
-	        "action_imports": {
-	          "create_note": "action/core/create-note/1.0",
-	          "update_status": "action/core/update-status/1.0",
-	          "link_objects": "action/core/link-objects/1.0",
-	          "soft_delete": "action/core/soft-delete/1.0"
-	        },
+        "expected_inputs": [],
+        "expected_outputs": [],
+        "instantiation_layouts": [],
+        "cogs": {
+          "state": "active",
+          "cost": "0.00",
+          "allocation_type": ""
+        }
+      }
+    },
+    {
+      "name": "External Object Link",
+      "polymorphic_discriminator": "generic_template",
+      "category": "generic",
+      "type": "generic",
+      "subtype": "external_object_link",
+      "version": "1.0",
+      "instance_prefix": "GX",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Core object used to map/link external system entities into TAPDB",
+        "properties": {
+          "name": "External Object Link",
+          "comments": "",
+          "external_system": "",
+          "external_euid": "",
+          "external_type": "",
+          "external_url": "",
+          "external_payload": {}
+        },
         "expected_inputs": [],
         "expected_outputs": [],
         "instantiation_layouts": [],
@@ -35,4 +60,3 @@
     }
   ]
 }
-

@@ -656,7 +656,7 @@ def build_app():
             False,
             "--include-workflow",
             "-w",
-            help="Include workflow/action templates",
+            help="Include optional non-core templates if present in config",
         ),
         insecure_dev_defaults: bool = typer.Option(
             False,
@@ -726,7 +726,7 @@ def build_app():
             False,
             "--include-workflow",
             "-w",
-            help="Include workflow/action templates",
+            help="Include optional non-core templates if present in config",
         ),
         insecure_dev_defaults: bool = typer.Option(
             False,
