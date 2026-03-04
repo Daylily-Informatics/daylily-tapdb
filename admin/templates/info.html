@@ -23,7 +23,7 @@
             {% endfor %}
         </tbody>
     </table>
-    <p class="text-muted" style="margin-top: 0.75rem;">
+    <p style="margin-top: 0.75rem; color: var(--text-muted);">
         Password values are never displayed.
     </p>
 </div>
@@ -31,10 +31,9 @@
 <div class="card">
     <h2 class="card-title">Cognito Summary</h2>
     {% if cognito_error %}
-    <div class="status status--warning" role="status" aria-live="polite" style="margin-bottom: 0.75rem;">
-        <span class="status-icon" aria-hidden="true">!</span>
-        <span><strong>Warning:</strong> Could not resolve Cognito details: {{ cognito_error }}</span>
-    </div>
+    <p style="color: #ff8a8a; margin-bottom: 0.75rem;">
+        Could not resolve Cognito details: {{ cognito_error }}
+    </p>
     {% endif %}
     {% if cognito_summary_rows %}
     <table>
@@ -76,7 +75,7 @@
         </tbody>
     </table>
     {% else %}
-    <p class="text-muted">No Cognito runtime values available.</p>
+    <p style="color: var(--text-muted);">No Cognito runtime values available.</p>
     {% endif %}
 </div>
 {% endblock %}
