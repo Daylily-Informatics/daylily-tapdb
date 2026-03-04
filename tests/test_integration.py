@@ -5,7 +5,6 @@ Creates an isolated schema, installs tapdb_schema.sql, seeds templates from conf
 creates an instance+children+lineage, executes an action, verifies audit+soft delete.
 """
 
-import json
 import os
 import random
 import time
@@ -86,10 +85,7 @@ def _drop_schema(dsn: str, schema_name: str) -> None:
         conn.close()
 
 
-def _seed_templates(session, config_path: Path) -> None:
-    data = json.loads(config_path.read_text())
-    tmpl_list = data.get("templates", [])
-
+def _seed_templates(session, tmpl_list: list[dict]) -> None:
     disc_to_cls = {
         "action_template": action_template,
         "workflow_template": workflow_template,
@@ -119,6 +115,70 @@ def _seed_templates(session, config_path: Path) -> None:
     session.flush()
 
 
+def _integration_templates() -> list[dict]:
+    return [
+        {
+            "name": "Create Note",
+            "polymorphic_discriminator": "action_template",
+            "category": "action",
+            "type": "core",
+            "subtype": "create-note",
+            "version": "1.0",
+            "instance_prefix": "XX",
+            "is_singleton": False,
+            "bstatus": "active",
+            "json_addl": {
+                "action_definition": {
+                    "description": "Add a note to any object",
+                    "properties": {"name": "Create Note", "comments": ""},
+                    "action_type": "annotation",
+                    "required_fields": ["note_text"],
+                }
+            },
+        },
+        {
+            "name": "Available Queue",
+            "polymorphic_discriminator": "workflow_step_template",
+            "category": "workflow_step",
+            "type": "queue",
+            "subtype": "available",
+            "version": "1.0",
+            "instance_prefix": "WSX",
+            "is_singleton": False,
+            "bstatus": "active",
+            "json_addl": {
+                "properties": {"name": "Available Queue"},
+                "instantiation_layouts": [],
+            },
+        },
+        {
+            "name": "HLA Typing",
+            "polymorphic_discriminator": "workflow_template",
+            "category": "workflow",
+            "type": "assay",
+            "subtype": "hla-typing",
+            "version": "1.2",
+            "instance_prefix": "WX",
+            "is_singleton": False,
+            "bstatus": "active",
+            "json_addl": {
+                "properties": {"name": "HLA Typing"},
+                "action_imports": {
+                    "create_note": "action/core/create-note/1.0",
+                },
+                "instantiation_layouts": [
+                    {
+                        "relationship_type": "contains",
+                        "child_templates": [
+                            "workflow_step/queue/available/1.0",
+                        ],
+                    }
+                ],
+            },
+        },
+    ]
+
+
 def test_postgres_schema_seed_action_audit_soft_delete():
     dsn = os.environ.get("TAPDB_TEST_DSN")
     if not dsn:
@@ -144,11 +204,7 @@ def test_postgres_schema_seed_action_audit_soft_delete():
         with conn.session_scope(commit=False) as session:
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
 
-            _seed_templates(session, repo_root / "config" / "action" / "core.json")
-            _seed_templates(
-                session, repo_root / "config" / "workflow_step" / "queue.json"
-            )
-            _seed_templates(session, repo_root / "config" / "workflow" / "assay.json")
+            _seed_templates(session, _integration_templates())
 
             tenant_id = uuid.uuid4()
             wf = factory.create_instance(
