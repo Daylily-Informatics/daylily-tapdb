@@ -1089,8 +1089,9 @@ def db_restore(
 # Core template categories (always seeded)
 CORE_CATEGORIES = {"generic", "actor"}
 
-# Optional template categories (seeded with --include-workflow)
-OPTIONAL_CATEGORIES = {"workflow", "workflow_step", "action"}
+# Optional template categories (only when provided via external config packs)
+# TAPDB no longer bundles non-core template packs in this repository.
+OPTIONAL_CATEGORIES: set[str] = set()
 
 
 def _load_template_configs(
@@ -1100,7 +1101,7 @@ def _load_template_configs(
 
     Args:
         config_dir: Path to config directory
-        include_optional: If True, include workflow/workflow_step/action templates
+        include_optional: If True, include optional non-core template packs
 
     Returns list of template dicts ready for database insertion.
     """
@@ -1805,7 +1806,7 @@ def db_seed(
         False,
         "--include-workflow",
         "-w",
-        help="Include workflow/action templates (optional)",
+        help="Include optional non-core templates if present in config",
     ),
     skip_existing: bool = typer.Option(
         True,
@@ -1818,18 +1819,21 @@ def db_seed(
 ):
     """Seed TAPDB with template definitions from config files.
 
-    By default, seeds only CORE templates (generic, actor).
-    Use --include-workflow to also seed workflow, workflow_step, and action templates.
+    By default, seeds only CORE templates (generic + actor templates, including
+    generic/external_object_link).
+
+    --include-workflow is retained for compatibility and includes optional
+    non-core template packs when present in the provided config directory.
     """
     cfg = _get_db_config(env)
 
-    mode = "core + workflow" if include_workflow else "core only"
+    mode = "core + optional packs" if include_workflow else "core only"
     console.print(
         f"\n[bold cyan]━━━ Seed TAPDB Templates ({env.value}) ━━━[/bold cyan]"
     )
     console.print(f"  Mode: {mode}")
     console.print(f"  Core categories: {', '.join(sorted(CORE_CATEGORIES))}")
-    if include_workflow:
+    if include_workflow and OPTIONAL_CATEGORIES:
         console.print(
             f"  Optional categories: {', '.join(sorted(OPTIONAL_CATEGORIES))}"
         )
@@ -1954,7 +1958,10 @@ def db_setup(
     env: Environment = typer.Argument(..., help="Target environment"),
     force: bool = typer.Option(False, "--force", "-f", help="Reinitialize if exists"),
     include_workflow: bool = typer.Option(
-        False, "--include-workflow", "-w", help="Include workflow/action templates"
+        False,
+        "--include-workflow",
+        "-w",
+        help="Include optional non-core templates if present in config",
     ),
     insecure_dev_defaults: bool = typer.Option(
         False,
@@ -1964,8 +1971,11 @@ def db_setup(
 ):
     """Full database setup: create database, apply schema, seed templates.
 
-    By default, seeds only CORE templates (generic, actor).
-    Use --include-workflow to also seed workflow, workflow_step, and action templates.
+    By default, seeds only CORE templates (generic + actor templates, including
+    generic/external_object_link).
+
+    --include-workflow is retained for compatibility and includes optional
+    non-core template packs when present in the provided config directory.
 
     Combines: tapdb db create + tapdb db schema apply + tapdb db data seed
 
@@ -1975,7 +1985,7 @@ def db_setup(
     cfg = _get_db_config(env)
     is_aurora = cfg.get("engine_type") == "aurora"
 
-    mode = "core + workflow" if include_workflow else "core only"
+    mode = "core + optional packs" if include_workflow else "core only"
     console.print(f"\n[bold cyan]━━━ TAPDB Full Setup ({env.value}) ━━━[/bold cyan]")
     console.print(f"  Database: {cfg['database']}")
     console.print(f"  Host:     {cfg['host']}:{cfg['port']}")

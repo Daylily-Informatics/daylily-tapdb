@@ -99,6 +99,19 @@ export TAPDB_ENV=dev
 
 Use `--no-gui` when you need headless setup.
 
+## Core Template Policy
+Bundled TAPDB core templates are intentionally minimal:
+1. `generic/generic/generic/1.0`
+2. `generic/generic/external_object_link/1.0`
+3. `generic/actor/generic/1.0`
+4. `generic/actor/system_user/1.0`
+
+Operational rules:
+1. Treat these as TAPDB-native baseline templates.
+2. Do not add client-domain workflow/action/content packs to TAPDB core repo.
+3. If domain packs are needed, provide them via client repos or external config
+   directories and seed them explicitly.
+
 ## Config Schema Expectations
 Namespace config (`tapdb-config.yaml`) should include:
 
