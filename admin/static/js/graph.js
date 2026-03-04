@@ -14,12 +14,19 @@ const keyState = {
 const TAP_SEQUENCE_MS = 700;
 const WAVE_STEP_MS = 260;
 const WAVE_GLOW_MS = 520;
+const STATUS_META = {
+    ok: { label: 'Success', icon: '✓', className: 'status--success' },
+    warn: { label: 'Warning', icon: '!', className: 'status--warning' },
+    error: { label: 'Error', icon: '⨯', className: 'status--error' },
+    info: { label: 'Info', icon: 'i', className: 'status--info' },
+};
 
 const cytoscapeStyle = [
     {
         selector: 'node',
         style: {
             'background-color': 'data(color)',
+            'shape': 'data(shape)',
             'label': 'data(id)',  // Show EUID as label
             'color': '#fff',
             'text-valign': 'bottom',
@@ -30,7 +37,7 @@ const cytoscapeStyle = [
             'width': '40px',
             'height': '40px',
             'border-width': '2px',
-            'border-color': '#333',
+            'border-color': '#d5dfeb',
             'text-outline-color': '#000',
             'text-outline-width': '2px',
             'shadow-color': '#000',
@@ -43,17 +50,18 @@ const cytoscapeStyle = [
     {
         selector: 'node:selected',
         style: {
-            'border-width': '4px',
-            'border-color': '#fff',
-            'background-color': '#e74c3c',
+            'border-width': '6px',
+            'border-color': '#f8fafc',
+            'border-style': 'double',
         }
     },
     {
         selector: 'node.link-anchor',
         style: {
-            'border-color': '#ffe47a',
-            'border-width': '5px',
-            'shadow-color': '#ffe47a',
+            'border-color': '#f0e442',
+            'border-width': '6px',
+            'border-style': 'dashed',
+            'shadow-color': '#f0e442',
             'shadow-opacity': 0.95,
             'shadow-blur': 22,
         }
@@ -61,10 +69,10 @@ const cytoscapeStyle = [
     {
         selector: 'node.wave-child',
         style: {
-            'background-color': '#ff4fa3',
-            'border-color': '#ffd7ea',
-            'border-width': '5px',
-            'shadow-color': '#ff4fa3',
+            'border-color': '#f0e442',
+            'border-style': 'dashed',
+            'border-width': '6px',
+            'shadow-color': '#f0e442',
             'shadow-opacity': 0.9,
             'shadow-blur': 26,
         }
@@ -72,10 +80,10 @@ const cytoscapeStyle = [
     {
         selector: 'node.wave-parent',
         style: {
-            'background-color': '#26d9ff',
-            'border-color': '#cbf7ff',
-            'border-width': '5px',
-            'shadow-color': '#26d9ff',
+            'border-color': '#56b4e9',
+            'border-style': 'dotted',
+            'border-width': '6px',
+            'shadow-color': '#56b4e9',
             'shadow-opacity': 0.9,
             'shadow-blur': 26,
         }
@@ -86,12 +94,12 @@ const cytoscapeStyle = [
             // Directed edges: always render arrowhead on the *target* end.
             // Extra endpoint/distance settings keep arrowheads visible outside node borders.
             'width': 2,
-            'line-color': '#666',
+            'line-color': '#91a4b7',
             'curve-style': 'bezier',
             'source-arrow-shape': 'none',
             'target-arrow-shape': 'triangle',
             'target-arrow-fill': 'filled',
-            'target-arrow-color': '#666',
+            'target-arrow-color': '#91a4b7',
             'source-endpoint': 'outside-to-node',
             'target-endpoint': 'outside-to-node',
             'target-distance-from-node': 6,
@@ -101,23 +109,22 @@ const cytoscapeStyle = [
     {
         selector: 'edge:selected',
         style: {
-            'line-color': '#e74c3c',
-            'target-arrow-color': '#e74c3c',
-            'width': 3,
+            'line-color': '#f0e442',
+            'target-arrow-color': '#f0e442',
+            'line-style': 'dashed',
+            'width': 4,
         }
     }
 ];
 
-function setStatus(message, level = '') {
+function setStatus(message, level = 'info') {
     const el = document.getElementById('graph-mode-status');
     if (!el) {
         return;
     }
-    el.textContent = message;
-    el.className = '';
-    if (level) {
-        el.classList.add(level);
-    }
+    const meta = STATUS_META[level] || STATUS_META.info;
+    el.textContent = `${meta.icon} ${meta.label}: ${message}`;
+    el.className = `status ${meta.className}`;
 }
 
 function installKeyboardHandlers() {
@@ -189,7 +196,7 @@ function setPendingLineageChild(node) {
     clearPendingLineageSelection();
     pendingLineageChildId = node.id();
     node.addClass('link-anchor');
-    setStatus(`Link mode: child ${pendingLineageChildId} selected. Click parent node.`, 'warn');
+    setStatus(`Link mode armed. Selected child ${pendingLineageChildId}; click a parent node next.`, 'warn');
 }
 
 function collectWaveLevels(startNode, direction) {
@@ -237,8 +244,8 @@ function runWaveFromNode(startNode, direction) {
     }
 
     const className = direction === 'children' ? 'wave-child' : 'wave-parent';
-    const colorName = direction === 'children' ? 'pink' : 'aqua';
-    setStatus(`Running ${direction} wave (${colorName}) from ${startNode.id()}...`, 'ok');
+    const cueName = direction === 'children' ? 'dashed highlight ring' : 'dotted highlight ring';
+    setStatus(`Running ${direction} wave (${cueName}) from ${startNode.id()}.`, 'ok');
 
     levels.forEach((nodes, index) => {
         window.setTimeout(() => {
@@ -380,9 +387,12 @@ function refreshLegendFromCurrentGraph() {
     cy.nodes().forEach((node) => {
         const data = node.data();
         const category = data.category;
-        const color = data.color;
-        if (category && color && !typesInGraph[category]) {
-            typesInGraph[category] = color;
+        if (category && !typesInGraph[category]) {
+            typesInGraph[category] = {
+                color: data.color || '#9AA7B3',
+                shape: data.shape || 'ellipse',
+                marker: data.marker || '?',
+            };
         }
     });
     updateLegend(typesInGraph);
@@ -494,7 +504,7 @@ function initCytoscape(container, elements) {
         window.location.href = '/object/' + euid;
     });
 
-    setStatus('Ready.', '');
+    setStatus('Ready.', 'info');
     return cy;
 }
 
@@ -725,9 +735,12 @@ async function loadGraph() {
         const typesInGraph = {};
         data.elements.nodes.forEach((node) => {
             const category = node.data.category;
-            const color = node.data.color;
             if (category && !typesInGraph[category]) {
-                typesInGraph[category] = color;
+                typesInGraph[category] = {
+                    color: node.data.color || '#9AA7B3',
+                    shape: node.data.shape || 'ellipse',
+                    marker: node.data.marker || '?',
+                };
             }
         });
         updateLegend(typesInGraph);
@@ -760,8 +773,10 @@ function updateLegend(typesInGraph) {
 
     legendContainer.innerHTML = sortedTypes.map((type) => `
         <div class="legend-item">
-            <div class="legend-color" style="background:${typesInGraph[type]}"></div>
-            ${type}
+            <div class="legend-color" style="background:${typesInGraph[type].color}" aria-hidden="true"></div>
+            <span>${type}</span>
+            <span class="legend-shape">shape: ${typesInGraph[type].shape}</span>
+            <span class="legend-marker">${typesInGraph[type].marker}</span>
         </div>
     `).join('');
 }

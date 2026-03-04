@@ -61,7 +61,7 @@
         <button type="submit" class="btn">Run Query</button>
     </form>
 
-    {% if query_params.q %}
+{% if query_params.q %}
         {% if object_results %}
         <table>
             <thead>
@@ -88,10 +88,10 @@
             </tbody>
         </table>
         {% else %}
-        <p style="color: var(--text-muted); margin-top: 1rem;">No objects matched your query.</p>
+        <p class="text-muted" style="margin-top: 1rem;">No objects matched your query.</p>
         {% endif %}
     {% else %}
-    <p style="color: var(--text-muted); margin-top: 1rem;">Enter a query to search templates, instances, and lineages.</p>
+    <p class="text-muted" style="margin-top: 1rem;">Enter a query to search templates, instances, and lineages.</p>
     {% endif %}
 </div>
 
@@ -150,18 +150,19 @@
             </tbody>
         </table>
         {% else %}
-        <p style="color: var(--text-muted); margin-top: 1rem;">No audit rows found for this object.</p>
+        <p class="text-muted" style="margin-top: 1rem;">No audit rows found for this object.</p>
         {% endif %}
     {% else %}
-    <p style="color: var(--text-muted); margin-top: 1rem;">Enter an object EUID to load its audit trail.</p>
+    <p class="text-muted" style="margin-top: 1rem;">Enter an object EUID to load its audit trail.</p>
     {% endif %}
 </div>
 
 <div class="card" style="margin-top: 2rem;">
     <h2 class="card-title">User Audit Trail</h2>
     {% if audit_warning %}
-    <div style="margin-bottom: 0.9rem; padding: 0.65rem 0.8rem; border-radius: 6px; background: rgba(231, 76, 60, 0.15); color: #ffb3a7;">
-        {{ audit_warning }}
+    <div class="status status--warning" role="status" aria-live="polite" style="margin-bottom: 0.9rem;">
+        <span class="status-icon" aria-hidden="true">!</span>
+        <span><strong>Warning:</strong> {{ audit_warning }}</span>
     </div>
     {% endif %}
 
@@ -220,17 +221,17 @@
         </tbody>
     </table>
     {% else %}
-    <p style="color: var(--text-muted); margin-top: 1rem;">No user audit rows found for {{ audit_user_effective }}.</p>
+    <p class="text-muted" style="margin-top: 1rem;">No user audit rows found for {{ audit_user_effective }}.</p>
     {% endif %}
 </div>
 
 <div class="card" style="margin-top: 2rem;">
     <h2 class="card-title">About TAPDB</h2>
-    <p style="color: var(--text-muted);">
+    <p class="text-muted">
         TAPDB (Templated Abstract Polymorphic Database) is a flexible object model for building
         database applications. It provides:
     </p>
-    <ul style="margin-top: 1rem; margin-left: 1.5rem; color: var(--text-muted);">
+    <ul class="text-muted" style="margin-top: 1rem; margin-left: 1.5rem;">
         <li><strong>Templates</strong> - Blueprints defining object structure and behavior</li>
         <li><strong>Instances</strong> - Concrete objects created from templates</li>
         <li><strong>Lineages</strong> - Directed relationships forming a DAG (Directed Acyclic Graph)</li>
