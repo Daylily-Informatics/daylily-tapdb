@@ -176,6 +176,15 @@ Bundled TAPDB core templates are:
 Non-core domain packs (workflow/action/content/etc.) are expected to live in
 client repositories or external config directories, not in TAPDB core.
 
+When seeding or validating templates with `tapdb db data seed` or
+`tapdb db config validate`, TAPDB loads template configs in this order:
+
+1. TAPDB core config bundle (`daylily_tapdb/core_config` or repo `config/`)
+2. Client-specified `--config` directory (if provided)
+
+Duplicate template keys across merged sources are a hard failure; TAPDB does
+not silently override by load order.
+
 ### Canonical fields (v2)
 
 Each element in `templates` is a template definition with:
@@ -765,11 +774,11 @@ tapdb db schema apply <env>  # Apply TAPDB schema to existing database
 tapdb db schema status <env> # Check schema status and row counts
 tapdb db schema reset <env>  # Drop TAPDB schema objects (⚠️ destructive)
 tapdb db schema migrate <env># Apply schema migrations
-tapdb db data seed <env>     # Seed bundled core templates from config/
+tapdb db data seed <env>     # Seed core templates first, then optional client --config
 tapdb db data seed <env> -w  # Include optional non-core packs if present
 tapdb db data backup <env>   # Backup database (--output/-o FILE)
 tapdb db data restore <env>  # Restore from backup (--input/-i FILE)
-tapdb db config validate     # Validate template JSON config files (no DB required)
+tapdb db config validate     # Validate merged core + client template config set
 
 # User management
 tapdb user list              # List users
