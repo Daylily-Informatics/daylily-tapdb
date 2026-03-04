@@ -124,8 +124,24 @@
     }
     #graph-mode-status {
         margin-top: 0.6rem;
+        padding: 0.5rem 0.6rem;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
         font-size: 0.82rem;
+        color: var(--text-muted);
         min-height: 2.1rem;
+    }
+    #graph-mode-status.ok {
+        color: #c9ffd9;
+        border-color: #2f7a4a;
+    }
+    #graph-mode-status.warn {
+        color: #ffd7a8;
+        border-color: #8d6b2f;
+    }
+    #graph-mode-status.error {
+        color: #ffd0d0;
+        border-color: #8b3d3d;
     }
     #relationship-dialog {
         border: 1px solid var(--border-color);
@@ -171,29 +187,13 @@
     .legend-item {
         display: flex;
         align-items: center;
-        gap: 0.35rem;
+        gap: 0.25rem;
         font-size: 0.75rem;
-        border: 1px solid var(--border-color);
-        border-radius: 999px;
-        padding: 0.2rem 0.5rem;
-        background: rgba(0, 0, 0, 0.2);
     }
     .legend-color {
         width: 12px;
         height: 12px;
         border-radius: 2px;
-        border: 1px solid rgba(255, 255, 255, 0.25);
-    }
-    .legend-shape {
-        font-size: 0.7rem;
-        color: var(--text-muted);
-    }
-    .legend-marker {
-        font-size: 0.68rem;
-        padding: 0.05rem 0.34rem;
-        border-radius: 999px;
-        border: 1px dashed var(--border-color);
-        color: var(--text-muted);
     }
     .loading {
         display: flex;
@@ -268,11 +268,11 @@
                 <h3>⌨️ Graph Gestures</h3>
                 <div style="font-size: 0.74rem; color: var(--text-muted); line-height: 1.42;">
                     <div><strong>D + right click</strong>: delete node or edge</div>
-                    <div><strong>3x left click node</strong>: child-wave highlight (dashed ring)</div>
-                    <div><strong>3x right click node</strong>: parent-wave highlight (dotted ring)</div>
+                    <div><strong>3x left click node</strong>: child-wave glow (pink)</div>
+                    <div><strong>3x right click node</strong>: parent-wave glow (aqua)</div>
                     <div><strong>L + left click node</strong>: pick child, then click parent to create edge</div>
                 </div>
-                <div id="graph-mode-status" class="status status--info">i Info: Ready.</div>
+                <div id="graph-mode-status">Ready.</div>
             </div>
 
             <div class="control-panel">

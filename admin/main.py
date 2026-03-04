@@ -65,40 +65,6 @@ IS_PROD = APP_ENV == "prod"
 DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
 DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/daylily-tapdb"
 
-# Graph node category styling (color is supplemental; shape/marker are primary cues).
-GRAPH_CATEGORY_STYLES: Dict[str, Dict[str, str]] = {
-    "workflow": {"color": "#56B4E9", "shape": "round-rectangle", "marker": "W"},
-    "workflow_step": {"color": "#0072B2", "shape": "rectangle", "marker": "WS"},
-    "container": {"color": "#CC79A7", "shape": "hexagon", "marker": "C"},
-    "content": {"color": "#009E73", "shape": "diamond", "marker": "CT"},
-    "equipment": {"color": "#E69F00", "shape": "triangle", "marker": "E"},
-    "data": {"color": "#F0E442", "shape": "ellipse", "marker": "D"},
-    "actor": {"color": "#D55E00", "shape": "star", "marker": "A"},
-    "action": {"color": "#6F4E7C", "shape": "vee", "marker": "AC"},
-    "test_requisition": {"color": "#8C6D31", "shape": "pentagon", "marker": "TR"},
-    "health_event": {"color": "#C95D63", "shape": "octagon", "marker": "H"},
-    "file": {"color": "#4CAF50", "shape": "rhomboid", "marker": "F"},
-    "subject": {"color": "#7E8CE0", "shape": "barrel", "marker": "S"},
-}
-
-DEFAULT_GRAPH_NODE_STYLE: Dict[str, str] = {
-    "color": "#9AA7B3",
-    "shape": "ellipse",
-    "marker": "?",
-}
-
-
-def get_graph_category_style(category: Optional[str]) -> Dict[str, str]:
-    """Resolve graph style metadata for a category with safe defaults."""
-    if not category:
-        return dict(DEFAULT_GRAPH_NODE_STYLE)
-    style = GRAPH_CATEGORY_STYLES.get(category, DEFAULT_GRAPH_NODE_STYLE)
-    return {
-        "color": style["color"],
-        "shape": style["shape"],
-        "marker": style["marker"],
-    }
-
 
 def _git_output(*args: str) -> str:
     """Best-effort git command output for footer metadata."""
@@ -1912,6 +1878,21 @@ async def get_graph_data(
     visited_nodes = set()
     visited_edges = set()
 
+    colors = {
+        "workflow": "#00FF7F",
+        "workflow_step": "#ADFF2F",
+        "container": "#8B00FF",
+        "content": "#00BFFF",
+        "equipment": "#FF4500",
+        "data": "#FFD700",
+        "actor": "#FF69B4",
+        "action": "#FF8C00",
+        "test_requisition": "#FFA500",
+        "health_event": "#DC143C",
+        "file": "#00FF00",
+        "subject": "#9370DB",
+    }
+
     with get_db() as conn:
         with conn.session_scope() as session:
             if start_euid:
@@ -1926,7 +1907,6 @@ async def get_graph_data(
                     if current_depth > depth or instance.euid in visited_nodes:
                         return
                     visited_nodes.add(instance.euid)
-                    style = get_graph_category_style(instance.category)
 
                     nodes.append({
                         "data": {
@@ -1935,9 +1915,7 @@ async def get_graph_data(
                             "type": instance.type,
                             "category": instance.category,
                             "subtype": instance.subtype,
-                            "color": style["color"],
-                            "shape": style["shape"],
-                            "marker": style["marker"],
+                            "color": colors.get(instance.category, "#888888"),
                         }
                     })
 
@@ -1979,7 +1957,6 @@ async def get_graph_data(
                 ).limit(200).all()
 
                 for inst in instances:
-                    style = get_graph_category_style(inst.category)
                     nodes.append({
                         "data": {
                             "id": inst.euid,
@@ -1987,9 +1964,7 @@ async def get_graph_data(
                             "type": inst.type,
                             "category": inst.category,
                             "subtype": inst.subtype,
-                            "color": style["color"],
-                            "shape": style["shape"],
-                            "marker": style["marker"],
+                            "color": colors.get(inst.category, "#888888"),
                         }
                     })
                     visited_nodes.add(inst.euid)
