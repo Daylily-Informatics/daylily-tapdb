@@ -420,7 +420,13 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     assert "Instance name is required." not in create_instance_resp.text
 
     # API routes (public)
-    assert client.get("/api/graph/data").status_code == 200
+    graph_resp = client.get("/api/graph/data")
+    assert graph_resp.status_code == 200
+    graph_payload = graph_resp.json()
+    assert graph_payload["elements"]["nodes"]
+    first_node = graph_payload["elements"]["nodes"][0]["data"]
+    assert "shape" in first_node
+    assert "marker" in first_node
     assert client.get("/api/templates").status_code == 200
     assert client.get("/api/instances").status_code == 200
     assert client.get("/api/object/GT1").status_code == 200
