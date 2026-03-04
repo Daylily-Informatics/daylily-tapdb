@@ -15,7 +15,12 @@
     "generic_template": "GT",
     "generic_instance": "GX",
     "generic_instance_lineage": "GN",
-    "actor": "ACT",
+    "container": "CX",
+    "container_well": "CWX",
+    "content": "CNX",
+    "workflow": "WX",
+    "workflow_assay": "AY",
+    "workflow_step": "WSX",
     "action": "XX"
   }
 }

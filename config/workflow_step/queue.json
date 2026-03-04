@@ -1,0 +1,106 @@
+{
+  "$comment": "TAPDB v2 Template: Workflow step queues",
+  "templates": [
+    {
+      "name": "Available Queue",
+      "polymorphic_discriminator": "workflow_step_template",
+      "category": "workflow_step",
+      "type": "queue",
+      "subtype": "available",
+      "version": "1.0",
+      "instance_prefix": "WSX",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Queue for items ready for processing",
+        "properties": {
+          "name": "Available Queue",
+          "comments": "",
+          "step_number": 1
+        },
+        "queue_type": "available",
+        "cogs": {
+          "state": "active",
+          "cost": "0.00",
+          "allocation_type": ""
+        }
+      }
+    },
+    {
+      "name": "In Progress Queue",
+      "polymorphic_discriminator": "workflow_step_template",
+      "category": "workflow_step",
+      "type": "queue",
+      "subtype": "in-progress",
+      "version": "1.0",
+      "instance_prefix": "WSX",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Queue for items currently being processed",
+        "properties": {
+          "name": "In Progress Queue",
+          "comments": "",
+          "step_number": 2
+        },
+        "queue_type": "in-progress",
+        "cogs": {
+          "state": "active",
+          "cost": "0.00",
+          "allocation_type": ""
+        }
+      }
+    },
+    {
+      "name": "Completed Queue",
+      "polymorphic_discriminator": "workflow_step_template",
+      "category": "workflow_step",
+      "type": "queue",
+      "subtype": "completed",
+      "version": "1.0",
+      "instance_prefix": "WSX",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Queue for completed items",
+        "properties": {
+          "name": "Completed Queue",
+          "comments": "",
+          "step_number": 3
+        },
+        "queue_type": "completed",
+        "cogs": {
+          "state": "active",
+          "cost": "0.00",
+          "allocation_type": ""
+        }
+      }
+    },
+    {
+      "name": "Exception Queue",
+      "polymorphic_discriminator": "workflow_step_template",
+      "category": "workflow_step",
+      "type": "queue",
+      "subtype": "exception",
+      "version": "1.0",
+      "instance_prefix": "WSX",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Queue for items requiring attention/intervention",
+        "properties": {
+          "name": "Exception Queue",
+          "comments": "",
+          "step_number": 99
+        },
+        "queue_type": "exception",
+        "cogs": {
+          "state": "active",
+          "cost": "0.00",
+          "allocation_type": ""
+        }
+      }
+    }
+  ]
+}
+

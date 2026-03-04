@@ -1,0 +1,31 @@
+{
+  "$comment": "TAPDB v2 Template: Content specimen definitions",
+  "templates": [
+    {
+      "name": "Whole Blood Specimen",
+      "polymorphic_discriminator": "content_template",
+      "category": "content",
+      "type": "specimen",
+      "subtype": "blood-whole",
+      "version": "1.0",
+      "instance_prefix": "CNX",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Whole blood specimen content template",
+        "properties": {
+          "name": "Whole Blood Specimen",
+          "comments": ""
+        },
+        "expected_inputs": [],
+        "expected_outputs": [],
+        "instantiation_layouts": [],
+        "cogs": {
+          "state": "active",
+          "cost": "0.00",
+          "allocation_type": ""
+        }
+      }
+    }
+  ]
+}
