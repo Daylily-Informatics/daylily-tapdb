@@ -64,7 +64,9 @@ def _resolve_tls_paths(env_name: Optional[str] = None) -> tuple[Path, Path]:
     return cert, key
 
 
-def _ensure_tls_certificates(host: str, *, env_name: Optional[str] = None) -> tuple[Path, Path]:
+def _ensure_tls_certificates(
+    host: str, *, env_name: Optional[str] = None
+) -> tuple[Path, Path]:
     """Ensure TLS cert/key exist for HTTPS UI startup."""
     cert_path, key_path = _resolve_tls_paths(env_name)
     if cert_path.exists() and key_path.exists():
@@ -124,7 +126,9 @@ def _ensure_tls_certificates(host: str, *, env_name: Optional[str] = None) -> tu
         fallback = subprocess.run(fallback_cmd, capture_output=True, text=True)
         if fallback.returncode != 0:
             msg = (fallback.stderr or fallback.stdout or "").strip()
-            raise RuntimeError(f"Failed to generate TLS certificate with openssl: {msg}")
+            raise RuntimeError(
+                f"Failed to generate TLS certificate with openssl: {msg}"
+            )
 
     try:
         os.chmod(key_path, 0o600)
@@ -212,6 +216,7 @@ def build_app():
     console = Console()
 
     # Import subcommand modules (require Typer/Rich)
+    from daylily_tapdb.cli.cognito import cognito_app
     from daylily_tapdb.cli.db import (
         Environment as DbEnvironment,
     )
@@ -223,7 +228,6 @@ def build_app():
         run_migrations,
         seed_templates,
     )
-    from daylily_tapdb.cli.cognito import cognito_app
     from daylily_tapdb.cli.pg import pg_app, pg_init, pg_start_local
     from daylily_tapdb.cli.user import user_app
 
@@ -326,7 +330,9 @@ def build_app():
             "-p",
             help="Port to run the server on (defaults to environments.<env>.ui_port)",
         ),
-        host: str = typer.Option(DEFAULT_UI_HOST, "--host", "-h", help="Host to bind to"),
+        host: str = typer.Option(
+            DEFAULT_UI_HOST, "--host", "-h", help="Host to bind to"
+        ),
         reload: bool = typer.Option(False, "--reload", "-r", help="Enable auto-reload"),
         background: bool = typer.Option(
             True, "--background/--foreground", "-b/-f", help="Run in background"
@@ -349,7 +355,8 @@ def build_app():
                 "[red]✗[/red] UI port override is not allowed in strict mode."
             )
             console.print(
-                f"  Configured ui_port for env {env_name}: [cyan]{configured_port}[/cyan]"
+                f"  Configured ui_port for env {env_name}: "
+                f"[cyan]{configured_port}[/cyan]"
             )
             raise typer.Exit(1)
 
@@ -371,9 +378,8 @@ def build_app():
 
         if not _port_is_available(host, port):
             console.print(f"[red]✗[/red] {_port_conflict_details(port)}")
-            console.print(
-                f"  Namespace: [dim]{_require_context(env_name=env_name).namespace_slug()}[/dim]"
-            )
+            ns = _require_context(env_name=env_name).namespace_slug()
+            console.print(f"  Namespace: [dim]{ns}[/dim]")
             console.print(
                 "  Update environments."
                 f"{env_name}.ui_port in the namespaced config to a free port."
@@ -457,8 +463,12 @@ def build_app():
         env_name = _active_env_name()
         mkcert = shutil.which("mkcert")
         if not mkcert:
-            console.print("[red]✗[/red] mkcert is required for trusted local HTTPS certs.")
-            console.print("  Install mkcert first, then rerun [cyan]tapdb ui mkcert[/cyan].")
+            console.print(
+                "[red]✗[/red] mkcert is required for trusted local HTTPS certs."
+            )
+            console.print(
+                "  Install mkcert first, then rerun [cyan]tapdb ui mkcert[/cyan]."
+            )
             raise typer.Exit(1)
 
         default_cert, default_key = _resolve_tls_paths(env_name)
@@ -592,7 +602,9 @@ def build_app():
         port: Optional[int] = typer.Option(
             None, "--port", "-p", help="Port to run the server on"
         ),
-        host: str = typer.Option(DEFAULT_UI_HOST, "--host", "-h", help="Host to bind to"),
+        host: str = typer.Option(
+            DEFAULT_UI_HOST, "--host", "-h", help="Host to bind to"
+        ),
     ):
         """Restart the TAPDB Admin UI server."""
         ui_stop()
@@ -1020,7 +1032,8 @@ def build_app():
 
         if target_path.exists() and not force:
             raise RuntimeError(
-                f"Target config already exists: {target_path}. Use --force to overwrite."
+                f"Target config already exists: {target_path}. "
+                "Use --force to overwrite."
             )
 
         if source:

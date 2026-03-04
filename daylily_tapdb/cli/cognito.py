@@ -281,7 +281,8 @@ def _resolve_daycog_pool_id_after_setup(
     """Resolve pool ID from daycog 0.1.24+ config file naming."""
     cfg_dir = _daycog_config_dir()
     pool_env = cfg_dir / f"{pool_name}.{region}.env"
-    app_env = cfg_dir / f"{pool_name}.{region}.{_sanitize_filename_part(client_name)}.env"
+    sanitized_client = _sanitize_filename_part(client_name)
+    app_env = cfg_dir / f"{pool_name}.{region}.{sanitized_client}.env"
     default_env = cfg_dir / "default.env"
 
     checked: list[Path] = []
@@ -934,7 +935,9 @@ def cognito_status(
     cfg = get_db_config_for_env(env.value)
     pool_id = (cfg.get("cognito_user_pool_id") or "").strip()
     if not pool_id:
-        console.print(f"[yellow]⚠[/yellow] No cognito_user_pool_id set for env {env.value}")
+        console.print(
+            f"[yellow]⚠[/yellow] No cognito_user_pool_id set for env {env.value}"
+        )
         raise typer.Exit(1)
 
     env_file, values = _find_pool_env_file_by_id(
@@ -1323,7 +1326,14 @@ def cognito_config_print(
         region=region,
         profile=None,
     )
-    args = ["config", "print", "--pool-name", selected_pool, "--region", selected_region]
+    args = [
+        "config",
+        "print",
+        "--pool-name",
+        selected_pool,
+        "--region",
+        selected_region,
+    ]
     _run_daycog_printing(args, env=proc_env)
 
 
@@ -1440,8 +1450,8 @@ def cognito_add_user(
         )
     except Exception as e:
         console.print(
-            "[red]✗[/red] Cognito user created, but failed to provision TAPDB actor user: "
-            f"{e}"
+            "[red]✗[/red] Cognito user created, but failed to provision "
+            f"TAPDB actor user: {e}"
         )
         raise typer.Exit(1)
 

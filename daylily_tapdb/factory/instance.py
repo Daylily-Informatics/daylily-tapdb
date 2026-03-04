@@ -49,9 +49,11 @@ def materialize_actions(
         if not isinstance(definition, dict) or not definition:
             legacy = action_tmpl.json_addl.get("action_template")
             if isinstance(legacy, dict) and legacy:
-                # TODO: remove once Bloom action templates are migrated to action_definition.
+                # TODO: remove once Bloom action templates are migrated to
+                # action_definition.
                 logger.warning(
-                    "materialize_actions legacy fallback: %s (TODO remove after Bloom action migration)",
+                    "materialize_actions legacy fallback: %s "
+                    "(TODO remove after Bloom action migration)",
                     template_code,
                 )
                 definition = legacy
@@ -125,8 +127,9 @@ class InstanceFactory:
             create_children: Whether to create child objects from instantiation_layouts.
             _depth: Internal recursion depth tracker.
             _visited: Internal visited set for cycle detection.
-            tenant_id: Optional tenant UUID; if provided, persists to the real column and
-                also to json_addl["properties"]["tenant_id"] for transition compatibility.
+            tenant_id: Optional tenant UUID; if provided, persists to the real column
+                and also to json_addl["properties"]["tenant_id"] for transition
+                compatibility.
 
         Returns:
             The created instance.

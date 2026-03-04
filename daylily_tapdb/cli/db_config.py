@@ -162,7 +162,8 @@ def _validate_meta_for_context(root: dict[str, Any], ctx: TapdbContext) -> None:
     if cfg_client != ctx.client_id or cfg_db != ctx.database_name:
         raise RuntimeError(
             "Config metadata does not match active namespace. "
-            f"Expected client_id={ctx.client_id!r}, database_name={ctx.database_name!r}; "
+            f"Expected client_id={ctx.client_id!r}, "
+            f"database_name={ctx.database_name!r}; "
             f"got client_id={cfg_client!r}, database_name={cfg_db!r}."
         )
 
@@ -266,7 +267,8 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
         )
         cfg["ssl"] = os.environ.get(f"{env_prefix}SSL", _file_str("ssl") or "true")
     else:
-        # Local connections must always use localhost to avoid accidental cross-host reuse.
+        # Local connections must always use localhost to avoid accidental cross-host
+        # reuse.
         if str(cfg["host"]).strip().lower() != "localhost":
             raise RuntimeError(
                 f"Invalid local host {cfg['host']!r} for env {env_key}. "

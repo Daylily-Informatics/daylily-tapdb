@@ -29,6 +29,15 @@ CREATE TABLE IF NOT EXISTS tapdb_identity_prefix_config (
     updated_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Default identity prefixes required by triggers.
+--
+-- audit_log EUID generation is config-driven (see set_audit_log_euid()).
+-- Ensure a sane default exists for fresh installs/tests; operators may override
+-- this by updating tapdb_identity_prefix_config as needed.
+INSERT INTO tapdb_identity_prefix_config (entity, prefix)
+VALUES ('audit_log', 'AD')
+ON CONFLICT (entity) DO NOTHING;
+
 -- generic_template: Blueprint definitions
 CREATE TABLE IF NOT EXISTS generic_template (
     -- Primary identification
