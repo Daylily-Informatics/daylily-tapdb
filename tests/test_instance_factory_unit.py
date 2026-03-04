@@ -50,6 +50,31 @@ def test_materialize_actions_skips_missing_action_templates():
     assert groups["core_actions"]["a"]["action_template_euid"] == "XX1"
 
 
+def test_materialize_actions_legacy_action_template_fallback_logs_warning(caplog):
+    from daylily_tapdb.factory.instance import materialize_actions
+
+    caplog.set_level("WARNING")
+
+    sess = _FakeSession()
+    tmpl = SimpleNamespace(json_addl={"action_imports": {"a": "action/core/x/1.0"}})
+
+    action_tmpl = SimpleNamespace(
+        uuid=uuid.uuid4(),
+        euid="XX1",
+        type="core",
+        json_addl={"action_template": {"foo": "bar"}},
+    )
+
+    class TM:
+        def get_template(self, session, template_code):
+            return action_tmpl
+
+    groups = materialize_actions(sess, tmpl, TM())
+
+    assert groups["core_actions"]["a"]["foo"] == "bar"
+    assert any("legacy fallback" in r.message for r in caplog.records)
+
+
 def test_create_instance_errors_depth_cycle_and_missing_template():
     from daylily_tapdb.factory.instance import InstanceFactory
 
@@ -107,6 +132,43 @@ def test_create_instance_builds_json_addl_and_merges_properties():
     assert inst.json_addl["properties"] == {"a": 1, "b": 2}
     assert "action_groups" in inst.json_addl
     assert sess.flushed >= 1
+
+
+def test_create_instance_sets_tenant_id_column_and_json_when_provided():
+    from daylily_tapdb.factory.instance import InstanceFactory
+
+    sess = _FakeSession()
+    t_uuid = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+
+    tmpl = SimpleNamespace(
+        uuid=t_uuid,
+        is_singleton=False,
+        instance_polymorphic_identity=None,
+        polymorphic_discriminator="generic_template",
+        category="generic",
+        type="generic",
+        subtype="generic",
+        version="1.0",
+        json_addl={"properties": {}, "action_imports": {}},
+    )
+
+    class TM:
+        def get_template(self, session, template_code):
+            return tmpl
+
+    f = InstanceFactory(TM())
+    inst = f.create_instance(
+        sess,
+        template_code="generic/generic/generic/1.0",
+        name="x",
+        properties={},
+        create_children=False,
+        tenant_id=tenant_id,
+    )
+
+    assert inst.tenant_id == tenant_id
+    assert inst.json_addl["properties"]["tenant_id"] == str(tenant_id)
 
 
 def test_create_instance_invalid_instantiation_layouts_raises_value_error():

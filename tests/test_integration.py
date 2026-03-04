@@ -9,6 +9,7 @@ import json
 import os
 import random
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -149,14 +150,21 @@ def test_postgres_schema_seed_action_audit_soft_delete():
             )
             _seed_templates(session, repo_root / "config" / "workflow" / "assay.json")
 
+            tenant_id = uuid.uuid4()
             wf = factory.create_instance(
                 session=session,
                 template_code="workflow/assay/hla-typing/1.2",
                 name="pytest-workflow",
                 create_children=True,
+                tenant_id=tenant_id,
             )
 
             assert session.query(generic_instance_lineage).count() > 0
+            stored_tenant_id = session.execute(
+                text("SELECT tenant_id FROM generic_instance WHERE uuid = :u"),
+                {"u": wf.uuid},
+            ).scalar_one()
+            assert str(stored_tenant_id) == str(tenant_id)
 
             action_ds = wf.json_addl["action_groups"]["core_actions"]["create_note"]
             res = dispatcher.execute_action(

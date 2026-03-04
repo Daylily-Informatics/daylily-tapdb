@@ -10,7 +10,7 @@ Phase 2 spec: ORM must match schema:
 
 import sqlalchemy.orm as sqla_orm
 from sqlalchemy import BIGINT, Boolean, Column, DateTime, FetchedValue, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 Base = sqla_orm.declarative_base()
 
@@ -48,6 +48,9 @@ class tapdb_core(Base):
     euid = Column(Text, nullable=False, server_default=FetchedValue())
     euid_prefix = Column(Text, nullable=False, server_default=FetchedValue())
     euid_seq = Column(BIGINT, nullable=False, server_default=FetchedValue())
+
+    # Tenant scoping (nullable for transition; enforced via RLS/policies later)
+    tenant_id = Column(UUID(as_uuid=True), nullable=True)
 
     # Application-managed display name
     name = Column(Text, nullable=False)
