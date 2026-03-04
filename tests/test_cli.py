@@ -321,7 +321,10 @@ class TestCLICognito:
             captured["args"] = list(args)
             return ""
 
-        monkeypatch.setattr("daylily_tapdb.cli.cognito._daycog_config_dir", lambda: cfg_dir)
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito._daycog_config_dir",
+            lambda: cfg_dir,
+        )
         monkeypatch.setattr("daylily_tapdb.cli.cognito._run_daycog", _fake_run_daycog)
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito._write_pool_id_to_tapdb_config",
@@ -356,7 +359,9 @@ class TestCLICognito:
         assert "--scopes" in args
         assert "--idp" in args
 
-    def test_cognito_setup_with_domain_flags_routes_to_daycog(self, tmp_path, monkeypatch):
+    def test_cognito_setup_with_domain_flags_routes_to_daycog(
+        self, tmp_path, monkeypatch
+    ):
         pool_name = "tapdb-dev-users"
         cfg_dir = tmp_path / ".config" / "daycog"
         cfg_dir.mkdir(parents=True, exist_ok=True)
@@ -372,7 +377,10 @@ class TestCLICognito:
             captured["args"] = list(args)
             return ""
 
-        monkeypatch.setattr("daylily_tapdb.cli.cognito._daycog_config_dir", lambda: cfg_dir)
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito._daycog_config_dir",
+            lambda: cfg_dir,
+        )
         monkeypatch.setattr("daylily_tapdb.cli.cognito._run_daycog", _fake_run_daycog)
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito._write_pool_id_to_tapdb_config",
@@ -416,7 +424,10 @@ class TestCLICognito:
             captured["args"] = list(args)
             return ""
 
-        monkeypatch.setattr("daylily_tapdb.cli.cognito._daycog_config_dir", lambda: cfg_dir)
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.cognito._daycog_config_dir",
+            lambda: cfg_dir,
+        )
         monkeypatch.setattr("daylily_tapdb.cli.cognito._run_daycog", _fake_run_daycog)
         monkeypatch.setattr(
             "daylily_tapdb.cli.cognito._write_pool_id_to_tapdb_config",
@@ -577,7 +588,9 @@ class TestCLICognito:
                     "COGNITO_USER_POOL_ID": "us-east-1_TESTPOOL",
                     "COGNITO_APP_CLIENT_ID": "cid123",
                     "COGNITO_CLIENT_NAME": "tapdb",
-                    "COGNITO_DOMAIN": "tapdb-dev-users.auth.us-east-1.amazoncognito.com",
+                    "COGNITO_DOMAIN": (
+                        "tapdb-dev-users.auth.us-east-1.amazoncognito.com"
+                    ),
                     "COGNITO_CALLBACK_URL": "https://localhost:8911/auth/callback",
                     "COGNITO_LOGOUT_URL": "https://localhost:8911/",
                 },
@@ -884,7 +897,10 @@ class TestCLIDB:
                 },
             ),
         ):
-            with pytest.raises(RuntimeError, match="Local TAPDB must use host 'localhost'"):
+            with pytest.raises(
+                RuntimeError,
+                match="Local TAPDB must use host 'localhost'",
+            ):
                 _get_db_config(Environment.test)
 
     def test_find_schema_file(self):

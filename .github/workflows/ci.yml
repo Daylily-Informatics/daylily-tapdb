@@ -40,7 +40,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,cli,aurora]"
+          pip install -e ".[dev,cli,aurora,admin]"
 
       - name: Lint
         run: ruff check daylily_tapdb tests

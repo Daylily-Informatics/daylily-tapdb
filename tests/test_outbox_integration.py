@@ -10,7 +10,6 @@ from sqlalchemy import select, text
 from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.models.outbox import outbox_event
 from daylily_tapdb.outbox.repository import claim_events, enqueue_event, mark_delivered
-
 from tests.test_integration import _drop_schema, _install_schema
 
 
@@ -22,7 +21,9 @@ def test_postgres_outbox_enqueue_claim_and_mark_delivered():
     repo_root = Path(__file__).resolve().parents[1]
     schema_sql_path = repo_root / "schema" / "tapdb_schema.sql"
 
-    schema_name = f"tapdb_test_outbox_{int(time.time())}_{random.randint(1, 1_000_000_000)}"
+    schema_name = (
+        f"tapdb_test_outbox_{int(time.time())}_{random.randint(1, 1_000_000_000)}"
+    )
     _install_schema(dsn, schema_name, schema_sql_path)
 
     try:
@@ -59,4 +60,3 @@ def test_postgres_outbox_enqueue_claim_and_mark_delivered():
             assert delivered.delivered_dt is not None
     finally:
         _drop_schema(dsn, schema_name)
-

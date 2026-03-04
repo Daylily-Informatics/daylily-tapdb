@@ -110,7 +110,9 @@ def claim_events(
 
     Does not commit; callers should commit after claiming to release locks quickly.
     """
-    rows = list(session.execute(_build_claim_select(batch_size=batch_size)).scalars().all())
+    rows = list(
+        session.execute(_build_claim_select(batch_size=batch_size)).scalars().all()
+    )
     if not rows:
         return []
 

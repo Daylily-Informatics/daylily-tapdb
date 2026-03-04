@@ -50,7 +50,8 @@ def run_dispatch_loop(
                         batch_size=batch_size,
                         lock_timeout_s=lock_timeout_s,
                     )
-                    # Prevent expire-on-commit from forcing lazy DB reads during delivery.
+                    # Prevent expire-on-commit from forcing lazy DB reads during
+                    # delivery.
                     for ev in claimed:
                         session.expunge(ev)
         except Exception:
@@ -95,4 +96,3 @@ def run_dispatch_loop(
             with session_factory() as session:
                 with session.begin():
                     mark_delivered(session, int(ev.id))
-
