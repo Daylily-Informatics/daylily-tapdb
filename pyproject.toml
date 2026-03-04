@@ -85,6 +85,10 @@ where = ["."]
 include = ["daylily_tapdb*", "admin*"]
 
 [tool.setuptools.package-data]
+daylily_tapdb = [
+    "core_config/_metadata.json",
+    "core_config/*/*.json",
+]
 # Admin UI ships HTML templates + static assets.
 admin = [
     "templates/*.html",

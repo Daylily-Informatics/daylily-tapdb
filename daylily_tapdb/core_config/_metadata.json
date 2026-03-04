@@ -1,0 +1,21 @@
+{
+  "$schema": "tapdb-template-v2",
+  "version": "2.0.0",
+  "description": "TAPDB core template configuration schema",
+  "field_mapping": {
+    "polymorphic_discriminator": "Path: category/type/subtype/version (e.g., container/tube/generic/1.0)",
+    "category": "Top-level category (core TAPDB bundles use generic)",
+    "type": "Type within category (core TAPDB bundles use generic and actor)",
+    "subtype": "Specific variant (e.g., generic, system_user, external_object_link)",
+    "version": "Template version (e.g., 1.0)",
+    "instance_prefix": "EUID prefix for instances (core TAPDB bundles use ACT and GX)",
+    "json_addl": "Flexible JSON data for template-specific properties"
+  },
+  "euid_prefixes": {
+    "generic_template": "GT",
+    "generic_instance": "GX",
+    "generic_instance_lineage": "GN",
+    "actor": "ACT",
+    "external_object_link": "GX"
+  }
+}

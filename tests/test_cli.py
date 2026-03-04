@@ -15,10 +15,13 @@ from daylily_tapdb.cli import app
 from daylily_tapdb.cli.db import (
     Environment,
     _ensure_dirs,
+    _find_duplicate_template_keys,
     _find_config_dir,
     _find_schema_file,
+    _find_tapdb_core_config_dir,
     _get_db_config,
     _load_template_configs,
+    _resolve_seed_config_dirs,
 )
 from daylily_tapdb.cli.db_config import get_config_path
 
@@ -1074,7 +1077,7 @@ class TestCLIDBSeed:
                             "polymorphic_discriminator": "generic_template",
                             "category": "generic",
                             "type": "generic",
-                            "subtype": "generic",
+                            "subtype": "client-generic-valid-minimal",
                             "version": "1.0",
                             "instance_prefix": "GX",
                             "is_singleton": False,
@@ -1137,7 +1140,7 @@ class TestCLIDBSeed:
                             "polymorphic_discriminator": "generic_template",
                             "category": "generic",
                             "type": "generic",
-                            "subtype": "generic",
+                            "subtype": "client-generic-valid-layouts",
                             "version": "1.0",
                             "instance_prefix": "GX",
                             "is_singleton": False,
@@ -1183,7 +1186,7 @@ class TestCLIDBSeed:
                             "polymorphic_discriminator": "generic_template",
                             "category": "generic",
                             "type": "generic",
-                            "subtype": "generic",
+                            "subtype": "client-generic-missing-ref-layouts",
                             "version": "1.0",
                             "instance_prefix": "GX",
                             "is_singleton": False,
@@ -1253,7 +1256,7 @@ class TestCLIDBSeed:
                             "polymorphic_discriminator": "generic_template",
                             "category": "generic",
                             "type": "generic",
-                            "subtype": "generic",
+                            "subtype": "client-generic-invalid-count",
                             "version": "1.0",
                             "instance_prefix": "GX",
                             "is_singleton": False,
@@ -1304,7 +1307,7 @@ class TestCLIDBSeed:
                             "polymorphic_discriminator": "generic_template",
                             "category": "generic",
                             "type": "generic",
-                            "subtype": "generic",
+                            "subtype": "client-generic-missing-template-code",
                             "version": "1.0",
                             "instance_prefix": "GX",
                             "is_singleton": False,
@@ -1345,7 +1348,7 @@ class TestCLIDBSeed:
                             "polymorphic_discriminator": "generic_template",
                             "category": "generic",
                             "type": "generic",
-                            "subtype": "generic",
+                            "subtype": "client-generic-missing-ref-strict",
                             "version": "1.0",
                             "instance_prefix": "GX",
                             "is_singleton": False,
@@ -1385,7 +1388,7 @@ class TestCLIDBSeed:
                             "polymorphic_discriminator": "generic_template",
                             "category": "generic",
                             "type": "generic",
-                            "subtype": "generic",
+                            "subtype": "client-generic-missing-ref-nonstrict",
                             "version": "1.0",
                             "instance_prefix": "GX",
                             "is_singleton": False,
@@ -1407,6 +1410,144 @@ class TestCLIDBSeed:
         )
         assert result.exit_code == 0
 
+    def test_db_validate_config_merged_core_then_client_strict_ok(
+        self, tmp_path: Path
+    ):
+        """Strict validate should consider TAPDB core templates before client config."""
+        (tmp_path / "generic").mkdir()
+        (tmp_path / "generic" / "custom.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Client Probe",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "client-probe",
+                            "version": "1.0",
+                            "instance_prefix": "GX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {
+                                "action_imports": {
+                                    "uses_core_actor": "generic/actor/system_user/1.0"
+                                }
+                            },
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "db",
+                "config",
+                "validate",
+                "--config",
+                str(tmp_path),
+                "--strict",
+                "--json",
+            ],
+        )
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        core_dir = _find_tapdb_core_config_dir().resolve()
+        assert payload["errors"] == 0
+        assert payload["config_dirs"][0] == str(core_dir)
+        assert str(tmp_path.resolve()) in payload["config_dirs"]
+
+    def test_db_validate_config_json_includes_ordered_config_dirs(
+        self, tmp_path: Path
+    ):
+        """JSON validate output should expose ordered merged config directories."""
+        (tmp_path / "generic").mkdir()
+        (tmp_path / "generic" / "custom.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Custom Generic",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "custom-generic",
+                            "version": "1.0",
+                            "instance_prefix": "GX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app, ["db", "config", "validate", "--config", str(tmp_path), "--json"]
+        )
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        core_dir = _find_tapdb_core_config_dir().resolve()
+        assert payload["config_dir"] == str(core_dir)
+        assert payload["config_dirs"][0] == str(core_dir)
+        assert payload["config_dirs"][-1] == str(tmp_path.resolve())
+
+    def test_db_validate_config_fails_on_core_client_duplicate_key(
+        self, tmp_path: Path
+    ):
+        """Validation should hard-fail on duplicate template keys across sources."""
+        (tmp_path / "generic").mkdir()
+        client_file = tmp_path / "generic" / "generic.json"
+        client_file.write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Client Duplicate Generic",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "generic",
+                            "version": "1.0",
+                            "instance_prefix": "GX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "db",
+                "config",
+                "validate",
+                "--config",
+                str(tmp_path),
+                "--strict",
+                "--json",
+            ],
+        )
+        assert result.exit_code != 0
+        payload = json.loads(result.output)
+        assert payload["errors"] >= 1
+        messages = "\n".join(i["message"] for i in payload["issues"]).lower()
+        assert "duplicate template key" in messages
+
+        core_generic = _find_tapdb_core_config_dir().resolve() / "generic" / "generic.json"
+        payload_text = json.dumps(payload).lower()
+        assert str(core_generic).lower() in payload_text
+        assert str(client_file.resolve()).lower() in payload_text
+
     def test_db_setup_help(self):
         """Test db setup --help."""
         result = runner.invoke(app, ["db", "setup", "--help"])
@@ -1421,6 +1562,29 @@ class TestCLIDBSeed:
         assert (config_dir / "_metadata.json").exists() or len(
             list(config_dir.glob("*.json"))
         ) > 0
+
+    def test_find_tapdb_core_config_dir(self):
+        """Core TAPDB seed config should always be resolvable."""
+        core_dir = _find_tapdb_core_config_dir()
+        assert core_dir.exists()
+        assert (core_dir / "actor" / "actor.json").exists()
+        assert (core_dir / "generic" / "generic.json").exists()
+
+    def test_resolve_seed_config_dirs_includes_core(self, tmp_path: Path):
+        """Seed config resolution should include core + custom dirs without duplication."""
+        custom_dir = tmp_path / "custom-config"
+        custom_dir.mkdir()
+        dirs = _resolve_seed_config_dirs(custom_dir)
+        core_dir = _find_tapdb_core_config_dir().resolve()
+        assert dirs[0] == core_dir
+        assert custom_dir.resolve() in dirs
+        assert len(dirs) == len(set(dirs))
+
+    def test_resolve_seed_config_dirs_default_is_core_only(self):
+        """Without a client config override, only core seed config should load."""
+        dirs = _resolve_seed_config_dirs(None)
+        core_dir = _find_tapdb_core_config_dir().resolve()
+        assert dirs == [core_dir]
 
     def test_load_template_configs(self):
         """Test _load_template_configs loads templates from config files."""
@@ -1445,6 +1609,75 @@ class TestCLIDBSeed:
 
         # Should have at least generic and container categories
         assert "generic" in categories or "container" in categories
+
+    def test_find_duplicate_template_keys(self):
+        """Duplicate template keys should be detected as hard errors."""
+        templates = [
+            {
+                "category": "generic",
+                "type": "generic",
+                "subtype": "generic",
+                "version": "1.0",
+                "_source_file": "/tmp/a.json",
+            },
+            {
+                "category": "generic",
+                "type": "generic",
+                "subtype": "generic",
+                "version": "1.0",
+                "_source_file": "/tmp/b.json",
+            },
+        ]
+        duplicates = _find_duplicate_template_keys(templates)
+        assert ("generic", "generic", "generic", "1.0") in duplicates
+        assert len(duplicates[("generic", "generic", "generic", "1.0")]) == 2
+
+    def test_db_seed_dry_run_fails_on_duplicate_template_keys(self, tmp_path: Path):
+        """db data seed should hard-fail when merged config sources clash."""
+        custom_generic_dir = tmp_path / "generic"
+        custom_generic_dir.mkdir(parents=True)
+        (custom_generic_dir / "generic.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Duplicate Generic Object",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "generic",
+                            "version": "1.0",
+                            "instance_prefix": "GX",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with (
+            patch("daylily_tapdb.cli.db._check_db_exists", return_value=True),
+            patch("daylily_tapdb.cli.db._schema_exists", return_value=True),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "db",
+                    "data",
+                    "seed",
+                    "dev",
+                    "--dry-run",
+                    "--config",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code != 0
+        output = _strip_ansi(result.output).lower()
+        assert "duplicate template keys detected" in output
 
     def test_db_seed_dry_run(self):
         """Test db seed --dry-run shows templates without inserting."""

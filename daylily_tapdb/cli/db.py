@@ -1,5 +1,6 @@
 """Database management commands for TAPDB CLI."""
 
+import importlib
 import json
 import os
 import re
@@ -217,6 +218,76 @@ def _find_config_dir() -> Path:
         "Cannot find config/ directory with template JSON files. "
         "Run from the daylily-tapdb repo root or ensure config is installed."
     )
+
+
+def _find_tapdb_core_config_dir() -> Path:
+    """Find TAPDB's built-in core template config directory."""
+    candidates: list[Path] = []
+
+    try:
+        tapdb_pkg = importlib.import_module("daylily_tapdb")
+        pkg_file = Path(tapdb_pkg.__file__).resolve()
+        candidates.extend(
+            [
+                pkg_file.parent / "core_config",
+                pkg_file.parents[1] / "config",
+                pkg_file.parents[2] / "config",
+            ]
+        )
+    except Exception:
+        pass
+
+    current = Path(__file__).resolve()
+    candidates.extend(
+        [
+            current.parents[1] / "core_config",
+            current.parents[2] / "config",
+            current.parents[3] / "config",
+        ]
+    )
+
+    for candidate in candidates:
+        if not candidate.exists() or not candidate.is_dir():
+            continue
+        if (candidate / "actor" / "actor.json").exists() and (
+            candidate / "generic" / "generic.json"
+        ).exists():
+            return candidate
+
+    raise FileNotFoundError(
+        "Cannot find TAPDB core config directory with actor/generic templates."
+    )
+
+
+def _resolve_seed_config_dirs(config_path: Optional[Path]) -> list[Path]:
+    """Resolve ordered template config directories for seeding.
+
+    Always includes TAPDB core config first, then caller-provided/auto-discovered
+    client config when different.
+    """
+    core_dir = _find_tapdb_core_config_dir().resolve()
+    dirs: list[Path] = [core_dir]
+
+    client_dir: Path | None = config_path.resolve() if config_path is not None else None
+
+    if client_dir is not None and client_dir != core_dir:
+        dirs.append(client_dir)
+
+    return dirs
+
+
+def _normalize_config_dirs(config_dirs: Path | list[Path]) -> list[Path]:
+    """Normalize config directory input into a de-duplicated ordered list."""
+    dirs = [config_dirs] if isinstance(config_dirs, Path) else list(config_dirs)
+    seen_dirs: set[Path] = set()
+    unique_dirs: list[Path] = []
+    for directory in dirs:
+        resolved = directory.resolve()
+        if resolved in seen_dirs:
+            continue
+        seen_dirs.add(resolved)
+        unique_dirs.append(resolved)
+    return unique_dirs
 
 
 # Environment enum
@@ -1095,12 +1166,12 @@ OPTIONAL_CATEGORIES: set[str] = set()
 
 
 def _load_template_configs(
-    config_dir: Path, include_optional: bool = False
+    config_dirs: Path | list[Path], include_optional: bool = False
 ) -> list[dict]:
-    """Load template configurations from JSON files in config directory.
+    """Load template configurations from one or more config directories.
 
     Args:
-        config_dir: Path to config directory
+        config_dirs: Path or list of paths to config directories
         include_optional: If True, include optional non-core template packs
 
     Returns list of template dicts ready for database insertion.
@@ -1110,32 +1181,53 @@ def _load_template_configs(
     if include_optional:
         allowed_categories.update(OPTIONAL_CATEGORIES)
 
-    # Walk through config subdirectories
-    for category_dir in sorted(config_dir.iterdir()):
-        if not category_dir.is_dir() or category_dir.name.startswith("_"):
+    unique_dirs = _normalize_config_dirs(config_dirs)
+
+    for config_dir in unique_dirs:
+        if not config_dir.exists() or not config_dir.is_dir():
+            console.print(
+                f"[yellow]⚠[/yellow] Config directory not found or not a directory: {config_dir}"
+            )
             continue
 
-        # Filter by allowed categories
-        if category_dir.name not in allowed_categories:
-            continue
+        for category_dir in sorted(config_dir.iterdir()):
+            if not category_dir.is_dir() or category_dir.name.startswith("_"):
+                continue
 
-        for json_file in sorted(category_dir.glob("*.json")):
-            try:
-                with open(json_file, "r") as f:
-                    data = json.load(f)
+            # Filter by allowed categories
+            if category_dir.name not in allowed_categories:
+                continue
 
-                # Extract templates from the file
-                if "templates" in data:
-                    for tmpl in data["templates"]:
-                        tmpl["_source_file"] = str(json_file.relative_to(config_dir))
-                        templates.append(tmpl)
+            for json_file in sorted(category_dir.glob("*.json")):
+                try:
+                    with open(json_file, "r") as f:
+                        data = json.load(f)
 
-            except json.JSONDecodeError as e:
-                console.print(f"[yellow]⚠[/yellow] Invalid JSON in {json_file}: {e}")
-            except Exception as e:
-                console.print(f"[yellow]⚠[/yellow] Error reading {json_file}: {e}")
+                    # Extract templates from the file
+                    if "templates" in data:
+                        for tmpl in data["templates"]:
+                            tmpl = dict(tmpl)
+                            tmpl["_source_file"] = str(json_file)
+                            templates.append(tmpl)
+
+                except json.JSONDecodeError as e:
+                    console.print(f"[yellow]⚠[/yellow] Invalid JSON in {json_file}: {e}")
+                except Exception as e:
+                    console.print(f"[yellow]⚠[/yellow] Error reading {json_file}: {e}")
 
     return templates
+
+
+def _find_duplicate_template_keys(
+    templates: list[dict],
+) -> dict[tuple[str, str, str, str], list[str]]:
+    """Return duplicate template keys with source files for hard-fail checks."""
+    key_sources: dict[tuple[str, str, str, str], list[str]] = {}
+    for tmpl in templates:
+        key = _template_key(tmpl)
+        source = str(tmpl.get("_source_file") or "(unknown)")
+        key_sources.setdefault(key, []).append(source)
+    return {key: sources for key, sources in key_sources.items() if len(sources) > 1}
 
 
 @dataclass(frozen=True)
@@ -1210,7 +1302,7 @@ def _extract_template_refs(obj: Any) -> list[str]:
 
 
 def _validate_template_configs(
-    config_dir: Path, *, strict: bool
+    config_dirs: Path | list[Path], *, strict: bool
 ) -> tuple[list[dict], list[_ConfigIssue]]:
     """Load and validate template config JSON files.
 
@@ -1228,81 +1320,91 @@ def _validate_template_configs(
     issues: list[_ConfigIssue] = []
     templates: list[dict] = []
 
-    if not config_dir.exists():
-        return [], [
-            _ConfigIssue(
-                level="error", message=f"Config directory not found: {config_dir}"
-            )
-        ]
+    unique_dirs = _normalize_config_dirs(config_dirs)
+    if not unique_dirs:
+        return [], [_ConfigIssue(level="error", message="No config directories provided")]
 
     # Load
-    for category_dir in sorted(config_dir.iterdir()):
-        if not category_dir.is_dir() or category_dir.name.startswith("_"):
+    for config_dir in unique_dirs:
+        if not config_dir.exists() or not config_dir.is_dir():
+            issues.append(
+                _ConfigIssue(
+                    level="error",
+                    message=f"Config directory not found: {config_dir}",
+                )
+            )
             continue
 
-        for json_file in sorted(category_dir.glob("*.json")):
-            rel = str(json_file.relative_to(config_dir))
-            try:
-                data = json.loads(json_file.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as e:
-                issues.append(
-                    _ConfigIssue(
-                        level="error", source_file=rel, message=f"Invalid JSON: {e}"
-                    )
-                )
-                continue
-            except Exception as e:
-                issues.append(
-                    _ConfigIssue(
-                        level="error",
-                        source_file=rel,
-                        message=f"Error reading file: {e}",
-                    )
-                )
+        for category_dir in sorted(config_dir.iterdir()):
+            if not category_dir.is_dir() or category_dir.name.startswith("_"):
                 continue
 
-            if not isinstance(data, dict):
-                issues.append(
-                    _ConfigIssue(
-                        level="error",
-                        source_file=rel,
-                        message="Config root must be an object/dict",
-                    )
-                )
-                continue
-            tmpl_list = data.get("templates")
-            if not isinstance(tmpl_list, list):
-                issues.append(
-                    _ConfigIssue(
-                        level="error",
-                        source_file=rel,
-                        message="Missing or invalid 'templates' list",
-                    )
-                )
-                continue
-
-            for i, tmpl in enumerate(tmpl_list):
-                if not isinstance(tmpl, dict):
+            for json_file in sorted(category_dir.glob("*.json")):
+                source_file = str(json_file)
+                try:
+                    data = json.loads(json_file.read_text(encoding="utf-8"))
+                except json.JSONDecodeError as e:
                     issues.append(
                         _ConfigIssue(
                             level="error",
-                            source_file=rel,
-                            message=(
-                                f"Template[{i}] must be an"
-                                f" object/dict, got"
-                                f" {type(tmpl).__name__}"
-                            ),
+                            source_file=source_file,
+                            message=f"Invalid JSON: {e}",
                         )
                     )
                     continue
-                tmpl = dict(tmpl)
-                tmpl["_source_file"] = rel
-                templates.append(tmpl)
+                except Exception as e:
+                    issues.append(
+                        _ConfigIssue(
+                            level="error",
+                            source_file=source_file,
+                            message=f"Error reading file: {e}",
+                        )
+                    )
+                    continue
+
+                if not isinstance(data, dict):
+                    issues.append(
+                        _ConfigIssue(
+                            level="error",
+                            source_file=source_file,
+                            message="Config root must be an object/dict",
+                        )
+                    )
+                    continue
+                tmpl_list = data.get("templates")
+                if not isinstance(tmpl_list, list):
+                    issues.append(
+                        _ConfigIssue(
+                            level="error",
+                            source_file=source_file,
+                            message="Missing or invalid 'templates' list",
+                        )
+                    )
+                    continue
+
+                for i, tmpl in enumerate(tmpl_list):
+                    if not isinstance(tmpl, dict):
+                        issues.append(
+                            _ConfigIssue(
+                                level="error",
+                                source_file=source_file,
+                                message=(
+                                    f"Template[{i}] must be an"
+                                    f" object/dict, got"
+                                    f" {type(tmpl).__name__}"
+                                ),
+                            )
+                        )
+                        continue
+                    tmpl = dict(tmpl)
+                    tmpl["_source_file"] = source_file
+                    templates.append(tmpl)
 
     if not templates:
         issues.append(
             _ConfigIssue(
-                level="error", message=f"No templates found under: {config_dir}"
+                level="error",
+                message="No templates found under configured directories",
             )
         )
 
@@ -1545,18 +1647,19 @@ def db_validate_config(
     """Validate template JSON config files (no database required)."""
 
     try:
-        config_dir = config_path if config_path else _find_config_dir()
+        config_dirs = _resolve_seed_config_dirs(config_path)
     except FileNotFoundError as e:
         console.print(f"[red]✗[/red] {e}")
         raise typer.Exit(1)
 
-    templates, issues = _validate_template_configs(config_dir, strict=strict)
+    templates, issues = _validate_template_configs(config_dirs, strict=strict)
     errors = [i for i in issues if i.level == "error"]
     warnings = [i for i in issues if i.level == "warning"]
 
     if json_output:
         payload = {
-            "config_dir": str(config_dir),
+            "config_dir": str(config_dirs[0]),
+            "config_dirs": [str(d) for d in config_dirs],
             "strict": strict,
             "templates": len(templates),
             "errors": len(errors),
@@ -1576,7 +1679,9 @@ def db_validate_config(
 
     mode = "strict" if strict else "non-strict"
     console.print(f"\n[bold cyan]━━━ Validate Template Config ({mode}) ━━━[/bold cyan]")
-    console.print(f"  Config directory: [dim]{config_dir}[/dim]")
+    console.print("  Config directories:")
+    for directory in config_dirs:
+        console.print(f"    - [dim]{directory}[/dim]")
     console.print(f"  Templates loaded: {len(templates)}")
 
     if issues:
@@ -1838,13 +1943,16 @@ def db_seed(
             f"  Optional categories: {', '.join(sorted(OPTIONAL_CATEGORIES))}"
         )
 
-    # Find config directory
+    # Resolve config directories (always include TAPDB core config first)
     try:
-        config_dir = config_path if config_path else _find_config_dir()
-        console.print(f"[green]✓[/green] Config directory: {config_dir}")
+        seed_config_dirs = _resolve_seed_config_dirs(config_path)
     except FileNotFoundError as e:
         console.print(f"[red]✗[/red] {e}")
         raise typer.Exit(1)
+
+    console.print("[green]✓[/green] Seed config directories:")
+    for directory in seed_config_dirs:
+        console.print(f"  - {directory}")
 
     # Check database and schema exist
     if not _check_db_exists(env, cfg["database"]):
@@ -1861,11 +1969,25 @@ def db_seed(
 
     # Load templates
     console.print("[yellow]►[/yellow] Loading template configurations...")
-    templates = _load_template_configs(config_dir, include_optional=include_workflow)
+    templates = _load_template_configs(
+        seed_config_dirs, include_optional=include_workflow
+    )
 
     if not templates:
-        console.print(f"[yellow]⚠[/yellow] No templates found in {config_dir}")
+        console.print("[yellow]⚠[/yellow] No templates found in configured seed directories")
         return
+
+    duplicates = _find_duplicate_template_keys(templates)
+    if duplicates:
+        console.print(
+            "[red]✗[/red] Duplicate template keys detected across seed configs. "
+            "Aborting to prevent clashing templates:"
+        )
+        for key, sources in sorted(duplicates.items()):
+            console.print(f"  • {key}")
+            for source in sources:
+                console.print(f"      - {source}")
+        raise typer.Exit(1)
 
     console.print(f"[green]✓[/green] Found {len(templates)} template(s)")
 
