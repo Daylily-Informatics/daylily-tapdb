@@ -40,7 +40,9 @@
                 <td>{{ item.version }}</td>
                 <td>
                     <a href="/object/{{ item.euid }}" class="btn" style="padding: 0.25rem 0.5rem;">View</a>
+                    {% if not is_reserved_template(item) %}
                     <a href="/create-instance/{{ item.euid }}" class="btn btn-success" style="padding: 0.25rem 0.5rem;">+ Create</a>
+                    {% endif %}
                 </td>
             </tr>
             {% else %}
@@ -74,4 +76,3 @@
     {% endif %}
 </div>
 {% endblock %}
-

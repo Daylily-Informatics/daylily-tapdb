@@ -19,6 +19,30 @@ from daylily_tapdb.validation.instantiation_layouts import (
 
 logger = logging.getLogger(__name__)
 
+_SYSTEM_USER_COORDS = ("generic", "actor", "system_user")
+
+
+def _norm_text(value: Any, *, lowercase: bool = False) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text.lower() if lowercase else text
+
+
+def _parse_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off"}:
+        return False
+    return default
+
 
 def materialize_actions(
     session: Session, template: generic_template, template_manager
@@ -167,6 +191,7 @@ class InstanceFactory:
 
         # Build json_addl
         json_addl = self._build_json_addl(session, template, properties)
+        self._normalize_system_user_json_addl(template, json_addl)
         if tenant_id is not None:
             json_addl["properties"]["tenant_id"] = str(tenant_id)
 
@@ -194,6 +219,63 @@ class InstanceFactory:
             self._create_children(session, instance, template, _depth, _visited.copy())
 
         return instance
+
+    def _normalize_system_user_json_addl(
+        self, template: generic_template, json_addl: Dict[str, Any]
+    ) -> None:
+        """Normalize actor/system_user payload shape for auth/user-store compatibility."""
+        if (
+            template.category,
+            template.type,
+            template.subtype,
+        ) != _SYSTEM_USER_COORDS:
+            return
+
+        props = json_addl.get("properties")
+        if not isinstance(props, dict):
+            props = {}
+            json_addl["properties"] = props
+
+        def _pick(key: str) -> Any:
+            top = json_addl.get(key)
+            if top is not None and str(top).strip():
+                return top
+            return props.get(key)
+
+        login_identifier = _norm_text(_pick("login_identifier"), lowercase=True)
+        email = _norm_text(_pick("email"), lowercase=True)
+        cognito_username = _norm_text(_pick("cognito_username"), lowercase=True)
+        if not login_identifier:
+            login_identifier = email or cognito_username
+        if not login_identifier:
+            raise ValueError(
+                "system_user requires a non-empty login_identifier "
+                "(or email/cognito_username)."
+            )
+
+        role = (_norm_text(_pick("role"), lowercase=True) or "user").lower()
+        if role not in {"admin", "user"}:
+            raise ValueError("system_user role must be 'admin' or 'user'.")
+
+        normalized = {
+            "login_identifier": login_identifier,
+            "email": email or "",
+            "display_name": _norm_text(_pick("display_name")) or "",
+            "role": role,
+            "is_active": _parse_bool(_pick("is_active"), default=True),
+            "require_password_change": _parse_bool(
+                _pick("require_password_change"), default=False
+            ),
+            "password_hash": _norm_text(_pick("password_hash")),
+            "last_login_dt": _norm_text(_pick("last_login_dt")),
+            "cognito_username": cognito_username or "",
+        }
+
+        # Keep both top-level keys (used by auth/user-store SQL and unique index)
+        # and nested properties (used by generic template rendering/edit flows).
+        for key, value in normalized.items():
+            json_addl[key] = value
+            props[key] = value
 
     def _build_json_addl(
         self,
