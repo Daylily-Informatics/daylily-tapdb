@@ -6,7 +6,7 @@
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
     <h1>{{ obj.euid }}</h1>
     <div>
-        {% if obj_type == 'template' %}
+        {% if obj_type == 'template' and not is_reserved_template(obj) %}
         <a href="/create-instance/{{ obj.euid }}" class="btn btn-success">➕ Create Instance</a>
         {% endif %}
         {% if obj_type == 'instance' %}

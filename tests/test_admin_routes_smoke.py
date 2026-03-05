@@ -242,9 +242,22 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         created_dt=now,
         is_deleted=False,
     )
+    system_user_template = SimpleNamespace(
+        uuid=2,
+        euid="GT2",
+        name="System User Actor",
+        category="generic",
+        type="actor",
+        subtype="system_user",
+        version="1.0",
+        bstatus="active",
+        json_addl={"properties": {}},
+        created_dt=now,
+        is_deleted=False,
+    )
 
     state = {
-        "templates": [template],
+        "templates": [template, system_user_template],
         "instances": [parent, child],
         "lineages": [lineage],
         "audit_rows": [
@@ -331,6 +344,51 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         lambda *_: {"access_token": "tok"},
     )
     monkeypatch.setattr(admin_main, "change_cognito_password", lambda *_: None)
+    monkeypatch.setattr(
+        admin_main,
+        "load_db_metrics_context",
+        lambda **_k: {
+            "metrics_enabled": True,
+            "metrics_message": "",
+            "metrics_file": "/tmp/db_metrics.tsv",
+            "period_start_utc": "2026-01-01T00:00:00+00:00",
+            "limit": 5000,
+            "dropped_count": 0,
+            "summary": {
+                "count": 2,
+                "p50_ms": 1.0,
+                "p95_ms": 2.0,
+                "p99_ms": 2.5,
+                "max_ms": 3.0,
+                "last_seen": "2026-01-01T00:00:00+00:00",
+                "slowest": [
+                    {
+                        "ts_utc": "2026-01-01T00:00:00+00:00",
+                        "duration_ms": 3.0,
+                        "ok": True,
+                        "op": "SELECT",
+                        "table_hint": "generic_instance_lineage",
+                        "path": "/",
+                        "method": "GET",
+                        "username": "admin",
+                        "rowcount": "1",
+                        "error_type": "",
+                    }
+                ],
+                "by_path": [
+                    {"path": "/", "count": 2, "p95_ms": 2.0, "max_ms": 3.0}
+                ],
+                "by_table": [
+                    {
+                        "table_hint": "generic_instance_lineage",
+                        "count": 2,
+                        "p95_ms": 2.0,
+                        "max_ms": 3.0,
+                    }
+                ],
+            },
+        },
+    )
 
     return TestClient(admin_main.app), state
 
@@ -429,7 +487,9 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     assert client.get("/graph").status_code == 200
     assert client.get("/query").status_code == 200
     assert client.get("/info").status_code == 200
+    assert client.get("/admin/metrics").status_code == 200
     assert client.get("/create-instance/GT1").status_code == 200
+    assert client.get("/create-instance/GT2").status_code == 403
     create_instance_resp = client.post(
         "/create-instance/GT1",
         data={
@@ -442,6 +502,17 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     )
     assert create_instance_resp.status_code == 200
     assert "Instance name is required." not in create_instance_resp.text
+    blocked_create_resp = client.post(
+        "/create-instance/GT2",
+        data={
+            "instance_name": "blocked",
+            "create_children": "false",
+            "parent_euids": "",
+            "child_euids": "",
+            "relationship_type": "contains",
+        },
+    )
+    assert blocked_create_resp.status_code == 403
 
     # API routes (public)
     assert client.get("/api/graph/data").status_code == 200

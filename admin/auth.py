@@ -12,8 +12,7 @@ from fastapi import Request, HTTPException
 from fastapi.responses import RedirectResponse
 
 from admin.cognito import get_cognito_auth
-from daylily_tapdb import TAPDBConnection
-from daylily_tapdb.cli.db_config import get_db_config_for_env
+from admin.db_pool import get_db_connection
 from daylily_tapdb.user_store import (
     create_or_get,
     get_by_login_or_email,
@@ -27,7 +26,7 @@ SESSION_COOKIE_NAME = "tapdb_session"
 SESSION_MAX_AGE = 86400  # 24 hours
 
 
-def get_db() -> TAPDBConnection:
+def get_db():
     """Get database connection using the canonical config loader.
 
     Config resolution order (highest precedence first):
@@ -37,25 +36,7 @@ def get_db() -> TAPDBConnection:
     4. Hard-coded defaults
     """
     env = os.environ.get("TAPDB_ENV", "dev").lower()
-    cfg = get_db_config_for_env(env)
-    engine_type = (cfg.get("engine_type") or "local").strip().lower()
-    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in (
-        "true",
-        "1",
-        "yes",
-        "on",
-    )
-    region = (cfg.get("region") or "us-west-2").strip()
-
-    return TAPDBConnection(
-        db_hostname=f"{cfg['host']}:{cfg['port']}",
-        db_user=cfg["user"],
-        db_pass=cfg.get("password") or None,
-        db_name=cfg["database"],
-        engine_type=engine_type,
-        region=region,
-        iam_auth=iam_auth,
-    )
+    return get_db_connection(env)
 
 def get_user_by_username(username: str) -> Optional[dict]:
     """Fetch user from database by username or email."""

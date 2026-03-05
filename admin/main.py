@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from jinja2 import Environment, FileSystemLoader
 
-from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory, __version__
+from daylily_tapdb import TemplateManager, InstanceFactory, __version__
 from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.models.instance import generic_instance
@@ -34,6 +34,14 @@ from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
 from sqlalchemy.exc import IntegrityError
 from admin.cognito import resolve_tapdb_pool_config, get_cognito_auth
+from admin.db_pool import get_db_connection
+from admin.db_pool import dispose_all_engines
+from admin.db_metrics import (
+    request_path_var,
+    request_method_var,
+    build_metrics_page_context,
+    stop_all_writers,
+)
 
 from admin.auth import (
     get_current_user, require_auth, require_admin,
@@ -64,6 +72,7 @@ APP_ENV = os.environ.get("TAPDB_ENV", "dev").lower()
 IS_PROD = APP_ENV == "prod"
 DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
 DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/daylily-tapdb"
+_RESERVED_TEMPLATE_COORDS = {("generic", "actor", "system_user")}
 
 
 def _git_output(*args: str) -> str:
@@ -134,6 +143,23 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# Best-effort cleanup for pooled DB + metrics writer.
+@app.on_event("shutdown")
+def _shutdown_cleanup() -> None:
+    stop_all_writers()
+    dispose_all_engines()
+
+# Request context for DB metrics attribution (path/method).
+@app.middleware("http")
+async def _metrics_request_context(request: Request, call_next):
+    token_path = request_path_var.set(request.url.path)
+    token_method = request_method_var.set(request.method)
+    try:
+        return await call_next(request)
+    finally:
+        request_path_var.reset(token_path)
+        request_method_var.reset(token_method)
+
 # Session middleware (must be added before CORS)
 app.add_middleware(
     SessionMiddleware,
@@ -180,7 +206,7 @@ app.add_middleware(
 )
 
 
-def get_db() -> TAPDBConnection:
+def get_db():
     """Get database connection.
 
     Uses the canonical config loader from daylily_tapdb.cli.db_config.
@@ -194,30 +220,43 @@ def get_db() -> TAPDBConnection:
     4. Hard-coded defaults
     """
     env = os.environ.get("TAPDB_ENV", "dev").lower()
-    cfg = get_db_config_for_env(env)
-    engine_type = (cfg.get("engine_type") or "local").strip().lower()
-    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in (
-        "true",
-        "1",
-        "yes",
-        "on",
-    )
-    region = (cfg.get("region") or "us-west-2").strip()
-
-    return TAPDBConnection(
-        db_hostname=f"{cfg['host']}:{cfg['port']}",
-        db_user=cfg["user"],
-        db_pass=cfg.get("password") or None,
-        db_name=cfg["database"],
-        engine_type=engine_type,
-        region=region,
-        iam_auth=iam_auth,
-    )
+    return get_db_connection(env)
 
 
 def get_style() -> Dict[str, str]:
     """Get default style configuration."""
     return {"skin_css": "/static/css/style.css"}
+
+
+def _is_reserved_template(template_obj: Any) -> bool:
+    if template_obj is None:
+        return False
+    key = (
+        str(getattr(template_obj, "category", "") or "").strip().lower(),
+        str(getattr(template_obj, "type", "") or "").strip().lower(),
+        str(getattr(template_obj, "subtype", "") or "").strip().lower(),
+    )
+    return key in _RESERVED_TEMPLATE_COORDS
+
+
+def _ensure_template_manual_create_allowed(template_obj: Any) -> None:
+    if _is_reserved_template(template_obj):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This template is reserved for TAPDB-managed provisioning and "
+                "cannot be created manually."
+            ),
+        )
+
+
+templates.globals["is_reserved_template"] = _is_reserved_template
+
+
+def load_db_metrics_context(*, limit: int = 5000) -> dict:
+    """Load DB metrics data for the admin metrics page (test-friendly wrapper)."""
+    env = os.environ.get("TAPDB_ENV", "dev").lower()
+    return build_metrics_page_context(env, limit=limit)
 
 
 def _read_env_file_values(path: Path) -> Dict[str, str]:
@@ -1039,6 +1078,26 @@ async def info_page(request: Request):
     return HTMLResponse(content=content)
 
 
+@app.get("/admin/metrics", response_class=HTMLResponse)
+@require_admin
+async def admin_metrics_page(
+    request: Request,
+    limit: int = Query(5000, ge=1, le=20000),
+):
+    """Admin-only DB metrics dashboard."""
+    user = request.state.user
+    permissions = get_user_permissions(user)
+    metrics_ctx = load_db_metrics_context(limit=limit)
+    content = templates.get_template("admin_metrics.html").render(
+        request=request,
+        style=get_style(),
+        user=user,
+        permissions=permissions,
+        **metrics_ctx,
+    )
+    return HTMLResponse(content=content)
+
+
 # ============================================================================
 # HTML Routes (Protected)
 # ============================================================================
@@ -1677,6 +1736,7 @@ async def create_instance_form(request: Request, template_euid: str):
 
             if not template:
                 raise HTTPException(status_code=404, detail=f"Template not found: {template_euid}")
+            _ensure_template_manual_create_allowed(template)
 
             # Get default properties from json_addl
             default_properties = template.json_addl or {}
@@ -1754,6 +1814,7 @@ async def create_instance_submit(request: Request, template_euid: str):
 
             if not template:
                 raise HTTPException(status_code=404, detail=f"Template not found: {template_euid}")
+            _ensure_template_manual_create_allowed(template)
 
             default_properties = template.json_addl or {}
             has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))

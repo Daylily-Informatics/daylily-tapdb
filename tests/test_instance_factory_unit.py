@@ -171,6 +171,98 @@ def test_create_instance_sets_tenant_id_column_and_json_when_provided():
     assert inst.json_addl["properties"]["tenant_id"] == str(tenant_id)
 
 
+def test_create_instance_system_user_normalizes_login_identifier_and_top_level_keys():
+    from daylily_tapdb.factory.instance import InstanceFactory
+
+    sess = _FakeSession()
+    t_uuid = uuid.uuid4()
+    tmpl = SimpleNamespace(
+        uuid=t_uuid,
+        is_singleton=False,
+        instance_polymorphic_identity=None,
+        polymorphic_discriminator="actor_template",
+        category="generic",
+        type="actor",
+        subtype="system_user",
+        version="1.0",
+        json_addl={
+            "properties": {
+                "login_identifier": "",
+                "email": "",
+                "display_name": "",
+                "role": "user",
+                "is_active": True,
+                "require_password_change": False,
+                "password_hash": None,
+                "last_login_dt": None,
+                "cognito_username": "",
+            },
+            "action_imports": {},
+        },
+    )
+
+    class TM:
+        def get_template(self, session, template_code):
+            return tmpl
+
+    f = InstanceFactory(TM())
+    inst = f.create_instance(
+        sess,
+        template_code="generic/actor/system_user/1.0",
+        name="",
+        properties={"email": "John@Example.com"},
+        create_children=False,
+    )
+
+    assert inst.json_addl["login_identifier"] == "john@example.com"
+    assert inst.json_addl["properties"]["login_identifier"] == "john@example.com"
+    assert inst.json_addl["email"] == "john@example.com"
+    assert inst.json_addl["properties"]["email"] == "john@example.com"
+
+
+def test_create_instance_system_user_requires_non_empty_login_identifier():
+    from daylily_tapdb.factory.instance import InstanceFactory
+
+    sess = _FakeSession()
+    tmpl = SimpleNamespace(
+        uuid=uuid.uuid4(),
+        is_singleton=False,
+        instance_polymorphic_identity=None,
+        polymorphic_discriminator="actor_template",
+        category="generic",
+        type="actor",
+        subtype="system_user",
+        version="1.0",
+        json_addl={
+            "properties": {
+                "login_identifier": "",
+                "email": "",
+                "display_name": "",
+                "role": "user",
+                "is_active": True,
+                "require_password_change": False,
+                "password_hash": None,
+                "last_login_dt": None,
+                "cognito_username": "",
+            },
+            "action_imports": {},
+        },
+    )
+
+    class TM:
+        def get_template(self, session, template_code):
+            return tmpl
+
+    f = InstanceFactory(TM())
+    with pytest.raises(ValueError, match="system_user requires a non-empty login_identifier"):
+        f.create_instance(
+            sess,
+            template_code="generic/actor/system_user/1.0",
+            name="",
+            create_children=False,
+        )
+
+
 def test_create_instance_invalid_instantiation_layouts_raises_value_error():
     from daylily_tapdb.factory.instance import InstanceFactory
 
