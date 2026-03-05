@@ -32,6 +32,7 @@ from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from admin.cognito import resolve_tapdb_pool_config, get_cognito_auth
 from admin.db_pool import get_db_connection
@@ -257,6 +258,198 @@ def load_db_metrics_context(*, limit: int = 5000) -> dict:
     """Load DB metrics data for the admin metrics page (test-friendly wrapper)."""
     env = os.environ.get("TAPDB_ENV", "dev").lower()
     return build_metrics_page_context(env, limit=limit)
+
+
+def _empty_db_inventory_context(*, error: Optional[str] = None) -> dict:
+    """Default inventory context payload for /info."""
+    return {
+        "db_inventory_error": error,
+        "db_inventory_db_name": None,
+        "db_inventory_schema_names": [],
+        "db_inventory_counts": {
+            "schemas": 0,
+            "tables": 0,
+            "views": 0,
+            "materialized_views": 0,
+            "sequences": 0,
+            "triggers": 0,
+            "functions": 0,
+            "indexes": 0,
+        },
+        "db_inventory_tables": [],
+        "db_inventory_views": [],
+        "db_inventory_materialized_views": [],
+        "db_inventory_sequences": [],
+        "db_inventory_triggers": [],
+        "db_inventory_functions": [],
+        "db_inventory_indexes": [],
+    }
+
+
+def load_db_inventory_context() -> dict:
+    """Load DB object inventory for /info (test-friendly wrapper)."""
+    ctx = _empty_db_inventory_context()
+
+    try:
+        with get_db() as conn:
+            conn.app_username = "system"
+            with conn.session_scope() as session:
+                db_name = session.execute(text("SELECT current_database()")).scalar()
+                ctx["db_inventory_db_name"] = str(db_name or "")
+
+                schema_filter = """
+                    nspname NOT IN ('pg_catalog', 'information_schema')
+                    AND nspname NOT LIKE 'pg_toast%'
+                    AND nspname NOT LIKE 'pg_temp_%'
+                    AND nspname NOT LIKE 'pg_toast_temp_%'
+                """
+                schemaname_filter = """
+                    schemaname NOT IN ('pg_catalog', 'information_schema')
+                    AND schemaname NOT LIKE 'pg_toast%'
+                    AND schemaname NOT LIKE 'pg_temp_%'
+                    AND schemaname NOT LIKE 'pg_toast_temp_%'
+                """
+
+                schema_rows = session.execute(
+                    text(
+                        f"""
+                        SELECT nspname AS schema_name
+                        FROM pg_namespace
+                        WHERE {schema_filter}
+                        ORDER BY nspname
+                        """
+                    )
+                ).mappings()
+                schema_names = [str(row["schema_name"]) for row in schema_rows]
+                ctx["db_inventory_schema_names"] = schema_names
+
+                tables = [
+                    dict(row)
+                    for row in session.execute(
+                        text(
+                            f"""
+                            SELECT schemaname AS schema_name, tablename AS table_name
+                            FROM pg_tables
+                            WHERE {schemaname_filter}
+                            ORDER BY schemaname, tablename
+                            """
+                        )
+                    ).mappings()
+                ]
+                views = [
+                    dict(row)
+                    for row in session.execute(
+                        text(
+                            f"""
+                            SELECT schemaname AS schema_name, viewname AS view_name
+                            FROM pg_views
+                            WHERE {schemaname_filter}
+                            ORDER BY schemaname, viewname
+                            """
+                        )
+                    ).mappings()
+                ]
+                materialized_views = [
+                    dict(row)
+                    for row in session.execute(
+                        text(
+                            f"""
+                            SELECT schemaname AS schema_name, matviewname AS materialized_view_name
+                            FROM pg_matviews
+                            WHERE {schemaname_filter}
+                            ORDER BY schemaname, matviewname
+                            """
+                        )
+                    ).mappings()
+                ]
+                sequences = [
+                    dict(row)
+                    for row in session.execute(
+                        text(
+                            f"""
+                            SELECT schemaname AS schema_name, sequencename AS sequence_name
+                            FROM pg_sequences
+                            WHERE {schemaname_filter}
+                            ORDER BY schemaname, sequencename
+                            """
+                        )
+                    ).mappings()
+                ]
+                triggers = [
+                    dict(row)
+                    for row in session.execute(
+                        text(
+                            f"""
+                            SELECT
+                                ns.nspname AS schema_name,
+                                cls.relname AS table_name,
+                                tg.tgname AS trigger_name
+                            FROM pg_trigger tg
+                            JOIN pg_class cls ON cls.oid = tg.tgrelid
+                            JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+                            WHERE NOT tg.tgisinternal
+                              AND {schema_filter}
+                            ORDER BY ns.nspname, cls.relname, tg.tgname
+                            """
+                        )
+                    ).mappings()
+                ]
+                functions = [
+                    dict(row)
+                    for row in session.execute(
+                        text(
+                            f"""
+                            SELECT
+                                ns.nspname AS schema_name,
+                                p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
+                                    AS function_signature
+                            FROM pg_proc p
+                            JOIN pg_namespace ns ON ns.oid = p.pronamespace
+                            WHERE {schema_filter}
+                            ORDER BY ns.nspname, function_signature
+                            """
+                        )
+                    ).mappings()
+                ]
+                indexes = [
+                    dict(row)
+                    for row in session.execute(
+                        text(
+                            f"""
+                            SELECT
+                                schemaname AS schema_name,
+                                tablename AS table_name,
+                                indexname AS index_name
+                            FROM pg_indexes
+                            WHERE {schemaname_filter}
+                            ORDER BY schemaname, tablename, indexname
+                            """
+                        )
+                    ).mappings()
+                ]
+
+                ctx["db_inventory_tables"] = tables
+                ctx["db_inventory_views"] = views
+                ctx["db_inventory_materialized_views"] = materialized_views
+                ctx["db_inventory_sequences"] = sequences
+                ctx["db_inventory_triggers"] = triggers
+                ctx["db_inventory_functions"] = functions
+                ctx["db_inventory_indexes"] = indexes
+                ctx["db_inventory_counts"] = {
+                    "schemas": len(schema_names),
+                    "tables": len(tables),
+                    "views": len(views),
+                    "materialized_views": len(materialized_views),
+                    "sequences": len(sequences),
+                    "triggers": len(triggers),
+                    "functions": len(functions),
+                    "indexes": len(indexes),
+                }
+    except Exception as exc:
+        logger.warning("Could not load DB inventory: %s", exc)
+        return _empty_db_inventory_context(error=str(exc))
+
+    return ctx
 
 
 def _read_env_file_values(path: Path) -> Dict[str, str]:
@@ -1034,10 +1227,22 @@ async def info_page(request: Request):
     permissions = get_user_permissions(user)
     env = os.environ.get("TAPDB_ENV", "dev").lower()
     cfg = get_db_config_for_env(env)
+    is_admin = str(user.get("role") or "").strip().lower() == "admin"
+
+    inventory_ctx = _empty_db_inventory_context()
+    if is_admin:
+        inventory_ctx = load_db_inventory_context()
+    inventory_ctx["db_inventory_visible"] = is_admin
+
+    runtime_db_name = (
+        str(inventory_ctx.get("db_inventory_db_name") or "").strip()
+        or str(cfg.get("database") or "").strip()
+    )
 
     db_rows: List[tuple[str, str]] = [
         ("environment", env),
         ("config_path", str(get_config_path())),
+        ("runtime_database_name", runtime_db_name),
     ]
     for key in sorted(cfg.keys()):
         if key == "password":
@@ -1074,6 +1279,7 @@ async def info_page(request: Request):
         cognito_summary_rows=cognito_summary_rows,
         cognito_env_rows=cognito_env_rows,
         cognito_error=cognito_error,
+        **inventory_ctx,
     )
     return HTMLResponse(content=content)
 

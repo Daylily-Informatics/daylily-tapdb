@@ -389,6 +389,63 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
             },
         },
     )
+    monkeypatch.setattr(
+        admin_main,
+        "load_db_inventory_context",
+        lambda: {
+            "db_inventory_error": None,
+            "db_inventory_db_name": "tapdb_dev_runtime",
+            "db_inventory_schema_names": ["public", "app_ns"],
+            "db_inventory_counts": {
+                "schemas": 2,
+                "tables": 3,
+                "views": 1,
+                "materialized_views": 1,
+                "sequences": 2,
+                "triggers": 4,
+                "functions": 5,
+                "indexes": 6,
+            },
+            "db_inventory_tables": [
+                {"schema_name": "public", "table_name": "generic_template"},
+                {"schema_name": "public", "table_name": "generic_instance"},
+                {"schema_name": "app_ns", "table_name": "domain_table"},
+            ],
+            "db_inventory_views": [
+                {"schema_name": "public", "view_name": "v_active_instances"}
+            ],
+            "db_inventory_materialized_views": [
+                {
+                    "schema_name": "public",
+                    "materialized_view_name": "mv_instance_counts",
+                }
+            ],
+            "db_inventory_sequences": [
+                {"schema_name": "public", "sequence_name": "generic_template_seq"},
+                {"schema_name": "public", "sequence_name": "gx_instance_seq"},
+            ],
+            "db_inventory_triggers": [
+                {
+                    "schema_name": "public",
+                    "table_name": "generic_instance",
+                    "trigger_name": "trigger_update_modified_dt_generic_instance",
+                }
+            ],
+            "db_inventory_functions": [
+                {
+                    "schema_name": "public",
+                    "function_signature": "set_generic_instance_euid()",
+                }
+            ],
+            "db_inventory_indexes": [
+                {
+                    "schema_name": "public",
+                    "table_name": "generic_instance",
+                    "index_name": "idx_generic_instance_euid",
+                }
+            ],
+        },
+    )
 
     return TestClient(admin_main.app), state
 
@@ -634,6 +691,53 @@ def test_home_user_audit_forces_non_admin_to_self(
         (row.changed_by or "").lower() == "john@example.com"
         for row in ctx["user_audit_rows"]
     )
+
+
+def test_info_page_includes_inventory_for_admin(
+    route_client, monkeypatch: pytest.MonkeyPatch
+):
+    client, state = route_client
+
+    async def _admin_auth_user(_request):
+        return _admin_user()
+
+    monkeypatch.setattr(auth_mod, "get_current_user", _admin_auth_user)
+
+    resp = client.get("/info")
+    assert resp.status_code == 200
+    ctx = _last_render_context(state, "info.html")
+    assert ctx["db_inventory_visible"] is True
+    assert ctx["db_inventory_db_name"] == "tapdb_dev_runtime"
+    assert ctx["db_inventory_schema_names"] == ["public", "app_ns"]
+    assert ctx["db_inventory_counts"]["tables"] == 3
+    assert ctx["db_inventory_tables"]
+    assert ctx["db_inventory_functions"]
+    db_rows = dict(ctx["db_rows"])
+    assert db_rows["runtime_database_name"] == "tapdb_dev_runtime"
+
+
+def test_info_page_hides_inventory_for_non_admin(
+    route_client, monkeypatch: pytest.MonkeyPatch
+):
+    client, state = route_client
+
+    async def _user_auth(_request):
+        return {
+            "uuid": 44,
+            "username": "john@example.com",
+            "email": "john@example.com",
+            "role": "user",
+            "require_password_change": False,
+        }
+
+    monkeypatch.setattr(auth_mod, "get_current_user", _user_auth)
+
+    resp = client.get("/info")
+    assert resp.status_code == 200
+    ctx = _last_render_context(state, "info.html")
+    assert ctx["db_inventory_visible"] is False
+    assert ctx["db_inventory_schema_names"] == []
+    assert ctx["db_inventory_tables"] == []
 
 
 def test_static_assets_and_openapi_are_served(route_client):
