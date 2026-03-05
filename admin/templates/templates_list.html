@@ -32,16 +32,16 @@
         <tbody>
             {% for item in items %}
             <tr>
-                <td><a href="/object/{{ item.euid }}">{{ item.euid }}</a></td>
+                <td><a href="{{ tapdb_url(request, '/object/' ~ item.euid) }}">{{ item.euid }}</a></td>
                 <td>{{ item.name or '-' }}</td>
                 <td><span class="badge badge-{{ item.category }}">{{ item.category }}</span></td>
                 <td>{{ item.type }}</td>
                 <td>{{ item.subtype }}</td>
                 <td>{{ item.version }}</td>
                 <td>
-                    <a href="/object/{{ item.euid }}" class="btn" style="padding: 0.25rem 0.5rem;">View</a>
+                    <a href="{{ tapdb_url(request, '/object/' ~ item.euid) }}" class="btn" style="padding: 0.25rem 0.5rem;">View</a>
                     {% if not is_reserved_template(item) %}
-                    <a href="/create-instance/{{ item.euid }}" class="btn btn-success" style="padding: 0.25rem 0.5rem;">+ Create</a>
+                    <a href="{{ tapdb_url(request, '/create-instance/' ~ item.euid) }}" class="btn btn-success" style="padding: 0.25rem 0.5rem;">+ Create</a>
                     {% endif %}
                 </td>
             </tr>

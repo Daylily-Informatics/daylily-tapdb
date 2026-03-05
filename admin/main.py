@@ -207,6 +207,28 @@ app.add_middleware(
 )
 
 
+def tapdb_base_path(request: Request) -> str:
+    """Base path for TAPDB UI when mounted as a sub-app (e.g. '/tapdb')."""
+    raw = request.scope.get("root_path") or ""
+    if not isinstance(raw, str):
+        return ""
+    return raw.rstrip("/")
+
+
+def tapdb_url(request: Request, path: str) -> str:
+    """Prefix an absolute path with the TAPDB mount root, if any."""
+    base = tapdb_base_path(request)
+    if not path:
+        return base or ""
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return f"{base}{path}"
+
+
+templates.globals["tapdb_base_path"] = tapdb_base_path
+templates.globals["tapdb_url"] = tapdb_url
+
+
 def get_db():
     """Get database connection.
 
@@ -224,9 +246,10 @@ def get_db():
     return get_db_connection(env)
 
 
-def get_style() -> Dict[str, str]:
+def get_style(request: Optional[Request] = None) -> Dict[str, str]:
     """Get default style configuration."""
-    return {"skin_css": "/static/css/style.css"}
+    base = tapdb_base_path(request) if request else ""
+    return {"skin_css": f"{base}/static/css/style.css"}
 
 
 def _is_reserved_template(template_obj: Any) -> bool:
@@ -713,12 +736,12 @@ def _new_graph_lineage(
 @app.get("/auth/login")
 async def oauth_login(
     request: Request,
-    next: str = Query("/", description="Post-auth redirect path"),
+    next: str = Query("", description="Post-auth redirect path"),
 ):
     """Start Cognito Hosted UI login flow (Google IdP)."""
     user = await get_current_user(request)
     if user:
-        return RedirectResponse("/", status_code=302)
+        return RedirectResponse(tapdb_url(request, "/"), status_code=302)
 
     env_name = os.environ.get("TAPDB_ENV", "dev").lower()
     try:
@@ -726,14 +749,25 @@ async def oauth_login(
     except Exception as exc:
         content = templates.get_template("login.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error=f"OAuth login is not configured: {exc}",
         )
         return HTMLResponse(content=content)
 
     state = secrets.token_urlsafe(32)
     request.session["oauth_state"] = state
-    request.session["oauth_next"] = next if isinstance(next, str) and next.startswith("/") else "/"
+    raw_next = (next or "").strip()
+    if not raw_next.startswith("/"):
+        raw_next = ""
+
+    default_next = tapdb_url(request, "/")
+    base = tapdb_base_path(request)
+    if not raw_next or raw_next == "/":
+        raw_next = default_next
+    elif base and not (raw_next == base or raw_next.startswith(f"{base}/")):
+        # Treat '/foo' as TAPDB-relative when mounted at a sub-path.
+        raw_next = tapdb_url(request, raw_next)
+    request.session["oauth_next"] = raw_next
     return RedirectResponse(_build_cognito_authorize_url(runtime, state), status_code=302)
 
 
@@ -751,7 +785,7 @@ async def oauth_callback(
         details = error_description or error
         content = templates.get_template("login.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error=f"OAuth login failed: {details}",
         )
         return HTMLResponse(content=content)
@@ -760,7 +794,7 @@ async def oauth_callback(
     if not expected_state or not state or state != expected_state:
         content = templates.get_template("login.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error="OAuth login failed: invalid state",
         )
         return HTMLResponse(content=content)
@@ -768,7 +802,7 @@ async def oauth_callback(
     if not code:
         content = templates.get_template("login.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error="OAuth login failed: missing authorization code",
         )
         return HTMLResponse(content=content)
@@ -785,7 +819,7 @@ async def oauth_callback(
     except Exception as exc:
         content = templates.get_template("login.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error=f"OAuth login failed: {exc}",
         )
         return HTMLResponse(content=content)
@@ -798,9 +832,15 @@ async def oauth_callback(
     request.session.pop("cognito_challenge_session", None)
     update_last_login(user["uuid"])
 
-    next_path = request.session.pop("oauth_next", "/")
-    if not isinstance(next_path, str) or not next_path.startswith("/"):
-        next_path = "/"
+    next_path = request.session.pop("oauth_next", "")
+    next_path = (next_path or "").strip()
+    if not next_path.startswith("/"):
+        next_path = ""
+    base = tapdb_base_path(request)
+    if not next_path or next_path == "/":
+        next_path = tapdb_url(request, "/")
+    elif base and not (next_path == base or next_path.startswith(f"{base}/")):
+        next_path = tapdb_url(request, next_path)
     return RedirectResponse(next_path, status_code=302)
 
 
@@ -811,12 +851,12 @@ async def login_page(request: Request, error: Optional[str] = None):
     user = await get_current_user(request)
     if user:
         if user.get("require_password_change"):
-            return RedirectResponse("/change-password", status_code=302)
-        return RedirectResponse("/", status_code=302)
+            return RedirectResponse(tapdb_url(request, "/change-password"), status_code=302)
+        return RedirectResponse(tapdb_url(request, "/"), status_code=302)
 
     content = templates.get_template("login.html").render(
         request=request,
-        style=get_style(),
+        style=get_style(request),
         error=error,
     )
     return HTMLResponse(content=content)
@@ -834,14 +874,14 @@ async def login_submit(request: Request, username: str = Form(...), password: st
     except ValueError:
         content = templates.get_template("login.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error="Invalid username or password",
         )
         return HTMLResponse(content=content)
     except Exception as e:
         content = templates.get_template("login.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error=f"Authentication error: {e}",
         )
         return HTMLResponse(content=content)
@@ -853,7 +893,7 @@ async def login_submit(request: Request, username: str = Form(...), password: st
         except Exception as e:
             content = templates.get_template("login.html").render(
                 request=request,
-                style=get_style(),
+                style=get_style(request),
                 error=(
                     "Authenticated with Cognito, but failed to provision TAPDB user: "
                     f"{e}"
@@ -870,14 +910,14 @@ async def login_submit(request: Request, username: str = Form(...), password: st
         request.session["cognito_challenge"] = "NEW_PASSWORD_REQUIRED"
         request.session["cognito_challenge_session"] = auth_result.get("session", "")
         logger.info(f"User requires new Cognito password: {cognito_username}")
-        return RedirectResponse("/change-password", status_code=302)
+        return RedirectResponse(tapdb_url(request, "/change-password"), status_code=302)
 
     access_token = auth_result.get("access_token")
     if not access_token:
         request.session.clear()
         content = templates.get_template("login.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error="Authentication failed: no access token returned",
         )
         return HTMLResponse(content=content)
@@ -890,9 +930,9 @@ async def login_submit(request: Request, username: str = Form(...), password: st
 
     # Redirect to password change if required
     if user.get("require_password_change"):
-        return RedirectResponse("/change-password", status_code=302)
+        return RedirectResponse(tapdb_url(request, "/change-password"), status_code=302)
 
-    return RedirectResponse("/", status_code=302)
+    return RedirectResponse(tapdb_url(request, "/"), status_code=302)
 
 
 @app.get("/signup", response_class=HTMLResponse)
@@ -903,11 +943,11 @@ async def signup_page(
     """Account creation page."""
     user = await get_current_user(request)
     if user:
-        return RedirectResponse("/", status_code=302)
+        return RedirectResponse(tapdb_url(request, "/"), status_code=302)
 
     content = templates.get_template("signup.html").render(
         request=request,
-        style=get_style(),
+        style=get_style(request),
         error=error,
     )
     return HTMLResponse(content=content)
@@ -926,7 +966,7 @@ async def signup_submit(
     if not normalized_email or "@" not in normalized_email:
         content = templates.get_template("signup.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error="Valid email is required",
         )
         return HTMLResponse(content=content)
@@ -934,7 +974,7 @@ async def signup_submit(
     if len(password) < 8:
         content = templates.get_template("signup.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error="Password must be at least 8 characters",
         )
         return HTMLResponse(content=content)
@@ -942,7 +982,7 @@ async def signup_submit(
     if password != confirm_password:
         content = templates.get_template("signup.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error="Passwords do not match",
         )
         return HTMLResponse(content=content)
@@ -956,14 +996,14 @@ async def signup_submit(
     except ValueError as e:
         content = templates.get_template("signup.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error=str(e),
         )
         return HTMLResponse(content=content)
     except Exception as e:
         content = templates.get_template("signup.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error=f"Account creation failed: {e}",
         )
         return HTMLResponse(content=content)
@@ -977,7 +1017,7 @@ async def signup_submit(
     except Exception as e:
         content = templates.get_template("signup.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error=(
                 "Cognito account created, but TAPDB user provisioning failed: "
                 f"{e}"
@@ -990,7 +1030,7 @@ async def signup_submit(
     except Exception as e:
         content = templates.get_template("login.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             error=(
                 "Account created but auto-login failed. Please sign in manually. "
                 f"Details: {e}"
@@ -1005,21 +1045,21 @@ async def signup_submit(
     if auth_result.get("challenge") == "NEW_PASSWORD_REQUIRED":
         request.session["cognito_challenge"] = "NEW_PASSWORD_REQUIRED"
         request.session["cognito_challenge_session"] = auth_result.get("session", "")
-        return RedirectResponse("/change-password", status_code=302)
+        return RedirectResponse(tapdb_url(request, "/change-password"), status_code=302)
 
     access_token = auth_result.get("access_token")
     if access_token:
         request.session["cognito_access_token"] = access_token
     request.session.pop("cognito_challenge", None)
     request.session.pop("cognito_challenge_session", None)
-    return RedirectResponse("/", status_code=302)
+    return RedirectResponse(tapdb_url(request, "/"), status_code=302)
 
 
 @app.get("/logout")
 async def logout(request: Request):
     """Logout and clear session."""
     request.session.clear()
-    return RedirectResponse("/login", status_code=302)
+    return RedirectResponse(tapdb_url(request, "/login"), status_code=302)
 
 
 @app.get("/change-password", response_class=HTMLResponse)
@@ -1027,14 +1067,14 @@ async def change_password_page(request: Request, error: Optional[str] = None, su
     """Password change page."""
     user = await get_current_user(request)
     if not user:
-        return RedirectResponse("/login", status_code=302)
+        return RedirectResponse(tapdb_url(request, "/login"), status_code=302)
 
     challenge_required = (
         request.session.get("cognito_challenge") == "NEW_PASSWORD_REQUIRED"
     )
     content = templates.get_template("change_password.html").render(
         request=request,
-        style=get_style(),
+        style=get_style(request),
         user=user,
         required=user.get("require_password_change", False),
         challenge_required=challenge_required,
@@ -1054,13 +1094,13 @@ async def change_password_submit(
     """Handle password change form."""
     user = await get_current_user(request)
     if not user:
-        return RedirectResponse("/login", status_code=302)
+        return RedirectResponse(tapdb_url(request, "/login"), status_code=302)
 
     # Validate new password
     if len(new_password) < 8:
         content = templates.get_template("change_password.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             user=user,
             required=user.get("require_password_change", False),
             challenge_required=(
@@ -1073,7 +1113,7 @@ async def change_password_submit(
     if new_password != confirm_password:
         content = templates.get_template("change_password.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             user=user,
             required=user.get("require_password_change", False),
             challenge_required=(
@@ -1091,7 +1131,7 @@ async def change_password_submit(
         if not challenge_session:
             content = templates.get_template("change_password.html").render(
                 request=request,
-                style=get_style(),
+                style=get_style(request),
                 user=user,
                 required=True,
                 challenge_required=True,
@@ -1117,11 +1157,11 @@ async def change_password_submit(
             request.session.pop("cognito_challenge", None)
             request.session.pop("cognito_challenge_session", None)
             logger.info(f"Cognito NEW_PASSWORD_REQUIRED completed: {cognito_username}")
-            return RedirectResponse("/", status_code=302)
+            return RedirectResponse(tapdb_url(request, "/"), status_code=302)
         except ValueError as e:
             content = templates.get_template("change_password.html").render(
                 request=request,
-                style=get_style(),
+                style=get_style(request),
                 user=user,
                 required=True,
                 challenge_required=True,
@@ -1131,7 +1171,7 @@ async def change_password_submit(
         except Exception as e:
             content = templates.get_template("change_password.html").render(
                 request=request,
-                style=get_style(),
+                style=get_style(request),
                 user=user,
                 required=True,
                 challenge_required=True,
@@ -1142,7 +1182,7 @@ async def change_password_submit(
     if not current_password:
         content = templates.get_template("change_password.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             user=user,
             required=user.get("require_password_change", False),
             challenge_required=False,
@@ -1154,7 +1194,7 @@ async def change_password_submit(
     if not access_token:
         content = templates.get_template("change_password.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             user=user,
             required=user.get("require_password_change", False),
             challenge_required=False,
@@ -1168,7 +1208,7 @@ async def change_password_submit(
     except ValueError as e:
         content = templates.get_template("change_password.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             user=user,
             required=user.get("require_password_change", False),
             challenge_required=False,
@@ -1178,7 +1218,7 @@ async def change_password_submit(
     except Exception as e:
         content = templates.get_template("change_password.html").render(
             request=request,
-            style=get_style(),
+            style=get_style(request),
             user=user,
             required=user.get("require_password_change", False),
             challenge_required=False,
@@ -1188,11 +1228,11 @@ async def change_password_submit(
 
     # If was required, redirect to home. Otherwise show success.
     if user.get("require_password_change"):
-        return RedirectResponse("/", status_code=302)
+        return RedirectResponse(tapdb_url(request, "/"), status_code=302)
 
     content = templates.get_template("change_password.html").render(
         request=request,
-        style=get_style(),
+        style=get_style(request),
         user=user,
         required=False,
         challenge_required=False,
@@ -1212,7 +1252,7 @@ async def help_page(request: Request):
     permissions = get_user_permissions(user)
     content = templates.get_template("help.html").render(
         request=request,
-        style=get_style(),
+        style=get_style(request),
         user=user,
         permissions=permissions,
     )
@@ -1272,7 +1312,7 @@ async def info_page(request: Request):
 
     content = templates.get_template("info.html").render(
         request=request,
-        style=get_style(),
+        style=get_style(request),
         user=user,
         permissions=permissions,
         db_rows=db_rows,
@@ -1296,7 +1336,7 @@ async def admin_metrics_page(
     metrics_ctx = load_db_metrics_context(limit=limit)
     content = templates.get_template("admin_metrics.html").render(
         request=request,
-        style=get_style(),
+        style=get_style(request),
         user=user,
         permissions=permissions,
         **metrics_ctx,
@@ -1623,7 +1663,7 @@ async def index(
 
     content = templates.get_template("index.html").render(
         request=request,
-        style=get_style(),
+        style=get_style(request),
         user=user,
         permissions=permissions,
         template_count=template_count,
@@ -1693,7 +1733,7 @@ async def complex_query_page(
 
     content = templates.get_template("complex_query.html").render(
         request=request,
-        style=get_style(),
+        style=get_style(request),
         user=user,
         permissions=permissions,
         query_params=query_params,
@@ -1734,7 +1774,7 @@ async def list_templates(
 
             content = templates.get_template("templates_list.html").render(
                 request=request,
-                style=get_style(),
+                style=get_style(request),
                 user=user,
                 permissions=permissions,
                 items=items,
@@ -1781,7 +1821,7 @@ async def list_instances(
 
             content = templates.get_template("instances_list.html").render(
                 request=request,
-                style=get_style(),
+                style=get_style(request),
                 user=user,
                 permissions=permissions,
                 items=items,
@@ -1833,7 +1873,7 @@ async def list_lineages(
 
             content = templates.get_template("lineages_list.html").render(
                 request=request,
-                style=get_style(),
+                style=get_style(request),
                 user=user,
                 permissions=permissions,
                 items=items,
@@ -1893,7 +1933,7 @@ async def object_detail(request: Request, euid: str):
             # Render template inside session context to avoid detached instance errors
             content = templates.get_template("object_detail.html").render(
                 request=request,
-                style=get_style(),
+                style=get_style(request),
                 user=user,
                 permissions=permissions,
                 obj=obj,
@@ -1917,7 +1957,7 @@ async def graph_view(
 
     content = templates.get_template("graph.html").render(
         request=request,
-        style=get_style(),
+        style=get_style(request),
         user=user,
         permissions=permissions,
         start_euid=start_euid or "",
@@ -1950,7 +1990,7 @@ async def create_instance_form(request: Request, template_euid: str):
 
             content = templates.get_template("create_instance.html").render(
                 request=request,
-                style=get_style(),
+                style=get_style(request),
                 user=user,
                 permissions=permissions,
                 template=template,
@@ -2080,7 +2120,7 @@ async def create_instance_submit(request: Request, template_euid: str):
             logger.info(log_msg)
 
             # Redirect to the new instance
-            return RedirectResponse(f"/object/{instance_euid}", status_code=302)
+            return RedirectResponse(tapdb_url(request, f"/object/{instance_euid}"), status_code=302)
 
         except ValueError as e:
             with conn.session_scope() as session:
@@ -2092,7 +2132,7 @@ async def create_instance_submit(request: Request, template_euid: str):
 
                 content = templates.get_template("create_instance.html").render(
                     request=request,
-                    style=get_style(),
+                    style=get_style(request),
                     user=user,
                     permissions=permissions,
                     template=template,
@@ -2116,7 +2156,7 @@ async def create_instance_submit(request: Request, template_euid: str):
 
                 content = templates.get_template("create_instance.html").render(
                     request=request,
-                    style=get_style(),
+                    style=get_style(request),
                     user=user,
                     permissions=permissions,
                     template=template,

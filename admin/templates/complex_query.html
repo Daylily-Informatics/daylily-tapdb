@@ -11,7 +11,7 @@
         Filter templates, instances, and lineages with multiple fields. Results are read-only links to object detail pages.
     </p>
 
-    <form action="/query" method="get" class="filter-bar">
+    <form action="{{ tapdb_url(request, '/query') }}" method="get" class="filter-bar">
         <select name="kind">
             <option value="all" {% if query_params.kind == 'all' %}selected{% endif %}>All Kinds</option>
             <option value="template" {% if query_params.kind == 'template' %}selected{% endif %}>Templates</option>
@@ -25,7 +25,7 @@
         <input type="text" name="euid_like" value="{{ query_params.euid_like }}" placeholder="EUID contains">
         <input type="number" name="limit" min="1" max="100" value="{{ query_params.limit }}" style="width: 95px;">
         <button type="submit" class="btn">Run</button>
-        <a href="/query" class="btn" style="background: #6c757d;">Clear</a>
+        <a href="{{ tapdb_url(request, '/query') }}" class="btn" style="background: #6c757d;">Clear</a>
     </form>
 </div>
 
@@ -48,7 +48,7 @@
                 {% for row in results %}
                 <tr>
                     <td>{{ row.kind }}</td>
-                    <td><a href="/object/{{ row.euid }}">{{ row.euid }}</a></td>
+                    <td><a href="{{ tapdb_url(request, '/object/' ~ row.euid) }}">{{ row.euid }}</a></td>
                     <td>{{ row.name or '-' }}</td>
                     <td>{{ row.category or '-' }}</td>
                     <td>{{ row.type or '-' }}/{{ row.subtype or '-' }}</td>

@@ -15,7 +15,7 @@
             <option value="{{ cat }}" {% if cat == current_category %}selected{% endif %}>{{ cat }}</option>
             {% endfor %}
         </select>
-        <a href="/graph" class="btn">🔗 View as Graph</a>
+        <a href="{{ tapdb_url(request, '/graph') }}" class="btn">🔗 View as Graph</a>
     </div>
 
     <table>
@@ -33,15 +33,15 @@
         <tbody>
             {% for item in items %}
             <tr>
-                <td><a href="/object/{{ item.euid }}">{{ item.euid }}</a></td>
+                <td><a href="{{ tapdb_url(request, '/object/' ~ item.euid) }}">{{ item.euid }}</a></td>
                 <td>{{ item.name or '-' }}</td>
                 <td><span class="badge badge-{{ item.category }}">{{ item.category }}</span></td>
                 <td>{{ item.type }}</td>
                 <td>{{ item.subtype }}</td>
                 <td>{{ item.bstatus or '-' }}</td>
                 <td>
-                    <a href="/object/{{ item.euid }}" class="btn" style="padding: 0.25rem 0.5rem;">View</a>
-                    <a href="/graph?start_euid={{ item.euid }}" class="btn" style="padding: 0.25rem 0.5rem;">Graph</a>
+                    <a href="{{ tapdb_url(request, '/object/' ~ item.euid) }}" class="btn" style="padding: 0.25rem 0.5rem;">View</a>
+                    <a href="{{ tapdb_url(request, '/graph') }}?start_euid={{ item.euid }}" class="btn" style="padding: 0.25rem 0.5rem;">Graph</a>
                 </td>
             </tr>
             {% else %}
@@ -75,4 +75,3 @@
     {% endif %}
 </div>
 {% endblock %}
-

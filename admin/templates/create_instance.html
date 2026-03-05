@@ -4,7 +4,7 @@
 
 {% block content %}
 <nav style="margin-bottom: 1rem; color: var(--text-muted);">
-    <a href="/">Home</a> &gt; <a href="/templates">Templates</a> &gt; <a href="/object/{{ template.euid }}">{{ template.euid }}</a> &gt; Create Instance
+    <a href="{{ tapdb_url(request, '/') }}">Home</a> &gt; <a href="{{ tapdb_url(request, '/templates') }}">Templates</a> &gt; <a href="{{ tapdb_url(request, '/object/' ~ template.euid) }}">{{ template.euid }}</a> &gt; Create Instance
 </nav>
 
 <h1 style="margin-bottom: 1rem;">Create Instance from Template</h1>
@@ -19,7 +19,7 @@
 <div class="card" style="background: rgba(39, 174, 96, 0.2); border: 1px solid #27ae60;">
     <p style="color: #27ae60;">✅ {{ success }}</p>
     {% if created_instance %}
-    <p style="margin-top: 0.5rem;"><a href="/object/{{ created_instance.euid }}" class="btn btn-success">View Created Instance: {{ created_instance.euid }}</a></p>
+    <p style="margin-top: 0.5rem;"><a href="{{ tapdb_url(request, '/object/' ~ created_instance.euid) }}" class="btn btn-success">View Created Instance: {{ created_instance.euid }}</a></p>
     {% endif %}
 </div>
 {% endif %}
@@ -27,7 +27,7 @@
 <div class="card">
     <h2 class="card-title">Template Information</h2>
     <table>
-        <tr><th style="width: 200px;">EUID</th><td><a href="/object/{{ template.euid }}">{{ template.euid }}</a></td></tr>
+        <tr><th style="width: 200px;">EUID</th><td><a href="{{ tapdb_url(request, '/object/' ~ template.euid) }}">{{ template.euid }}</a></td></tr>
         <tr><th>Name</th><td>{{ template.name or '-' }}</td></tr>
         <tr><th>Type Hierarchy</th><td><span class="badge badge-{{ template.category }}">{{ template.category }}</span> / {{ template.type }} / {{ template.subtype }}</td></tr>
         <tr><th>Version</th><td>{{ template.version }}</td></tr>
@@ -39,7 +39,7 @@
 
 <div class="card">
     <h2 class="card-title">Instance Details</h2>
-    <form method="POST" action="/create-instance/{{ template.euid }}" id="create-instance-form">
+    <form method="POST" action="{{ tapdb_url(request, '/create-instance/' ~ template.euid) }}" id="create-instance-form">
         <div style="margin-bottom: 1rem;">
             <label for="instance_name" style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Instance Name</label>
             <input type="text" id="instance_name" name="instance_name"
@@ -137,7 +137,7 @@
 
         <div style="margin-top: 1.5rem; display: flex; gap: 1rem;">
             <button type="submit" class="btn btn-success" id="submit-btn">➕ Create Instance</button>
-            <a href="/object/{{ template.euid }}" class="btn">Cancel</a>
+            <a href="{{ tapdb_url(request, '/object/' ~ template.euid) }}" class="btn">Cancel</a>
         </div>
     </form>
 </div>
