@@ -25,6 +25,15 @@ pgbench --version
 python tools/db_loadtest/generate_synthetic_data.py --help
 ```
 
+If you need a fresh local TAPDB first:
+
+```bash
+export TAPDB_CLIENT_ID=tapdb
+export TAPDB_DATABASE_NAME=tapdb
+export TAPDB_ENV=dev
+tapdb bootstrap local --no-gui
+```
+
 ## 1) Generate Synthetic Data
 
 Default connection target is `localhost:5533`, DB `tapdb_tapdb_dev`.
@@ -55,7 +64,7 @@ python tools/db_loadtest/generate_synthetic_data.py \
 Notes:
 
 - `--truncate-first` issues `DELETE` for prior loadtest rows. In TAPDB this becomes soft-delete (`is_deleted=true`) because of triggers.
-- Generator stores `tenant_id` in `json_addl` for compatibility.
+- Generator stores tenant markers in `json_addl.tenant_id` for compatibility; it does not currently populate native `tenant_id` UUID columns.
 - Generator prints `template_uuid`, `tenant_count`, `min_instance_uuid`, `max_instance_uuid` for use with `pgbench -D`.
 - If you see many sequence-exists `NOTICE` lines from audit triggers, run with `PGOPTIONS='-c client_min_messages=warning'`.
 

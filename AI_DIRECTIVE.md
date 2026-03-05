@@ -17,6 +17,7 @@ Primary goals:
 3. Do not assume global shared runtime state.
 4. For local engine configs, host must be exactly `localhost`.
 5. Treat destructive operations as opt-in only.
+6. Treat native `tenant_id` columns as canonical tenant scope for TAPDB rows.
 
 ## Required Context (Strict Namespace)
 TAPDB is namespace-isolated. For commands that touch config/runtime/db/ui/cognito/user/aurora/info, require both:
@@ -91,10 +92,10 @@ export TAPDB_DATABASE_NAME=<database>
 export TAPDB_ENV=dev
 
 # Local runtime + logical setup + optional GUI
- tapdb bootstrap local
+tapdb bootstrap local
 
 # or Aurora infra + logical setup + optional GUI
- tapdb bootstrap aurora --cluster <cluster-id> --region <region>
+tapdb bootstrap aurora --cluster <cluster-id> --region <region>
 ```
 
 Use `--no-gui` when you need headless setup.
@@ -111,6 +112,12 @@ Operational rules:
 2. Do not add client-domain workflow/action/content packs to TAPDB core repo.
 3. If domain packs are needed, provide them via client repos or external config
    directories and seed them explicitly.
+
+Template loading precedence (seed + validate):
+1. TAPDB core config always loads first.
+2. Client `--config` directory (if supplied) loads second.
+3. Duplicate template keys across sources are hard-fail (no override).
+4. `tapdb db config validate` still requires namespace context even though it does not connect to DB.
 
 ## Config Schema Expectations
 Namespace config (`tapdb-config.yaml`) should include:
@@ -130,12 +137,25 @@ environments:
     password: <db-password>
     database: <db-name>
     cognito_user_pool_id: <pool-id>
+    audit_log_euid_prefix: <2-3-char meridian prefix>
+    support_email: <optional support contact>
 ```
 
 Rules:
 - local engine must use `host: localhost`.
 - `port` and `ui_port` must be explicit per environment.
 - port conflicts are hard errors (no silent auto-reassignment).
+- `audit_log_euid_prefix` must be configured for schema/bootstrap flows.
+
+## Native Tenant Policy
+1. TAPDB stores tenant scope in native nullable `tenant_id` (`UUID`) columns on:
+   - `generic_template`
+   - `generic_instance`
+   - `generic_instance_lineage`
+   - `audit_log`
+   - `outbox_event`
+2. Use native columns for tenancy filters/authorization whenever possible.
+3. JSON tenant keys (`json_addl.tenant_id`) may exist for payload compatibility but are not canonical.
 
 ## Python Library Usage
 Prefer TAPDB APIs over low-level SQL.
@@ -201,6 +221,19 @@ Operational requirements:
 1. Use app client name `tapdb` for TAPDB UI.
 2. Validate callback/logout URLs against TAPDB configured HTTPS UI port.
 3. Keep TAPDB and daycog in sync before testing login/signup.
+
+## GUI + API Route Reality
+HTML/UI routes in `admin/main.py` include:
+- auth/session: `/login`, `/signup`, `/logout`, `/auth/login`, `/auth/callback`, `/change-password`
+- authenticated pages: `/`, `/query`, `/templates`, `/instances`, `/lineages`, `/object/{euid}`, `/graph`, `/create-instance/{template_euid}`, `/info`
+- admin-only page: `/admin/metrics`
+- public help page: `/help`
+
+JSON endpoints:
+- public: `GET /api/graph/data`, `GET /api/templates`, `GET /api/instances`, `GET /api/object/{euid}`
+- admin-only: `POST /api/lineage`, `DELETE /api/object/{euid}`
+
+`/info` includes DB + Cognito runtime details for authenticated users and admin-only DB inventory enumeration.
 
 ## HTTPS Policy
 TAPDB GUI should run on HTTPS with localhost certs.
