@@ -54,6 +54,7 @@ def test_attach_aurora_password_provider_refreshes_iam_token(monkeypatch):
         host="dev.cluster-abc.us-west-2.rds.amazonaws.com",
         port=5432,
         user="tapdb_admin",
+        aws_profile=None,
         iam_auth=True,
         password="",
     )
@@ -70,10 +71,10 @@ def test_attach_aurora_password_provider_uses_static_password_when_iam_disabled(
         host="dev.cluster-abc.us-west-2.rds.amazonaws.com",
         port=5432,
         user="tapdb_admin",
+        aws_profile=None,
         iam_auth=False,
         password="pw123",
     )
     cparams = {}
     listener(None, None, None, cparams)
     assert cparams["password"] == "pw123"
-
