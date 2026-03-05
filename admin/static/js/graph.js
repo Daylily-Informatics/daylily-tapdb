@@ -2,6 +2,16 @@
  * TAPDB Admin - Cytoscape Graph Visualization
  */
 
+const TAPDB_BASE_PATH =
+    typeof window !== 'undefined' && window.TAPDB_BASE_PATH
+        ? String(window.TAPDB_BASE_PATH).replace(/\/+$/, '')
+        : '';
+
+function tapdbUrl(path) {
+    const normalized = (path || '').startsWith('/') ? path : `/${path}`;
+    return `${TAPDB_BASE_PATH}${normalized}`;
+}
+
 let cy = null;
 let keyboardHandlersInstalled = false;
 let pendingLineageChildId = null;
@@ -255,7 +265,7 @@ async function deleteGraphObject(ele) {
     const typeLabel = ele.isNode() ? 'node' : 'edge';
 
     try {
-        const response = await fetch(`/api/object/${encodeURIComponent(objectId)}`, {
+        const response = await fetch(tapdbUrl(`/api/object/${encodeURIComponent(objectId)}`), {
             method: 'DELETE',
             headers: {
                 'Accept': 'application/json',
@@ -333,7 +343,7 @@ function pickRelationshipType(childId, parentId) {
 }
 
 async function createLineageEdge(childId, parentId, relationshipType) {
-    const response = await fetch('/api/lineage', {
+    const response = await fetch(tapdbUrl('/api/lineage'), {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -572,7 +582,7 @@ function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
 
     const actions = `
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem;">
-            <a href="/object/${encodeURIComponent(euid)}" class="btn">View Details</a>
+            <a href="${tapdbUrl(`/object/${encodeURIComponent(euid)}`)}" class="btn">View Details</a>
             ${
                 isNode
                     ? `<button onclick="centerOnNode('${escapeHtml(euid)}')" class="btn">Center on Node</button>`
@@ -595,7 +605,7 @@ function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
 }
 
 async function fetchObjectData(euid) {
-    const response = await fetch(`/api/object/${encodeURIComponent(euid)}`, {
+    const response = await fetch(tapdbUrl(`/api/object/${encodeURIComponent(euid)}`), {
         headers: {
             Accept: 'application/json',
         },
@@ -703,7 +713,7 @@ async function loadGraph() {
     container.innerHTML = '<div class="loading">Loading graph data...</div>';
 
     try {
-        let url = '/api/graph/data?depth=' + depth;
+        let url = tapdbUrl('/api/graph/data') + '?depth=' + depth;
         if (startEuid) {
             url += '&start_euid=' + encodeURIComponent(startEuid);
         }
@@ -733,7 +743,7 @@ async function loadGraph() {
         updateLegend(typesInGraph);
 
         // Update URL without reload.
-        const newUrl = '/graph?start_euid=' + encodeURIComponent(startEuid) + '&depth=' + depth;
+        const newUrl = tapdbUrl('/graph') + '?start_euid=' + encodeURIComponent(startEuid) + '&depth=' + depth;
         window.history.replaceState({}, '', newUrl);
 
     } catch (error) {

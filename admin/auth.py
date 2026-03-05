@@ -4,12 +4,16 @@ TAPDB Admin Authentication.
 Session-based authentication with role-based access control.
 """
 
+import json
 import os
+from base64 import b64decode
 from functools import wraps
 from typing import Any, Callable, Optional
 
+import itsdangerous
 from fastapi import Request, HTTPException
 from fastapi.responses import RedirectResponse
+from itsdangerous import BadSignature
 
 from admin.cognito import get_cognito_auth
 from admin.db_pool import get_db_connection
@@ -24,6 +28,130 @@ from daylily_tapdb.user_store import (
 # Session cookie settings
 SESSION_COOKIE_NAME = "tapdb_session"
 SESSION_MAX_AGE = 86400  # 24 hours
+
+
+def _auth_disabled() -> bool:
+    """Return True when TAPDB admin auth is explicitly disabled."""
+    raw = (os.environ.get("TAPDB_ADMIN_DISABLE_AUTH") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _shared_auth_enabled() -> bool:
+    """Return True when TAPDB admin trusts Bloom's authenticated session."""
+    raw = (os.environ.get("TAPDB_ADMIN_SHARED_AUTH") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _disabled_auth_user() -> dict:
+    """Synthetic user used when TAPDB admin auth is disabled."""
+    email = (os.environ.get("TAPDB_ADMIN_DISABLED_USER_EMAIL") or "").strip().lower()
+    if not email:
+        email = "tapdb-admin@localhost"
+
+    role = (os.environ.get("TAPDB_ADMIN_DISABLED_USER_ROLE") or "admin").strip().lower()
+    if role not in {"admin", "user"}:
+        role = "admin"
+
+    return {
+        "uuid": 0,
+        "username": email,
+        "email": email,
+        "display_name": "TAPDB Admin (Auth Disabled)",
+        "role": role,
+        "is_active": True,
+        "require_password_change": False,
+    }
+
+
+def _bloom_session_secret() -> str:
+    """Resolve the signing key used for Bloom's SessionMiddleware cookie."""
+    return (
+        (os.environ.get("TAPDB_ADMIN_BLOOM_SESSION_SECRET") or "").strip()
+        or (os.environ.get("BLOOM_SESSION_SECRET") or "").strip()
+        or "your-secret-key"
+    )
+
+
+def _bloom_session_cookie_name() -> str:
+    return (os.environ.get("TAPDB_ADMIN_BLOOM_SESSION_COOKIE") or "session").strip()
+
+
+def _bloom_session_max_age() -> int:
+    raw = (os.environ.get("TAPDB_ADMIN_BLOOM_SESSION_MAX_AGE") or "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return 14 * 24 * 60 * 60
+
+
+def _extract_bloom_user(request: Request) -> Optional[dict]:
+    """Decode Bloom's signed session cookie and extract user identity."""
+    cookie_name = _bloom_session_cookie_name()
+    raw_cookie = request.cookies.get(cookie_name)
+    if not raw_cookie:
+        return None
+
+    signer = itsdangerous.TimestampSigner(_bloom_session_secret())
+    try:
+        payload = signer.unsign(raw_cookie.encode("utf-8"), max_age=_bloom_session_max_age())
+        data = json.loads(b64decode(payload))
+    except (BadSignature, ValueError, json.JSONDecodeError):
+        return None
+    except Exception:
+        return None
+
+    user_data = data.get("user_data")
+    if not isinstance(user_data, dict):
+        return None
+
+    email = str(user_data.get("email") or "").strip().lower()
+    if not email:
+        return None
+
+    role = str(user_data.get("role") or "user").strip().lower()
+    if role not in {"admin", "user"}:
+        role = "user"
+
+    return {"email": email, "role": role}
+
+
+def _resolve_shared_auth_user(request: Request) -> Optional[dict]:
+    """Resolve TAPDB user from Bloom session when shared auth is enabled."""
+    if not _shared_auth_enabled():
+        return None
+
+    bloom_user = _extract_bloom_user(request)
+    if not bloom_user:
+        return None
+
+    email = bloom_user["email"]
+    user = get_user_by_username(email)
+    if not user:
+        try:
+            user = get_or_create_user_from_email(email, role=bloom_user["role"])
+        except Exception:
+            return None
+
+    request.session["user_uuid"] = user["uuid"]
+    request.session["cognito_username"] = email
+    request.session.pop("cognito_challenge", None)
+    request.session.pop("cognito_challenge_session", None)
+    return user
+
+
+def _tapdb_base_path(request: Request) -> str:
+    raw = request.scope.get("root_path") or ""
+    if not isinstance(raw, str):
+        return ""
+    return raw.rstrip("/")
+
+
+def _tapdb_url(request: Request, path: str) -> str:
+    base = _tapdb_base_path(request)
+    if not path:
+        return base or ""
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return f"{base}{path}"
 
 
 def get_db():
@@ -174,6 +302,13 @@ def update_last_login(user_uuid: int | str) -> None:
 
 async def get_current_user(request: Request) -> Optional[dict]:
     """Get current user from session."""
+    if _auth_disabled():
+        return _disabled_auth_user()
+
+    shared_user = _resolve_shared_auth_user(request)
+    if shared_user:
+        return shared_user
+
     user_uuid = request.session.get("user_uuid")
     if not user_uuid:
         return None
@@ -198,11 +333,11 @@ def require_auth(func: Callable) -> Callable:
     async def wrapper(request: Request, *args: Any, **kwargs: Any) -> Any:
         user = await get_current_user(request)
         if not user:
-            return RedirectResponse("/login", status_code=302)
+            return RedirectResponse(_tapdb_url(request, "/login"), status_code=302)
 
         # Check if password change required (except for change-password route itself)
-        if user.get("require_password_change") and request.url.path != "/change-password":
-            return RedirectResponse("/change-password", status_code=302)
+        if user.get("require_password_change") and request.scope.get("path") != "/change-password":
+            return RedirectResponse(_tapdb_url(request, "/change-password"), status_code=302)
 
         request.state.user = user
         return await func(request, *args, **kwargs)
@@ -218,10 +353,10 @@ def require_admin(func: Callable) -> Callable:
     async def wrapper(request: Request, *args: Any, **kwargs: Any) -> Any:
         user = await get_current_user(request)
         if not user:
-            return RedirectResponse("/login", status_code=302)
+            return RedirectResponse(_tapdb_url(request, "/login"), status_code=302)
 
         if user.get("require_password_change"):
-            return RedirectResponse("/change-password", status_code=302)
+            return RedirectResponse(_tapdb_url(request, "/change-password"), status_code=302)
 
         if user.get("role") != "admin":
             raise HTTPException(status_code=403, detail="Admin access required")

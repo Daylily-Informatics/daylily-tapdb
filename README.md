@@ -68,6 +68,7 @@ template subclasses and configs.
 
 - **Library + CLI (default)**: `pip install daylily-tapdb`
 - **Admin UI (optional)**: `pip install "daylily-tapdb[admin]"`
+- **Embedding guide (host app + auth modes)**: see [`tapdb_gui_inclusion.md`](tapdb_gui_inclusion.md)
 - **Developer tooling (optional)**: `pip install "daylily-tapdb[dev]"`
 - **Aurora (AWS) support**: `pip install "daylily-tapdb[aurora]"` (adds boto3 for Aurora cluster management)
 - **CLI YAML config support (optional)**: `pip install "daylily-tapdb[cli]"` (adds PyYAML for TAPDB CLI config files like `tapdb-config*.yaml`; template config files remain JSON)
@@ -661,6 +662,7 @@ ruff check daylily_tapdb/
 ## Admin Web Interface
 
 TAPDB includes a FastAPI-based admin interface for browsing and managing objects.
+For mounting TAPDB inside another FastAPI app (including shared-auth and disable-auth modes), see [`tapdb_gui_inclusion.md`](tapdb_gui_inclusion.md).
 
 ### Running the Admin App
 

@@ -9,33 +9,33 @@
     <div class="card stat-card">
         <div class="stat-value">{{ template_count }}</div>
         <div class="stat-label">Templates</div>
-        <a href="/templates" class="btn" style="margin-top: 1rem;">View All</a>
+        <a href="{{ tapdb_url(request, '/templates') }}" class="btn" style="margin-top: 1rem;">View All</a>
     </div>
     <div class="card stat-card">
         <div class="stat-value">{{ instance_count }}</div>
         <div class="stat-label">Instances</div>
-        <a href="/instances" class="btn" style="margin-top: 1rem;">View All</a>
+        <a href="{{ tapdb_url(request, '/instances') }}" class="btn" style="margin-top: 1rem;">View All</a>
     </div>
     <div class="card stat-card">
         <div class="stat-value">{{ lineage_count }}</div>
         <div class="stat-label">Lineages</div>
-        <a href="/lineages" class="btn" style="margin-top: 1rem;">View All</a>
+        <a href="{{ tapdb_url(request, '/lineages') }}" class="btn" style="margin-top: 1rem;">View All</a>
     </div>
 </div>
 
 <div class="card" style="margin-top: 2rem;">
     <h2 class="card-title">Quick Actions</h2>
     <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
-        <a href="/graph" class="btn">🔗 View Object Graph</a>
-        <a href="/query" class="btn">🧠 Complex Query</a>
-        <a href="/templates" class="btn">📋 Browse Templates</a>
-        <a href="/instances" class="btn">📦 Browse Instances</a>
+        <a href="{{ tapdb_url(request, '/graph') }}" class="btn">🔗 View Object Graph</a>
+        <a href="{{ tapdb_url(request, '/query') }}" class="btn">🧠 Complex Query</a>
+        <a href="{{ tapdb_url(request, '/templates') }}" class="btn">📋 Browse Templates</a>
+        <a href="{{ tapdb_url(request, '/instances') }}" class="btn">📦 Browse Instances</a>
     </div>
 </div>
 
 <div class="card" style="margin-top: 2rem;">
     <h2 class="card-title">Search by EUID</h2>
-    <form action="/object/" method="get" style="display: flex; gap: 1rem;" onsubmit="this.action='/object/' + this.euid.value; return true;">
+    <form action="{{ tapdb_url(request, '/object/') }}" method="get" style="display: flex; gap: 1rem;" onsubmit="this.action='{{ tapdb_url(request, '/object/') }}' + this.euid.value; return true;">
         <input type="text" name="euid" placeholder="Enter EUID (e.g., GX123)" style="flex: 1; padding: 0.75rem;">
         <button type="submit" class="btn">Search</button>
     </form>
@@ -43,7 +43,7 @@
 
 <div class="card" style="margin-top: 2rem;">
     <h2 class="card-title">Simple Query</h2>
-    <form action="/" method="get" class="filter-bar">
+    <form action="{{ tapdb_url(request, '/') }}" method="get" class="filter-bar">
         <input
             type="text"
             name="q"
@@ -78,7 +78,7 @@
                 {% for row in object_results %}
                 <tr>
                     <td>{{ row.kind }}</td>
-                    <td><a href="/object/{{ row.euid }}">{{ row.euid }}</a></td>
+                    <td><a href="{{ tapdb_url(request, '/object/' ~ row.euid) }}">{{ row.euid }}</a></td>
                     <td>{{ row.name or '-' }}</td>
                     <td>{{ row.category or '-' }}</td>
                     <td>{{ row.type or '-' }}/{{ row.subtype or '-' }}</td>
@@ -97,7 +97,7 @@
 
 <div class="card" style="margin-top: 2rem;">
     <h2 class="card-title">Object Audit Trail</h2>
-    <form action="/" method="get" class="filter-bar">
+    <form action="{{ tapdb_url(request, '/') }}" method="get" class="filter-bar">
         <input
             type="text"
             name="object_euid"
@@ -165,7 +165,7 @@
     </div>
     {% endif %}
 
-    <form action="/" method="get" class="filter-bar">
+    <form action="{{ tapdb_url(request, '/') }}" method="get" class="filter-bar">
         <input
             type="text"
             name="audit_user"
@@ -203,7 +203,7 @@
             <tr>
                 <td>{{ row.changed_at.strftime('%Y-%m-%d %H:%M:%S') if row.changed_at else '-' }}</td>
                 <td>{{ row.operation_type or '-' }}</td>
-                <td><a href="/object/{{ row.rel_table_euid_fk }}">{{ row.rel_table_euid_fk or '-' }}</a></td>
+                <td><a href="{{ tapdb_url(request, '/object/' ~ row.rel_table_euid_fk) }}">{{ row.rel_table_euid_fk or '-' }}</a></td>
                 <td>{{ row.rel_table_name or '-' }}</td>
                 <td>{{ row.column_name or '-' }}</td>
                 <td>{{ row.changed_by or '-' }}</td>

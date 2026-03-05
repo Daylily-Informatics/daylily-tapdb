@@ -8,6 +8,9 @@
 	    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 	    <link rel="stylesheet" type="text/css" href="{{ style.skin_css }}">
+	    <script>
+	        window.TAPDB_BASE_PATH = "{{ tapdb_base_path(request) | e }}";
+	    </script>
 	    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 	    {% block head %}{% endblock %}
 	    <style>
@@ -232,23 +235,23 @@
 </head>
 <body class="{% if user and user.role == 'admin' %}is-admin{% endif %}">
     <nav class="navbar">
-        <a href="/" class="navbar-brand">🗄️ TAPDB Admin</a>
+        <a href="{{ tapdb_url(request, '/') }}" class="navbar-brand">🗄️ TAPDB Admin</a>
         <ul class="navbar-nav">
-            <li><a href="/">Home</a></li>
-            <li><a href="/templates">Templates</a></li>
-            <li><a href="/instances">Instances</a></li>
-            <li><a href="/lineages">Lineages</a></li>
-            <li><a href="/graph">Graph</a></li>
-            <li><a href="/query">Query</a></li>
-            <li class="admin-only"><a href="/admin/metrics">Admin</a></li>
+            <li><a href="{{ tapdb_url(request, '/') }}">Home</a></li>
+            <li><a href="{{ tapdb_url(request, '/templates') }}">Templates</a></li>
+            <li><a href="{{ tapdb_url(request, '/instances') }}">Instances</a></li>
+            <li><a href="{{ tapdb_url(request, '/lineages') }}">Lineages</a></li>
+            <li><a href="{{ tapdb_url(request, '/graph') }}">Graph</a></li>
+            <li><a href="{{ tapdb_url(request, '/query') }}">Query</a></li>
+            <li class="admin-only"><a href="{{ tapdb_url(request, '/admin/metrics') }}">Admin</a></li>
         </ul>
         {% if user %}
         <div class="user-info">
             <span class="username">{{ user.display_name or user.username }}</span>
             <span class="role-badge {{ user.role }}">{{ user.role }}</span>
             <div class="user-menu">
-                <a href="/change-password">🔐</a>
-                <a href="/logout">Logout</a>
+                <a href="{{ tapdb_url(request, '/change-password') }}">🔐</a>
+                <a href="{{ tapdb_url(request, '/logout') }}">Logout</a>
             </div>
         </div>
         {% endif %}
@@ -265,8 +268,8 @@
                 <span>hash <code>{{ tapdb_footer.hash }}</code></span>
             </div>
             <div class="footer-right">
-                <a href="/info">Info</a>
-                <a href="/help">Help</a>
+                <a href="{{ tapdb_url(request, '/info') }}">Info</a>
+                <a href="{{ tapdb_url(request, '/help') }}">Help</a>
                 <a href="{{ tapdb_footer.repo_url }}" target="_blank" rel="noopener noreferrer">GitHub</a>
                 <a href="mailto:{{ tapdb_footer.support_email }}">{{ tapdb_footer.support_email }}</a>
             </div>

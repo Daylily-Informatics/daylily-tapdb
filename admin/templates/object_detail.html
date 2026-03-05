@@ -7,10 +7,10 @@
     <h1>{{ obj.euid }}</h1>
     <div>
         {% if obj_type == 'template' and not is_reserved_template(obj) %}
-        <a href="/create-instance/{{ obj.euid }}" class="btn btn-success">➕ Create Instance</a>
+        <a href="{{ tapdb_url(request, '/create-instance/' ~ obj.euid) }}" class="btn btn-success">➕ Create Instance</a>
         {% endif %}
         {% if obj_type == 'instance' %}
-        <a href="/graph?start_euid={{ obj.euid }}" class="btn">🔗 View in Graph</a>
+        <a href="{{ tapdb_url(request, '/graph') }}?start_euid={{ obj.euid }}" class="btn">🔗 View in Graph</a>
         {% endif %}
         {% if permissions and permissions.can_delete_object %}
         <button onclick="deleteObject('{{ obj.euid }}')" class="btn btn-danger">🗑️ Delete</button>
@@ -54,8 +54,8 @@
         <tbody>
             {% for lin in parent_lineages %}
             <tr>
-                <td><a href="/object/{{ lin.euid }}">{{ lin.euid }}</a></td>
-                <td><a href="/object/{{ lin.child_euid }}">{{ lin.child_euid }}</a></td>
+                <td><a href="{{ tapdb_url(request, '/object/' ~ lin.euid) }}">{{ lin.euid }}</a></td>
+                <td><a href="{{ tapdb_url(request, '/object/' ~ lin.child_euid) }}">{{ lin.child_euid }}</a></td>
                 <td>{{ lin.child_name or '-' }}</td>
                 <td>{{ lin.relationship_type or 'related' }}</td>
             </tr>
@@ -78,8 +78,8 @@
         <tbody>
             {% for lin in child_lineages %}
             <tr>
-                <td><a href="/object/{{ lin.euid }}">{{ lin.euid }}</a></td>
-                <td><a href="/object/{{ lin.parent_euid }}">{{ lin.parent_euid }}</a></td>
+                <td><a href="{{ tapdb_url(request, '/object/' ~ lin.euid) }}">{{ lin.euid }}</a></td>
+                <td><a href="{{ tapdb_url(request, '/object/' ~ lin.parent_euid) }}">{{ lin.parent_euid }}</a></td>
                 <td>{{ lin.parent_name or '-' }}</td>
                 <td>{{ lin.relationship_type or 'related' }}</td>
             </tr>
@@ -100,7 +100,7 @@
             <th style="width: 200px;">Parent Instance</th>
             <td>
                 {% if obj.parent_instance %}
-                <a href="/object/{{ obj.parent_instance.euid }}">{{ obj.parent_instance.euid }}</a>
+                <a href="{{ tapdb_url(request, '/object/' ~ obj.parent_instance.euid) }}">{{ obj.parent_instance.euid }}</a>
                 ({{ obj.parent_instance.name or '-' }})
                 {% else %}-{% endif %}
             </td>
@@ -109,7 +109,7 @@
             <th>Child Instance</th>
             <td>
                 {% if obj.child_instance %}
-                <a href="/object/{{ obj.child_instance.euid }}">{{ obj.child_instance.euid }}</a>
+                <a href="{{ tapdb_url(request, '/object/' ~ obj.child_instance.euid) }}">{{ obj.child_instance.euid }}</a>
                 ({{ obj.child_instance.name or '-' }})
                 {% else %}-{% endif %}
             </td>
@@ -124,12 +124,12 @@
 <script>
 function deleteObject(euid) {
     if (confirm('Are you sure you want to delete ' + euid + '? This will soft-delete the object.')) {
-        fetch('/api/object/' + euid, { method: 'DELETE' })
+        fetch('{{ tapdb_url(request, '/api/object/') }}' + euid, { method: 'DELETE' })
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     alert('Object deleted successfully');
-                    window.location.href = '/';
+                    window.location.href = '{{ tapdb_url(request, '/') }}';
                 } else {
                     alert('Error: ' + (data.detail || 'Unknown error'));
                 }

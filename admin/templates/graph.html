@@ -314,7 +314,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/graph.js"></script>
+<script src="{{ tapdb_url(request, '/static/js/graph.js') }}"></script>
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         loadGraph();

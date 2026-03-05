@@ -136,7 +136,7 @@
         <div class="error-message">{{ error }}</div>
         {% endif %}
 
-        <form method="POST" action="/signup">
+        <form method="POST" action="{{ tapdb_url(request, '/signup') }}">
             <div class="form-group">
                 <label for="email">Email</label>
                 <input type="email" id="email" name="email" required autofocus>
@@ -155,9 +155,9 @@
             </div>
             <button type="submit" class="btn-signup">Create Account</button>
         </form>
-        <a href="/auth/login" class="btn-google">Continue with Google</a>
+        <a href="{{ tapdb_url(request, '/auth/login') }}" class="btn-google">Continue with Google</a>
 
-        <a href="/login" class="login-link">Already have an account? Sign in</a>
+        <a href="{{ tapdb_url(request, '/login') }}" class="login-link">Already have an account? Sign in</a>
     </div>
 </body>
 </html>

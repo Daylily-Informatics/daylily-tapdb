@@ -18,7 +18,7 @@
             {{ metrics_message }}
         </div>
     {% endif %}
-    <form method="get" action="/admin/metrics" class="filter-bar" style="margin-top: 1rem;">
+    <form method="get" action="{{ tapdb_url(request, '/admin/metrics') }}" class="filter-bar" style="margin-top: 1rem;">
         <label>
             Tail lines
             <input type="number" name="limit" min="1" max="20000" value="{{ limit }}" />
@@ -131,4 +131,3 @@
 </div>
 
 {% endblock %}
-

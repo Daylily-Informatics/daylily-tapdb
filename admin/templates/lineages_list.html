@@ -21,10 +21,10 @@
         <tbody>
             {% for item in items %}
             <tr>
-                <td><a href="/object/{{ item.euid }}">{{ item.euid }}</a></td>
+                <td><a href="{{ tapdb_url(request, '/object/' ~ item.euid) }}">{{ item.euid }}</a></td>
                 <td>
                     {% if item.parent_euid %}
-                    <a href="/object/{{ item.parent_euid }}">{{ item.parent_euid }}</a>
+                    <a href="{{ tapdb_url(request, '/object/' ~ item.parent_euid) }}">{{ item.parent_euid }}</a>
                     <br><small style="color: var(--text-muted);">{{ item.parent_name or '-' }}</small>
                     {% else %}
                     -
@@ -32,7 +32,7 @@
                 </td>
                 <td>
                     {% if item.child_euid %}
-                    <a href="/object/{{ item.child_euid }}">{{ item.child_euid }}</a>
+                    <a href="{{ tapdb_url(request, '/object/' ~ item.child_euid) }}">{{ item.child_euid }}</a>
                     <br><small style="color: var(--text-muted);">{{ item.child_name or '-' }}</small>
                     {% else %}
                     -
@@ -41,7 +41,7 @@
                 <td>{{ item.relationship_type or 'related' }}</td>
                 <td>{{ item.created_dt.strftime('%Y-%m-%d %H:%M') if item.created_dt else '-' }}</td>
                 <td>
-                    <a href="/object/{{ item.euid }}" class="btn" style="padding: 0.25rem 0.5rem;">View</a>
+                    <a href="{{ tapdb_url(request, '/object/' ~ item.euid) }}" class="btn" style="padding: 0.25rem 0.5rem;">View</a>
                 </td>
             </tr>
             {% else %}
@@ -75,4 +75,3 @@
     {% endif %}
 </div>
 {% endblock %}
-
