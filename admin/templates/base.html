@@ -1,13 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}TAPDB Admin{% endblock %}</title>
-    <link rel="stylesheet" type="text/css" href="{{ style.skin_css }}">
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    {% block head %}{% endblock %}
-    <style>
+	<head>
+	    <meta charset="UTF-8">
+	    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+	    <title>{% block title %}TAPDB Admin{% endblock %}</title>
+	    <link rel="preconnect" href="https://fonts.googleapis.com">
+	    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+	    <link rel="stylesheet" type="text/css" href="{{ style.skin_css }}">
+	    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+	    {% block head %}{% endblock %}
+	    <style>
         :root {
             --primary-color: #2c3e50;
             --secondary-color: #3498db;
@@ -18,13 +21,13 @@
             --text-muted: #888;
             --border-color: #333;
         }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--bg-color);
-            color: var(--text-color);
-            line-height: 1.6;
-        }
+	        * { box-sizing: border-box; margin: 0; padding: 0; }
+	        body {
+	            font-family: 'Kanit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+	            background: var(--bg-color);
+	            color: var(--text-color);
+	            line-height: 1.6;
+	        }
         .navbar {
             background: var(--primary-color);
             padding: 1rem 2rem;
@@ -237,6 +240,7 @@
             <li><a href="/lineages">Lineages</a></li>
             <li><a href="/graph">Graph</a></li>
             <li><a href="/query">Query</a></li>
+            <li class="admin-only"><a href="/admin/metrics">Admin</a></li>
         </ul>
         {% if user %}
         <div class="user-info">
