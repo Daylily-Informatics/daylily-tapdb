@@ -78,4 +78,222 @@
     <p style="color: var(--text-muted);">No Cognito runtime values available.</p>
     {% endif %}
 </div>
+
+{% if db_inventory_visible %}
+<div class="card">
+    <h2 class="card-title">Database Inventory (Admin)</h2>
+    {% if db_inventory_error %}
+    <p style="color: #ff8a8a; margin-bottom: 0.75rem;">
+        Could not load database inventory: {{ db_inventory_error }}
+    </p>
+    {% else %}
+    <p style="margin-bottom: 0.75rem;">
+        Connected runtime database:
+        <code>{{ db_inventory_db_name or "unknown" }}</code>
+    </p>
+    <p style="margin-bottom: 0.75rem;">
+        Schemas:
+        {% if db_inventory_schema_names %}
+        {% for schema_name in db_inventory_schema_names %}
+        <code>{{ schema_name }}</code>{% if not loop.last %}, {% endif %}
+        {% endfor %}
+        {% else %}
+        <span style="color: var(--text-muted);">none</span>
+        {% endif %}
+    </p>
+    <table>
+        <thead>
+            <tr>
+                <th>Object Class</th>
+                <th>Count</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>schemas</td><td>{{ db_inventory_counts.schemas }}</td></tr>
+            <tr><td>tables</td><td>{{ db_inventory_counts.tables }}</td></tr>
+            <tr><td>views</td><td>{{ db_inventory_counts.views }}</td></tr>
+            <tr><td>materialized views</td><td>{{ db_inventory_counts.materialized_views }}</td></tr>
+            <tr><td>sequences</td><td>{{ db_inventory_counts.sequences }}</td></tr>
+            <tr><td>triggers</td><td>{{ db_inventory_counts.triggers }}</td></tr>
+            <tr><td>functions</td><td>{{ db_inventory_counts.functions }}</td></tr>
+            <tr><td>indexes</td><td>{{ db_inventory_counts.indexes }}</td></tr>
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+
+{% if not db_inventory_error %}
+<div class="card">
+    <h2 class="card-title">Tables</h2>
+    {% if db_inventory_tables %}
+    <table>
+        <thead>
+            <tr>
+                <th>Schema</th>
+                <th>Table</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in db_inventory_tables %}
+            <tr>
+                <td><code>{{ row.schema_name }}</code></td>
+                <td><code>{{ row.table_name }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-muted);">No tables found.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2 class="card-title">Views</h2>
+    {% if db_inventory_views %}
+    <table>
+        <thead>
+            <tr>
+                <th>Schema</th>
+                <th>View</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in db_inventory_views %}
+            <tr>
+                <td><code>{{ row.schema_name }}</code></td>
+                <td><code>{{ row.view_name }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-muted);">No views found.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2 class="card-title">Materialized Views</h2>
+    {% if db_inventory_materialized_views %}
+    <table>
+        <thead>
+            <tr>
+                <th>Schema</th>
+                <th>Materialized View</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in db_inventory_materialized_views %}
+            <tr>
+                <td><code>{{ row.schema_name }}</code></td>
+                <td><code>{{ row.materialized_view_name }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-muted);">No materialized views found.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2 class="card-title">Sequences</h2>
+    {% if db_inventory_sequences %}
+    <table>
+        <thead>
+            <tr>
+                <th>Schema</th>
+                <th>Sequence</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in db_inventory_sequences %}
+            <tr>
+                <td><code>{{ row.schema_name }}</code></td>
+                <td><code>{{ row.sequence_name }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-muted);">No sequences found.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2 class="card-title">Triggers</h2>
+    {% if db_inventory_triggers %}
+    <table>
+        <thead>
+            <tr>
+                <th>Schema</th>
+                <th>Table</th>
+                <th>Trigger</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in db_inventory_triggers %}
+            <tr>
+                <td><code>{{ row.schema_name }}</code></td>
+                <td><code>{{ row.table_name }}</code></td>
+                <td><code>{{ row.trigger_name }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-muted);">No triggers found.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2 class="card-title">Functions</h2>
+    {% if db_inventory_functions %}
+    <table>
+        <thead>
+            <tr>
+                <th>Schema</th>
+                <th>Function</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in db_inventory_functions %}
+            <tr>
+                <td><code>{{ row.schema_name }}</code></td>
+                <td><code>{{ row.function_signature }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-muted);">No functions found.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2 class="card-title">Indexes</h2>
+    {% if db_inventory_indexes %}
+    <table>
+        <thead>
+            <tr>
+                <th>Schema</th>
+                <th>Table</th>
+                <th>Index</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in db_inventory_indexes %}
+            <tr>
+                <td><code>{{ row.schema_name }}</code></td>
+                <td><code>{{ row.table_name }}</code></td>
+                <td><code>{{ row.index_name }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-muted);">No indexes found.</p>
+    {% endif %}
+</div>
+{% endif %}
+{% endif %}
 {% endblock %}
