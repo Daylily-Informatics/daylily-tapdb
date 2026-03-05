@@ -348,7 +348,7 @@ def test_iam_token_cache_expires(monkeypatch):
     assert len(mod._iam_token_cache) == 1
 
     # Expire the cache by manipulating the stored expiry
-    cache_key = ("us-east-1", "host.rds.amazonaws.com", 5432, "user1")
+    cache_key = ("us-east-1", "host.rds.amazonaws.com", 5432, "user1", "")
     token, _ = mod._iam_token_cache[cache_key]
     mod._iam_token_cache[cache_key] = (token, time_mod.monotonic() - 1)
 

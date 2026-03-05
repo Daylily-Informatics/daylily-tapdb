@@ -70,6 +70,7 @@ class AuroraConnectionBuilder:
         host: str,
         port: int,
         user: str,
+        profile: Optional[str] = None,
     ) -> str:
         """Generate an RDS IAM authentication token.
 
@@ -85,7 +86,7 @@ class AuroraConnectionBuilder:
         Returns:
             Short-lived IAM auth token string.
         """
-        cache_key = (region, host, port, user)
+        cache_key = (region, host, port, user, profile or "")
         if cache_key in _iam_token_cache:
             token, expires_at = _iam_token_cache[cache_key]
             if time.monotonic() < expires_at:
@@ -93,7 +94,11 @@ class AuroraConnectionBuilder:
                 return token
 
         boto3 = _ensure_boto3()
-        client = boto3.client("rds", region_name=region)
+        if profile:
+            session = boto3.session.Session(profile_name=profile)
+            client = session.client("rds", region_name=region)
+        else:
+            client = boto3.client("rds", region_name=region)
         token = client.generate_db_auth_token(
             DBHostname=host,
             Port=port,

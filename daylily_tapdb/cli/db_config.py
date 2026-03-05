@@ -247,6 +247,10 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
             f"{env_prefix}SUPPORT_EMAIL",
             _file_str("support_email") or "",
         ),
+        "aws_profile": os.environ.get(
+            f"{env_prefix}AWS_PROFILE",
+            os.environ.get("AWS_PROFILE", _file_str("aws_profile") or ""),
+        ),
     }
 
     if ctx:
