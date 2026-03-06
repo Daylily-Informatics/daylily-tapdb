@@ -15,13 +15,13 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from collections.abc import Callable
 from typing import Generator, Optional
 
 from sqlalchemy import create_engine, event, text
-from sqlalchemy.engine import Engine, URL
+from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from daylily_tapdb.aurora.connection import AuroraConnectionBuilder
@@ -197,7 +197,9 @@ def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
                 pool_cfg = resolve_tapdb_pool_config(env_name)
                 aws_profile = (pool_cfg.aws_profile or "").strip() or None
             except Exception as exc:
-                logger.debug("No daycog AWS profile fallback for env %s: %s", env_name, exc)
+                logger.debug(
+                    "No daycog AWS profile fallback for env %s: %s", env_name, exc
+                )
         ca_path = AuroraConnectionBuilder.ensure_ca_bundle()
         url = URL.create(
             "postgresql+psycopg2",
@@ -246,7 +248,9 @@ def get_engine_bundle(env_name: str) -> EngineBundle:
 
         maybe_install_engine_metrics(engine, env_name=env)
         SessionFactory = sessionmaker(bind=engine)
-        bundle = EngineBundle(env_name=env, engine=engine, SessionFactory=SessionFactory, cfg=cfg)
+        bundle = EngineBundle(
+            env_name=env, engine=engine, SessionFactory=SessionFactory, cfg=cfg
+        )
         _bundles_by_env[env] = bundle
         return bundle
 
@@ -266,7 +270,9 @@ def dispose_all_engines() -> None:
         try:
             bundle.engine.dispose()
         except Exception as exc:
-            logger.warning("Error disposing engine for env %s: %s", bundle.env_name, exc)
+            logger.warning(
+                "Error disposing engine for env %s: %s", bundle.env_name, exc
+            )
 
 
 def _clear_engine_cache_for_tests() -> None:

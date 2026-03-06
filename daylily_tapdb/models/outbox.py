@@ -41,4 +41,3 @@ class outbox_event(Base):
             "<outbox_event(id="
             f"{self.id!r}, destination={self.destination!r}, status={self.status!r})>"
         )
-

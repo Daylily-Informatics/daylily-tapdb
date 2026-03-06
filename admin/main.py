@@ -6,56 +6,58 @@ FastAPI-based admin interface for managing TAPDB objects with Cytoscape DAG visu
 Usage:
     uvicorn admin.main:app --reload --port 8911
 """
-import os
+
+import base64
 import json
 import logging
+import os
 import secrets
 import subprocess
-import base64
-from types import SimpleNamespace
 from pathlib import Path
-from typing import Optional, Dict, Any, List
-from urllib.parse import urlencode, urlsplit
-from urllib.request import Request as UrlRequest, urlopen
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 
-from fastapi import FastAPI, Request, Query, HTTPException, Form
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.sessions import SessionMiddleware
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
-
-from daylily_tapdb import TemplateManager, InstanceFactory, __version__
-from daylily_tapdb.models.audit import audit_log
-from daylily_tapdb.models.template import generic_template
-from daylily_tapdb.models.instance import generic_instance
-from daylily_tapdb.models.lineage import generic_instance_lineage
-from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from admin.cognito import resolve_tapdb_pool_config, get_cognito_auth
-from admin.db_pool import get_db_connection
-from admin.db_pool import dispose_all_engines
-from admin.db_metrics import (
-    request_path_var,
-    request_method_var,
-    build_metrics_page_context,
-    stop_all_writers,
-)
+from starlette.middleware.sessions import SessionMiddleware
 
 from admin.auth import (
-    get_current_user, require_auth, require_admin,
-    get_user_by_username,
-    authenticate_with_cognito,
-    create_cognito_user_account,
-    get_or_create_user_from_email,
-    respond_to_new_password_challenge,
-    change_cognito_password,
-    update_last_login,
-    get_user_permissions,
     SESSION_COOKIE_NAME,
+    authenticate_with_cognito,
+    change_cognito_password,
+    create_cognito_user_account,
+    get_current_user,
+    get_or_create_user_from_email,
+    get_user_by_username,
+    get_user_permissions,
+    require_admin,
+    require_auth,
+    respond_to_new_password_challenge,
+    update_last_login,
 )
+from admin.cognito import get_cognito_auth, resolve_tapdb_pool_config
+from admin.db_metrics import (
+    build_metrics_page_context,
+    request_method_var,
+    request_path_var,
+    stop_all_writers,
+)
+from admin.db_pool import dispose_all_engines, get_db_connection
+from daylily_tapdb import InstanceFactory, TemplateManager, __version__
+from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+from daylily_tapdb.models.audit import audit_log
+from daylily_tapdb.models.instance import generic_instance
+from daylily_tapdb.models.lineage import generic_instance_lineage
+from daylily_tapdb.models.template import generic_template
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -144,11 +146,13 @@ app = FastAPI(
     version="0.1.0",
 )
 
+
 # Best-effort cleanup for pooled DB + metrics writer.
 @app.on_event("shutdown")
 def _shutdown_cleanup() -> None:
     stop_all_writers()
     dispose_all_engines()
+
 
 # Request context for DB metrics attribution (path/method).
 @app.middleware("http")
@@ -160,6 +164,7 @@ async def _metrics_request_context(request: Request, call_next):
     finally:
         request_path_var.reset(token_path)
         request_method_var.reset(token_method)
+
 
 # Session middleware (must be added before CORS)
 app.add_middleware(
@@ -174,6 +179,7 @@ app.add_middleware(
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+
 def _parse_allowed_origins(raw: str) -> List[str]:
     return [v.strip() for v in (raw or "").split(",") if v.strip()]
 
@@ -185,7 +191,9 @@ if IS_PROD:
     # In prod we refuse to start unless CORS is explicitly configured.
     # (Also reject common foot-gun values like whitespace-only or '*'.)
     if not allowed_origins:
-        raise RuntimeError("Refusing to start in prod without TAPDB_ADMIN_ALLOWED_ORIGINS")
+        raise RuntimeError(
+            "Refusing to start in prod without TAPDB_ADMIN_ALLOWED_ORIGINS"
+        )
     if any(o == "*" for o in allowed_origins):
         raise RuntimeError("Refusing to start in prod with wildcard CORS origin '*'")
 else:
@@ -522,7 +530,9 @@ def _resolve_cognito_oauth_runtime(env_name: str) -> Dict[str, str]:
     callback_url = (values.get("COGNITO_CALLBACK_URL") or "").strip()
     if not callback_url:
         raise RuntimeError("COGNITO_CALLBACK_URL is missing in daycog config")
-    client_id = (values.get("COGNITO_APP_CLIENT_ID") or pool_cfg.app_client_id or "").strip()
+    client_id = (
+        values.get("COGNITO_APP_CLIENT_ID") or pool_cfg.app_client_id or ""
+    ).strip()
     if not client_id:
         raise RuntimeError("COGNITO_APP_CLIENT_ID is missing in daycog config")
     return {
@@ -549,7 +559,9 @@ def _build_cognito_authorize_url(runtime: Dict[str, str], state: str) -> str:
     return f"https://{runtime['domain']}/oauth2/authorize?{query}"
 
 
-def _exchange_oauth_authorization_code(runtime: Dict[str, str], code: str) -> Dict[str, Any]:
+def _exchange_oauth_authorization_code(
+    runtime: Dict[str, str], code: str
+) -> Dict[str, Any]:
     """Exchange Hosted UI auth code for Cognito tokens."""
     token_url = f"https://{runtime['domain']}/oauth2/token"
     payload = {
@@ -632,12 +644,19 @@ def _resolve_oauth_user_profile(
             logger.warning("Failed to verify id_token claims: %s", exc)
 
     email = (
-        str(claims.get("email") or claims.get("cognito:username") or claims.get("username") or "")
+        str(
+            claims.get("email")
+            or claims.get("cognito:username")
+            or claims.get("username")
+            or ""
+        )
         .strip()
         .lower()
     )
     if not email:
-        raise RuntimeError("OAuth login succeeded but no email/username claim was returned")
+        raise RuntimeError(
+            "OAuth login succeeded but no email/username claim was returned"
+        )
 
     display_name = (
         str(
@@ -672,9 +691,11 @@ def _resolve_lineage_targets_or_raise(
         if parent_euid in seen_parent_euids:
             continue
         seen_parent_euids.add(parent_euid)
-        parent_instance = session.query(generic_instance).filter_by(
-            euid=parent_euid, is_deleted=False
-        ).first()
+        parent_instance = (
+            session.query(generic_instance)
+            .filter_by(euid=parent_euid, is_deleted=False)
+            .first()
+        )
         if not parent_instance:
             missing_parents.append(parent_euid)
             continue
@@ -685,9 +706,11 @@ def _resolve_lineage_targets_or_raise(
         if child_euid in seen_child_euids:
             continue
         seen_child_euids.add(child_euid)
-        child_instance = session.query(generic_instance).filter_by(
-            euid=child_euid, is_deleted=False
-        ).first()
+        child_instance = (
+            session.query(generic_instance)
+            .filter_by(euid=child_euid, is_deleted=False)
+            .first()
+        )
         if not child_instance:
             missing_children.append(child_euid)
             continue
@@ -720,8 +743,8 @@ def _new_graph_lineage(
         subtype="generic",
         version="1.0",
         bstatus="active",
-        parent_instance_uuid=parent.uuid,
-        child_instance_uuid=child.uuid,
+        parent_instance_uid=parent.uid,
+        child_instance_uid=child.uid,
         relationship_type=rel,
         parent_type=parent.polymorphic_discriminator,
         child_type=child.polymorphic_discriminator,
@@ -732,6 +755,7 @@ def _new_graph_lineage(
 # ============================================================================
 # Authentication Routes
 # ============================================================================
+
 
 @app.get("/auth/login")
 async def oauth_login(
@@ -768,7 +792,9 @@ async def oauth_login(
         # Treat '/foo' as TAPDB-relative when mounted at a sub-path.
         raw_next = tapdb_url(request, raw_next)
     request.session["oauth_next"] = raw_next
-    return RedirectResponse(_build_cognito_authorize_url(runtime, state), status_code=302)
+    return RedirectResponse(
+        _build_cognito_authorize_url(runtime, state), status_code=302
+    )
 
 
 @app.get("/auth/callback")
@@ -824,13 +850,13 @@ async def oauth_callback(
         )
         return HTMLResponse(content=content)
 
-    request.session["user_uuid"] = user["uuid"]
+    request.session["user_uid"] = user["uid"]
     request.session["cognito_username"] = profile["email"]
     if tokens.get("access_token"):
         request.session["cognito_access_token"] = tokens["access_token"]
     request.session.pop("cognito_challenge", None)
     request.session.pop("cognito_challenge_session", None)
-    update_last_login(user["uuid"])
+    update_last_login(user["uid"])
 
     next_path = request.session.pop("oauth_next", "")
     next_path = (next_path or "").strip()
@@ -851,7 +877,9 @@ async def login_page(request: Request, error: Optional[str] = None):
     user = await get_current_user(request)
     if user:
         if user.get("require_password_change"):
-            return RedirectResponse(tapdb_url(request, "/change-password"), status_code=302)
+            return RedirectResponse(
+                tapdb_url(request, "/change-password"), status_code=302
+            )
         return RedirectResponse(tapdb_url(request, "/"), status_code=302)
 
     content = templates.get_template("login.html").render(
@@ -863,7 +891,9 @@ async def login_page(request: Request, error: Optional[str] = None):
 
 
 @app.post("/login", response_class=HTMLResponse)
-async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+async def login_submit(
+    request: Request, username: str = Form(...), password: str = Form(...)
+):
     """Handle login form submission."""
     identity = (username or "").strip()
     user = get_user_by_username(identity)
@@ -902,9 +932,9 @@ async def login_submit(request: Request, username: str = Form(...), password: st
             return HTMLResponse(content=content)
 
     # Set session (used for app auth/authorization)
-    request.session["user_uuid"] = user["uuid"]
+    request.session["user_uid"] = user["uid"]
     request.session["cognito_username"] = cognito_username
-    update_last_login(user["uuid"])
+    update_last_login(user["uid"])
 
     if auth_result.get("challenge") == "NEW_PASSWORD_REQUIRED":
         request.session["cognito_challenge"] = "NEW_PASSWORD_REQUIRED"
@@ -1018,10 +1048,7 @@ async def signup_submit(
         content = templates.get_template("signup.html").render(
             request=request,
             style=get_style(request),
-            error=(
-                "Cognito account created, but TAPDB user provisioning failed: "
-                f"{e}"
-            ),
+            error=(f"Cognito account created, but TAPDB user provisioning failed: {e}"),
         )
         return HTMLResponse(content=content)
 
@@ -1038,9 +1065,9 @@ async def signup_submit(
         )
         return HTMLResponse(content=content)
 
-    request.session["user_uuid"] = user["uuid"]
+    request.session["user_uid"] = user["uid"]
     request.session["cognito_username"] = normalized_email
-    update_last_login(user["uuid"])
+    update_last_login(user["uid"])
 
     if auth_result.get("challenge") == "NEW_PASSWORD_REQUIRED":
         request.session["cognito_challenge"] = "NEW_PASSWORD_REQUIRED"
@@ -1063,7 +1090,9 @@ async def logout(request: Request):
 
 
 @app.get("/change-password", response_class=HTMLResponse)
-async def change_password_page(request: Request, error: Optional[str] = None, success: Optional[str] = None):
+async def change_password_page(
+    request: Request, error: Optional[str] = None, success: Optional[str] = None
+):
     """Password change page."""
     user = await get_current_user(request)
     if not user:
@@ -1245,6 +1274,7 @@ async def change_password_submit(
 # Help Route
 # ============================================================================
 
+
 @app.get("/help", response_class=HTMLResponse)
 async def help_page(request: Request):
     """GUI help and support page."""
@@ -1288,7 +1318,9 @@ async def info_page(request: Request):
         if key == "password":
             continue
         db_rows.append((key, _mask_sensitive_value(key, str(cfg.get(key, "")))))
-    db_rows.append(("password_configured", "yes" if bool(cfg.get("password")) else "no"))
+    db_rows.append(
+        ("password_configured", "yes" if bool(cfg.get("password")) else "no")
+    )
 
     cognito_summary_rows: List[tuple[str, str]] = []
     cognito_env_rows: List[tuple[str, str]] = []
@@ -1431,9 +1463,7 @@ def _run_complex_query(
         "instance": (generic_instance, "instance"),
         "lineage": (generic_instance_lineage, "lineage"),
     }
-    selected_scopes = (
-        list(scope_models.keys()) if kind == "all" else [kind]
-    )
+    selected_scopes = list(scope_models.keys()) if kind == "all" else [kind]
     category_q = (category or "").strip().lower()
     type_q = (type_name or "").strip().lower()
     subtype_q = (subtype or "").strip().lower()
@@ -1489,9 +1519,7 @@ def _run_simple_object_query(
         "instance": (generic_instance, "instance"),
         "lineage": (generic_instance_lineage, "lineage"),
     }
-    selected_scopes = (
-        list(scope_models.keys()) if scope == "all" else [scope]
-    )
+    selected_scopes = list(scope_models.keys()) if scope == "all" else [scope]
 
     for selected in selected_scopes:
         model, kind = scope_models[selected]
@@ -1531,11 +1559,11 @@ def _load_object_audit(
         # Materialize rows before session closes to avoid detached-instance access in templates.
         filtered.append(
             SimpleNamespace(
-                uuid=getattr(raw, "uuid", None),
+                uid=getattr(raw, "uid", None),
                 euid=getattr(raw, "euid", None),
                 rel_table_name=getattr(raw, "rel_table_name", None),
                 column_name=getattr(raw, "column_name", None),
-                rel_table_uuid_fk=getattr(raw, "rel_table_uuid_fk", None),
+                rel_table_uid_fk=getattr(raw, "rel_table_uid_fk", None),
                 rel_table_euid_fk=getattr(raw, "rel_table_euid_fk", None),
                 old_value=getattr(raw, "old_value", None),
                 new_value=getattr(raw, "new_value", None),
@@ -1568,11 +1596,11 @@ def _load_user_audit(
             continue
         filtered.append(
             SimpleNamespace(
-                uuid=getattr(raw, "uuid", None),
+                uid=getattr(raw, "uid", None),
                 euid=getattr(raw, "euid", None),
                 rel_table_name=getattr(raw, "rel_table_name", None),
                 column_name=getattr(raw, "column_name", None),
-                rel_table_uuid_fk=getattr(raw, "rel_table_uuid_fk", None),
+                rel_table_uid_fk=getattr(raw, "rel_table_uid_fk", None),
                 rel_table_euid_fk=getattr(raw, "rel_table_euid_fk", None),
                 old_value=getattr(raw, "old_value", None),
                 new_value=getattr(raw, "new_value", None),
@@ -1616,7 +1644,9 @@ async def index(
     scope: str = Query("all", description="Query scope: all|template|instance|lineage"),
     object_euid: str = Query("", description="EUID for per-object audit trail"),
     audit_user: str = Query("", description="User identifier for per-user audit trail"),
-    op: str = Query("ALL", description="Audit operation filter: INSERT|UPDATE|DELETE|ALL"),
+    op: str = Query(
+        "ALL", description="Audit operation filter: INSERT|UPDATE|DELETE|ALL"
+    ),
     limit: int = Query(20, description="Result row limit"),
 ):
     """Home page with overview, simple query, and audit trail panels."""
@@ -1634,9 +1664,17 @@ async def index(
     with get_db() as conn:
         conn.app_username = user.get("username")
         with conn.session_scope() as session:
-            template_count = session.query(generic_template).filter_by(is_deleted=False).count()
-            instance_count = session.query(generic_instance).filter_by(is_deleted=False).count()
-            lineage_count = session.query(generic_instance_lineage).filter_by(is_deleted=False).count()
+            template_count = (
+                session.query(generic_template).filter_by(is_deleted=False).count()
+            )
+            instance_count = (
+                session.query(generic_instance).filter_by(is_deleted=False).count()
+            )
+            lineage_count = (
+                session.query(generic_instance_lineage)
+                .filter_by(is_deleted=False)
+                .count()
+            )
             object_results = _run_simple_object_query(
                 session=session,
                 q=query_params["q"],
@@ -1756,7 +1794,6 @@ async def list_templates(
     user = request.state.user
     permissions = get_user_permissions(user)
 
-
     with get_db() as conn:
         conn.app_username = user.get("username")
         with conn.session_scope() as session:
@@ -1800,7 +1837,6 @@ async def list_instances(
     """List all instances."""
     user = request.state.user
     permissions = get_user_permissions(user)
-
 
     with get_db() as conn:
         conn.app_username = user.get("username")
@@ -1862,10 +1898,18 @@ async def list_lineages(
                 items.append(
                     {
                         "euid": lin.euid,
-                        "parent_euid": lin.parent_instance.euid if lin.parent_instance else None,
-                        "parent_name": lin.parent_instance.name if lin.parent_instance else None,
-                        "child_euid": lin.child_instance.euid if lin.child_instance else None,
-                        "child_name": lin.child_instance.name if lin.child_instance else None,
+                        "parent_euid": lin.parent_instance.euid
+                        if lin.parent_instance
+                        else None,
+                        "parent_name": lin.parent_instance.name
+                        if lin.parent_instance
+                        else None,
+                        "child_euid": lin.child_instance.euid
+                        if lin.child_instance
+                        else None,
+                        "child_name": lin.child_instance.name
+                        if lin.child_instance
+                        else None,
                         "relationship_type": lin.relationship_type,
                         "created_dt": lin.created_dt,
                     }
@@ -1896,15 +1940,27 @@ async def object_detail(request: Request, euid: str):
         conn.app_username = user.get("username")
         with conn.session_scope() as session:
             # Try to find in templates first
-            obj = session.query(generic_template).filter_by(euid=euid, is_deleted=False).first()
+            obj = (
+                session.query(generic_template)
+                .filter_by(euid=euid, is_deleted=False)
+                .first()
+            )
             obj_type = "template"
 
             if not obj:
-                obj = session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
+                obj = (
+                    session.query(generic_instance)
+                    .filter_by(euid=euid, is_deleted=False)
+                    .first()
+                )
                 obj_type = "instance"
 
             if not obj:
-                obj = session.query(generic_instance_lineage).filter_by(euid=euid, is_deleted=False).first()
+                obj = (
+                    session.query(generic_instance_lineage)
+                    .filter_by(euid=euid, is_deleted=False)
+                    .first()
+                )
                 obj_type = "lineage"
 
             if not obj:
@@ -1916,19 +1972,31 @@ async def object_detail(request: Request, euid: str):
             if obj_type == "instance":
                 # Fetch lineages and eagerly load related instances
                 for lin in obj.parent_of_lineages.filter_by(is_deleted=False).all():
-                    parent_lineages.append({
-                        "euid": lin.euid,
-                        "child_euid": lin.child_instance.euid if lin.child_instance else None,
-                        "child_name": lin.child_instance.name if lin.child_instance else None,
-                        "relationship_type": lin.relationship_type,
-                    })
+                    parent_lineages.append(
+                        {
+                            "euid": lin.euid,
+                            "child_euid": lin.child_instance.euid
+                            if lin.child_instance
+                            else None,
+                            "child_name": lin.child_instance.name
+                            if lin.child_instance
+                            else None,
+                            "relationship_type": lin.relationship_type,
+                        }
+                    )
                 for lin in obj.child_of_lineages.filter_by(is_deleted=False).all():
-                    child_lineages.append({
-                        "euid": lin.euid,
-                        "parent_euid": lin.parent_instance.euid if lin.parent_instance else None,
-                        "parent_name": lin.parent_instance.name if lin.parent_instance else None,
-                        "relationship_type": lin.relationship_type,
-                    })
+                    child_lineages.append(
+                        {
+                            "euid": lin.euid,
+                            "parent_euid": lin.parent_instance.euid
+                            if lin.parent_instance
+                            else None,
+                            "parent_name": lin.parent_instance.name
+                            if lin.parent_instance
+                            else None,
+                            "relationship_type": lin.relationship_type,
+                        }
+                    )
 
             # Render template inside session context to avoid detached instance errors
             content = templates.get_template("object_detail.html").render(
@@ -1976,17 +2044,23 @@ async def create_instance_form(request: Request, template_euid: str):
     with get_db() as conn:
         conn.app_username = user.get("username")
         with conn.session_scope() as session:
-            template = session.query(generic_template).filter_by(
-                euid=template_euid, is_deleted=False
-            ).first()
+            template = (
+                session.query(generic_template)
+                .filter_by(euid=template_euid, is_deleted=False)
+                .first()
+            )
 
             if not template:
-                raise HTTPException(status_code=404, detail=f"Template not found: {template_euid}")
+                raise HTTPException(
+                    status_code=404, detail=f"Template not found: {template_euid}"
+                )
             _ensure_template_manual_create_allowed(template)
 
             # Get default properties from json_addl
             default_properties = template.json_addl or {}
-            has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))
+            has_instantiation_layouts = bool(
+                default_properties.get("instantiation_layouts")
+            )
 
             content = templates.get_template("create_instance.html").render(
                 request=request,
@@ -2022,8 +2096,16 @@ async def create_instance_submit(request: Request, template_euid: str):
     relationship_type = form.get("relationship_type", "contains").strip()
 
     # Parse comma-separated EUIDs into lists
-    parent_euids = [e.strip() for e in parent_euids_raw.split(",") if e.strip()] if parent_euids_raw else []
-    child_euids = [e.strip() for e in child_euids_raw.split(",") if e.strip()] if child_euids_raw else []
+    parent_euids = (
+        [e.strip() for e in parent_euids_raw.split(",") if e.strip()]
+        if parent_euids_raw
+        else []
+    )
+    child_euids = (
+        [e.strip() for e in child_euids_raw.split(",") if e.strip()]
+        if child_euids_raw
+        else []
+    )
 
     # Collect custom properties from form
     custom_properties = {}
@@ -2054,16 +2136,22 @@ async def create_instance_submit(request: Request, template_euid: str):
         conn.app_username = user.get("username")
 
         with conn.session_scope() as session:
-            template = session.query(generic_template).filter_by(
-                euid=template_euid, is_deleted=False
-            ).first()
+            template = (
+                session.query(generic_template)
+                .filter_by(euid=template_euid, is_deleted=False)
+                .first()
+            )
 
             if not template:
-                raise HTTPException(status_code=404, detail=f"Template not found: {template_euid}")
+                raise HTTPException(
+                    status_code=404, detail=f"Template not found: {template_euid}"
+                )
             _ensure_template_manual_create_allowed(template)
 
             default_properties = template.json_addl or {}
-            has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))
+            has_instantiation_layouts = bool(
+                default_properties.get("instantiation_layouts")
+            )
             template_code = f"{template.category}/{template.type}/{template.subtype}/{template.version}/"
 
         # Create instance using InstanceFactory
@@ -2120,15 +2208,21 @@ async def create_instance_submit(request: Request, template_euid: str):
             logger.info(log_msg)
 
             # Redirect to the new instance
-            return RedirectResponse(tapdb_url(request, f"/object/{instance_euid}"), status_code=302)
+            return RedirectResponse(
+                tapdb_url(request, f"/object/{instance_euid}"), status_code=302
+            )
 
         except ValueError as e:
             with conn.session_scope() as session:
-                template = session.query(generic_template).filter_by(
-                    euid=template_euid, is_deleted=False
-                ).first()
+                template = (
+                    session.query(generic_template)
+                    .filter_by(euid=template_euid, is_deleted=False)
+                    .first()
+                )
                 default_properties = template.json_addl or {} if template else {}
-                has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))
+                has_instantiation_layouts = bool(
+                    default_properties.get("instantiation_layouts")
+                )
 
                 content = templates.get_template("create_instance.html").render(
                     request=request,
@@ -2148,11 +2242,15 @@ async def create_instance_submit(request: Request, template_euid: str):
         except Exception as e:
             logger.exception(f"Error creating instance from template {template_euid}")
             with conn.session_scope() as session:
-                template = session.query(generic_template).filter_by(
-                    euid=template_euid, is_deleted=False
-                ).first()
+                template = (
+                    session.query(generic_template)
+                    .filter_by(euid=template_euid, is_deleted=False)
+                    .first()
+                )
                 default_properties = template.json_addl or {} if template else {}
-                has_instantiation_layouts = bool(default_properties.get("instantiation_layouts"))
+                has_instantiation_layouts = bool(
+                    default_properties.get("instantiation_layouts")
+                )
 
                 content = templates.get_template("create_instance.html").render(
                     request=request,
@@ -2173,6 +2271,7 @@ async def create_instance_submit(request: Request, template_euid: str):
 # ============================================================================
 # API Routes
 # ============================================================================
+
 
 @app.get("/api/graph/data")
 async def get_graph_data(
@@ -2204,9 +2303,11 @@ async def get_graph_data(
         with conn.session_scope() as session:
             if start_euid:
                 # Start from specific node and traverse
-                start_obj = session.query(generic_instance).filter_by(
-                    euid=start_euid, is_deleted=False
-                ).first()
+                start_obj = (
+                    session.query(generic_instance)
+                    .filter_by(euid=start_euid, is_deleted=False)
+                    .first()
+                )
                 if not start_obj:
                     return {"elements": {"nodes": [], "edges": []}}
 
@@ -2215,85 +2316,104 @@ async def get_graph_data(
                         return
                     visited_nodes.add(instance.euid)
 
-                    nodes.append({
-                        "data": {
-                            "id": instance.euid,
-                            "name": instance.name or instance.euid,
-                            "type": instance.type,
-                            "category": instance.category,
-                            "subtype": instance.subtype,
-                            "color": colors.get(instance.category, "#888888"),
+                    nodes.append(
+                        {
+                            "data": {
+                                "id": instance.euid,
+                                "name": instance.name or instance.euid,
+                                "type": instance.type,
+                                "category": instance.category,
+                                "subtype": instance.subtype,
+                                "color": colors.get(instance.category, "#888888"),
+                            }
                         }
-                    })
+                    )
 
                     # Traverse children
                     for lin in instance.parent_of_lineages.filter_by(is_deleted=False):
                         if lin.euid not in visited_edges:
                             visited_edges.add(lin.euid)
-                            edges.append({
-                                "data": {
-                                    "id": lin.euid,
-									# Major wants directionality: child -> parent
-									"source": lin.child_instance.euid,
-									"target": instance.euid,
-                                    "relationship_type": lin.relationship_type or "related",
+                            edges.append(
+                                {
+                                    "data": {
+                                        "id": lin.euid,
+                                        # Major wants directionality: child -> parent
+                                        "source": lin.child_instance.euid,
+                                        "target": instance.euid,
+                                        "relationship_type": lin.relationship_type
+                                        or "related",
+                                    }
                                 }
-                            })
+                            )
                         traverse(lin.child_instance, current_depth + 1)
 
                     # Traverse parents
                     for lin in instance.child_of_lineages.filter_by(is_deleted=False):
                         if lin.euid not in visited_edges:
                             visited_edges.add(lin.euid)
-                            edges.append({
-                                "data": {
-                                    "id": lin.euid,
-									# Major wants directionality: child -> parent
-									"source": instance.euid,
-									"target": lin.parent_instance.euid,
-                                    "relationship_type": lin.relationship_type or "related",
+                            edges.append(
+                                {
+                                    "data": {
+                                        "id": lin.euid,
+                                        # Major wants directionality: child -> parent
+                                        "source": instance.euid,
+                                        "target": lin.parent_instance.euid,
+                                        "relationship_type": lin.relationship_type
+                                        or "related",
+                                    }
                                 }
-                            })
+                            )
                         traverse(lin.parent_instance, current_depth + 1)
 
                 traverse(start_obj, 0)
             else:
                 # Get all instances (limited)
-                instances = session.query(generic_instance).filter_by(
-                    is_deleted=False
-                ).limit(200).all()
+                instances = (
+                    session.query(generic_instance)
+                    .filter_by(is_deleted=False)
+                    .limit(200)
+                    .all()
+                )
 
                 for inst in instances:
-                    nodes.append({
-                        "data": {
-                            "id": inst.euid,
-                            "name": inst.name or inst.euid,
-                            "type": inst.type,
-                            "category": inst.category,
-                            "subtype": inst.subtype,
-                            "color": colors.get(inst.category, "#888888"),
+                    nodes.append(
+                        {
+                            "data": {
+                                "id": inst.euid,
+                                "name": inst.name or inst.euid,
+                                "type": inst.type,
+                                "category": inst.category,
+                                "subtype": inst.subtype,
+                                "color": colors.get(inst.category, "#888888"),
+                            }
                         }
-                    })
+                    )
                     visited_nodes.add(inst.euid)
 
                 # Get lineages for these instances
-                lineages = session.query(generic_instance_lineage).filter_by(
-                    is_deleted=False
-                ).limit(500).all()
+                lineages = (
+                    session.query(generic_instance_lineage)
+                    .filter_by(is_deleted=False)
+                    .limit(500)
+                    .all()
+                )
 
                 for lin in lineages:
                     p_euid = lin.parent_instance.euid if lin.parent_instance else None
                     c_euid = lin.child_instance.euid if lin.child_instance else None
                     if p_euid in visited_nodes and c_euid in visited_nodes:
-                        edges.append({
-                            "data": {
-                                "id": lin.euid,
-								# Major wants directionality: child -> parent
-								"source": c_euid,
-								"target": p_euid,
-                                "relationship_type": lin.relationship_type or "related",
+                        edges.append(
+                            {
+                                "data": {
+                                    "id": lin.euid,
+                                    # Major wants directionality: child -> parent
+                                    "source": c_euid,
+                                    "target": p_euid,
+                                    "relationship_type": lin.relationship_type
+                                    or "related",
+                                }
                             }
-                        })
+                        )
 
     return {"elements": {"nodes": nodes, "edges": edges}}
 
@@ -2317,7 +2437,7 @@ async def api_list_templates(
             return {
                 "items": [
                     {
-                        "uuid": t.uuid,
+                        "uid": t.uid,
                         "euid": t.euid,
                         "name": t.name,
                         "category": t.category,
@@ -2352,7 +2472,7 @@ async def api_list_instances(
             return {
                 "items": [
                     {
-                        "uuid": i.uuid,
+                        "uid": i.uid,
                         "euid": i.euid,
                         "name": i.name,
                         "category": i.category,
@@ -2373,22 +2493,34 @@ async def api_get_object(euid: str):
     """API: Get object by EUID."""
     with get_db() as conn:
         with conn.session_scope() as session:
-            obj = session.query(generic_template).filter_by(euid=euid, is_deleted=False).first()
+            obj = (
+                session.query(generic_template)
+                .filter_by(euid=euid, is_deleted=False)
+                .first()
+            )
             obj_type = "template"
 
             if not obj:
-                obj = session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
+                obj = (
+                    session.query(generic_instance)
+                    .filter_by(euid=euid, is_deleted=False)
+                    .first()
+                )
                 obj_type = "instance"
 
             if not obj:
-                obj = session.query(generic_instance_lineage).filter_by(euid=euid, is_deleted=False).first()
+                obj = (
+                    session.query(generic_instance_lineage)
+                    .filter_by(euid=euid, is_deleted=False)
+                    .first()
+                )
                 obj_type = "lineage"
 
             if not obj:
                 raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
 
             return {
-                "uuid": obj.uuid,
+                "uid": obj.uid,
                 "euid": obj.euid,
                 "name": obj.name,
                 "type": obj_type,
@@ -2412,26 +2544,44 @@ async def api_create_lineage(request: Request):
     relationship_type = (data.get("relationship_type") or "").strip() or "generic"
 
     if not parent_euid or not child_euid:
-        raise HTTPException(status_code=400, detail="parent_euid and child_euid required")
+        raise HTTPException(
+            status_code=400, detail="parent_euid and child_euid required"
+        )
 
     user = getattr(request.state, "user", None)
     with get_db() as conn:
         conn.app_username = (user or {}).get("username")
         with conn.session_scope(commit=True) as session:
-            parent = session.query(generic_instance).filter_by(euid=parent_euid, is_deleted=False).first()
-            child = session.query(generic_instance).filter_by(euid=child_euid, is_deleted=False).first()
+            parent = (
+                session.query(generic_instance)
+                .filter_by(euid=parent_euid, is_deleted=False)
+                .first()
+            )
+            child = (
+                session.query(generic_instance)
+                .filter_by(euid=child_euid, is_deleted=False)
+                .first()
+            )
 
             if not parent:
-                raise HTTPException(status_code=404, detail=f"Parent not found: {parent_euid}")
+                raise HTTPException(
+                    status_code=404, detail=f"Parent not found: {parent_euid}"
+                )
             if not child:
-                raise HTTPException(status_code=404, detail=f"Child not found: {child_euid}")
+                raise HTTPException(
+                    status_code=404, detail=f"Child not found: {child_euid}"
+                )
 
-            existing = session.query(generic_instance_lineage).filter_by(
-                parent_instance_uuid=parent.uuid,
-                child_instance_uuid=child.uuid,
-                relationship_type=relationship_type,
-                is_deleted=False,
-            ).first()
+            existing = (
+                session.query(generic_instance_lineage)
+                .filter_by(
+                    parent_instance_uid=parent.uid,
+                    child_instance_uid=child.uid,
+                    relationship_type=relationship_type,
+                    is_deleted=False,
+                )
+                .first()
+            )
             if existing:
                 raise HTTPException(
                     status_code=409,
@@ -2451,7 +2601,10 @@ async def api_create_lineage(request: Request):
                 session.flush()
             except IntegrityError as exc:
                 # Keep duplicate edge inserts as a clear client error.
-                if "idx_lineage_unique_edge" in str(exc) or "duplicate key" in str(exc).lower():
+                if (
+                    "idx_lineage_unique_edge" in str(exc)
+                    or "duplicate key" in str(exc).lower()
+                ):
                     raise HTTPException(
                         status_code=409,
                         detail=(
@@ -2461,7 +2614,7 @@ async def api_create_lineage(request: Request):
                     ) from exc
                 raise
 
-            return {"success": True, "euid": lineage.euid, "uuid": lineage.uuid}
+            return {"success": True, "euid": lineage.euid, "uid": lineage.uid}
 
 
 @app.delete("/api/object/{euid}")
@@ -2472,11 +2625,23 @@ async def api_delete_object(request: Request, euid: str, hard_delete: bool = Fal
     with get_db() as conn:
         conn.app_username = (user or {}).get("username")
         with conn.session_scope(commit=True) as session:
-            obj = session.query(generic_template).filter_by(euid=euid, is_deleted=False).first()
+            obj = (
+                session.query(generic_template)
+                .filter_by(euid=euid, is_deleted=False)
+                .first()
+            )
             if not obj:
-                obj = session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
+                obj = (
+                    session.query(generic_instance)
+                    .filter_by(euid=euid, is_deleted=False)
+                    .first()
+                )
             if not obj:
-                obj = session.query(generic_instance_lineage).filter_by(euid=euid, is_deleted=False).first()
+                obj = (
+                    session.query(generic_instance_lineage)
+                    .filter_by(euid=euid, is_deleted=False)
+                    .first()
+                )
 
             if not obj:
                 raise HTTPException(status_code=404, detail=f"Object not found: {euid}")

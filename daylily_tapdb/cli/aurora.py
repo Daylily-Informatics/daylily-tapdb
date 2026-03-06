@@ -196,22 +196,18 @@ def aurora_create(
                 f"(stack: [bold]{initiated['stack_name']}[/bold])."
             )
             console.print(
-                f"  Check progress with: "
-                f"[cyan]tapdb aurora status {env}[/cyan]"
+                f"  Check progress with: [cyan]tapdb aurora status {env}[/cyan]"
             )
             return
         else:
             # Block with live progress using rich status spinner
             from rich.status import Status
 
-            status_display = Status(
-                "Creating...", console=console, spinner="dots"
-            )
+            status_display = Status("Creating...", console=console, spinner="dots")
 
             def _progress_callback(status: str, elapsed: float) -> None:
                 status_display.update(
-                    f"Creating... ({elapsed:.0f}s elapsed) — "
-                    f"Status: {status}"
+                    f"Creating... ({elapsed:.0f}s elapsed) — Status: {status}"
                 )
 
             status_display.start()
@@ -296,9 +292,7 @@ def aurora_delete(
                 f"  [dim]Disabled deletion protection on cluster {cluster_id}[/dim]"
             )
         except Exception as exc:
-            console.print(
-                f"  [dim]Could not disable deletion protection: {exc}[/dim]"
-            )
+            console.print(f"  [dim]Could not disable deletion protection: {exc}[/dim]")
 
         result = mgr.delete_stack(stack_name, retain_networking=retain_networking)
     except RuntimeError as exc:

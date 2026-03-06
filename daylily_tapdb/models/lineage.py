@@ -15,8 +15,8 @@ class generic_instance_lineage(tapdb_core):
     Lineage table - directed edges between instances.
 
     Lineages connect instances in a DAG (Directed Acyclic Graph):
-    - parent_instance_uuid: The parent instance ID
-    - child_instance_uuid: The child instance ID
+    - parent_instance_uid: The parent instance ID
+    - child_instance_uid: The child instance ID
     - relationship_type: Type of relationship (e.g., "contains", "derived_from")
     - parent_type/child_type: Cached polymorphic types for query optimization
 
@@ -37,11 +37,11 @@ class generic_instance_lineage(tapdb_core):
     child_type = Column(Text, nullable=True)
     relationship_type = Column(Text, nullable=False, server_default=FetchedValue())
 
-    parent_instance_uuid = Column(
-        BIGINT, ForeignKey("generic_instance.uuid"), nullable=False
+    parent_instance_uid = Column(
+        BIGINT, ForeignKey("generic_instance.uid"), nullable=False
     )
-    child_instance_uuid = Column(
-        BIGINT, ForeignKey("generic_instance.uuid"), nullable=False
+    child_instance_uid = Column(
+        BIGINT, ForeignKey("generic_instance.uid"), nullable=False
     )
 
 

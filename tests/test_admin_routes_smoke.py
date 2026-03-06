@@ -126,16 +126,16 @@ class _FakeSession:
     def add(self, obj):
         if getattr(obj, "euid", None) is None:
             obj.euid = f"GN{len(self._state['lineages']) + 200}"
-        if getattr(obj, "uuid", None) is None:
-            obj.uuid = len(self._state["lineages"]) + 200
+        if getattr(obj, "uid", None) is None:
+            obj.uid = len(self._state["lineages"]) + 200
         obj.is_deleted = False
         obj.created_dt = datetime.now(timezone.utc)
         parent = next(
-            (i for i in self._state["instances"] if i.uuid == obj.parent_instance_uuid),
+            (i for i in self._state["instances"] if i.uid == obj.parent_instance_uid),
             None,
         )
         child = next(
-            (i for i in self._state["instances"] if i.uuid == obj.child_instance_uuid),
+            (i for i in self._state["instances"] if i.uid == obj.child_instance_uid),
             None,
         )
         obj.parent_instance = parent
@@ -175,7 +175,7 @@ class _FakeConn:
 def route_client(monkeypatch: pytest.MonkeyPatch):
     now = datetime.now(timezone.utc)
     parent = SimpleNamespace(
-        uuid=11,
+        uid=11,
         euid="GX11",
         name="Parent",
         category="generic",
@@ -191,7 +191,7 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         child_of_lineages=_FakeRelatedQuery([]),
     )
     child = SimpleNamespace(
-        uuid=12,
+        uid=12,
         euid="GX12",
         name="Child",
         category="generic",
@@ -207,7 +207,7 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         child_of_lineages=_FakeRelatedQuery([]),
     )
     lineage = SimpleNamespace(
-        uuid=21,
+        uid=21,
         euid="GN21",
         name="Parent->Child:contains",
         category="lineage",
@@ -219,8 +219,8 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         created_dt=now,
         is_deleted=False,
         relationship_type="contains",
-        parent_instance_uuid=parent.uuid,
-        child_instance_uuid=child.uuid,
+        parent_instance_uid=parent.uid,
+        child_instance_uid=child.uid,
         parent_type="generic_instance",
         child_type="generic_instance",
         parent_instance=parent,
@@ -230,7 +230,7 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
     child.child_of_lineages = _FakeRelatedQuery([lineage])
 
     template = SimpleNamespace(
-        uuid=1,
+        uid=1,
         euid="GT1",
         name="Generic Template",
         category="generic",
@@ -243,7 +243,7 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         is_deleted=False,
     )
     system_user_template = SimpleNamespace(
-        uuid=2,
+        uid=2,
         euid="GT2",
         name="System User Actor",
         category="generic",
@@ -262,11 +262,11 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         "lineages": [lineage],
         "audit_rows": [
             SimpleNamespace(
-                uuid=501,
+                uid=501,
                 euid="AD501",
                 rel_table_name="generic_instance",
                 column_name="name",
-                rel_table_uuid_fk=child.uuid,
+                rel_table_uid_fk=child.uid,
                 rel_table_euid_fk=child.euid,
                 old_value="Child",
                 new_value="Child Updated",
@@ -276,11 +276,11 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
                 is_deleted=False,
             ),
             SimpleNamespace(
-                uuid=502,
+                uid=502,
                 euid="AD502",
                 rel_table_name="generic_instance",
                 column_name="bstatus",
-                rel_table_uuid_fk=child.uuid,
+                rel_table_uid_fk=child.uid,
                 rel_table_euid_fk=child.euid,
                 old_value="active",
                 new_value="archived",
@@ -290,11 +290,11 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
                 is_deleted=False,
             ),
             SimpleNamespace(
-                uuid=503,
+                uid=503,
                 euid="AD503",
                 rel_table_name="generic_template",
                 column_name="name",
-                rel_table_uuid_fk=template.uuid,
+                rel_table_uid_fk=template.uid,
                 rel_table_euid_fk=template.euid,
                 old_value="Generic Template",
                 new_value="Generic Template v2",
@@ -331,7 +331,7 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         admin_main,
         "get_or_create_user_from_email",
         lambda email, **_k: {
-            "uuid": 777,
+            "uid": 777,
             "username": email,
             "email": email,
             "role": "user",
@@ -375,9 +375,7 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
                         "error_type": "",
                     }
                 ],
-                "by_path": [
-                    {"path": "/", "count": 2, "p95_ms": 2.0, "max_ms": 3.0}
-                ],
+                "by_path": [{"path": "/", "count": 2, "p95_ms": 2.0, "max_ms": 3.0}],
                 "by_table": [
                     {
                         "table_hint": "generic_instance_lineage",
@@ -452,7 +450,7 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
 
 def _admin_user():
     return {
-        "uuid": 1,
+        "uid": 1,
         "username": "admin",
         "email": "admin@example.com",
         "role": "admin",
@@ -626,8 +624,7 @@ def test_home_query_and_audit_panels_admin(
     assert ctx["audit_user_effective"] == "other_user"
     assert ctx["audit_warning"] is None
     assert all(
-        (row.changed_by or "").lower() == "other_user"
-        for row in ctx["user_audit_rows"]
+        (row.changed_by or "").lower() == "other_user" for row in ctx["user_audit_rows"]
     )
 
     # Operation filter applies to user audit.
@@ -636,8 +633,7 @@ def test_home_query_and_audit_panels_admin(
     ctx = _last_render_context(state, "index.html")
     assert ctx["query_params"]["op"] == "UPDATE"
     assert all(
-        (row.operation_type or "").upper() == "UPDATE"
-        for row in ctx["user_audit_rows"]
+        (row.operation_type or "").upper() == "UPDATE" for row in ctx["user_audit_rows"]
     )
 
     # Limit is clamped server-side.
@@ -672,7 +668,7 @@ def test_home_user_audit_forces_non_admin_to_self(
 
     async def _user_auth(_request):
         return {
-            "uuid": 44,
+            "uid": 44,
             "username": "john@example.com",
             "email": "john@example.com",
             "role": "user",
@@ -723,7 +719,7 @@ def test_info_page_hides_inventory_for_non_admin(
 
     async def _user_auth(_request):
         return {
-            "uuid": 44,
+            "uid": 44,
             "username": "john@example.com",
             "email": "john@example.com",
             "role": "user",
@@ -791,7 +787,9 @@ def test_oauth_login_redirect_and_callback_success(
     login_resp = client.get("/auth/login", follow_redirects=False)
     assert login_resp.status_code == 302
     location = login_resp.headers["location"]
-    assert location.startswith("https://example.auth.us-east-1.amazoncognito.com/oauth2/authorize")
+    assert location.startswith(
+        "https://example.auth.us-east-1.amazoncognito.com/oauth2/authorize"
+    )
     query = parse_qs(urlsplit(location).query)
     assert query.get("identity_provider") == ["Google"]
     assert "state" in query

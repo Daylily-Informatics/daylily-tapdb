@@ -27,4 +27,3 @@ def test_outbox_enqueue_uses_conflict_handling():
     ).lower()
     assert "on conflict" in sql
     assert "do nothing" in sql
-

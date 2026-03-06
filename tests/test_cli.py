@@ -15,8 +15,8 @@ from daylily_tapdb.cli import app
 from daylily_tapdb.cli.db import (
     Environment,
     _ensure_dirs,
-    _find_duplicate_template_keys,
     _find_config_dir,
+    _find_duplicate_template_keys,
     _find_schema_file,
     _find_tapdb_core_config_dir,
     _get_db_config,
@@ -56,12 +56,7 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("TAPDB_TEST_DSN", raising=False)
     monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
     cfg_path = (
-        tmp_path
-        / ".config"
-        / "tapdb"
-        / "testclient"
-        / "testdb"
-        / "tapdb-config.yaml"
+        tmp_path / ".config" / "tapdb" / "testclient" / "testdb" / "tapdb-config.yaml"
     )
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text(
@@ -76,7 +71,7 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "    port: 5533\n"
         "    ui_port: 8911\n"
         "    user: test\n"
-        "    password: \"\"\n"
+        '    password: ""\n'
         "    database: tapdb_dev\n"
         "  test:\n"
         "    engine_type: local\n"
@@ -84,7 +79,7 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "    port: 5534\n"
         "    ui_port: 8912\n"
         "    user: test\n"
-        "    password: \"\"\n"
+        '    password: ""\n'
         "    database: tapdb_test\n"
         "  prod:\n"
         "    engine_type: local\n"
@@ -92,7 +87,7 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "    port: 5535\n"
         "    ui_port: 8913\n"
         "    user: test\n"
-        "    password: \"\"\n"
+        '    password: ""\n'
         "    database: tapdb_prod\n",
         encoding="utf-8",
     )
@@ -159,9 +154,7 @@ class TestCLIMain:
     def test_database_name_option_scopes_config_paths(self):
         """Test --database-name changes config search path naming."""
         with patch("shutil.which", return_value=None):
-            result = runner.invoke(
-                app, ["--database-name", "atlas", "info", "--json"]
-            )
+            result = runner.invoke(app, ["--database-name", "atlas", "info", "--json"])
         assert result.exit_code == 0
         payload = json.loads(result.output)
         paths = payload["paths"]["config_search_order"]
@@ -313,8 +306,7 @@ class TestCLICognito:
         cfg_dir = tmp_path / ".config" / "daycog"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / f"{pool_name}.us-east-1.env").write_text(
-            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
-            "COGNITO_CLIENT_NAME=tapdb\n",
+            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\nCOGNITO_CLIENT_NAME=tapdb\n",
             encoding="utf-8",
         )
 
@@ -369,8 +361,7 @@ class TestCLICognito:
         cfg_dir = tmp_path / ".config" / "daycog"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / f"{pool_name}.us-east-1.env").write_text(
-            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
-            "COGNITO_CLIENT_NAME=tapdb\n",
+            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\nCOGNITO_CLIENT_NAME=tapdb\n",
             encoding="utf-8",
         )
 
@@ -416,8 +407,7 @@ class TestCLICognito:
         cfg_dir = tmp_path / ".config" / "daycog"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / f"{pool_name}.us-east-1.env").write_text(
-            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
-            "COGNITO_CLIENT_NAME=tapdb\n",
+            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\nCOGNITO_CLIENT_NAME=tapdb\n",
             encoding="utf-8",
         )
 
@@ -1410,9 +1400,7 @@ class TestCLIDBSeed:
         )
         assert result.exit_code == 0
 
-    def test_db_validate_config_merged_core_then_client_strict_ok(
-        self, tmp_path: Path
-    ):
+    def test_db_validate_config_merged_core_then_client_strict_ok(self, tmp_path: Path):
         """Strict validate should consider TAPDB core templates before client config."""
         (tmp_path / "generic").mkdir()
         (tmp_path / "generic" / "custom.json").write_text(
@@ -1460,9 +1448,7 @@ class TestCLIDBSeed:
         assert payload["config_dirs"][0] == str(core_dir)
         assert str(tmp_path.resolve()) in payload["config_dirs"]
 
-    def test_db_validate_config_json_includes_ordered_config_dirs(
-        self, tmp_path: Path
-    ):
+    def test_db_validate_config_json_includes_ordered_config_dirs(self, tmp_path: Path):
         """JSON validate output should expose ordered merged config directories."""
         (tmp_path / "generic").mkdir()
         (tmp_path / "generic" / "custom.json").write_text(
@@ -1543,7 +1529,9 @@ class TestCLIDBSeed:
         messages = "\n".join(i["message"] for i in payload["issues"]).lower()
         assert "duplicate template key" in messages
 
-        core_generic = _find_tapdb_core_config_dir().resolve() / "generic" / "generic.json"
+        core_generic = (
+            _find_tapdb_core_config_dir().resolve() / "generic" / "generic.json"
+        )
         payload_text = json.dumps(payload).lower()
         assert str(core_generic).lower() in payload_text
         assert str(client_file.resolve()).lower() in payload_text

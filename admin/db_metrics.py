@@ -143,7 +143,9 @@ def two_week_period_start_utc(now_utc: datetime) -> datetime:
     iso_year, iso_week, _iso_weekday = now_utc.isocalendar()
     start_week = iso_week - ((iso_week - 1) % 2)
     start_date = datetime.fromisocalendar(iso_year, start_week, 1).date()
-    return datetime(start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc)
+    return datetime(
+        start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc
+    )
 
 
 def current_metrics_path(env_name: str, *, now_utc: Optional[datetime] = None) -> Path:
@@ -191,7 +193,9 @@ class TSVMetricsWriter:
         self._dropped = 0
         self._dropped_lock = threading.Lock()
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="tapdb-db-metrics", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="tapdb-db-metrics", daemon=True
+        )
         self._thread.start()
 
     def enqueue(self, row: MetricsRow) -> None:
@@ -287,16 +291,22 @@ def maybe_install_engine_metrics(engine: Engine, *, env_name: str) -> None:
     if writer is None:
         return
 
-    def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    def _before_cursor_execute(
+        conn, cursor, statement, parameters, context, executemany
+    ):
         _ = parameters, context, executemany
         start = time.perf_counter()
         op = _extract_op(statement)
         table_hint = _extract_table_hint(statement, op)
         conn.info.setdefault("_tapdb_metrics", {})[id(cursor)] = (start, op, table_hint)
 
-    def _after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    def _after_cursor_execute(
+        conn, cursor, statement, parameters, context, executemany
+    ):
         _ = statement, parameters, context, executemany
-        start, op, table_hint = conn.info.get("_tapdb_metrics", {}).pop(id(cursor), (None, "OTHER", ""))
+        start, op, table_hint = conn.info.get("_tapdb_metrics", {}).pop(
+            id(cursor), (None, "OTHER", "")
+        )
         if start is None:
             return
         duration_ms = (time.perf_counter() - start) * 1000.0
@@ -321,8 +331,12 @@ def maybe_install_engine_metrics(engine: Engine, *, env_name: str) -> None:
         cursor = getattr(exception_context, "cursor", None)
         if conn is None or cursor is None:
             return None
-        start, op, table_hint = conn.info.get("_tapdb_metrics", {}).pop(id(cursor), (None, "OTHER", ""))
-        duration_ms = (time.perf_counter() - start) * 1000.0 if start is not None else 0.0
+        start, op, table_hint = conn.info.get("_tapdb_metrics", {}).pop(
+            id(cursor), (None, "OTHER", "")
+        )
+        duration_ms = (
+            (time.perf_counter() - start) * 1000.0 if start is not None else 0.0
+        )
         err = getattr(exception_context, "original_exception", None)
         error_type = err.__class__.__name__ if err is not None else "Error"
         writer.enqueue(
@@ -439,10 +453,14 @@ def summarize_metrics(rows: Iterable[dict]) -> dict:
                     "max_ms": max(vals) if vals else 0.0,
                 }
             )
-        out.sort(key=lambda d: (d.get("p95_ms") or 0.0, d.get("count") or 0), reverse=True)
+        out.sort(
+            key=lambda d: (d.get("p95_ms") or 0.0, d.get("count") or 0), reverse=True
+        )
         return out
 
-    slowest = sorted(rows_list, key=lambda r: float(r.get("duration_ms") or 0.0), reverse=True)[:25]
+    slowest = sorted(
+        rows_list, key=lambda r: float(r.get("duration_ms") or 0.0), reverse=True
+    )[:25]
     return {
         "count": len(rows_list),
         "p50_ms": _percentile(durations, 50.0),

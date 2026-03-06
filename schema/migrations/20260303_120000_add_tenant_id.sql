@@ -25,15 +25,15 @@ BEGIN
     END;
 
     -- Soft delete only the row in the triggering table (dynamic SQL)
-    EXECUTE format('UPDATE %I SET is_deleted = TRUE WHERE uuid = $1', TG_TABLE_NAME)
-    USING OLD.uuid;
+    EXECUTE format('UPDATE %I SET is_deleted = TRUE WHERE uid = $1', TG_TABLE_NAME)
+    USING OLD.uid;
 
     -- Record deletion in audit log with full record snapshot
     INSERT INTO audit_log (
-        rel_table_name, rel_table_uuid_fk, rel_table_euid_fk,
+        rel_table_name, rel_table_uid_fk, rel_table_euid_fk,
         tenant_id, changed_by, operation_type, old_value
     ) VALUES (
-        TG_TABLE_NAME, OLD.uuid, OLD.euid,
+        TG_TABLE_NAME, OLD.uid, OLD.euid,
         OLD.tenant_id, app_username, 'DELETE', row_to_json(OLD)::TEXT
     );
 
@@ -67,7 +67,7 @@ BEGIN
                                    changed_by, rel_table_uuid_fk, rel_table_euid_fk,
                                    tenant_id, operation_type)
             VALUES (TG_TABLE_NAME, column_name, old_value, new_value,
-                    app_username, NEW.uuid, NEW.euid,
+                    app_username, NEW.uid, NEW.euid,
                     NEW.tenant_id, TG_OP);
         END IF;
     END LOOP;
@@ -90,7 +90,7 @@ BEGIN
 
     INSERT INTO audit_log (rel_table_name, rel_table_uuid_fk, rel_table_euid_fk,
                            tenant_id, changed_by, operation_type)
-    VALUES (TG_TABLE_NAME, NEW.uuid, NEW.euid, NEW.tenant_id, app_username, 'INSERT');
+    VALUES (TG_TABLE_NAME, NEW.uid, NEW.euid, NEW.tenant_id, app_username, 'INSERT');
 
     RETURN NEW;
 END;

@@ -24,7 +24,7 @@ class TestTapdbCore:
         # Check column names exist on a concrete subclass
         columns = [c.name for c in generic_template.__table__.columns]
         expected = [
-            "uuid",
+            "uid",
             "euid",
             "euid_prefix",
             "euid_seq",

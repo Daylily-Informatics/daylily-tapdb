@@ -45,7 +45,9 @@ def test_tsv_writer_writes_header_and_rows(tmp_path, monkeypatch):
 
     path = current_metrics_path("dev")
     text = path.read_text(encoding="utf-8")
-    assert text.startswith("ts_utc\tduration_ms\tok\top\ttable_hint\tpath\tmethod\tusername\trowcount\terror_type")
+    assert text.startswith(
+        "ts_utc\tduration_ms\tok\top\ttable_hint\tpath\tmethod\tusername\trowcount\terror_type"
+    )
     assert "SELECT" in text
     assert "\tgeneric_instance\t" in text
 
@@ -73,4 +75,3 @@ def test_tsv_writer_drops_when_queue_full(tmp_path, monkeypatch):
         writer.enqueue(row)
     assert writer.dropped_count() > 0
     writer.stop(timeout=1.0)
-

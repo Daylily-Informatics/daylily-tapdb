@@ -94,7 +94,7 @@ def materialize_actions(
         # so ActionDispatcher can persist action_instance rows against the action
         # template (ensuring XX prefix), not against the target instance template.
         action_groups[group_name][action_key] = {
-            "action_template_uuid": action_tmpl.uuid,
+            "action_template_uid": action_tmpl.uid,
             "action_template_euid": action_tmpl.euid,
             "action_template_code": template_code,
             **definition,
@@ -205,7 +205,7 @@ class InstanceFactory:
             type=template.type,
             subtype=template.subtype,
             version=template.version,
-            template_uuid=template.uuid,
+            template_uid=template.uid,
             json_addl=json_addl,
             bstatus=template.json_addl.get("default_status", "created"),
             is_singleton=bool(template.is_singleton),
@@ -406,8 +406,8 @@ class InstanceFactory:
             subtype="instance_lineage",
             version="1.0.0",
             bstatus="active",
-            parent_instance_uuid=parent.uuid,
-            child_instance_uuid=child.uuid,
+            parent_instance_uid=parent.uid,
+            child_instance_uid=child.uid,
             relationship_type=relationship_type,
             parent_type=parent.polymorphic_discriminator,
             child_type=child.polymorphic_discriminator,
@@ -459,7 +459,7 @@ class InstanceFactory:
         existing = (
             session.query(generic_instance)
             .filter(
-                generic_instance.template_uuid == template.uuid,
+                generic_instance.template_uid == template.uid,
                 generic_instance.is_deleted.is_(False),
             )
             .order_by(generic_instance.created_dt.desc())

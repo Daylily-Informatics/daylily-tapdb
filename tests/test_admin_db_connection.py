@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from sqlalchemy import create_engine as sa_create_engine
+
 import admin.auth as auth_mod
 import admin.db_pool as pool_mod
 import admin.main as main_mod
-from sqlalchemy import create_engine as sa_create_engine
 
 
 def test_admin_get_db_reuses_single_engine_bundle(monkeypatch):
