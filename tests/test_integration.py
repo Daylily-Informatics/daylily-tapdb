@@ -217,8 +217,8 @@ def test_postgres_schema_seed_action_audit_soft_delete():
 
             assert session.query(generic_instance_lineage).count() > 0
             stored_tenant_id = session.execute(
-                text("SELECT tenant_id FROM generic_instance WHERE uuid = :u"),
-                {"u": wf.uuid},
+                text("SELECT tenant_id FROM generic_instance WHERE uid = :u"),
+                {"u": wf.uid},
             ).scalar_one()
             assert str(stored_tenant_id) == str(tenant_id)
 
@@ -245,16 +245,16 @@ def test_postgres_schema_seed_action_audit_soft_delete():
 
             action_tmpl = tm.get_template(session, "action/core/create-note/1.0")
             assert action_tmpl is not None
-            assert str(a.template_uuid) == str(action_tmpl.uuid)
+            assert str(a.template_uid) == str(action_tmpl.uid)
 
             assert session.query(audit_log).count() > 0
 
-            wf_uuid = wf.uuid
+            wf_uid = wf.uid
             session.delete(wf)
             session.flush()
             is_deleted = session.execute(
-                text("SELECT is_deleted FROM generic_instance WHERE uuid = :u"),
-                {"u": wf_uuid},
+                text("SELECT is_deleted FROM generic_instance WHERE uid = :u"),
+                {"u": wf_uid},
             ).scalar_one()
             assert is_deleted is True
 
@@ -396,7 +396,7 @@ def test_postgres_restricted_role_schema_install_and_identity_triggers():
                     'generic', 'test', 'restricted', '1.0',
                     'GX', 'active'
                 )
-                RETURNING uuid, euid, euid_prefix, euid_seq;
+                RETURNING uid, euid, euid_prefix, euid_seq;
                 """
             )
             row = role_cur.fetchone()

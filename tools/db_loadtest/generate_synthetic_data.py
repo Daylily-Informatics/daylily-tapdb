@@ -19,7 +19,6 @@ from pathlib import Path
 import psycopg2
 from psycopg2.extras import execute_values
 
-
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 5533
 DEFAULT_DB = "tapdb_tapdb_dev"
@@ -29,14 +28,14 @@ DEFAULT_USER = os.environ.get("USER", "postgres")
 @dataclass
 class RunSummary:
     run_id: str
-    template_uuid: int
+    template_uid: int
     tenant_count: int
     base_instance_count: int
     all_instance_count: int
     lineage_edges_created: int
     revision_edges_created: int
-    min_instance_uuid: int
-    max_instance_uuid: int
+    min_instance_uid: int
+    max_instance_uid: int
 
 
 def parse_args() -> argparse.Namespace:
@@ -105,7 +104,9 @@ def parse_args() -> argparse.Namespace:
     if args.revision_chain_length < 0:
         parser.error("--revision-chain-length must be >= 0")
     if args.revision_chain_count > 0 and args.revision_chain_length < 2:
-        parser.error("--revision-chain-length must be >= 2 when --revision-chain-count > 0")
+        parser.error(
+            "--revision-chain-length must be >= 2 when --revision-chain-count > 0"
+        )
     if args.max_depth < 1:
         parser.error("--max-depth must be >= 1")
     if args.latest_limit < 1:
@@ -170,16 +171,16 @@ def ensure_loadtest_template(cur) -> int:
             is_deleted = false,
             json_addl = COALESCE(generic_template.json_addl, '{}'::jsonb) || EXCLUDED.json_addl,
             modified_dt = CURRENT_TIMESTAMP
-        RETURNING uuid
+        RETURNING uid
         """
     )
     row = cur.fetchone()
     if row is None:
-        raise RuntimeError("Failed to create or fetch loadtest template uuid")
+        raise RuntimeError("Failed to create or fetch loadtest template uid")
     return int(row[0])
 
 
-def soft_cleanup(cur, template_uuid: int) -> None:
+def soft_cleanup(cur, template_uid: int) -> None:
     # TAPDB soft-delete triggers transform DELETE into is_deleted=true updates.
     cur.execute(
         """
@@ -195,9 +196,9 @@ def soft_cleanup(cur, template_uuid: int) -> None:
         """
         DELETE FROM generic_instance
         WHERE is_deleted = FALSE
-          AND template_uuid = %s
+          AND template_uid = %s
         """,
-        (template_uuid,),
+        (template_uid,),
     )
 
 
@@ -205,7 +206,7 @@ def insert_base_instances(
     cur,
     *,
     run_id: str,
-    template_uuid: int,
+    template_uid: int,
     tenants: int,
     instances_per_tenant: int,
     batch_size: int,
@@ -218,7 +219,7 @@ def insert_base_instances(
             type,
             subtype,
             version,
-            template_uuid,
+            template_uid,
             json_addl,
             bstatus,
             is_singleton
@@ -250,7 +251,7 @@ def insert_base_instances(
                     "generic",
                     "loadtest_node",
                     "1.0",
-                    template_uuid,
+                    template_uid,
                     json.dumps(payload, separators=(",", ":")),
                     "active",
                     False,
@@ -275,8 +276,8 @@ def get_run_instance_bounds(cur, *, run_id: str) -> tuple[int, int, int]:
         """
         SELECT
             COUNT(*)::bigint AS cnt,
-            MIN(uuid)::bigint AS min_uuid,
-            MAX(uuid)::bigint AS max_uuid
+            MIN(uid)::bigint AS min_uid,
+            MAX(uid)::bigint AS max_uid
         FROM generic_instance
         WHERE is_deleted = FALSE
           AND COALESCE(json_addl->>'loadtest', 'false') = 'true'
@@ -326,8 +327,8 @@ def insert_synthetic_edges(cur, *, run_id: str, lineage_edges: int) -> int:
         """
         WITH base_nodes AS (
             SELECT
-                uuid,
-                row_number() OVER (ORDER BY uuid) - 1 AS idx
+                uid,
+                row_number() OVER (ORDER BY uid) - 1 AS idx
             FROM generic_instance
             WHERE is_deleted = FALSE
               AND COALESCE(json_addl->>'loadtest', 'false') = 'true'
@@ -360,8 +361,8 @@ def insert_synthetic_edges(cur, *, run_id: str, lineage_edges: int) -> int:
             type,
             subtype,
             version,
-            parent_instance_uuid,
-            child_instance_uuid,
+            parent_instance_uid,
+            child_instance_uid,
             relationship_type,
             json_addl,
             bstatus,
@@ -374,8 +375,8 @@ def insert_synthetic_edges(cur, *, run_id: str, lineage_edges: int) -> int:
             'lineage',
             'generic',
             '1.0',
-            parent.uuid,
-            child.uuid,
+            parent.uid,
+            child.uid,
             'loadtest_rel',
             jsonb_build_object(
                 'loadtest', true,
@@ -401,7 +402,7 @@ def insert_revision_chains(
     cur,
     *,
     run_id: str,
-    template_uuid: int,
+    template_uid: int,
     tenants: int,
     chain_count: int,
     chain_length: int,
@@ -416,7 +417,7 @@ def insert_revision_chains(
     for chain_id in range(1, chain_count + 1):
         tenant_ord = rng.randint(1, tenants)
         tenant_id = f"tenant_{tenant_ord:04d}"
-        previous_uuid: int | None = None
+        previous_uid: int | None = None
 
         for rev in range(1, chain_length + 1):
             payload = {
@@ -437,7 +438,7 @@ def insert_revision_chains(
                     type,
                     subtype,
                     version,
-                    template_uuid,
+                    template_uid,
                     json_addl,
                     bstatus,
                     is_singleton
@@ -454,18 +455,18 @@ def insert_revision_chains(
                     'active',
                     false
                 )
-                RETURNING uuid
+                RETURNING uid
                 """,
                 (
                     f"lt-{run_id}-rev-chain{chain_id:04d}-r{rev:04d}",
-                    template_uuid,
+                    template_uid,
                     json.dumps(payload, separators=(",", ":")),
                 ),
             )
-            current_uuid = int(cur.fetchone()[0])
+            current_uid = int(cur.fetchone()[0])
             revision_instance_count += 1
 
-            if previous_uuid is not None:
+            if previous_uid is not None:
                 edge_payload = {
                     "loadtest": True,
                     "run_id": run_id,
@@ -483,8 +484,8 @@ def insert_revision_chains(
                         type,
                         subtype,
                         version,
-                        parent_instance_uuid,
-                        child_instance_uuid,
+                        parent_instance_uid,
+                        child_instance_uid,
                         relationship_type,
                         json_addl,
                         bstatus,
@@ -507,29 +508,31 @@ def insert_revision_chains(
                     ON CONFLICT DO NOTHING
                     """,
                     (
-                        f"lt-{run_id}-rev-chain{chain_id:04d}-r{rev:04d}-revision_of-r{rev-1:04d}",
-                        current_uuid,
-                        previous_uuid,
+                        f"lt-{run_id}-rev-chain{chain_id:04d}-r{rev:04d}-revision_of-r{rev - 1:04d}",
+                        current_uid,
+                        previous_uid,
                         json.dumps(edge_payload, separators=(",", ":")),
                     ),
                 )
                 revision_edge_count += cur.rowcount
 
-            previous_uuid = current_uuid
+            previous_uid = current_uid
 
     return revision_instance_count, revision_edge_count
 
 
-def write_vars_file(path_str: str, *, summary: RunSummary, max_depth: int, latest_limit: int) -> None:
+def write_vars_file(
+    path_str: str, *, summary: RunSummary, max_depth: int, latest_limit: int
+) -> None:
     path = Path(path_str).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     content = (
         "# Generated by tools/db_loadtest/generate_synthetic_data.py\n"
-        f"template_uuid={summary.template_uuid}\n"
+        f"template_uid={summary.template_uid}\n"
         f"tenant_count={summary.tenant_count}\n"
-        f"min_instance_uuid={summary.min_instance_uuid}\n"
-        f"max_instance_uuid={summary.max_instance_uuid}\n"
+        f"min_instance_uid={summary.min_instance_uid}\n"
+        f"max_instance_uid={summary.max_instance_uid}\n"
         f"max_depth={max_depth}\n"
         f"latest_limit={latest_limit}\n"
     )
@@ -550,10 +553,10 @@ def print_pgbench_commands(
 ) -> None:
     base = "tools/db_loadtest/pgbench"
     vars_block = (
-        f"-D template_uuid={summary.template_uuid} "
+        f"-D template_uid={summary.template_uid} "
         f"-D tenant_count={summary.tenant_count} "
-        f"-D min_instance_uuid={summary.min_instance_uuid} "
-        f"-D max_instance_uuid={summary.max_instance_uuid} "
+        f"-D min_instance_uid={summary.min_instance_uid} "
+        f"-D max_instance_uid={summary.max_instance_uid} "
         f"-D max_depth={max_depth} "
         f"-D latest_limit={latest_limit}"
     )
@@ -585,8 +588,8 @@ def print_pgbench_commands(
     )
     print(
         f"DB_HOST={host} DB_PORT={port} DB_NAME={dbname} DB_USER={user} "
-        f"TEMPLATE_UUID={summary.template_uuid} TENANT_COUNT={summary.tenant_count} "
-        f"MIN_INSTANCE_UUID={summary.min_instance_uuid} MAX_INSTANCE_UUID={summary.max_instance_uuid} "
+        f"TEMPLATE_UID={summary.template_uid} TENANT_COUNT={summary.tenant_count} "
+        f"MIN_INSTANCE_UID={summary.min_instance_uid} MAX_INSTANCE_UID={summary.max_instance_uid} "
         f"MAX_DEPTH={max_depth} LATEST_LIMIT={latest_limit} "
         f"{base}/run_app_shaped.sh"
     )
@@ -602,17 +605,17 @@ def run(args: argparse.Namespace) -> RunSummary:
 
     try:
         with conn.cursor() as cur:
-            template_uuid = ensure_loadtest_template(cur)
-            print(f"Using loadtest template uuid={template_uuid}")
+            template_uid = ensure_loadtest_template(cur)
+            print(f"Using loadtest template uid={template_uid}")
 
             if args.truncate_first:
                 print("Soft-cleaning prior loadtest rows (--truncate-first)")
-                soft_cleanup(cur, template_uuid)
+                soft_cleanup(cur, template_uid)
 
             base_inserted = insert_base_instances(
                 cur,
                 run_id=run_id,
-                template_uuid=template_uuid,
+                template_uid=template_uid,
                 tenants=args.tenants,
                 instances_per_tenant=args.instances_per_tenant,
                 batch_size=args.batch_size,
@@ -627,14 +630,14 @@ def run(args: argparse.Namespace) -> RunSummary:
             rev_instances, rev_edges = insert_revision_chains(
                 cur,
                 run_id=run_id,
-                template_uuid=template_uuid,
+                template_uid=template_uid,
                 tenants=args.tenants,
                 chain_count=args.revision_chain_count,
                 chain_length=args.revision_chain_length,
                 rng=rng,
             )
 
-            all_count, min_uuid, max_uuid = get_run_instance_bounds(cur, run_id=run_id)
+            all_count, min_uid, max_uid = get_run_instance_bounds(cur, run_id=run_id)
 
         conn.commit()
 
@@ -646,14 +649,14 @@ def run(args: argparse.Namespace) -> RunSummary:
 
     return RunSummary(
         run_id=run_id,
-        template_uuid=template_uuid,
+        template_uid=template_uid,
         tenant_count=args.tenants,
         base_instance_count=base_inserted,
         all_instance_count=all_count,
         lineage_edges_created=edges_created,
         revision_edges_created=rev_edges,
-        min_instance_uuid=min_uuid,
-        max_instance_uuid=max_uuid,
+        min_instance_uid=min_uid,
+        max_instance_uid=max_uid,
     )
 
 
@@ -667,14 +670,14 @@ def main() -> int:
 
     print("\nGeneration complete:")
     print(f"  run_id:                {summary.run_id}")
-    print(f"  template_uuid:         {summary.template_uuid}")
+    print(f"  template_uid:          {summary.template_uid}")
     print(f"  tenant_count:          {summary.tenant_count}")
     print(f"  base instances:        {summary.base_instance_count}")
     print(f"  all instances:         {summary.all_instance_count}")
     print(f"  lineage edges:         {summary.lineage_edges_created}")
     print(f"  revision edges:        {summary.revision_edges_created}")
-    print(f"  min instance uuid:     {summary.min_instance_uuid}")
-    print(f"  max instance uuid:     {summary.max_instance_uuid}")
+    print(f"  min instance uid:      {summary.min_instance_uid}")
+    print(f"  max instance uid:      {summary.max_instance_uid}")
 
     if args.write_vars:
         write_vars_file(

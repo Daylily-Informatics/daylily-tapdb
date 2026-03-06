@@ -195,9 +195,7 @@ def _resources() -> dict[str, Any]:
                 "DBInstanceIdentifier": {"Fn::Sub": "${ClusterIdentifier}-writer"},
                 "DBInstanceClass": {"Ref": "InstanceClass"},
                 "Engine": "aurora-postgresql",
-                "PubliclyAccessible": {
-                    "Fn::If": ["IsPubliclyAccessible", True, False]
-                },
+                "PubliclyAccessible": {"Fn::If": ["IsPubliclyAccessible", True, False]},
                 "Tags": tags_with_refs,
             },
         },
@@ -247,7 +245,6 @@ def _outputs() -> dict[str, Any]:
             "Description": "Aurora cluster port",
             "Value": {"Fn::GetAtt": ["AuroraCluster", "Endpoint.Port"]},
         },
-
         "SecretArn": {
             "Description": "ARN of the Secrets Manager secret for master credentials",
             "Value": {"Ref": "MasterSecret"},

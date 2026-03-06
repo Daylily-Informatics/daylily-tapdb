@@ -90,7 +90,7 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
     success, output = _run_psql(env, sql=sql)
     if not success:
         raise RuntimeError(
-            "Failed to sync identity prefix config for audit_log: " f"{output[:200]}"
+            f"Failed to sync identity prefix config for audit_log: {output[:200]}"
         )
 
 
@@ -637,8 +637,7 @@ def db_schema_apply(
             f"[dim]○[/dim] Schema already exists in {cfg['database']} (skipping apply)"
         )
         console.print(
-            "[yellow]►[/yellow] Syncing required identity prefixes "
-            "(audit_log)..."
+            "[yellow]►[/yellow] Syncing required identity prefixes (audit_log)..."
         )
         try:
             _sync_identity_prefix_config(env)
@@ -658,8 +657,7 @@ def db_schema_apply(
     _log_operation(env.value, "SCHEMA_APPLY", f"Schema applied from {schema_file}")
     console.print("[green]✓[/green] Schema applied successfully")
     console.print(
-        "[yellow]►[/yellow] Syncing required identity prefixes "
-        "(audit_log)..."
+        "[yellow]►[/yellow] Syncing required identity prefixes (audit_log)..."
     )
     try:
         _sync_identity_prefix_config(env)
@@ -937,8 +935,7 @@ def db_migrate(
 
     if not _schema_exists(env):
         console.print(
-            "[red]✗[/red] TAPDB schema not found. "
-            "Use 'tapdb db schema apply' first."
+            "[red]✗[/red] TAPDB schema not found. Use 'tapdb db schema apply' first."
         )
         raise typer.Exit(1)
 
@@ -1211,7 +1208,9 @@ def _load_template_configs(
                             templates.append(tmpl)
 
                 except json.JSONDecodeError as e:
-                    console.print(f"[yellow]⚠[/yellow] Invalid JSON in {json_file}: {e}")
+                    console.print(
+                        f"[yellow]⚠[/yellow] Invalid JSON in {json_file}: {e}"
+                    )
                 except Exception as e:
                     console.print(f"[yellow]⚠[/yellow] Error reading {json_file}: {e}")
 
@@ -1322,7 +1321,9 @@ def _validate_template_configs(
 
     unique_dirs = _normalize_config_dirs(config_dirs)
     if not unique_dirs:
-        return [], [_ConfigIssue(level="error", message="No config directories provided")]
+        return [], [
+            _ConfigIssue(level="error", message="No config directories provided")
+        ]
 
     # Load
     for config_dir in unique_dirs:
@@ -1892,9 +1893,7 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
         if created:
             console.print("  [green]✓[/green] Created admin user: tapdb_admin")
             return True
-        console.print(
-            f"  [green]✓[/green] Admin user already exists ({user.username})"
-        )
+        console.print(f"  [green]✓[/green] Admin user already exists ({user.username})")
         return False
     except Exception as e:
         console.print(f"  [red]✗[/red] Failed to create admin user: {e}")
@@ -1974,7 +1973,9 @@ def db_seed(
     )
 
     if not templates:
-        console.print("[yellow]⚠[/yellow] No templates found in configured seed directories")
+        console.print(
+            "[yellow]⚠[/yellow] No templates found in configured seed directories"
+        )
         return
 
     duplicates = _find_duplicate_template_keys(templates)

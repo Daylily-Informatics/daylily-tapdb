@@ -37,7 +37,7 @@ class TemplateManager:
         """
         self.config_path = config_path
         # Cache IDs only to avoid detached ORM objects.
-        self._template_uuid_cache: Dict[str, Any] = {}
+        self._template_uid_cache: Dict[str, Any] = {}
         self._template_euid_cache: Dict[str, Any] = {}
 
     def get_template(
@@ -55,9 +55,9 @@ class TemplateManager:
         Returns:
             The template object, or None if not found.
         """
-        cached_uuid = self._template_uuid_cache.get(template_code)
-        if cached_uuid is not None:
-            tmpl = session.get(generic_template, cached_uuid)
+        cached_uid = self._template_uid_cache.get(template_code)
+        if cached_uid is not None:
+            tmpl = session.get(generic_template, cached_uid)
             if tmpl is not None and tmpl.is_deleted is False:
                 return tmpl
 
@@ -82,8 +82,8 @@ class TemplateManager:
         )
 
         if template:
-            self._template_uuid_cache[template_code] = template.uuid
-            self._template_euid_cache[template.euid] = template.uuid
+            self._template_uid_cache[template_code] = template.uid
+            self._template_euid_cache[template.euid] = template.uid
 
         return template
 
@@ -114,12 +114,12 @@ class TemplateManager:
             .first()
         )
         if tmpl is not None:
-            self._template_euid_cache[euid] = tmpl.uuid
+            self._template_euid_cache[euid] = tmpl.uid
         return tmpl
 
     def clear_cache(self):
         """Clear the template cache."""
-        self._template_uuid_cache.clear()
+        self._template_uid_cache.clear()
         self._template_euid_cache.clear()
 
     def list_templates(

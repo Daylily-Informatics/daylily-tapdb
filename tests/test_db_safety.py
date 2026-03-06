@@ -112,7 +112,6 @@ def test_db_migrate_idempotent_when_all_migrations_already_applied(
     assert not any(c["file"] is not None for c in calls)
 
 
-
 # ---------------------------------------------------------------------------
 # M5: _ensure_instance_prefix_sequence rejects non-alpha prefixes
 # ---------------------------------------------------------------------------
