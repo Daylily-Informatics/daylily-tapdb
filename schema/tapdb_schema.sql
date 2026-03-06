@@ -251,7 +251,7 @@ CREATE INDEX IF NOT EXISTS idx_generic_instance_polymorphic_discriminator ON gen
 CREATE INDEX IF NOT EXISTS idx_generic_instance_type ON generic_instance(type);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_euid ON generic_instance(euid);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_is_deleted ON generic_instance(is_deleted);
-CREATE INDEX IF NOT EXISTS idx_generic_instance_template_uuid ON generic_instance(template_uuid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_template_uid ON generic_instance(template_uid);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_category ON generic_instance(category);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_subtype ON generic_instance(subtype);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_version ON generic_instance(version);
@@ -270,7 +270,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_system_user_login_identif
 
 -- generic_instance_lineage indexes
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lineage_unique_edge
-    ON generic_instance_lineage (parent_instance_uuid, child_instance_uuid, relationship_type)
+    ON generic_instance_lineage (parent_instance_uid, child_instance_uid, relationship_type)
     WHERE is_deleted = FALSE;
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_parent ON generic_instance_lineage(parent_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_child ON generic_instance_lineage(child_instance_uid);

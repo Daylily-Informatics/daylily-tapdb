@@ -64,7 +64,7 @@ BEGIN
 
         IF old_value IS DISTINCT FROM new_value THEN
             INSERT INTO audit_log (rel_table_name, column_name, old_value, new_value,
-                                   changed_by, rel_table_uuid_fk, rel_table_euid_fk,
+                                   changed_by, rel_table_uid_fk, rel_table_euid_fk,
                                    tenant_id, operation_type)
             VALUES (TG_TABLE_NAME, column_name, old_value, new_value,
                     app_username, NEW.uid, NEW.euid,
@@ -88,7 +88,7 @@ BEGIN
         app_username := current_user;
     END;
 
-    INSERT INTO audit_log (rel_table_name, rel_table_uuid_fk, rel_table_euid_fk,
+    INSERT INTO audit_log (rel_table_name, rel_table_uid_fk, rel_table_euid_fk,
                            tenant_id, changed_by, operation_type)
     VALUES (TG_TABLE_NAME, NEW.uid, NEW.euid, NEW.tenant_id, app_username, 'INSERT');
 

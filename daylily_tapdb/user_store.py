@@ -288,7 +288,7 @@ def create_or_get(
             'actor',
             'system_user',
             '1.0',
-            :template_uuid,
+            :template_uid,
             CAST(:json_addl AS jsonb),
             'active',
             FALSE,
