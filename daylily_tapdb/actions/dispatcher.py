@@ -133,17 +133,17 @@ class ActionDispatcher(ABC):
         user: Optional[str],
     ):
         """Create an action_instance record for audit/scheduling."""
-        action_template_uuid = action_ds.get("action_template_uuid")
-        if not action_template_uuid:
+        action_template_uid = action_ds.get("action_template_uid")
+        if not action_template_uid:
             raise ValueError(
-                "action_ds is missing required 'action_template_uuid'. "
+                "action_ds is missing required 'action_template_uid'. "
                 "Instances must be created with Phase 2 action materialization."
             )
 
-        template_uuid = (
-            int(action_template_uuid)
-            if isinstance(action_template_uuid, str)
-            else action_template_uuid
+        template_uid = (
+            int(action_template_uid)
+            if isinstance(action_template_uid, str)
+            else action_template_uid
         )
 
         # This creates a first-class action record (XX prefix)
@@ -154,9 +154,9 @@ class ActionDispatcher(ABC):
             type="action",
             subtype=action_key,
             version="1.0",
-            template_uuid=template_uuid,
+            template_uid=template_uid,
             json_addl={
-                "target_instance_uuid": instance.uuid,
+                "target_instance_uid": instance.uid,
                 "target_instance_euid": instance.euid,
                 "action_group": action_group,
                 "action_key": action_key,

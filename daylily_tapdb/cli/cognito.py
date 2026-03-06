@@ -1179,12 +1179,8 @@ def cognito_edit_app(
 @cognito_app.command("remove-app")
 def cognito_remove_app(
     env: Environment = typer.Argument(..., help="Target environment"),
-    app_name: Optional[str] = typer.Option(
-        None, "--app-name", help="App client name"
-    ),
-    client_id: Optional[str] = typer.Option(
-        None, "--client-id", help="App client ID"
-    ),
+    app_name: Optional[str] = typer.Option(None, "--app-name", help="App client name"),
+    client_id: Optional[str] = typer.Option(None, "--client-id", help="App client ID"),
     pool_name: Optional[str] = typer.Option(
         None, "--pool-name", help="Cognito pool name (default from env DB name)"
     ),
@@ -1231,12 +1227,8 @@ def cognito_remove_app(
 @cognito_app.command("add-google-idp")
 def cognito_add_google_idp(
     env: Environment = typer.Argument(..., help="Target environment"),
-    app_name: Optional[str] = typer.Option(
-        None, "--app-name", help="App client name"
-    ),
-    client_id: Optional[str] = typer.Option(
-        None, "--client-id", help="App client ID"
-    ),
+    app_name: Optional[str] = typer.Option(None, "--app-name", help="App client name"),
+    client_id: Optional[str] = typer.Option(None, "--client-id", help="App client ID"),
     pool_name: Optional[str] = typer.Option(
         None, "--pool-name", help="Cognito pool name (default from env DB name)"
     ),

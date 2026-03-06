@@ -294,7 +294,6 @@ class TestConfigUpdate:
         assert "aurora" in raw
 
 
-
 # ── aurora create --background ──────────────────────────────────────
 
 
@@ -322,9 +321,7 @@ class TestAuroraCreateBackground:
         mock_mgr = _mock_stack_manager()
         mock_mgr_cls.return_value = mock_mgr
 
-        result = runner.invoke(
-            app, ["aurora", "create", "dev", "--vpc-id", "vpc-123"]
-        )
+        result = runner.invoke(app, ["aurora", "create", "dev", "--vpc-id", "vpc-123"])
         assert result.exit_code == 0
         mock_mgr.create_stack.assert_called_once()
         mock_mgr.initiate_create_stack.assert_not_called()
@@ -334,8 +331,6 @@ class TestAuroraCreateBackground:
         mock_mgr_cls.return_value.initiate_create_stack.side_effect = RuntimeError(
             "No default VPC"
         )
-        result = runner.invoke(
-            app, ["aurora", "create", "dev", "--background"]
-        )
+        result = runner.invoke(app, ["aurora", "create", "dev", "--background"])
         assert result.exit_code == 1
         assert "No default VPC" in _strip(result.output)

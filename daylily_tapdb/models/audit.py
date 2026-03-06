@@ -17,7 +17,7 @@ class audit_log(Base):
 
     __tablename__ = "audit_log"
 
-    uuid = Column(
+    uid = Column(
         BIGINT, primary_key=True, nullable=False, server_default=FetchedValue()
     )
     euid = Column(Text, nullable=False, server_default=FetchedValue())
@@ -29,7 +29,7 @@ class audit_log(Base):
     rel_table_name = Column(Text, nullable=False)
     column_name = Column(Text, nullable=True)
 
-    rel_table_uuid_fk = Column(BIGINT, nullable=False)
+    rel_table_uid_fk = Column(BIGINT, nullable=False)
     rel_table_euid_fk = Column(Text, nullable=False)
 
     old_value = Column(Text, nullable=True)

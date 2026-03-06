@@ -14,15 +14,15 @@ JOBS="${JOBS:-4}"
 DURATION="${DURATION:-120}"
 PROGRESS_EVERY="${PROGRESS_EVERY:-5}"
 
-TEMPLATE_UUID="${TEMPLATE_UUID:-}"
+TEMPLATE_UID="${TEMPLATE_UID:-}"
 TENANT_COUNT="${TENANT_COUNT:-5}"
-MIN_INSTANCE_UUID="${MIN_INSTANCE_UUID:-1}"
-MAX_INSTANCE_UUID="${MAX_INSTANCE_UUID:-1000}"
+MIN_INSTANCE_UID="${MIN_INSTANCE_UID:-1}"
+MAX_INSTANCE_UID="${MAX_INSTANCE_UID:-1000}"
 MAX_DEPTH="${MAX_DEPTH:-4}"
 LATEST_LIMIT="${LATEST_LIMIT:-50}"
 
-if [[ -z "${TEMPLATE_UUID}" ]]; then
-  echo "ERROR: TEMPLATE_UUID is required"
+if [[ -z "${TEMPLATE_UID}" ]]; then
+  echo "ERROR: TEMPLATE_UID is required"
   echo "Run tools/db_loadtest/generate_synthetic_data.py and use emitted vars."
   exit 1
 fi
@@ -45,10 +45,10 @@ cmd=(
   -j "${JOBS}"
   -T "${DURATION}"
   -P "${PROGRESS_EVERY}"
-  -D "template_uuid=${TEMPLATE_UUID}"
+  -D "template_uid=${TEMPLATE_UID}"
   -D "tenant_count=${TENANT_COUNT}"
-  -D "min_instance_uuid=${MIN_INSTANCE_UUID}"
-  -D "max_instance_uuid=${MAX_INSTANCE_UUID}"
+  -D "min_instance_uid=${MIN_INSTANCE_UID}"
+  -D "max_instance_uid=${MAX_INSTANCE_UID}"
   -D "max_depth=${MAX_DEPTH}"
   -D "latest_limit=${LATEST_LIMIT}"
   -f "${SCRIPT_DIR}/read_graph_recursive.sql@50"

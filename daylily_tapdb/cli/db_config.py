@@ -103,8 +103,7 @@ def _load_yaml_or_json(path: Path) -> dict[str, Any]:
         file_stat = os.stat(path)
         if file_stat.st_mode & (stat.S_IRGRP | stat.S_IROTH):
             warnings.warn(
-                f"Config file {path} is readable by other users. "
-                f"Run: chmod 600 {path}",
+                f"Config file {path} is readable by other users. Run: chmod 600 {path}",
                 stacklevel=2,
             )
     except OSError:
@@ -153,9 +152,7 @@ def _validate_meta_for_context(root: dict[str, Any], ctx: TapdbContext) -> None:
     cfg_version = meta.get("config_version")
     version_ok = str(cfg_version).strip() == "2"
     if not version_ok:
-        raise RuntimeError(
-            f"Unsupported config_version {cfg_version!r}. Expected 2."
-        )
+        raise RuntimeError(f"Unsupported config_version {cfg_version!r}. Expected 2.")
 
     cfg_client = str(meta.get("client_id") or "").strip()
     cfg_db = str(meta.get("database_name") or "").strip()
@@ -204,9 +201,11 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
             return None
         return str(val)
 
-    engine_type = os.environ.get(
-        f"{env_prefix}ENGINE_TYPE", _file_str("engine_type") or "local"
-    ).strip().lower()
+    engine_type = (
+        os.environ.get(f"{env_prefix}ENGINE_TYPE", _file_str("engine_type") or "local")
+        .strip()
+        .lower()
+    )
 
     cfg: dict[str, str] = {
         "engine_type": engine_type,

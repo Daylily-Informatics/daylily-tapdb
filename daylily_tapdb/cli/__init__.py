@@ -250,9 +250,7 @@ def build_app():
         database_name: Optional[str] = typer.Option(
             None,
             "--database-name",
-            help=(
-                "Database namespace key. Required for runtime/DB commands."
-            ),
+            help=("Database namespace key. Required for runtime/DB commands."),
         ),
     ):
         """Set global CLI context options."""
@@ -514,9 +512,7 @@ def build_app():
             console.print("   Set env overrides before start:")
             console.print(f"   [cyan]export TAPDB_UI_SSL_CERT={cert_path}[/cyan]")
             console.print(f"   [cyan]export TAPDB_UI_SSL_KEY={key_path}[/cyan]")
-        console.print(
-            "   Restart UI: [cyan]tapdb ui restart[/cyan]"
-        )
+        console.print("   Restart UI: [cyan]tapdb ui restart[/cyan]")
 
     @ui_app.command("stop")
     def ui_stop():
@@ -993,8 +989,7 @@ def build_app():
         for env_name in env_names:
             env_cfg = root["environments"][env_name]
             console.print(
-                "  "
-                f"{env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}"
+                f"  {env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}"
             )
 
     @config_root_app.command("migrate-legacy")
@@ -1109,8 +1104,7 @@ def build_app():
         for env_name in sorted(migrated["environments"].keys()):
             env_cfg = migrated["environments"][env_name]
             console.print(
-                "  "
-                f"{env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}"
+                f"  {env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}"
             )
 
     @app.command("version")

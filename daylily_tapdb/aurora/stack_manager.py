@@ -110,9 +110,7 @@ class AuroraStackManager:
     # create_stack
     # ------------------------------------------------------------------
 
-    def _resolve_vpc_and_subnets(
-        self, config: AuroraConfig
-    ) -> tuple[str, list[str]]:
+    def _resolve_vpc_and_subnets(self, config: AuroraConfig) -> tuple[str, list[str]]:
         """Resolve VPC ID and subnet IDs from config or auto-discovery.
 
         If ``config.vpc_id`` is set, use that VPC. Otherwise discover the
@@ -150,9 +148,7 @@ class AuroraStackManager:
             )
         return vpc_id, subnet_ids
 
-    def initiate_create_stack(
-        self, config: AuroraConfig
-    ) -> dict[str, str]:
+    def initiate_create_stack(self, config: AuroraConfig) -> dict[str, str]:
         """Start stack creation without waiting for completion.
 
         Args:
@@ -238,9 +234,7 @@ class AuroraStackManager:
         stack_name = initiated["stack_name"]
         stack_id = initiated["stack_id"]
 
-        result = self.wait_for_stack(
-            stack_name, "CREATE_COMPLETE", callback=callback
-        )
+        result = self.wait_for_stack(stack_name, "CREATE_COMPLETE", callback=callback)
         if result["status"] != "CREATE_COMPLETE":
             events = _cfn_events_summary(self._cfn, stack_name)
             raise RuntimeError(
