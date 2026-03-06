@@ -71,4 +71,3 @@ def ensure_instance_prefix_sequence(session: Session, prefix: str) -> None:
         text(_build_ensure_instance_prefix_sequence_sql(seq_name)),
         {"prefix": normalized},
     )
-

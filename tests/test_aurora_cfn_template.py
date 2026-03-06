@@ -91,8 +91,7 @@ class TestParameters:
 
     def test_subnet_ids_type(self, template):
         assert (
-            template["Parameters"]["SubnetIds"]["Type"]
-            == "List<AWS::EC2::Subnet::Id>"
+            template["Parameters"]["SubnetIds"]["Type"] == "List<AWS::EC2::Subnet::Id>"
         )
 
 

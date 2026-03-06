@@ -18,7 +18,7 @@ class generic_instance(tapdb_core):
     Instance table - concrete objects created from templates.
 
     Instances have:
-    - template_uuid: Reference to the template this instance was created from
+    - template_uid: Reference to the template this instance was created from
     - Lineage relationships: parent_of_lineages and child_of_lineages
 
     Polymorphic inheritance allows typed subclasses (workflow_instance, etc.)
@@ -34,15 +34,15 @@ class generic_instance(tapdb_core):
         "confirm_deleted_rows": False,
     }
 
-    template_uuid = Column(BIGINT, ForeignKey("generic_template.uuid"), nullable=False)
+    template_uid = Column(BIGINT, ForeignKey("generic_template.uid"), nullable=False)
 
     # Lineage relationships
     parent_of_lineages = relationship(
         "generic_instance_lineage",
         primaryjoin=(
-            "and_(generic_instance.uuid =="
+            "and_(generic_instance.uid =="
             " foreign(generic_instance_lineage"
-            ".parent_instance_uuid))"
+            ".parent_instance_uid))"
         ),
         backref=backref("parent_instance", passive_deletes=True),
         lazy="dynamic",
@@ -54,9 +54,9 @@ class generic_instance(tapdb_core):
     child_of_lineages = relationship(
         "generic_instance_lineage",
         primaryjoin=(
-            "and_(generic_instance.uuid =="
+            "and_(generic_instance.uid =="
             " foreign(generic_instance_lineage"
-            ".child_instance_uuid))"
+            ".child_instance_uid))"
         ),
         backref=backref("child_instance", passive_deletes=True),
         lazy="dynamic",

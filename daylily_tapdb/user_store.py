@@ -40,7 +40,7 @@ _REQUIRE_PASSWORD_CHANGE_EXPR = (
 
 @dataclass
 class ActorUser:
-    uuid: int
+    uid: int
     username: str
     email: Optional[str]
     display_name: Optional[str]
@@ -56,7 +56,7 @@ class ActorUser:
 
     def to_session_user(self) -> dict[str, Any]:
         return {
-            "uuid": self.uuid,
+            "uid": self.uid,
             "username": self.username,
             "email": self.email,
             "display_name": self.display_name,
@@ -89,7 +89,7 @@ def _row_to_actor_user(row: Any) -> ActorUser:
     if not username and email:
         username = email.lower()
     return ActorUser(
-        uuid=int(row["uuid"]),
+        uid=int(row["uid"]),
         username=username,
         email=email.lower() if email else None,
         display_name=_norm_optional(row["display_name"]),
@@ -108,7 +108,7 @@ def _row_to_actor_user(row: Any) -> ActorUser:
 def _select_user_columns() -> str:
     return f"""
         SELECT
-            gi.uuid,
+            gi.uid,
             gi.euid,
             gi.created_dt,
             gi.modified_dt,
@@ -126,11 +126,11 @@ def _select_user_columns() -> str:
     """
 
 
-def _get_system_user_template_uuid(session: Session) -> int:
+def _get_system_user_template_uid(session: Session) -> int:
     row = session.execute(
         text(
             """
-            SELECT uuid
+            SELECT uid
             FROM generic_template
             WHERE is_deleted = FALSE
               AND category = :category
@@ -198,17 +198,17 @@ def get_by_login_or_email(
     return _row_to_actor_user(row)
 
 
-def get_by_uuid(
+def get_by_uid(
     session: Session,
-    user_uuid: int | str,
+    user_uid: int | str,
     *,
     include_inactive: bool = False,
 ) -> Optional[ActorUser]:
     sql = _select_user_columns()
     if not include_inactive:
         sql += f"\n  AND {_ACTIVE_EXPR} = TRUE"
-    sql += "\n  AND gi.uuid = :uuid\nLIMIT 1"
-    row = session.execute(text(sql), {"uuid": int(user_uuid)}).mappings().first()
+    sql += "\n  AND gi.uid = :uid\nLIMIT 1"
+    row = session.execute(text(sql), {"uid": int(user_uid)}).mappings().first()
     if not row:
         return None
     return _row_to_actor_user(row)
@@ -243,13 +243,11 @@ def create_or_get(
     if selected_role not in ("admin", "user"):
         raise ValueError(f"invalid role: {role}")
 
-    existing = get_by_login_identifier(
-        session, normalized_login, include_inactive=True
-    )
+    existing = get_by_login_identifier(session, normalized_login, include_inactive=True)
     if existing:
         return existing, False
 
-    template_uuid = _get_system_user_template_uuid(session)
+    template_uid = _get_system_user_template_uid(session)
     now_iso = datetime.now(timezone.utc).isoformat()
     payload = {
         "login_identifier": normalized_login,
@@ -277,7 +275,7 @@ def create_or_get(
             type,
             subtype,
             version,
-            template_uuid,
+            template_uid,
             json_addl,
             bstatus,
             is_singleton,
@@ -290,13 +288,13 @@ def create_or_get(
             'actor',
             'system_user',
             '1.0',
-            :template_uuid,
+            :template_uid,
             CAST(:json_addl AS jsonb),
             'active',
             FALSE,
             FALSE
         )
-        RETURNING uuid
+        RETURNING uid
         """
     )
     try:
@@ -304,12 +302,12 @@ def create_or_get(
             insert_sql,
             {
                 "name": payload["display_name"] or normalized_login,
-                "template_uuid": template_uuid,
+                "template_uid": template_uid,
                 "json_addl": json.dumps(payload),
             },
         ).fetchone()
         if inserted:
-            created = get_by_uuid(session, int(inserted[0]), include_inactive=True)
+            created = get_by_uid(session, int(inserted[0]), include_inactive=True)
             if created:
                 return created, True
     except IntegrityError:
@@ -322,7 +320,7 @@ def create_or_get(
     raise RuntimeError(f"Failed to create actor user {normalized_login}")
 
 
-def set_last_login(session: Session, user_uuid: int | str) -> None:
+def set_last_login(session: Session, user_uid: int | str) -> None:
     last_login_dt = datetime.now(timezone.utc).isoformat()
     session.execute(
         text(
@@ -335,7 +333,7 @@ def set_last_login(session: Session, user_uuid: int | str) -> None:
                     TRUE
                 ),
                 modified_dt = NOW()
-            WHERE gi.uuid = :uuid
+            WHERE gi.uid = :uid
               AND gi.is_deleted = FALSE
               AND gi.polymorphic_discriminator = 'actor_instance'
               AND gi.category = 'generic'
@@ -343,7 +341,7 @@ def set_last_login(session: Session, user_uuid: int | str) -> None:
               AND gi.subtype = 'system_user'
             """
         ),
-        {"uuid": int(user_uuid), "last_login_dt": last_login_dt},
+        {"uid": int(user_uid), "last_login_dt": last_login_dt},
     )
 
 
@@ -365,7 +363,7 @@ def set_role(session: Session, login_identifier: str, role: str) -> bool:
                 modified_dt = NOW()
             WHERE {_SYSTEM_USER_WHERE}
               AND lower(COALESCE(gi.json_addl->>'login_identifier', '')) = :identifier
-            RETURNING gi.uuid
+            RETURNING gi.uid
             """
         ),
         {"identifier": normalized_login, "role": selected_role},
@@ -388,7 +386,7 @@ def set_active(session: Session, login_identifier: str, is_active: bool) -> bool
                 modified_dt = NOW()
             WHERE {_SYSTEM_USER_WHERE}
               AND lower(COALESCE(gi.json_addl->>'login_identifier', '')) = :identifier
-            RETURNING gi.uuid
+            RETURNING gi.uid
             """
         ),
         {"identifier": normalized_login, "is_active": bool(is_active)},
@@ -435,7 +433,7 @@ def set_password_hash(
                 modified_dt = NOW()
             WHERE {_SYSTEM_USER_WHERE}
               AND lower(COALESCE(gi.json_addl->>'login_identifier', '')) = :identifier
-            RETURNING gi.uuid
+            RETURNING gi.uid
             """
         ),
         params,
@@ -453,7 +451,7 @@ def soft_delete(session: Session, login_identifier: str) -> bool:
                 modified_dt = NOW()
             WHERE {_SYSTEM_USER_WHERE}
               AND lower(COALESCE(gi.json_addl->>'login_identifier', '')) = :identifier
-            RETURNING gi.uuid
+            RETURNING gi.uid
             """
         ),
         {"identifier": normalized_login},

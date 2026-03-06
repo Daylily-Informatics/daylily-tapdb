@@ -7,7 +7,7 @@ INSERT INTO generic_instance (
     type,
     subtype,
     version,
-    template_uuid,
+    template_uid,
     json_addl,
     bstatus,
     is_singleton
@@ -19,7 +19,7 @@ VALUES (
     'generic',
     'loadtest_node',
     '1.0',
-    :template_uuid,
+    :template_uid,
     jsonb_build_object(
         'tenant_id', format('tenant_%s', :tenant_bucket),
         'loadtest', true,

@@ -86,7 +86,6 @@ def _active_env() -> Environment:
         return Environment.dev
 
 
-
 def _get_pg_service_cmd() -> tuple[str, list[str], list[str], Path]:
     """
     Get platform-specific system PostgreSQL service commands.
@@ -503,8 +502,7 @@ def pg_start_local(
             f"[red]✗[/red] Missing/invalid configured port for env {env.value}."
         )
         console.print(
-            "  Set environments."
-            f"{env.value}.port in the namespaced TAPDB config."
+            f"  Set environments.{env.value}.port in the namespaced TAPDB config."
         )
         raise typer.Exit(1)
 
@@ -514,9 +512,7 @@ def pg_start_local(
         console.print(
             "[red]✗[/red] --port override does not match configured TAPDB env port."
         )
-        console.print(
-            f"  Configured environments.{env.value}.port = {configured_port}"
-        )
+        console.print(f"  Configured environments.{env.value}.port = {configured_port}")
         raise typer.Exit(1)
 
     data_dir = _get_postgres_data_dir(env)

@@ -13,4 +13,3 @@ __all__ = [
     "mark_delivered",
     "mark_failed",
 ]
-

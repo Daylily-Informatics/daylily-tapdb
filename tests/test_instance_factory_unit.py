@@ -30,7 +30,7 @@ def test_materialize_actions_skips_missing_action_templates():
     )
 
     action_tmpl = SimpleNamespace(
-        uuid=uuid.uuid4(),
+        uid=uuid.uuid4(),
         euid="XX1",
         type="core",
         json_addl={"action_definition": {"foo": "bar"}},
@@ -59,7 +59,7 @@ def test_materialize_actions_legacy_action_template_fallback_logs_warning(caplog
     tmpl = SimpleNamespace(json_addl={"action_imports": {"a": "action/core/x/1.0"}})
 
     action_tmpl = SimpleNamespace(
-        uuid=uuid.uuid4(),
+        uid=uuid.uuid4(),
         euid="XX1",
         type="core",
         json_addl={"action_template": {"foo": "bar"}},
@@ -103,7 +103,7 @@ def test_create_instance_builds_json_addl_and_merges_properties():
     t_uuid = uuid.uuid4()
 
     tmpl = SimpleNamespace(
-        uuid=t_uuid,
+        uid=t_uuid,
         is_singleton=False,
         instance_polymorphic_identity=None,
         polymorphic_discriminator="generic_template",
@@ -128,7 +128,7 @@ def test_create_instance_builds_json_addl_and_merges_properties():
     )
 
     assert inst.name == "x"
-    assert inst.template_uuid == t_uuid
+    assert inst.template_uid == t_uuid
     assert inst.json_addl["properties"] == {"a": 1, "b": 2}
     assert "action_groups" in inst.json_addl
     assert sess.flushed >= 1
@@ -142,7 +142,7 @@ def test_create_instance_sets_tenant_id_column_and_json_when_provided():
     tenant_id = uuid.uuid4()
 
     tmpl = SimpleNamespace(
-        uuid=t_uuid,
+        uid=t_uuid,
         is_singleton=False,
         instance_polymorphic_identity=None,
         polymorphic_discriminator="generic_template",
@@ -177,7 +177,7 @@ def test_create_instance_system_user_normalizes_login_identifier_and_top_level_k
     sess = _FakeSession()
     t_uuid = uuid.uuid4()
     tmpl = SimpleNamespace(
-        uuid=t_uuid,
+        uid=t_uuid,
         is_singleton=False,
         instance_polymorphic_identity=None,
         polymorphic_discriminator="actor_template",
@@ -225,7 +225,7 @@ def test_create_instance_system_user_requires_non_empty_login_identifier():
 
     sess = _FakeSession()
     tmpl = SimpleNamespace(
-        uuid=uuid.uuid4(),
+        uid=uuid.uuid4(),
         is_singleton=False,
         instance_polymorphic_identity=None,
         polymorphic_discriminator="actor_template",
@@ -254,7 +254,9 @@ def test_create_instance_system_user_requires_non_empty_login_identifier():
             return tmpl
 
     f = InstanceFactory(TM())
-    with pytest.raises(ValueError, match="system_user requires a non-empty login_identifier"):
+    with pytest.raises(
+        ValueError, match="system_user requires a non-empty login_identifier"
+    ):
         f.create_instance(
             sess,
             template_code="generic/actor/system_user/1.0",
@@ -268,7 +270,7 @@ def test_create_instance_invalid_instantiation_layouts_raises_value_error():
 
     sess = _FakeSession()
     tmpl = SimpleNamespace(
-        uuid=uuid.uuid4(),
+        uid=uuid.uuid4(),
         is_singleton=False,
         instance_polymorphic_identity=None,
         polymorphic_discriminator="generic_template",
@@ -308,7 +310,7 @@ def test_create_children_handles_string_and_object_child_templates_and_creates_l
     sess = _FakeSession()
 
     parent = SimpleNamespace(
-        uuid=uuid.uuid4(),
+        uid=uuid.uuid4(),
         euid="GX1",
         name="parent",
         polymorphic_discriminator="generic_instance",
@@ -338,7 +340,7 @@ def test_create_children_handles_string_and_object_child_templates_and_creates_l
     def fake_create_instance(*, session, template_code, name, **kwargs):
         created.append((template_code, name))
         return SimpleNamespace(
-            uuid=uuid.uuid4(),
+            uid=uuid.uuid4(),
             euid=f"GX_child_{len(created)}",
             polymorphic_discriminator="generic_instance",
         )
@@ -363,7 +365,7 @@ def test_create_children_handles_string_and_object_child_templates_and_creates_l
 def test_get_or_create_singleton_instance_existing_is_returned_and_filters_is_deleted():
     from daylily_tapdb.factory.instance import InstanceFactory
 
-    existing = SimpleNamespace(uuid=uuid.uuid4(), is_deleted=False)
+    existing = SimpleNamespace(uid=uuid.uuid4(), is_deleted=False)
 
     class Q:
         def __init__(self, result):
@@ -387,7 +389,7 @@ def test_get_or_create_singleton_instance_existing_is_returned_and_filters_is_de
         def query(self, *a, **k):
             return self.q
 
-    tmpl = SimpleNamespace(uuid=uuid.uuid4(), is_singleton=True)
+    tmpl = SimpleNamespace(uid=uuid.uuid4(), is_singleton=True)
 
     class TM:
         def get_template(self, session, template_code):

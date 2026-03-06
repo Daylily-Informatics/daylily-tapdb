@@ -1,2 +1,1 @@
 """TAPDB Admin API endpoints."""
-

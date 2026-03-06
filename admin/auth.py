@@ -11,7 +11,7 @@ from functools import wraps
 from typing import Any, Callable, Optional
 
 import itsdangerous
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature
 
@@ -20,10 +20,11 @@ from admin.db_pool import get_db_connection
 from daylily_tapdb.user_store import (
     create_or_get,
     get_by_login_or_email,
-    get_by_uuid as get_actor_user_by_uuid,
     set_last_login,
 )
-
+from daylily_tapdb.user_store import (
+    get_by_uid as get_actor_user_by_uid,
+)
 
 # Session cookie settings
 SESSION_COOKIE_NAME = "tapdb_session"
@@ -53,7 +54,7 @@ def _disabled_auth_user() -> dict:
         role = "admin"
 
     return {
-        "uuid": 0,
+        "uid": 0,
         "username": email,
         "email": email,
         "display_name": "TAPDB Admin (Auth Disabled)",
@@ -92,7 +93,9 @@ def _extract_bloom_user(request: Request) -> Optional[dict]:
 
     signer = itsdangerous.TimestampSigner(_bloom_session_secret())
     try:
-        payload = signer.unsign(raw_cookie.encode("utf-8"), max_age=_bloom_session_max_age())
+        payload = signer.unsign(
+            raw_cookie.encode("utf-8"), max_age=_bloom_session_max_age()
+        )
         data = json.loads(b64decode(payload))
     except (BadSignature, ValueError, json.JSONDecodeError):
         return None
@@ -131,7 +134,7 @@ def _resolve_shared_auth_user(request: Request) -> Optional[dict]:
         except Exception:
             return None
 
-    request.session["user_uuid"] = user["uuid"]
+    request.session["user_uid"] = user["uid"]
     request.session["cognito_username"] = email
     request.session.pop("cognito_challenge", None)
     request.session.pop("cognito_challenge_session", None)
@@ -165,6 +168,7 @@ def get_db():
     """
     env = os.environ.get("TAPDB_ENV", "dev").lower()
     return get_db_connection(env)
+
 
 def get_user_by_username(username: str) -> Optional[dict]:
     """Fetch user from database by username or email."""
@@ -210,12 +214,12 @@ def get_or_create_user_from_email(
         return user.to_session_user()
 
 
-def get_user_by_uuid(user_uuid: int | str) -> Optional[dict]:
+def get_user_by_uid(user_uid: int | str) -> Optional[dict]:
     """Fetch user from database by integer primary key."""
     with get_db() as conn:
         conn.app_username = "system"
         with conn.session_scope() as session:
-            user = get_actor_user_by_uuid(session, user_uuid, include_inactive=False)
+            user = get_actor_user_by_uid(session, user_uid, include_inactive=False)
         if user:
             return user.to_session_user()
     return None
@@ -292,12 +296,12 @@ def change_cognito_password(
     )
 
 
-def update_last_login(user_uuid: int | str) -> None:
+def update_last_login(user_uid: int | str) -> None:
     """Update user's last login timestamp."""
     with get_db() as conn:
         conn.app_username = "system"
         with conn.session_scope(commit=True) as session:
-            set_last_login(session, user_uuid)
+            set_last_login(session, user_uid)
 
 
 async def get_current_user(request: Request) -> Optional[dict]:
@@ -309,10 +313,10 @@ async def get_current_user(request: Request) -> Optional[dict]:
     if shared_user:
         return shared_user
 
-    user_uuid = request.session.get("user_uuid")
-    if not user_uuid:
+    user_uid = request.session.get("user_uid")
+    if not user_uid:
         return None
-    user = get_user_by_uuid(user_uuid)
+    user = get_user_by_uid(user_uid)
     if not user:
         return None
 
@@ -329,6 +333,7 @@ def require_auth(func: Callable) -> Callable:
     Redirects to password change if required.
     Injects user into request.state.user
     """
+
     @wraps(func)
     async def wrapper(request: Request, *args: Any, **kwargs: Any) -> Any:
         user = await get_current_user(request)
@@ -336,11 +341,17 @@ def require_auth(func: Callable) -> Callable:
             return RedirectResponse(_tapdb_url(request, "/login"), status_code=302)
 
         # Check if password change required (except for change-password route itself)
-        if user.get("require_password_change") and request.scope.get("path") != "/change-password":
-            return RedirectResponse(_tapdb_url(request, "/change-password"), status_code=302)
+        if (
+            user.get("require_password_change")
+            and request.scope.get("path") != "/change-password"
+        ):
+            return RedirectResponse(
+                _tapdb_url(request, "/change-password"), status_code=302
+            )
 
         request.state.user = user
         return await func(request, *args, **kwargs)
+
     return wrapper
 
 
@@ -349,6 +360,7 @@ def require_admin(func: Callable) -> Callable:
 
     Returns 403 if not admin.
     """
+
     @wraps(func)
     async def wrapper(request: Request, *args: Any, **kwargs: Any) -> Any:
         user = await get_current_user(request)
@@ -356,13 +368,16 @@ def require_admin(func: Callable) -> Callable:
             return RedirectResponse(_tapdb_url(request, "/login"), status_code=302)
 
         if user.get("require_password_change"):
-            return RedirectResponse(_tapdb_url(request, "/change-password"), status_code=302)
+            return RedirectResponse(
+                _tapdb_url(request, "/change-password"), status_code=302
+            )
 
         if user.get("role") != "admin":
             raise HTTPException(status_code=403, detail="Admin access required")
 
         request.state.user = user
         return await func(request, *args, **kwargs)
+
     return wrapper
 
 

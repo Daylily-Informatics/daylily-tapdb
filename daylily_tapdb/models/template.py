@@ -42,7 +42,7 @@ class generic_template(tapdb_core):
     child_instances = relationship(
         "generic_instance",
         primaryjoin=(
-            "and_(generic_template.uuid == foreign(generic_instance.template_uuid))"
+            "and_(generic_template.uid == foreign(generic_instance.template_uid))"
         ),
         backref="parent_template",
     )

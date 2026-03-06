@@ -110,4 +110,3 @@ def resolve_context(
         database_name=resolved_db,
         env_name=resolved_env,
     )
-

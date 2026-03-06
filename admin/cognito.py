@@ -9,14 +9,14 @@ files in ``~/.config/daycog/*.env`` with preference for pool-scoped
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-import re
 from typing import Optional
 
-from daylily_tapdb.cli.db_config import get_db_config_for_env
 from daylily_tapdb.cli.cognito import REQUIRED_COGNITO_CLIENT_NAME
+from daylily_tapdb.cli.db_config import get_db_config_for_env
 
 
 @dataclass(frozen=True)
