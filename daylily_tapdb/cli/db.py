@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import sysconfig
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -154,9 +155,11 @@ def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
 
 def _write_migration_baseline(env: "Environment") -> None:
     """Write a migration baseline so fresh installs never apply legacy migrations."""
-    migrations_dir = Path(__file__).parent.parent.parent / "schema" / "migrations"
-    if not migrations_dir.exists():
+    try:
+        schema_root = _find_schema_root(required_subpath=Path("migrations"))
+    except FileNotFoundError:
         return
+    migrations_dir = schema_root / "migrations"
 
     migration_files = sorted(migrations_dir.glob("*.sql"))
     if not migration_files:
@@ -340,17 +343,51 @@ def _get_connection_string(env: Environment, database: Optional[str] = None) -> 
     return base
 
 
+def _schema_root_candidates() -> list[Path]:
+    """Return ordered candidate roots for TAPDB schema assets."""
+    current = Path(__file__).resolve()
+    candidates: list[Path] = [current.parents[2] / "schema"]
+
+    data_dir = sysconfig.get_paths().get("data")
+    if data_dir:
+        candidates.append(Path(data_dir) / "schema")
+
+    candidates.append(Path.cwd() / "schema")
+
+    seen: set[Path] = set()
+    unique_candidates: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_candidates.append(candidate)
+
+    return unique_candidates
+
+
+def _find_schema_root(required_subpath: Optional[Path] = None) -> Path:
+    """Resolve the schema root from known candidate locations."""
+    for schema_root in _schema_root_candidates():
+        if not schema_root.exists() or not schema_root.is_dir():
+            continue
+        if required_subpath is None or (schema_root / required_subpath).exists():
+            return schema_root
+
+    if required_subpath is None:
+        raise FileNotFoundError("Cannot find TAPDB schema root.")
+    raise FileNotFoundError(
+        f"Cannot find TAPDB schema root containing {required_subpath.as_posix()}."
+    )
+
+
 def _find_schema_file() -> Path:
     """Find the TAPDB schema SQL file."""
-    # Check relative to this file
-    pkg_schema = Path(__file__).parent.parent.parent / "schema" / "tapdb_schema.sql"
-    if pkg_schema.exists():
-        return pkg_schema
-
-    # Check current directory
-    cwd_schema = Path.cwd() / "schema" / "tapdb_schema.sql"
-    if cwd_schema.exists():
-        return cwd_schema
+    try:
+        schema_root = _find_schema_root(required_subpath=Path("tapdb_schema.sql"))
+        return schema_root / "tapdb_schema.sql"
+    except FileNotFoundError:
+        pass
 
     raise FileNotFoundError(
         "Cannot find schema/tapdb_schema.sql. "
@@ -940,13 +977,16 @@ def db_migrate(
         raise typer.Exit(1)
 
     # Find migration files
-    migrations_dir = Path(__file__).parent.parent.parent / "schema" / "migrations"
-    if not migrations_dir.exists():
+    default_migrations_dir = _schema_root_candidates()[0] / "migrations"
+    try:
+        schema_root = _find_schema_root(required_subpath=Path("migrations"))
+    except FileNotFoundError:
         console.print(
-            f"[yellow]⚠[/yellow] No migrations directory found at {migrations_dir}"
+            f"[yellow]⚠[/yellow] No migrations directory found at {default_migrations_dir}"
         )
         console.print("[dim]Schema is up to date (no migrations to apply).[/dim]")
         return
+    migrations_dir = schema_root / "migrations"
 
     migration_files = sorted(migrations_dir.glob("*.sql"))
     if not migration_files:

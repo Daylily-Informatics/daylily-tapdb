@@ -112,6 +112,42 @@ def test_db_migrate_idempotent_when_all_migrations_already_applied(
     assert not any(c["file"] is not None for c in calls)
 
 
+def test_db_migrate_uses_installed_data_migrations(tmp_path, monkeypatch):
+    """When repo schema is absent, migrations should resolve from data-dir schema."""
+    import daylily_tapdb.cli.db as m
+
+    fake_cli_dir = tmp_path / "site-packages" / "daylily_tapdb" / "cli"
+    fake_cli_dir.mkdir(parents=True)
+    fake_db_py = fake_cli_dir / "db.py"
+    fake_db_py.write_text("# test stub\n")
+    monkeypatch.setattr(m, "__file__", str(fake_db_py))
+
+    data_root = tmp_path / "py-data"
+    migrations_dir = data_root / "schema" / "migrations"
+    migrations_dir.mkdir(parents=True)
+    migration_file = migrations_dir / "001_test.sql"
+    migration_file.write_text("SELECT 1;\n")
+
+    monkeypatch.setattr(m.sysconfig, "get_paths", lambda: {"data": str(data_root)})
+    monkeypatch.setattr(m, "_get_db_config", lambda env: {"database": "tapdb"})
+    monkeypatch.setattr(m, "_check_db_exists", lambda env, db: True)
+    monkeypatch.setattr(m, "_schema_exists", lambda env: True)
+
+    calls: list[dict] = []
+
+    def fake_run_psql(env, *, sql=None, file: Path | None = None):
+        calls.append({"sql": sql, "file": file})
+        if sql and "SELECT filename FROM _tapdb_migrations" in sql:
+            return True, ""
+        return True, ""
+
+    monkeypatch.setattr(m, "_run_psql", fake_run_psql)
+
+    m.db_migrate(m.Environment.dev, dry_run=False)
+
+    assert any(c["file"] == migration_file for c in calls)
+
+
 # ---------------------------------------------------------------------------
 # M5: _ensure_instance_prefix_sequence rejects non-alpha prefixes
 # ---------------------------------------------------------------------------
