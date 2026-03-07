@@ -902,6 +902,34 @@ class TestCLIDB:
         assert schema_path.exists()
         assert schema_path.name == "tapdb_schema.sql"
 
+    def test_find_schema_file_falls_back_to_installed_data_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Use installed data-dir schema when repo-relative schema is absent."""
+        import daylily_tapdb.cli.db as m
+
+        fake_cli_dir = tmp_path / "site-packages" / "daylily_tapdb" / "cli"
+        fake_cli_dir.mkdir(parents=True)
+        fake_db_py = fake_cli_dir / "db.py"
+        fake_db_py.write_text("# fake module path\n")
+        monkeypatch.setattr(m, "__file__", str(fake_db_py))
+
+        data_root = tmp_path / "py-data"
+        expected_schema = data_root / "schema" / "tapdb_schema.sql"
+        expected_schema.parent.mkdir(parents=True)
+        expected_schema.write_text("-- installed schema\n")
+
+        cwd_schema = tmp_path / "cwd" / "schema" / "tapdb_schema.sql"
+        cwd_schema.parent.mkdir(parents=True)
+        cwd_schema.write_text("-- cwd schema\n")
+        monkeypatch.chdir(cwd_schema.parent.parent)
+
+        monkeypatch.setattr(m.sysconfig, "get_paths", lambda: {"data": str(data_root)})
+
+        schema_path = m._find_schema_file()
+        assert schema_path == expected_schema
+        assert schema_path.read_text() == "-- installed schema\n"
+
     def test_ensure_dirs_creates_config(self):
         """Test _ensure_dirs creates config directory."""
         _ensure_dirs()

@@ -72,6 +72,53 @@ jobs:
           cache: pip
       - run: |
           python -m pip install --upgrade pip
+          pip install build
           pip install -e ".[dev,cli,aurora,admin]"
+      - name: Build wheel artifact
+        run: python -m build --wheel
+      - name: Verify wheel includes schema assets
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          wheels = sorted(Path("dist").glob("*.whl"))
+          if not wheels:
+              raise SystemExit("No wheel artifact was produced in dist/")
+
+          wheel_path = wheels[-1]
+          with zipfile.ZipFile(wheel_path) as wheel:
+              names = set(wheel.namelist())
+
+          def has_suffix(suffix: str) -> bool:
+              return any(name.endswith(suffix) for name in names)
+
+          missing = []
+          for required in ("schema/tapdb_schema.sql", "schema/rls.sql"):
+              if not has_suffix(required):
+                  missing.append(required)
+
+          migration_files = [
+              name
+              for name in names
+              if "schema/migrations/" in name and name.endswith(".sql")
+          ]
+          legacy_migration_files = [
+              name
+              for name in names
+              if "schema/migrations_legacy/" in name and name.endswith(".sql")
+          ]
+
+          if not migration_files:
+              missing.append("schema/migrations/*.sql")
+          if not legacy_migration_files:
+              missing.append("schema/migrations_legacy/*.sql")
+
+          if missing:
+              joined = ", ".join(missing)
+              raise SystemExit(f"Wheel missing required schema assets: {joined}")
+
+          print(f"Validated schema assets in {wheel_path.name}")
+          PY
       - name: Run tests
         run: python -m pytest tests/ -q --deselect tests/test_admin_routes_smoke.py

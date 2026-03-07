@@ -99,6 +99,11 @@ admin = [
     "static/js/*.js",
 ]
 
+[tool.setuptools.data-files]
+"schema" = ["schema/tapdb_schema.sql", "schema/rls.sql"]
+"schema/migrations" = ["schema/migrations/*.sql"]
+"schema/migrations_legacy" = ["schema/migrations_legacy/*.sql"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
