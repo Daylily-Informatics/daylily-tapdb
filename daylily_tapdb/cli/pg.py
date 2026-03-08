@@ -5,6 +5,7 @@ import os
 import platform
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -42,7 +43,7 @@ def _get_postgres_log_file(env: "Environment") -> Path:
 
 def _get_instance_lock_file(env: "Environment") -> Path:
     if env.value == "prod":
-        return Path("/tmp/tapdb-prod-instance.lock")
+        return Path(tempfile.gettempdir()) / "tapdb-prod-instance.lock"
     ctx = resolve_context(require_keys=True, env_name=env.value)
     return ctx.lock_dir(env.value) / "instance.lock"
 

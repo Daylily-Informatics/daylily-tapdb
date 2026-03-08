@@ -25,7 +25,7 @@ from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.sessions import SessionMiddleware
@@ -69,13 +69,24 @@ TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
 # Jinja2 environment
-templates = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
+templates = Environment(
+    loader=FileSystemLoader(str(TEMPLATES_DIR)),
+    autoescape=select_autoescape(["html", "htm", "xml"]),
+)
 
 APP_ENV = os.environ.get("TAPDB_ENV", "dev").lower()
 IS_PROD = APP_ENV == "prod"
 DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
 DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/daylily-tapdb"
 _RESERVED_TEMPLATE_COORDS = {("generic", "actor", "system_user")}
+
+
+def _require_https_url(url: str, *, label: str) -> str:
+    """Reject non-HTTPS URLs before network access."""
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise RuntimeError(f"{label} must be an https URL")
+    return url
 
 
 def _git_output(*args: str) -> str:
@@ -563,7 +574,10 @@ def _exchange_oauth_authorization_code(
     runtime: Dict[str, str], code: str
 ) -> Dict[str, Any]:
     """Exchange Hosted UI auth code for Cognito tokens."""
-    token_url = f"https://{runtime['domain']}/oauth2/token"
+    token_url = _require_https_url(
+        f"https://{runtime['domain']}/oauth2/token",
+        label="Cognito token endpoint",
+    )
     payload = {
         "grant_type": "authorization_code",
         "code": code,
@@ -584,7 +598,7 @@ def _exchange_oauth_authorization_code(
         method="POST",
     )
     try:
-        with urlopen(req, timeout=15) as resp:
+        with urlopen(req, timeout=15) as resp:  # nosec B310
             body = resp.read().decode("utf-8")
     except HTTPError as exc:
         details = ""
@@ -610,13 +624,16 @@ def _exchange_oauth_authorization_code(
 
 def _fetch_oauth_userinfo(runtime: Dict[str, str], access_token: str) -> Dict[str, Any]:
     """Fetch user claims from Cognito userInfo endpoint."""
-    url = f"https://{runtime['domain']}/oauth2/userInfo"
+    url = _require_https_url(
+        f"https://{runtime['domain']}/oauth2/userInfo",
+        label="Cognito userInfo endpoint",
+    )
     req = UrlRequest(
         url,
         headers={"Authorization": f"Bearer {access_token}"},
         method="GET",
     )
-    with urlopen(req, timeout=15) as resp:
+    with urlopen(req, timeout=15) as resp:  # nosec B310
         body = resp.read().decode("utf-8")
     return json.loads(body)
 

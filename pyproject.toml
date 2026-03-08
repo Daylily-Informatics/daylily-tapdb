@@ -129,6 +129,20 @@ warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 
+[tool.bandit]
+targets = ["daylily_tapdb", "admin"]
+exclude_dirs = ["tests", "dist", "build"]
+skips = [
+    "B101",  # assert used in tests and defensive validation paths
+    "B105",  # hardcoded_password_string false positives on field names/defaults
+    "B110",  # intentional best-effort cleanup/logging paths
+    "B112",  # intentional defensive continue patterns if added later
+    "B311",  # non-cryptographic randomness if added later
+    "B404",  # CLI/admin intentionally use subprocess for trusted tools
+    "B603",  # subprocess calls execute trusted local commands
+    "B607",  # subprocess calls rely on known PATH tools (git, psql, lsof, etc.)
+    "B608",  # SQL fragments are operator-authored/static, not raw user interpolation
+]
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"
