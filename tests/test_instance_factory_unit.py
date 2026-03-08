@@ -72,7 +72,9 @@ def test_materialize_actions_skips_templates_without_action_definition(caplog):
     groups = materialize_actions(sess, tmpl, TM())
 
     assert groups == {}
-    assert any("missing non-empty action_definition" in r.message for r in caplog.records)
+    assert any(
+        "missing non-empty action_definition" in r.message for r in caplog.records
+    )
 
 
 def test_create_instance_errors_depth_cycle_and_missing_template():
