@@ -17,7 +17,7 @@ import stat
 import time
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,14 @@ _CA_BUNDLE_PATH = _CA_BUNDLE_DIR / "rds-ca-bundle.pem"
 # IAM auth token cache: (region, host, port, user) -> (token, expires_at)
 _iam_token_cache: dict[tuple, tuple[str, float]] = {}
 _IAM_TOKEN_TTL = 14 * 60  # 14 minutes (tokens valid for 15)
+
+
+def _require_https_url(url: str, *, label: str) -> str:
+    """Reject non-HTTPS URLs before downloading remote assets."""
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise RuntimeError(f"{label} must be an https URL")
+    return url
 
 
 def _ensure_boto3():
@@ -162,7 +170,11 @@ class AuroraConnectionBuilder:
         import urllib.request
 
         _CA_BUNDLE_DIR.mkdir(parents=True, exist_ok=True)
-        urllib.request.urlretrieve(_RDS_CA_BUNDLE_URL, str(_CA_BUNDLE_PATH))
+        download_url = _require_https_url(
+            _RDS_CA_BUNDLE_URL,
+            label="RDS CA bundle URL",
+        )
+        urllib.request.urlretrieve(download_url, str(_CA_BUNDLE_PATH))  # nosec B310
 
         # Verify checksum
         sha256 = hashlib.sha256(_CA_BUNDLE_PATH.read_bytes()).hexdigest()
