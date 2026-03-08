@@ -33,37 +33,30 @@ class TestEUIDConfig:
         assert "WSX" in euid_config.OPTIONAL_PREFIXES
         assert "XX" in euid_config.OPTIONAL_PREFIXES
 
-    def test_register_prefix(self, euid_config):
-        """Test registering a new prefix."""
-        euid_config.register_prefix("CX", "container_instance")
-        assert "CX" in euid_config.application_prefixes
-        assert euid_config.application_prefixes["CX"] == "container_instance"
-
-    def test_register_duplicate_raises(self, euid_config):
-        """Test that registering duplicate prefix raises error."""
-        euid_config.register_prefix("CX", "container_instance")
-        with pytest.raises(ValueError):
-            euid_config.register_prefix("CX", "other_instance")
-
-    def test_cannot_override_core(self, euid_config):
-        """Test that core prefixes cannot be overridden."""
-        with pytest.raises(ValueError):
-            euid_config.register_prefix("GT", "something")
-
-    def test_get_prefix_for_discriminator(self, euid_config):
-        """Test getting prefix for discriminator."""
-        assert euid_config.get_prefix_for_discriminator("generic_template") == "GT"
-        assert euid_config.get_prefix_for_discriminator("generic_instance") == "GX"
-        assert euid_config.get_prefix_for_discriminator("workflow_instance") == "WX"
-        assert euid_config.get_prefix_for_discriminator("unknown") is None
+    def test_get_discriminator_for_prefix(self, euid_config):
+        """Test looking up canonical discriminator from a canonical prefix."""
+        assert euid_config.get_discriminator_for_prefix("GT") == "generic_template"
+        assert euid_config.get_discriminator_for_prefix("GX") == "generic_instance"
+        assert euid_config.get_discriminator_for_prefix("WX") == "workflow_instance"
+        assert euid_config.get_discriminator_for_prefix("ZZ") is None
 
     def test_get_all_prefixes(self, euid_config):
-        """Test getting all prefixes."""
-        euid_config.register_prefix("CX", "container_instance")
+        """Test getting all canonical prefixes."""
         all_prefixes = euid_config.get_all_prefixes()
         assert "GT" in all_prefixes
         assert "WX" in all_prefixes
-        assert "CX" in all_prefixes
+        assert "XX" in all_prefixes
+
+    def test_is_canonical_prefix(self, euid_config):
+        """Only TapDB-managed prefixes are reported as canonical."""
+        assert euid_config.is_canonical_prefix("GT") is True
+        assert euid_config.is_canonical_prefix("XX") is True
+        assert euid_config.is_canonical_prefix("CX") is False
+
+    def test_prefix_maps_are_read_only(self, euid_config):
+        """The exported prefix catalog must not be mutable."""
+        with pytest.raises(TypeError):
+            euid_config.CORE_PREFIXES["CX"] = "container_instance"  # type: ignore[index]
 
 
 # ---------------------------------------------------------------------------

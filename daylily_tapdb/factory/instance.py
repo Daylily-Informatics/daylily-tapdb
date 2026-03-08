@@ -50,8 +50,9 @@ def materialize_actions(
     """
     Materialize action_imports into action_groups for an instance.
 
-    Reads action template definitions and expands them into the format
-    expected by ActionDispatcher. Uses canonical group naming: {type}_actions.
+    Reads action definitions from imported action templates and expands them
+    into the format expected by ActionDispatcher. Uses canonical group naming:
+    {type}_actions.
 
     Args:
         template: The template to materialize actions from.
@@ -71,18 +72,11 @@ def materialize_actions(
 
         definition = action_tmpl.json_addl.get("action_definition")
         if not isinstance(definition, dict) or not definition:
-            legacy = action_tmpl.json_addl.get("action_template")
-            if isinstance(legacy, dict) and legacy:
-                # TODO: remove once Bloom action templates are migrated to
-                # action_definition.
-                logger.warning(
-                    "materialize_actions legacy fallback: %s "
-                    "(TODO remove after Bloom action migration)",
-                    template_code,
-                )
-                definition = legacy
-            else:
-                definition = {}
+            logger.warning(
+                "materialize_actions skipped %s: missing non-empty action_definition",
+                template_code,
+            )
+            continue
 
         # Canonical group naming: {type}_actions
         group_name = f"{action_tmpl.type}_actions"

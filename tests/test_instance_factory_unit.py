@@ -50,7 +50,7 @@ def test_materialize_actions_skips_missing_action_templates():
     assert groups["core_actions"]["a"]["action_template_euid"] == "XX1"
 
 
-def test_materialize_actions_legacy_action_template_fallback_logs_warning(caplog):
+def test_materialize_actions_skips_templates_without_action_definition(caplog):
     from daylily_tapdb.factory.instance import materialize_actions
 
     caplog.set_level("WARNING")
@@ -71,8 +71,8 @@ def test_materialize_actions_legacy_action_template_fallback_logs_warning(caplog
 
     groups = materialize_actions(sess, tmpl, TM())
 
-    assert groups["core_actions"]["a"]["foo"] == "bar"
-    assert any("legacy fallback" in r.message for r in caplog.records)
+    assert groups == {}
+    assert any("missing non-empty action_definition" in r.message for r in caplog.records)
 
 
 def test_create_instance_errors_depth_cycle_and_missing_template():
