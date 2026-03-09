@@ -156,6 +156,23 @@ class TAPDBConnection:
         metadata = MetaData()
         self.AutomapBase = automap_base(metadata=metadata)
 
+    @staticmethod
+    def _is_postgresql_session(session: Session) -> bool:
+        bind = getattr(session, "bind", None)
+        dialect = getattr(bind, "dialect", None)
+        dialect_name = str(getattr(dialect, "name", "") or "").strip().lower()
+        return dialect_name == "postgresql"
+
+    def _set_session_timezone_utc(self, session: Session, *, local: bool) -> None:
+        """Ensure the DB session timezone is pinned to UTC for PostgreSQL."""
+        if not self._is_postgresql_session(session):
+            return
+        statement = "SET LOCAL TIME ZONE 'UTC'" if local else "SET TIME ZONE 'UTC'"
+        try:
+            session.execute(text(statement))
+        except Exception as e:
+            self.logger.warning(f"Could not set session timezone to UTC: {e}")
+
     def _set_session_username(self, session: Session) -> None:
         """Set the per-transaction username for audit logging (no commit)."""
         try:
@@ -176,7 +193,9 @@ class TAPDBConnection:
         Returns:
             New SQLAlchemy Session (caller must close)
         """
-        return self._Session()
+        session = self._Session()
+        self._set_session_timezone_utc(session, local=False)
+        return session
 
     @contextmanager
     def session_scope(self, commit: bool = False) -> Generator[Session, None, None]:
@@ -198,6 +217,7 @@ class TAPDBConnection:
         trans = session.begin()
         try:
             # Must happen inside a transaction for SET LOCAL.
+            self._set_session_timezone_utc(session, local=True)
             self._set_session_username(session)
             yield session
             if commit:

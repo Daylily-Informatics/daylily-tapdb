@@ -1131,7 +1131,7 @@ def build_app():
         """Show TAPDB configuration and status."""
         import json
         import shutil
-        from datetime import datetime
+        from datetime import UTC, datetime
         from urllib.parse import urlsplit, urlunsplit
 
         from daylily_tapdb import __version__
@@ -1256,9 +1256,11 @@ def build_app():
                     return result
 
                 # macOS/BSD ps lstart format: "Mon Jan  2 15:04:05 2006"
-                start_dt = datetime.strptime(raw, "%a %b %d %H:%M:%S %Y")
+                start_dt = datetime.strptime(raw, "%a %b %d %H:%M:%S %Y").replace(
+                    tzinfo=UTC
+                )
                 result["start_time"] = start_dt.isoformat(sep=" ")
-                up_s = int((datetime.now() - start_dt).total_seconds())
+                up_s = int((datetime.now(UTC) - start_dt).total_seconds())
                 result["uptime_seconds"] = up_s
                 result["uptime_human"] = _human_duration(up_s)
                 return result
