@@ -85,6 +85,13 @@ from daylily_tapdb.models.template import (
     workflow_template,
 )
 from daylily_tapdb.templates import TemplateManager
+from daylily_tapdb.timezone_utils import (
+    DEFAULT_DISPLAY_TIMEZONE,
+    is_valid_display_timezone,
+    normalize_display_timezone,
+    utc_now,
+    utc_now_iso,
+)
 
 __all__ = [
     "__version__",
@@ -140,4 +147,10 @@ __all__ = [
     "health_event_instance_lineage",
     "file_instance_lineage",
     "subject_instance_lineage",
+    # Timezone helpers
+    "DEFAULT_DISPLAY_TIMEZONE",
+    "normalize_display_timezone",
+    "is_valid_display_timezone",
+    "utc_now",
+    "utc_now_iso",
 ]

@@ -8,12 +8,17 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
+from daylily_tapdb.timezone_utils import (
+    DEFAULT_DISPLAY_TIMEZONE,
+    normalize_display_timezone,
+    utc_now_iso,
+)
 
 SYSTEM_USER_TEMPLATE_CATEGORY = "generic"
 SYSTEM_USER_TEMPLATE_TYPE = "actor"
@@ -50,6 +55,8 @@ class ActorUser:
     password_hash: Optional[str]
     last_login_dt: Optional[str]
     cognito_username: Optional[str]
+    preferences: dict[str, Any]
+    display_timezone: str
     euid: str
     created_dt: Any
     modified_dt: Any
@@ -63,6 +70,7 @@ class ActorUser:
             "role": self.role,
             "is_active": self.is_active,
             "require_password_change": self.require_password_change,
+            "display_timezone": self.display_timezone,
         }
 
 
@@ -88,6 +96,13 @@ def _row_to_actor_user(row: Any) -> ActorUser:
     email = _norm_optional(row["email"])
     if not username and email:
         username = email.lower()
+    prefs_raw = row.get("preferences")
+    preferences = prefs_raw if isinstance(prefs_raw, dict) else {}
+    display_timezone = normalize_display_timezone(
+        preferences.get("display_timezone"),
+        default=DEFAULT_DISPLAY_TIMEZONE,
+    )
+    preferences = {**preferences, "display_timezone": display_timezone}
     return ActorUser(
         uid=int(row["uid"]),
         username=username,
@@ -99,6 +114,8 @@ def _row_to_actor_user(row: Any) -> ActorUser:
         password_hash=_norm_optional(row["password_hash"]),
         last_login_dt=_norm_optional(row["last_login_dt"]),
         cognito_username=_norm_optional(row["cognito_username"]),
+        preferences=preferences,
+        display_timezone=display_timezone,
         euid=row["euid"],
         created_dt=row["created_dt"],
         modified_dt=row["modified_dt"],
@@ -120,7 +137,8 @@ def _select_user_columns() -> str:
             {_REQUIRE_PASSWORD_CHANGE_EXPR} AS require_password_change,
             NULLIF(gi.json_addl->>'password_hash', '') AS password_hash,
             NULLIF(gi.json_addl->>'last_login_dt', '') AS last_login_dt,
-            NULLIF(gi.json_addl->>'cognito_username', '') AS cognito_username
+            NULLIF(gi.json_addl->>'cognito_username', '') AS cognito_username,
+            COALESCE(gi.json_addl->'preferences', '{{}}'::jsonb) AS preferences
         FROM generic_instance gi
         WHERE {_SYSTEM_USER_WHERE}
     """
@@ -248,7 +266,7 @@ def create_or_get(
         return existing, False
 
     template_uid = _get_system_user_template_uid(session)
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = utc_now_iso()
     payload = {
         "login_identifier": normalized_login,
         "email": (normalized_email or normalized_login).lower(),
@@ -259,6 +277,7 @@ def create_or_get(
         "password_hash": _norm_optional(password_hash),
         "last_login_dt": None,
         "cognito_username": normalized_cognito_username,
+        "preferences": {"display_timezone": DEFAULT_DISPLAY_TIMEZONE},
         "provisioned_dt": now_iso,
     }
     if payload["display_name"] is None:
@@ -321,7 +340,7 @@ def create_or_get(
 
 
 def set_last_login(session: Session, user_uid: int | str) -> None:
-    last_login_dt = datetime.now(timezone.utc).isoformat()
+    last_login_dt = utc_now_iso()
     session.execute(
         text(
             """
@@ -457,3 +476,77 @@ def soft_delete(session: Session, login_identifier: str) -> bool:
         {"identifier": normalized_login},
     ).fetchone()
     return row is not None
+
+
+def set_display_timezone(
+    session: Session,
+    login_identifier: str,
+    display_timezone: str | None,
+) -> bool:
+    normalized_login = normalize_login_identifier(login_identifier)
+    normalized_tz = normalize_display_timezone(display_timezone)
+    row = session.execute(
+        text(
+            f"""
+            UPDATE generic_instance gi
+            SET json_addl = jsonb_set(
+                    COALESCE(gi.json_addl, '{{}}'::jsonb),
+                    '{{preferences,display_timezone}}',
+                    to_jsonb(CAST(:display_timezone AS text)),
+                    TRUE
+                ),
+                modified_dt = NOW()
+            WHERE {_SYSTEM_USER_WHERE}
+              AND lower(COALESCE(gi.json_addl->>'login_identifier', '')) = :identifier
+            RETURNING gi.uid
+            """
+        ),
+        {"identifier": normalized_login, "display_timezone": normalized_tz},
+    ).fetchone()
+    return row is not None
+
+
+def set_display_timezone_by_login_or_email(
+    session: Session,
+    identifier: str,
+    display_timezone: str | None,
+) -> bool:
+    normalized_identifier = normalize_login_identifier(identifier)
+    normalized_tz = normalize_display_timezone(display_timezone)
+    row = session.execute(
+        text(
+            f"""
+            UPDATE generic_instance gi
+            SET json_addl = jsonb_set(
+                    COALESCE(gi.json_addl, '{{}}'::jsonb),
+                    '{{preferences,display_timezone}}',
+                    to_jsonb(CAST(:display_timezone AS text)),
+                    TRUE
+                ),
+                modified_dt = NOW()
+            WHERE {_SYSTEM_USER_WHERE}
+              AND (
+                    lower(COALESCE(gi.json_addl->>'login_identifier', '')) = :identifier
+                 OR lower(COALESCE(gi.json_addl->>'email', '')) = :identifier
+              )
+            RETURNING gi.uid
+            """
+        ),
+        {"identifier": normalized_identifier, "display_timezone": normalized_tz},
+    ).fetchone()
+    return row is not None
+
+
+def get_display_timezone_by_login_or_email(
+    session: Session,
+    identifier: str,
+    *,
+    include_inactive: bool = False,
+) -> str:
+    user = get_by_login_or_email(session, identifier, include_inactive=include_inactive)
+    if user is None:
+        return DEFAULT_DISPLAY_TIMEZONE
+    return normalize_display_timezone(
+        user.preferences.get("display_timezone"),
+        default=DEFAULT_DISPLAY_TIMEZONE,
+    )

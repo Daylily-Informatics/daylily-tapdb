@@ -21,6 +21,15 @@ TAPDB provides a reusable foundation for applications that need:
 
 **Target use cases:** LIMS, workflow management, inventory tracking, any system needing flexible template-driven objects with complex relationships.
 
+## Timezone Policy
+
+- Persisted timestamps are UTC (`GMT+00:00`) and timezone-aware.
+- Shared user display timezone preference is stored on `generic/actor/system_user/1.0`:
+  - `json_addl.preferences.display_timezone`
+- Canonical preference key is `display_timezone` (IANA timezone name).
+- `GMT`/`UTC` aliases normalize to `UTC`.
+- Missing or invalid values default to `UTC`.
+
 ## System Architecture
 
 ### Data Model

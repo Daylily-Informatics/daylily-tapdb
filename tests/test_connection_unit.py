@@ -210,3 +210,51 @@ def test_reflect_tables_and_close_handle_exceptions(monkeypatch, caplog):
     conn.engine.raise_dispose = True
     with caplog.at_level("WARNING"):
         conn.close()
+
+
+def test_set_session_timezone_utc_skips_non_postgresql(monkeypatch):
+    from daylily_tapdb import connection as m
+
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+    conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
+
+    calls = {"execute": 0}
+
+    class Sess:
+        def __init__(self):
+            self.bind = types.SimpleNamespace(
+                dialect=types.SimpleNamespace(name="sqlite")
+            )
+
+        def execute(self, *_a, **_k):
+            calls["execute"] += 1
+
+    conn._set_session_timezone_utc(Sess(), local=True)
+    assert calls["execute"] == 0
+
+
+def test_set_session_timezone_utc_executes_for_postgresql(monkeypatch):
+    from daylily_tapdb import connection as m
+
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+    conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
+
+    captured: dict[str, str] = {}
+
+    class Sess:
+        def __init__(self):
+            self.bind = types.SimpleNamespace(
+                dialect=types.SimpleNamespace(name="postgresql")
+            )
+
+        def execute(self, stmt, *_a, **_k):
+            captured["stmt"] = str(stmt)
+
+    conn._set_session_timezone_utc(Sess(), local=True)
+    assert captured["stmt"] == "SET LOCAL TIME ZONE 'UTC'"

@@ -7,7 +7,7 @@ import re
 import subprocess
 import sysconfig
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -21,6 +21,7 @@ from rich.table import Table
 
 from daylily_tapdb import TAPDBConnection
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+from daylily_tapdb.timezone_utils import utc_now
 from daylily_tapdb.validation.instantiation_layouts import (
     format_validation_error,
     validate_instantiation_layouts,
@@ -318,7 +319,7 @@ def _log_operation(env: str, operation: str, details: str = ""):
     """Log database operations for audit trail."""
     _ensure_dirs()
     log_file = (get_config_path().parent / "logs") / "db_operations.log"
-    timestamp = datetime.now().isoformat()
+    timestamp = utc_now().isoformat()
     user = os.environ.get("USER", "unknown")
     with open(log_file, "a") as f:
         f.write(f"{timestamp} | {user} | {env} | {operation} | {details}\n")
@@ -1074,7 +1075,7 @@ def db_backup(
 
     # Generate output filename
     if output is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         output = Path(f"tapdb_{env.value}_{timestamp}.sql")
 
     # Build pg_dump command
