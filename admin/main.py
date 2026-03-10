@@ -23,12 +23,13 @@ from urllib.request import urlopen
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from admin.auth import (
     SESSION_COOKIE_NAME,
@@ -52,6 +53,12 @@ from admin.db_metrics import (
     stop_all_writers,
 )
 from admin.db_pool import dispose_all_engines, get_db_connection
+from admin.domain_access import (
+    build_allowed_origin_regex,
+    build_trusted_hosts,
+    is_allowed_origin,
+    validate_allowed_origins,
+)
 from daylily_tapdb import InstanceFactory, TemplateManager, __version__
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
 from daylily_tapdb.models.audit import audit_log
@@ -195,35 +202,37 @@ def _parse_allowed_origins(raw: str) -> List[str]:
     return [v.strip() for v in (raw or "").split(",") if v.strip()]
 
 
-allowed_origins_raw = os.environ.get("TAPDB_ADMIN_ALLOWED_ORIGINS", "")
-allowed_origins = _parse_allowed_origins(allowed_origins_raw)
+allow_local_domain_access = not IS_PROD
+allowed_origins = validate_allowed_origins(
+    _parse_allowed_origins(os.environ.get("TAPDB_ADMIN_ALLOWED_ORIGINS", "")),
+    allow_local=allow_local_domain_access,
+)
 
-if IS_PROD:
-    # In prod we refuse to start unless CORS is explicitly configured.
-    # (Also reject common foot-gun values like whitespace-only or '*'.)
-    if not allowed_origins:
-        raise RuntimeError(
-            "Refusing to start in prod without TAPDB_ADMIN_ALLOWED_ORIGINS"
-        )
-    if any(o == "*" for o in allowed_origins):
-        raise RuntimeError("Refusing to start in prod with wildcard CORS origin '*'")
-else:
-    if not allowed_origins:
-        # Safe local dev defaults derived from TAPDB env config.
-        try:
-            cfg = get_db_config_for_env(APP_ENV)
-            ui_port = int(str(cfg.get("ui_port") or "8911"))
-        except Exception:
-            ui_port = 8911
-        allowed_origins = [f"https://localhost:{ui_port}"]
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=build_trusted_hosts(allow_local=allow_local_domain_access),
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=(
+        None
+        if allowed_origins
+        else build_allowed_origin_regex(allow_local=allow_local_domain_access)
+    ),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _enforce_origin_allowlist(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if origin and not is_allowed_origin(origin, allow_local=allow_local_domain_access):
+        return PlainTextResponse("Origin not allowed", status_code=403)
+    return await call_next(request)
 
 
 def tapdb_base_path(request: Request) -> str:
