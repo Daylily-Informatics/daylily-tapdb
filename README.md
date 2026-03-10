@@ -113,3 +113,4 @@ See the embedding guide for the current supported patterns.
 Historical execution plans and breaking-change notes remain in `docs/` for background only.
 
 <!-- release-sweep: 2026-03-10 -->
+ 
