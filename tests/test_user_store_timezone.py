@@ -56,7 +56,7 @@ def test_set_display_timezone_by_login_or_email_normalizes_and_updates():
             executed["params"] = dict(params or {})
 
             class _Row:
-                def fetchone(self_nonlocal):
+                def fetchone(self):
                     return (1,)
 
             return _Row()
@@ -72,6 +72,11 @@ def test_set_display_timezone_by_login_or_email_normalizes_and_updates():
     assert params["display_timezone"] == "UTC"
 
 
-def test_get_display_timezone_by_login_or_email_returns_default_when_missing(monkeypatch):
+def test_get_display_timezone_by_login_or_email_returns_default_when_missing(
+    monkeypatch,
+):
     monkeypatch.setattr(m, "get_by_login_or_email", lambda *_a, **_k: None)
-    assert m.get_display_timezone_by_login_or_email(object(), "missing@example.com") == "UTC"
+    assert (
+        m.get_display_timezone_by_login_or_email(object(), "missing@example.com")
+        == "UTC"
+    )
