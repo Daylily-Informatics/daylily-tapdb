@@ -59,6 +59,13 @@ from admin.domain_access import (
     is_allowed_origin,
     validate_allowed_origins,
 )
+from admin.external_graph import (
+    fetch_remote_graph,
+    fetch_remote_object_detail,
+    get_external_ref_by_index,
+    namespace_external_graph,
+    resolve_external_graph_refs,
+)
 from daylily_tapdb import InstanceFactory, TemplateManager, __version__
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
 from daylily_tapdb.models.audit import audit_log
@@ -255,6 +262,26 @@ def tapdb_url(request: Request, path: str) -> str:
 
 templates.globals["tapdb_base_path"] = tapdb_base_path
 templates.globals["tapdb_url"] = tapdb_url
+
+
+def _external_ref_payloads(obj: Any) -> list[dict[str, Any]]:
+    return [
+        ref.to_public_dict(ref_index=index)
+        for index, ref in enumerate(resolve_external_graph_refs(obj))
+    ]
+
+
+def _find_object_by_euid(session: Any, euid: str) -> tuple[Any | None, str | None]:
+    obj = session.query(generic_template).filter_by(euid=euid, is_deleted=False).first()
+    if obj is not None:
+        return obj, "template"
+    obj = session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
+    if obj is not None:
+        return obj, "instance"
+    obj = session.query(generic_instance_lineage).filter_by(euid=euid, is_deleted=False).first()
+    if obj is not None:
+        return obj, "lineage"
+    return None, None
 
 
 def get_db():
@@ -1965,29 +1992,7 @@ async def object_detail(request: Request, euid: str):
     with get_db() as conn:
         conn.app_username = user.get("username")
         with conn.session_scope() as session:
-            # Try to find in templates first
-            obj = (
-                session.query(generic_template)
-                .filter_by(euid=euid, is_deleted=False)
-                .first()
-            )
-            obj_type = "template"
-
-            if not obj:
-                obj = (
-                    session.query(generic_instance)
-                    .filter_by(euid=euid, is_deleted=False)
-                    .first()
-                )
-                obj_type = "instance"
-
-            if not obj:
-                obj = (
-                    session.query(generic_instance_lineage)
-                    .filter_by(euid=euid, is_deleted=False)
-                    .first()
-                )
-                obj_type = "lineage"
+            obj, obj_type = _find_object_by_euid(session, euid)
 
             if not obj:
                 raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
@@ -2032,6 +2037,7 @@ async def object_detail(request: Request, euid: str):
                 permissions=permissions,
                 obj=obj,
                 obj_type=obj_type,
+                external_refs=_external_ref_payloads(obj),
                 parent_lineages=parent_lineages,
                 child_lineages=child_lineages,
             )
@@ -2044,6 +2050,7 @@ async def graph_view(
     request: Request,
     start_euid: Optional[str] = None,
     depth: int = Query(4, ge=1, le=10),
+    merge_ref: Optional[int] = Query(None, ge=0),
 ):
     """DAG graph visualization."""
     user = request.state.user
@@ -2056,6 +2063,7 @@ async def graph_view(
         permissions=permissions,
         start_euid=start_euid or "",
         depth=depth,
+        merge_ref=merge_ref,
     )
     return HTMLResponse(content=content)
 
@@ -2519,28 +2527,7 @@ async def api_get_object(euid: str):
     """API: Get object by EUID."""
     with get_db() as conn:
         with conn.session_scope() as session:
-            obj = (
-                session.query(generic_template)
-                .filter_by(euid=euid, is_deleted=False)
-                .first()
-            )
-            obj_type = "template"
-
-            if not obj:
-                obj = (
-                    session.query(generic_instance)
-                    .filter_by(euid=euid, is_deleted=False)
-                    .first()
-                )
-                obj_type = "instance"
-
-            if not obj:
-                obj = (
-                    session.query(generic_instance_lineage)
-                    .filter_by(euid=euid, is_deleted=False)
-                    .first()
-                )
-                obj_type = "lineage"
+            obj, obj_type = _find_object_by_euid(session, euid)
 
             if not obj:
                 raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
@@ -2557,7 +2544,66 @@ async def api_get_object(euid: str):
                 "bstatus": obj.bstatus,
                 "json_addl": obj.json_addl,
                 "created_dt": obj.created_dt.isoformat() if obj.created_dt else None,
+                "external_refs": _external_ref_payloads(obj),
             }
+
+
+@app.get("/api/graph/external")
+@require_auth
+async def api_get_external_graph(
+    request: Request,
+    source_euid: str,
+    ref_index: int = Query(..., ge=0),
+    depth: int = Query(4, ge=1, le=10),
+):
+    """Proxy a configured external graph and namespace it for merge-safe rendering."""
+    user = request.state.user
+    with get_db() as conn:
+        conn.app_username = user.get("username")
+        with conn.session_scope() as session:
+            obj, _obj_type = _find_object_by_euid(session, source_euid)
+            if obj is None:
+                raise HTTPException(status_code=404, detail=f"Object not found: {source_euid}")
+            try:
+                ref = get_external_ref_by_index(obj, ref_index)
+            except IndexError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            try:
+                payload = fetch_remote_graph(request, ref, depth=depth)
+                return namespace_external_graph(
+                    payload,
+                    ref=ref,
+                    ref_index=ref_index,
+                    source_euid=source_euid,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/graph/external/object")
+@require_auth
+async def api_get_external_graph_object(
+    request: Request,
+    source_euid: str,
+    ref_index: int = Query(..., ge=0),
+    euid: str = Query(...),
+):
+    """Proxy a configured external object detail payload."""
+    user = request.state.user
+    with get_db() as conn:
+        conn.app_username = user.get("username")
+        with conn.session_scope() as session:
+            obj, _obj_type = _find_object_by_euid(session, source_euid)
+            if obj is None:
+                raise HTTPException(status_code=404, detail=f"Object not found: {source_euid}")
+            try:
+                ref = get_external_ref_by_index(obj, ref_index)
+            except IndexError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            try:
+                return fetch_remote_object_detail(request, ref, euid=euid)
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/api/lineage")
