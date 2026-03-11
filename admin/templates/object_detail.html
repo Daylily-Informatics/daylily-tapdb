@@ -42,6 +42,36 @@
 </div>
 {% endif %}
 
+{% if external_refs %}
+<div class="card">
+    <h2 class="card-title">External References</h2>
+    <table>
+        <thead>
+            <tr><th>Label</th><th>System</th><th>Root EUID</th><th>Tenant</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+            {% for ref in external_refs %}
+            <tr>
+                <td>{{ ref.label }}</td>
+                <td>{{ ref.system }}</td>
+                <td><code>{{ ref.root_euid }}</code></td>
+                <td>{{ ref.tenant_id or '-' }}</td>
+                <td style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                    {% if ref.href %}
+                    <a href="{{ ref.href }}" class="btn" target="_blank" rel="noreferrer">Open Remote</a>
+                    {% endif %}
+                    <a href="{{ tapdb_url(request, '/graph') }}?start_euid={{ obj.euid }}&depth=4&merge_ref={{ ref.ref_index }}" class="btn">Open In Graph</a>
+                    {% if not ref.graph_expandable %}
+                    <span style="color: var(--text-muted);">{{ ref.reason or 'Graph expansion unavailable' }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
 {% if obj_type == 'instance' %}
 <div class="card">
     <h2 class="card-title">Parent Relationships ({{ parent_lineages | length }})</h2>
