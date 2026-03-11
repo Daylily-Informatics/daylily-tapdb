@@ -312,7 +312,7 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         "get_template",
         lambda name: _FakeTemplateRender(name, state),
     )
-    monkeypatch.setattr(admin_main, "get_style", lambda: {"skin_css": "x.css"})
+    monkeypatch.setattr(admin_main, "get_style", lambda *_args, **_kwargs: {"skin_css": "x.css"})
     monkeypatch.setattr(admin_main, "get_db", lambda: _FakeConn(state))
     monkeypatch.setattr(admin_main, "get_user_permissions", lambda _u: {"ok": True})
     monkeypatch.setattr(admin_main, "get_user_by_username", lambda _u: None)
@@ -584,6 +584,45 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     resp = client.delete("/api/object/GT1")
     assert resp.status_code == 200
     assert state["templates"][0].is_deleted is True
+
+
+def test_api_object_detail_includes_external_refs(route_client, monkeypatch: pytest.MonkeyPatch):
+    client, state = route_client
+
+    async def _admin_auth_user(_request):
+        return _admin_user()
+
+    monkeypatch.setattr(auth_mod, "get_current_user", _admin_auth_user)
+    state["instances"][0].json_addl = {
+        "properties": {
+            "external_payload": {
+                "tapdb_graph": {
+                    "system": "atlas",
+                    "base_url": "https://atlas.local",
+                    "root_euid": "AT-PAT-1",
+                    "tenant_id": "atlas-tenant-1",
+                    "graph_data_path": "/api/graph/data",
+                    "object_detail_path_template": "/api/graph/object/{euid}",
+                    "auth_mode": "none",
+                }
+            }
+        }
+    }
+
+    resp = client.get("/api/object/GX11")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["external_refs"] == [
+        {
+            "label": "atlas:AT-PAT-1",
+            "system": "atlas",
+            "root_euid": "AT-PAT-1",
+            "tenant_id": "atlas-tenant-1",
+            "href": "https://atlas.local/api/graph/object/AT-PAT-1",
+            "graph_expandable": True,
+            "ref_index": 0,
+        }
+    ]
 
 
 def test_home_query_and_audit_panels_admin(
