@@ -3,6 +3,7 @@
 import json
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -41,11 +42,32 @@ def _get_postgres_log_file(env: "Environment") -> Path:
     return ctx.postgres_dir(env.value) / "postgresql.log"
 
 
+def _get_postgres_socket_dir(env: "Environment") -> Path:
+    if env.value == "prod":
+        return Path("/var/run/postgresql")
+    cfg = get_db_config_for_env(env.value)
+    configured = str(cfg.get("unix_socket_dir") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    ctx = resolve_context(require_keys=True, env_name=env.value)
+    return ctx.postgres_socket_dir(env.value)
+
+
 def _get_instance_lock_file(env: "Environment") -> Path:
     if env.value == "prod":
         return Path(tempfile.gettempdir()) / "tapdb-prod-instance.lock"
     ctx = resolve_context(require_keys=True, env_name=env.value)
     return ctx.lock_dir(env.value) / "instance.lock"
+
+
+def _build_pg_ctl_options(port: int, socket_dir: Path) -> str:
+    return " ".join(
+        [
+            f"-p {port}",
+            f"-k {shlex.quote(str(socket_dir))}",
+            "-h localhost",
+        ]
+    )
 
 
 def _port_conflict_details(port: int) -> str:
@@ -291,6 +313,7 @@ def pg_status():
     user = cfg["user"]
     data_dir = _get_postgres_data_dir(env)
     log_file = _get_postgres_log_file(env)
+    socket_dir = _get_postgres_socket_dir(env)
     lock_file = _get_instance_lock_file(env)
 
     ready = subprocess.run(
@@ -312,6 +335,7 @@ def pg_status():
     console.print(f"  User:      {user}")
     console.print(f"  Data dir:  {data_dir}")
     console.print(f"  Log file:  {log_file}")
+    console.print(f"  Socket dir: {socket_dir}")
     console.print(f"  Lock file: {lock_file}")
 
 
@@ -518,7 +542,9 @@ def pg_start_local(
 
     data_dir = _get_postgres_data_dir(env)
     lock_file = _get_instance_lock_file(env)
+    socket_dir = _get_postgres_socket_dir(env)
     lock_file.parent.mkdir(parents=True, exist_ok=True)
+    socket_dir.mkdir(parents=True, exist_ok=True)
 
     if not data_dir.exists() or not (data_dir / "PG_VERSION").exists():
         console.print("[red]✗[/red] Data directory not initialized")
@@ -556,6 +582,7 @@ def pg_start_local(
 
     log_file = _get_postgres_log_file(env)
     log_file.parent.mkdir(parents=True, exist_ok=True)
+    postgres_opts = _build_pg_ctl_options(port, socket_dir)
 
     try:
         result = subprocess.run(
@@ -567,7 +594,7 @@ def pg_start_local(
                 "-l",
                 str(log_file),
                 "-o",
-                f"-p {port}",
+                postgres_opts,
             ],
             capture_output=True,
             text=True,
@@ -579,11 +606,13 @@ def pg_start_local(
             console.print(f"  Port: {port}")
             console.print(f"  Data: {data_dir}")
             console.print(f"  Log:  {log_file}")
+            console.print(f"  Socket dir: {socket_dir}")
             lock_payload = {
                 "env": env.value,
                 "port": port,
                 "data_dir": str(data_dir),
                 "log_file": str(log_file),
+                "socket_dir": str(socket_dir),
             }
             lock_file.write_text(
                 json.dumps(lock_payload, indent=2) + "\n",

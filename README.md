@@ -87,6 +87,13 @@ tapdb config init --client-id "$TAPDB_CLIENT_ID" --database-name "$TAPDB_DATABAS
 tapdb bootstrap local
 ```
 
+For local PostgreSQL, TAPDB now uses a namespaced user-writable Unix socket
+directory under `~/.config/tapdb/<client>/<database>/<env>/postgres/run` by
+default, so `tapdb pg start-local <env>` does not depend on system paths such
+as `/var/run/postgresql`. You can override that path with
+`environments.<env>.unix_socket_dir` or `TAPDB_<ENV>_UNIX_SOCKET_DIR` when you
+need a custom local runtime location.
+
 ## Admin UI
 
 The admin UI is optional and ships with the `admin` extra.
