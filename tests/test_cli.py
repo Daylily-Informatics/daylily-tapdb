@@ -1037,6 +1037,98 @@ class TestCLIPG:
         assert result.exit_code == 0
         assert "dev" in result.output
 
+    def test_pg_start_local_uses_namespaced_socket_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Test local startup passes explicit socket dir and localhost binding."""
+        import daylily_tapdb.cli.pg as pg_mod
+
+        data_dir = tmp_path / "pgdata"
+        data_dir.mkdir()
+        (data_dir / "PG_VERSION").write_text("16\n", encoding="utf-8")
+        log_file = tmp_path / "postgresql.log"
+        lock_file = tmp_path / "instance.lock"
+        socket_dir = tmp_path / "socket dir"
+
+        calls: list[list[str]] = []
+
+        def _fake_run(cmd, capture_output=True, text=True, timeout=30):
+            calls.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(pg_mod, "_get_postgres_data_dir", lambda _env: data_dir)
+        monkeypatch.setattr(pg_mod, "_get_postgres_log_file", lambda _env: log_file)
+        monkeypatch.setattr(pg_mod, "_get_instance_lock_file", lambda _env: lock_file)
+        monkeypatch.setattr(pg_mod, "_get_postgres_socket_dir", lambda _env: socket_dir)
+        monkeypatch.setattr(
+            pg_mod,
+            "get_db_config_for_env",
+            lambda _env: {
+                "port": "5533",
+                "host": "localhost",
+                "user": "test",
+                "unix_socket_dir": str(socket_dir),
+            },
+        )
+        monkeypatch.setattr(pg_mod, "_is_port_available", lambda _port: True)
+        monkeypatch.setattr(pg_mod.shutil, "which", lambda _name: "/usr/bin/pg_ctl")
+        monkeypatch.setattr(pg_mod.subprocess, "run", _fake_run)
+
+        result = runner.invoke(app, ["pg", "start-local", "dev"])
+
+        assert result.exit_code == 0
+        assert socket_dir.exists()
+        assert "Socket dir:" in result.output
+        assert calls
+        cmd = calls[0]
+        opts = cmd[cmd.index("-o") + 1]
+        assert "-p 5533" in opts
+        assert "-h localhost" in opts
+        assert f"-k '{socket_dir}'" in opts
+
+        lock_payload = json.loads(lock_file.read_text(encoding="utf-8"))
+        assert lock_payload["socket_dir"] == str(socket_dir)
+
+    def test_pg_status_shows_effective_socket_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Test pg status shows the local socket dir in operator-facing output."""
+        import daylily_tapdb.cli.pg as pg_mod
+
+        socket_dir = tmp_path / "pg-run"
+        monkeypatch.setattr(
+            pg_mod,
+            "get_db_config_for_env",
+            lambda _env: {
+                "host": "localhost",
+                "port": "5533",
+                "user": "test",
+                "unix_socket_dir": str(socket_dir),
+            },
+        )
+        monkeypatch.setattr(
+            pg_mod, "_get_postgres_data_dir", lambda _env: tmp_path / "data"
+        )
+        monkeypatch.setattr(
+            pg_mod, "_get_postgres_log_file", lambda _env: tmp_path / "postgresql.log"
+        )
+        monkeypatch.setattr(
+            pg_mod, "_get_instance_lock_file", lambda _env: tmp_path / "instance.lock"
+        )
+        monkeypatch.setattr(pg_mod, "_get_postgres_socket_dir", lambda _env: socket_dir)
+
+        def _fake_run(cmd, capture_output=True, timeout=5):
+            return subprocess.CompletedProcess(cmd, 1, b"", b"")
+
+        monkeypatch.setattr(pg_mod.subprocess, "run", _fake_run)
+
+        result = runner.invoke(app, ["pg", "status"])
+
+        assert result.exit_code == 0
+        out = _strip_ansi(result.output)
+        assert "Socket dir:" in out
+        assert "pg-run" in out
+
 
 class TestCLIDBSeed:
     """Tests for database seeding commands."""

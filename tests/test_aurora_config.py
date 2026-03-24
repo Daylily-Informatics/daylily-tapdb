@@ -178,6 +178,73 @@ class TestGetDbConfigEngineType:
         assert cfg["host"] == "localhost"
         assert cfg["database"] == "tapdb_dev"
 
+    def test_local_env_derives_namespaced_unix_socket_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from daylily_tapdb.cli.db_config import get_db_config_for_env
+
+        cfg_file = tmp_path / "tapdb-config.yaml"
+        cfg_file.write_text(
+            textwrap.dedent("""\
+            environments:
+              dev:
+                host: localhost
+                port: 5432
+                user: daylily
+                password: ""
+                database: tapdb_dev
+            """)
+        )
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("TAPDB_CONFIG_PATH", str(cfg_file))
+        monkeypatch.setenv("TAPDB_CLIENT_ID", "clientx")
+        monkeypatch.setenv("TAPDB_DATABASE_NAME", "dbx")
+
+        cfg = get_db_config_for_env("dev")
+
+        assert cfg["unix_socket_dir"] == str(
+            tmp_path
+            / ".config"
+            / "tapdb"
+            / "clientx"
+            / "dbx"
+            / "dev"
+            / "postgres"
+            / "run"
+        )
+
+    def test_local_env_unix_socket_dir_env_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from daylily_tapdb.cli.db_config import get_db_config_for_env
+
+        cfg_file = tmp_path / "tapdb-config.yaml"
+        cfg_file.write_text(
+            textwrap.dedent("""\
+            environments:
+              dev:
+                host: localhost
+                port: 5432
+                user: daylily
+                password: ""
+                database: tapdb_dev
+                unix_socket_dir: /tmp/from-config
+            """)
+        )
+        monkeypatch.setenv("TAPDB_CONFIG_PATH", str(cfg_file))
+        monkeypatch.setenv("TAPDB_DEV_UNIX_SOCKET_DIR", "/tmp/from-env")
+
+        cfg = get_db_config_for_env("dev")
+
+        assert cfg["unix_socket_dir"] == "/tmp/from-env"
+
+    @pytest.mark.usefixtures("_yaml_config")
+    def test_aurora_env_does_not_expose_unix_socket_dir(self):
+        from daylily_tapdb.cli.db_config import get_db_config_for_env
+
+        cfg = get_db_config_for_env("aurora_dev")
+        assert "unix_socket_dir" not in cfg
+
 
 class TestConfigPathScoping:
     def test_database_name_scoped_paths(self, monkeypatch: pytest.MonkeyPatch):
