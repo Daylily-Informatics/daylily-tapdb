@@ -60,6 +60,9 @@ class TapdbContext:
     def postgres_dir(self, env_name: Optional[str] = None) -> Path:
         return self.runtime_dir(env_name) / "postgres"
 
+    def postgres_socket_dir(self, env_name: Optional[str] = None) -> Path:
+        return self.postgres_dir(env_name) / "run"
+
     def lock_dir(self, env_name: Optional[str] = None) -> Path:
         return self.runtime_dir(env_name) / "locks"
 
