@@ -270,6 +270,13 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
         )
         cfg["ssl"] = os.environ.get(f"{env_prefix}SSL", _file_str("ssl") or "true")
     else:
+        unix_socket_dir = os.environ.get(
+            f"{env_prefix}UNIX_SOCKET_DIR",
+            _file_str("unix_socket_dir")
+            or (str(ctx.postgres_socket_dir(env_key)) if ctx else ""),
+        )
+        cfg["unix_socket_dir"] = unix_socket_dir
+
         # Local connections must always use localhost to avoid accidental cross-host
         # reuse.
         if str(cfg["host"]).strip().lower() != "localhost":
