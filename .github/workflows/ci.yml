@@ -85,6 +85,11 @@ jobs:
           pip install build
           pip install -e ".[dev,cli,aurora,admin]"
 
+      - name: Show SCM version context
+        run: |
+          git describe --tags --dirty --always
+          python -m setuptools_scm
+
       - name: Build wheel artifact
         run: python -m build --wheel
 

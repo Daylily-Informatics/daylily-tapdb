@@ -74,6 +74,26 @@ Optional convenience wrapper:
 source tapdb_activate.sh
 ```
 
+## Release Versioning
+
+Package versions are derived from Git tags via `setuptools_scm`.
+
+- An exact tagged commit builds the exact release version.
+- Commits after the latest tag build the next inferred version with a `.devN`
+  suffix, where `N` is the commit count since that tag.
+- Local version metadata is disabled, so builds do not append Git hashes to the
+  published version string.
+
+Examples:
+
+- `git describe` = `0.2.5` -> build version `0.2.5`
+- `git describe` = `0.2.5-2-g1774465` -> build version `0.2.6.dev2`
+
+For release artifacts, run `git describe --tags --dirty --always` before
+`python -m build` and build from the exact release tag. If `HEAD` includes
+additional commits that should be released, create a new tag on that commit
+first.
+
 ## Quick Start
 
 Initialize a strict namespace and bootstrap a local stack:
