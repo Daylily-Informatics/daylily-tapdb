@@ -171,7 +171,10 @@ def _default_pool_name(env: Environment) -> str:
 
 
 def _parse_daycog_context_name(name: str) -> tuple[str, str, str]:
-    match = re.match(r"^(?P<pool>.+)\.(?P<region>[a-z]{2}(?:-[a-z0-9]+)+-\d+)(?:\.(?P<app>.+))?$", name)
+    match = re.match(
+        r"^(?P<pool>.+)\.(?P<region>[a-z]{2}(?:-[a-z0-9]+)+-\d+)(?:\.(?P<app>.+))?$",
+        name,
+    )
     if not match:
         return "", "", ""
     return (
@@ -196,7 +199,9 @@ def _load_daycog_contexts() -> tuple[str, dict[str, dict[str, str]]]:
             if not isinstance(values, dict):
                 continue
             contexts[str(name)] = {
-                str(key): str(value) for key, value in values.items() if value is not None
+                str(key): str(value)
+                for key, value in values.items()
+                if value is not None
             }
     return active_name, contexts
 
@@ -301,7 +306,9 @@ def _resolve_daycog_pool_id_after_setup(
             return pool_id, context_name
 
     for context_name, values in sorted(contexts.items()):
-        candidate_pool, candidate_region, _candidate_app = _parse_daycog_context_name(context_name)
+        candidate_pool, candidate_region, _candidate_app = _parse_daycog_context_name(
+            context_name
+        )
         if candidate_pool != pool_name or candidate_region != region:
             continue
         pool_id = (values.get("COGNITO_USER_POOL_ID") or "").strip()
@@ -1073,7 +1080,9 @@ def cognito_add_app(
     ),
     idps: str = typer.Option("COGNITO", "--idp", help="Identity providers CSV"),
     set_default: bool = typer.Option(
-        False, "--set-default", help="Update the pool context and active Daycog context to this app"
+        False,
+        "--set-default",
+        help="Update the pool context and active Daycog context to this app",
     ),
 ) -> None:
     """Create a new app client in the pool via daycog."""
@@ -1137,7 +1146,9 @@ def cognito_edit_app(
     scopes: Optional[str] = typer.Option(None, "--scopes", help="OAuth scopes CSV"),
     idps: Optional[str] = typer.Option(None, "--idp", help="Identity providers CSV"),
     set_default: bool = typer.Option(
-        False, "--set-default", help="Update the pool context and active Daycog context to this app"
+        False,
+        "--set-default",
+        help="Update the pool context and active Daycog context to this app",
     ),
     pool_name: Optional[str] = typer.Option(
         None, "--pool-name", help="Cognito pool name (default from env DB name)"

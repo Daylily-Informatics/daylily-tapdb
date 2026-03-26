@@ -278,7 +278,11 @@ def _find_object_by_euid(session: Any, euid: str) -> tuple[Any | None, str | Non
     obj = session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
     if obj is not None:
         return obj, "instance"
-    obj = session.query(generic_instance_lineage).filter_by(euid=euid, is_deleted=False).first()
+    obj = (
+        session.query(generic_instance_lineage)
+        .filter_by(euid=euid, is_deleted=False)
+        .first()
+    )
     if obj is not None:
         return obj, "lineage"
     return None, None
@@ -2549,7 +2553,9 @@ async def api_get_external_graph(
         with conn.session_scope() as session:
             obj, _obj_type = _find_object_by_euid(session, source_euid)
             if obj is None:
-                raise HTTPException(status_code=404, detail=f"Object not found: {source_euid}")
+                raise HTTPException(
+                    status_code=404, detail=f"Object not found: {source_euid}"
+                )
             try:
                 ref = get_external_ref_by_index(obj, ref_index)
             except IndexError as exc:
@@ -2581,7 +2587,9 @@ async def api_get_external_graph_object(
         with conn.session_scope() as session:
             obj, _obj_type = _find_object_by_euid(session, source_euid)
             if obj is None:
-                raise HTTPException(status_code=404, detail=f"Object not found: {source_euid}")
+                raise HTTPException(
+                    status_code=404, detail=f"Object not found: {source_euid}"
+                )
             try:
                 ref = get_external_ref_by_index(obj, ref_index)
             except IndexError as exc:

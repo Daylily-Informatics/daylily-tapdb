@@ -312,7 +312,9 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         "get_template",
         lambda name: _FakeTemplateRender(name, state),
     )
-    monkeypatch.setattr(admin_main, "get_style", lambda *_args, **_kwargs: {"skin_css": "x.css"})
+    monkeypatch.setattr(
+        admin_main, "get_style", lambda *_args, **_kwargs: {"skin_css": "x.css"}
+    )
     monkeypatch.setattr(admin_main, "get_db", lambda: _FakeConn(state))
     monkeypatch.setattr(admin_main, "get_user_permissions", lambda _u: {"ok": True})
     monkeypatch.setattr(admin_main, "get_user_by_username", lambda _u: None)
@@ -586,7 +588,9 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     assert state["templates"][0].is_deleted is True
 
 
-def test_api_object_detail_includes_external_refs(route_client, monkeypatch: pytest.MonkeyPatch):
+def test_api_object_detail_includes_external_refs(
+    route_client, monkeypatch: pytest.MonkeyPatch
+):
     client, state = route_client
 
     async def _admin_auth_user(_request):

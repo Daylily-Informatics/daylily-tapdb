@@ -79,10 +79,7 @@ def validate_allowed_origins(
         if not normalized:
             continue
         if not is_allowed_origin(normalized, allow_local=allow_local):
-            raise ValueError(
-                "Origin is outside the approved allowlist: "
-                f"{normalized}"
-            )
+            raise ValueError(f"Origin is outside the approved allowlist: {normalized}")
         cleaned.append(normalized)
     return cleaned
 

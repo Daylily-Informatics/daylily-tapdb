@@ -145,7 +145,9 @@ def resolve_external_graph_refs(obj: Any) -> list[ExternalGraphRef]:
             )
         )
 
-    refs.sort(key=lambda ref: (ref.system, ref.label, ref.root_euid, ref.tenant_id or ""))
+    refs.sort(
+        key=lambda ref: (ref.system, ref.label, ref.root_euid, ref.tenant_id or "")
+    )
     return refs
 
 
@@ -314,7 +316,9 @@ def _apply_forwarded_auth(
     remote_parts = urlsplit(ref.base_url)
     remote_origin = f"{remote_parts.scheme}://{remote_parts.netloc}"
     if incoming_origin != remote_origin:
-        raise RuntimeError("same_origin auth requires matching request origin and base_url")
+        raise RuntimeError(
+            "same_origin auth requires matching request origin and base_url"
+        )
 
     cookie = request.headers.get("cookie")
     authorization = request.headers.get("authorization")

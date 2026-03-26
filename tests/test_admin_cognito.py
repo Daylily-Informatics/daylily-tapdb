@@ -13,14 +13,7 @@ def _write(path: Path, content: str) -> None:
 
 
 def _config_path(tmp_path: Path) -> Path:
-    return (
-        tmp_path
-        / ".config"
-        / "tapdb"
-        / "local"
-        / "tapdb"
-        / "tapdb-config.yaml"
-    )
+    return tmp_path / ".config" / "tapdb" / "local" / "tapdb" / "tapdb-config.yaml"
 
 
 def test_resolve_tapdb_pool_config_from_tapdb_yaml(
