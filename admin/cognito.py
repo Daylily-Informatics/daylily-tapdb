@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from daylily_tapdb.cli.cognito import REQUIRED_COGNITO_CLIENT_NAME
-from daylily_tapdb.cli.db_config import get_db_config_for_env, get_config_path
+from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,9 @@ def resolve_tapdb_pool_config(env_name: Optional[str] = None) -> TapdbPoolConfig
 
     app_client_id = (cfg.get("cognito_app_client_id") or "").strip()
     region = (cfg.get("cognito_region") or cfg.get("region") or "").strip()
-    client_name = (cfg.get("cognito_client_name") or REQUIRED_COGNITO_CLIENT_NAME).strip()
+    client_name = (
+        cfg.get("cognito_client_name") or REQUIRED_COGNITO_CLIENT_NAME
+    ).strip()
     if client_name != REQUIRED_COGNITO_CLIENT_NAME:
         raise RuntimeError(
             f"TAPDB config must set cognito_client_name={REQUIRED_COGNITO_CLIENT_NAME!r} "

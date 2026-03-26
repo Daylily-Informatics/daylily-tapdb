@@ -11,7 +11,6 @@ from urllib.request import urlopen
 
 from fastapi import Request
 
-
 ALLOWED_AUTH_MODES = {"none", "same_origin"}
 
 
@@ -146,7 +145,9 @@ def resolve_external_graph_refs(obj: Any) -> list[ExternalGraphRef]:
             )
         )
 
-    refs.sort(key=lambda ref: (ref.system, ref.label, ref.root_euid, ref.tenant_id or ""))
+    refs.sort(
+        key=lambda ref: (ref.system, ref.label, ref.root_euid, ref.tenant_id or "")
+    )
     return refs
 
 
@@ -173,9 +174,10 @@ def fetch_remote_graph(
 
     url = urljoin(ref.base_url.rstrip("/") + "/", ref.graph_data_path.lstrip("/"))
     url = f"{url}?{urlencode(params)}"
+    url = _require_http_url(url)
     headers = {"Accept": "application/json"}
     _apply_forwarded_auth(request, ref, headers)
-    with urlopen(UrlRequest(url, headers=headers), timeout=20) as response:
+    with urlopen(UrlRequest(url, headers=headers), timeout=20) as response:  # nosec B310
         payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, dict):
         raise RuntimeError("Remote graph response must be a JSON object")
@@ -204,9 +206,10 @@ def fetch_remote_object_detail(
     if ref.tenant_id:
         joiner = "&" if "?" in url else "?"
         url = f"{url}{joiner}{urlencode({'tenant_id': ref.tenant_id})}"
+    url = _require_http_url(url)
     headers = {"Accept": "application/json"}
     _apply_forwarded_auth(request, ref, headers)
-    with urlopen(UrlRequest(url, headers=headers), timeout=20) as response:
+    with urlopen(UrlRequest(url, headers=headers), timeout=20) as response:  # nosec B310
         payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, dict):
         raise RuntimeError("Remote object response must be a JSON object")
@@ -313,7 +316,9 @@ def _apply_forwarded_auth(
     remote_parts = urlsplit(ref.base_url)
     remote_origin = f"{remote_parts.scheme}://{remote_parts.netloc}"
     if incoming_origin != remote_origin:
-        raise RuntimeError("same_origin auth requires matching request origin and base_url")
+        raise RuntimeError(
+            "same_origin auth requires matching request origin and base_url"
+        )
 
     cookie = request.headers.get("cookie")
     authorization = request.headers.get("authorization")
@@ -321,3 +326,10 @@ def _apply_forwarded_auth(
         headers["Cookie"] = cookie
     if authorization:
         headers["Authorization"] = authorization
+
+
+def _require_http_url(url: str) -> str:
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        raise RuntimeError("External graph fetch requires an absolute http(s) URL")
+    return url

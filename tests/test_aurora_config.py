@@ -21,8 +21,8 @@ from daylily_tapdb.aurora.config import AuroraConfig
 @pytest.fixture(autouse=True)
 def _reset_namespace_env(monkeypatch):
     monkeypatch.setenv("TAPDB_STRICT_NAMESPACE", "0")
-    monkeypatch.delenv("TAPDB_CLIENT_ID", raising=False)
-    monkeypatch.delenv("TAPDB_DATABASE_NAME", raising=False)
+    monkeypatch.setenv("TAPDB_CLIENT_ID", "clientx")
+    monkeypatch.setenv("TAPDB_DATABASE_NAME", "dbx")
 
 
 # ---------------------------------------------------------------------------
@@ -109,10 +109,15 @@ def _yaml_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg_file = tmp_path / "tapdb-config.yaml"
     cfg_file.write_text(
         textwrap.dedent("""\
+        meta:
+          config_version: 2
+          client_id: clientx
+          database_name: dbx
         environments:
           dev:
             host: localhost
             port: 5432
+            ui_port: 8911
             user: daylily
             password: ""
             database: tapdb_dev
@@ -186,10 +191,15 @@ class TestGetDbConfigEngineType:
         cfg_file = tmp_path / "tapdb-config.yaml"
         cfg_file.write_text(
             textwrap.dedent("""\
+            meta:
+              config_version: 2
+              client_id: clientx
+              database_name: dbx
             environments:
               dev:
                 host: localhost
                 port: 5432
+                ui_port: 8911
                 user: daylily
                 password: ""
                 database: tapdb_dev
@@ -221,10 +231,15 @@ class TestGetDbConfigEngineType:
         cfg_file = tmp_path / "tapdb-config.yaml"
         cfg_file.write_text(
             textwrap.dedent("""\
+            meta:
+              config_version: 2
+              client_id: clientx
+              database_name: dbx
             environments:
               dev:
                 host: localhost
                 port: 5432
+                ui_port: 8911
                 user: daylily
                 password: ""
                 database: tapdb_dev
@@ -251,11 +266,18 @@ class TestConfigPathScoping:
         from daylily_tapdb.cli.db_config import get_config_paths
 
         monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
+        monkeypatch.setenv("TAPDB_CLIENT_ID", "clientx")
         monkeypatch.setenv("TAPDB_DATABASE_NAME", "atlas")
 
         paths = get_config_paths()
-        assert paths[0].name == "tapdb-config-atlas.yaml"
-        assert any(p.name == "tapdb-config.yaml" for p in paths)
+        assert paths == [
+            Path.home()
+            / ".config"
+            / "tapdb"
+            / "clientx"
+            / "atlas"
+            / "tapdb-config.yaml"
+        ]
 
     def test_explicit_config_override_beats_scoping(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -263,6 +285,7 @@ class TestConfigPathScoping:
         from daylily_tapdb.cli.db_config import get_config_paths
 
         override = tmp_path / "custom.yaml"
+        monkeypatch.setenv("TAPDB_CLIENT_ID", "clientx")
         monkeypatch.setenv("TAPDB_DATABASE_NAME", "atlas")
         monkeypatch.setenv("TAPDB_CONFIG_PATH", str(override))
 

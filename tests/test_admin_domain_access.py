@@ -35,6 +35,8 @@ def test_admin_rejects_disallowed_origin() -> None:
 
 def test_admin_rejects_disallowed_host() -> None:
     with TestClient(app) as client:
-        response = client.get("/", headers={"host": "evil.example.com"}, follow_redirects=False)
+        response = client.get(
+            "/", headers={"host": "evil.example.com"}, follow_redirects=False
+        )
 
     assert response.status_code == 400

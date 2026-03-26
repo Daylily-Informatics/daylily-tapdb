@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daylily-tapdb"
-version = "2.0.1"
+dynamic = ["version"]
 description = "Templated Abstract Polymorphic Database - A flexible object model library"
 readme = "README.md"
 license = {text = "MIT"}
@@ -44,6 +44,7 @@ dev = [
     "pre-commit>=3.0",
     "bandit>=1.7",
     "detect-secrets>=1.4",
+    "setuptools_scm>=8.0",
 ]
 
 # Optional CLI add-ons.
@@ -103,6 +104,12 @@ admin = [
 "schema" = ["schema/tapdb_schema.sql", "schema/rls.sql"]
 "schema/migrations" = ["schema/migrations/*.sql"]
 "schema/migrations_legacy" = ["schema/migrations_legacy/*.sql"]
+
+[tool.setuptools_scm]
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"
+write_to = "daylily_tapdb/_version.py"
+write_to_template = "__version__ = \"{version}\"\n"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

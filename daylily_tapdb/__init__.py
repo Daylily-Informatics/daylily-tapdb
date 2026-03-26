@@ -92,13 +92,6 @@ from daylily_tapdb.timezone_utils import (
     utc_now,
     utc_now_iso,
 )
-from daylily_tapdb.ursa_repository import (
-    URSA_TEMPLATE_DEFINITIONS,
-    TemplateDefinition as UrsaTemplateDefinition,
-    UrsaTapdbRepository,
-    from_json_addl,
-    to_action_history_entry,
-)
 
 __all__ = [
     "__version__",
@@ -160,10 +153,4 @@ __all__ = [
     "is_valid_display_timezone",
     "utc_now",
     "utc_now_iso",
-    # Ursa helper surface
-    "UrsaTapdbRepository",
-    "UrsaTemplateDefinition",
-    "URSA_TEMPLATE_DEFINITIONS",
-    "from_json_addl",
-    "to_action_history_entry",
 ]
