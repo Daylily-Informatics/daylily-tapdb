@@ -189,17 +189,6 @@ def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
             or (os.environ.get("AWS_PROFILE") or "").strip()
             or None
         )
-        if iam_auth and not aws_profile:
-            # Prefer daycog-selected profile when TAPDB config keeps only pool ID.
-            try:
-                from admin.cognito import resolve_tapdb_pool_config
-
-                pool_cfg = resolve_tapdb_pool_config(env_name)
-                aws_profile = (pool_cfg.aws_profile or "").strip() or None
-            except Exception as exc:
-                logger.debug(
-                    "No daycog AWS profile fallback for env %s: %s", env_name, exc
-                )
         ca_path = AuroraConnectionBuilder.ensure_ca_bundle()
         url = URL.create(
             "postgresql+psycopg2",

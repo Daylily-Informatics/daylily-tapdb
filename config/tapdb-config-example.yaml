@@ -1,16 +1,16 @@
 # Example TAPDB CLI config
 #
 # Save as:
-#   ~/.config/tapdb/tapdb-config.yaml
-# or:
-#   ./config/tapdb-config.yaml
+#   ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml
 #
 # The CLI resolves config in this order:
 # 1) TAPDB_CONFIG_PATH
-# 2) ~/.config/tapdb/tapdb-config-<database-name>.yaml (if TAPDB_DATABASE_NAME set)
-# 3) ~/.config/tapdb/tapdb-config.yaml
-# 4) ./config/tapdb-config-<database-name>.yaml (if TAPDB_DATABASE_NAME set)
-# 5) ./config/tapdb-config.yaml
+# 2) ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml
+
+meta:
+  config_version: 2
+  client_id: local
+  database_name: tapdb
 
 environments:
   dev:
@@ -21,8 +21,15 @@ environments:
     database: tapdb_dev
     audit_log_euid_prefix: AD
     support_email: support@example.com
-    # Optional: TAPDB Admin Cognito binding (pool details live in ~/.config/daycog/*.env)
     cognito_user_pool_id: us-east-1_xxxxxxxxx
+    cognito_app_client_id: client123
+    cognito_app_client_secret: ""
+    cognito_client_name: tapdb
+    cognito_region: us-east-1
+    cognito_domain: tapdb-dev-users.auth.us-east-1.amazoncognito.com
+    cognito_callback_url: https://localhost:8911/auth/callback
+    cognito_logout_url: https://localhost:8911/login
+    aws_profile: lsmc
 
   test:
     host: localhost
@@ -32,20 +39,16 @@ environments:
     database: tapdb_test
     audit_log_euid_prefix: AD
     support_email: support@example.com
-    cognito_user_pool_id: us-east-1_xxxxxxxxx
 
   prod:
     host: example-prod-host
     port: 5533
     user: tapdb_admin
-    password: "CHANGEME"
+    password: CHANGEME
     database: tapdb_prod
     audit_log_euid_prefix: AD
     support_email: support@example.com
-    cognito_user_pool_id: us-east-1_xxxxxxxxx
 
-  # Aurora (AWS RDS) environments use engine_type: aurora
-  # and require additional aurora-specific fields.
   aurora_dev:
     engine_type: aurora
     host: tapdb-dev-cluster.cluster-xxxxxxxxxxxx.us-west-2.rds.amazonaws.com

@@ -1,14 +1,8 @@
 """DB connection config loader for CLI.
 
-Namespace-first search order:
+Resolution order:
 1) TAPDB_CONFIG_PATH (explicit override)
 2) ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml
-
-Legacy fallback (only when strict namespace mode is disabled):
-3) ~/.config/tapdb/tapdb-config-<database_name>.yaml (legacy)
-4) ~/.config/tapdb/tapdb-config.yaml (legacy)
-5) ./config/tapdb-config-<database_name>.yaml (legacy repo-local)
-6) ./config/tapdb-config.yaml (legacy repo-local)
 """
 
 from __future__ import annotations
@@ -25,11 +19,6 @@ from daylily_tapdb.cli.context import CONFIG_FILENAME, TapdbContext, resolve_con
 DEFAULT_CONFIG_FILENAME = CONFIG_FILENAME
 DEFAULT_TAPDB_POSTGRES_PORT = "5533"
 DEFAULT_UI_PORT = "8911"
-
-
-def _strict_namespace_enabled() -> bool:
-    raw = (os.environ.get("TAPDB_STRICT_NAMESPACE") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
 
 
 def _legacy_default_config_path() -> Path:
@@ -79,14 +68,11 @@ def get_config_paths() -> list[Path]:
     if ctx:
         return [ctx.config_path()]
 
-    if _strict_namespace_enabled():
-        raise RuntimeError(
-            "TAPDB namespace is required in strict mode. "
-            "Set --client-id/--database-name or "
-            "TAPDB_CLIENT_ID/TAPDB_DATABASE_NAME."
-        )
-
-    return get_legacy_config_paths()
+    raise RuntimeError(
+        "TAPDB namespace is required. "
+        "Set --client-id/--database-name or "
+        "TAPDB_CLIENT_ID/TAPDB_DATABASE_NAME."
+    )
 
 
 def get_config_path() -> Path:
@@ -169,19 +155,17 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
     """Resolve DB config for an environment name (dev/test/prod/aurora_*)."""
     env_key = env_name.lower()
     env_prefix = f"TAPDB_{env_key.upper()}_"
-    strict = _strict_namespace_enabled()
-    ctx = resolve_context(require_keys=strict, env_name=env_key)
+    ctx = resolve_context(require_keys=True, env_name=env_key)
 
     root, config_path, config_exists = _load_config_with_path()
 
-    if strict:
-        if not config_exists:
-            raise RuntimeError(
-                f"No TAPDB config found at {config_path}. "
-                "Run: tapdb config init --client-id <id> --database-name <name>"
-            )
-        if ctx:
-            _validate_meta_for_context(root, ctx)
+    if not config_exists:
+        raise RuntimeError(
+            f"No TAPDB config found at {config_path}. "
+            "Run: tapdb config init --client-id <id> --database-name <name>"
+        )
+    if ctx:
+        _validate_meta_for_context(root, ctx)
 
     file_cfg: dict[str, Any] = {}
     if "environments" in root and isinstance(root.get("environments"), dict):
@@ -189,7 +173,7 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
     else:
         file_cfg = root.get(env_key, {}) or {}
 
-    if strict and not file_cfg:
+    if not file_cfg:
         raise RuntimeError(
             f"Environment {env_key!r} is not configured in {config_path}. "
             f"Run: tapdb config init --env {env_key}"
@@ -238,6 +222,34 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
             f"{env_prefix}COGNITO_USER_POOL_ID",
             _file_str("cognito_user_pool_id") or "",
         ),
+        "cognito_app_client_id": os.environ.get(
+            f"{env_prefix}COGNITO_APP_CLIENT_ID",
+            _file_str("cognito_app_client_id") or "",
+        ),
+        "cognito_app_client_secret": os.environ.get(
+            f"{env_prefix}COGNITO_APP_CLIENT_SECRET",
+            _file_str("cognito_app_client_secret") or "",
+        ),
+        "cognito_client_name": os.environ.get(
+            f"{env_prefix}COGNITO_CLIENT_NAME",
+            _file_str("cognito_client_name") or "",
+        ),
+        "cognito_region": os.environ.get(
+            f"{env_prefix}COGNITO_REGION",
+            _file_str("cognito_region") or "",
+        ),
+        "cognito_domain": os.environ.get(
+            f"{env_prefix}COGNITO_DOMAIN",
+            _file_str("cognito_domain") or "",
+        ),
+        "cognito_callback_url": os.environ.get(
+            f"{env_prefix}COGNITO_CALLBACK_URL",
+            _file_str("cognito_callback_url") or "",
+        ),
+        "cognito_logout_url": os.environ.get(
+            f"{env_prefix}COGNITO_LOGOUT_URL",
+            _file_str("cognito_logout_url") or "",
+        ),
         "audit_log_euid_prefix": os.environ.get(
             f"{env_prefix}AUDIT_LOG_EUID_PREFIX",
             _file_str("audit_log_euid_prefix") or "",
@@ -284,17 +296,16 @@ def get_db_config_for_env(env_name: str) -> dict[str, str]:
                 f"Invalid local host {cfg['host']!r} for env {env_key}. "
                 "Local TAPDB must use host 'localhost'."
             )
-        if strict:
-            required_fields = ("port", "ui_port")
-            missing_required = [
-                field
-                for field in required_fields
-                if not str(file_cfg.get(field) or "").strip()
-            ]
-            if missing_required:
-                raise RuntimeError(
-                    f"Config {config_path} is missing required field(s) for "
-                    f"env {env_key}: {', '.join(missing_required)}"
-                )
+        required_fields = ("port", "ui_port")
+        missing_required = [
+            field
+            for field in required_fields
+            if not str(file_cfg.get(field) or "").strip()
+        ]
+        if missing_required:
+            raise RuntimeError(
+                f"Config {config_path} is missing required field(s) for "
+                f"env {env_key}: {', '.join(missing_required)}"
+            )
 
     return cfg

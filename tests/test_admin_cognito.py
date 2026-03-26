@@ -12,30 +12,46 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def test_resolve_tapdb_pool_config_from_daycog_env(
+def _config_path(tmp_path: Path) -> Path:
+    return (
+        tmp_path
+        / ".config"
+        / "tapdb"
+        / "local"
+        / "tapdb"
+        / "tapdb-config.yaml"
+    )
+
+
+def test_resolve_tapdb_pool_config_from_tapdb_yaml(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TAPDB_CLIENT_ID", "local")
+    monkeypatch.setenv("TAPDB_DATABASE_NAME", "tapdb")
     monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
 
     _write(
-        tmp_path / ".config" / "tapdb" / "tapdb-config.yaml",
+        _config_path(tmp_path),
+        "meta:\n"
+        "  config_version: 2\n"
+        "  client_id: local\n"
+        "  database_name: tapdb\n"
         "environments:\n"
         "  dev:\n"
         "    host: localhost\n"
         "    port: 5432\n"
+        "    ui_port: 8911\n"
         "    user: test\n"
         "    database: tapdb_dev\n"
-        "    cognito_user_pool_id: us-east-1_TESTPOOL\n",
-    )
-    _write(
-        tmp_path / ".config" / "daycog" / "tapdb-dev-users.us-east-1.env",
-        "AWS_PROFILE=test-profile\n"
-        "AWS_REGION=us-east-1\n"
-        "COGNITO_REGION=us-east-1\n"
-        "COGNITO_CLIENT_NAME=tapdb\n"
-        "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
-        "COGNITO_APP_CLIENT_ID=client123\n",
+        "    cognito_user_pool_id: us-east-1_TESTPOOL\n"
+        "    cognito_app_client_id: client123\n"
+        "    cognito_client_name: tapdb\n"
+        "    cognito_region: us-east-1\n"
+        "    cognito_domain: tapdb-dev-users.auth.us-east-1.amazoncognito.com\n"
+        "    cognito_callback_url: https://localhost:8911/auth/callback\n"
+        "    cognito_logout_url: https://localhost:8911/login\n"
+        "    aws_profile: test-profile\n",
     )
 
     cfg = resolve_tapdb_pool_config("dev")
@@ -43,21 +59,28 @@ def test_resolve_tapdb_pool_config_from_daycog_env(
     assert cfg.app_client_id == "client123"
     assert cfg.region == "us-east-1"
     assert cfg.aws_profile == "test-profile"
-    assert cfg.source_file.name == "tapdb-dev-users.us-east-1.env"
+    assert cfg.source_file == _config_path(tmp_path)
 
 
 def test_resolve_tapdb_pool_config_requires_pool_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TAPDB_CLIENT_ID", "local")
+    monkeypatch.setenv("TAPDB_DATABASE_NAME", "tapdb")
     monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
 
     _write(
-        tmp_path / ".config" / "tapdb" / "tapdb-config.yaml",
+        _config_path(tmp_path),
+        "meta:\n"
+        "  config_version: 2\n"
+        "  client_id: local\n"
+        "  database_name: tapdb\n"
         "environments:\n"
         "  dev:\n"
         "    host: localhost\n"
         "    port: 5432\n"
+        "    ui_port: 8911\n"
         "    user: test\n"
         "    database: tapdb_dev\n",
     )
@@ -66,109 +89,62 @@ def test_resolve_tapdb_pool_config_requires_pool_id(
         resolve_tapdb_pool_config("dev")
 
 
-def test_resolve_tapdb_pool_config_requires_matching_daycog_env(
+def test_resolve_tapdb_pool_config_requires_client_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TAPDB_CLIENT_ID", "local")
+    monkeypatch.setenv("TAPDB_DATABASE_NAME", "tapdb")
     monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
 
     _write(
-        tmp_path / ".config" / "tapdb" / "tapdb-config.yaml",
+        _config_path(tmp_path),
+        "meta:\n"
+        "  config_version: 2\n"
+        "  client_id: local\n"
+        "  database_name: tapdb\n"
         "environments:\n"
         "  dev:\n"
         "    host: localhost\n"
         "    port: 5432\n"
+        "    ui_port: 8911\n"
         "    user: test\n"
         "    database: tapdb_dev\n"
-        "    cognito_user_pool_id: us-east-1_TESTPOOL\n",
-    )
-    _write(
-        tmp_path / ".config" / "daycog" / "other-pool.us-east-1.env",
-        "AWS_PROFILE=test-profile\n"
-        "AWS_REGION=us-east-1\n"
-        "COGNITO_USER_POOL_ID=us-east-1_OTHER\n"
-        "COGNITO_APP_CLIENT_ID=client456\n",
+        "    cognito_user_pool_id: us-east-1_TESTPOOL\n"
+        "    cognito_client_name: tapdb\n"
+        "    cognito_region: us-east-1\n",
     )
 
-    with pytest.raises(RuntimeError, match="No daycog config found"):
+    with pytest.raises(RuntimeError, match="cognito_app_client_id"):
         resolve_tapdb_pool_config("dev")
-
-
-def test_resolve_tapdb_pool_config_prefers_pool_scoped_env_over_app_and_default(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
-
-    _write(
-        tmp_path / ".config" / "tapdb" / "tapdb-config.yaml",
-        "environments:\n"
-        "  dev:\n"
-        "    host: localhost\n"
-        "    port: 5432\n"
-        "    user: test\n"
-        "    database: tapdb_dev\n"
-        "    cognito_user_pool_id: us-east-1_TESTPOOL\n",
-    )
-    _write(
-        tmp_path / ".config" / "daycog" / "default.env",
-        "AWS_PROFILE=default-profile\n"
-        "AWS_REGION=us-east-1\n"
-        "COGNITO_REGION=us-east-1\n"
-        "COGNITO_CLIENT_NAME=tapdb\n"
-        "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
-        "COGNITO_APP_CLIENT_ID=client-default\n",
-    )
-    _write(
-        tmp_path / ".config" / "daycog" / "tapdb-dev-users.us-east-1.web-app.env",
-        "AWS_PROFILE=app-profile\n"
-        "AWS_REGION=us-east-1\n"
-        "COGNITO_REGION=us-east-1\n"
-        "COGNITO_CLIENT_NAME=tapdb\n"
-        "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
-        "COGNITO_APP_CLIENT_ID=client-app\n",
-    )
-    _write(
-        tmp_path / ".config" / "daycog" / "tapdb-dev-users.us-east-1.env",
-        "AWS_PROFILE=pool-profile\n"
-        "AWS_REGION=us-east-1\n"
-        "COGNITO_REGION=us-east-1\n"
-        "COGNITO_CLIENT_NAME=tapdb\n"
-        "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
-        "COGNITO_APP_CLIENT_ID=client-pool\n",
-    )
-
-    cfg = resolve_tapdb_pool_config("dev")
-    assert cfg.app_client_id == "client-pool"
-    assert cfg.aws_profile == "pool-profile"
-    assert cfg.source_file.name == "tapdb-dev-users.us-east-1.env"
 
 
 def test_resolve_tapdb_pool_config_requires_tapdb_client_name(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TAPDB_CLIENT_ID", "local")
+    monkeypatch.setenv("TAPDB_DATABASE_NAME", "tapdb")
     monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
 
     _write(
-        tmp_path / ".config" / "tapdb" / "tapdb-config.yaml",
+        _config_path(tmp_path),
+        "meta:\n"
+        "  config_version: 2\n"
+        "  client_id: local\n"
+        "  database_name: tapdb\n"
         "environments:\n"
         "  dev:\n"
         "    host: localhost\n"
         "    port: 5432\n"
+        "    ui_port: 8911\n"
         "    user: test\n"
         "    database: tapdb_dev\n"
-        "    cognito_user_pool_id: us-east-1_TESTPOOL\n",
-    )
-    _write(
-        tmp_path / ".config" / "daycog" / "tapdb-dev-users.us-east-1.env",
-        "AWS_PROFILE=test-profile\n"
-        "AWS_REGION=us-east-1\n"
-        "COGNITO_REGION=us-east-1\n"
-        "COGNITO_CLIENT_NAME=wrong-client\n"
-        "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\n"
-        "COGNITO_APP_CLIENT_ID=client123\n",
+        "    cognito_user_pool_id: us-east-1_TESTPOOL\n"
+        "    cognito_app_client_id: client123\n"
+        "    cognito_client_name: wrong-client\n"
+        "    cognito_region: us-east-1\n",
     )
 
-    with pytest.raises(RuntimeError, match="must select app client 'tapdb'"):
+    with pytest.raises(RuntimeError, match="cognito_client_name"):
         resolve_tapdb_pool_config("dev")

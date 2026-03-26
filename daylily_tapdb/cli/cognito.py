@@ -16,6 +16,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import typer
+import yaml
 from rich.console import Console
 
 from daylily_tapdb import TAPDBConnection
@@ -26,7 +27,7 @@ from daylily_tapdb.user_store import create_or_get
 
 console = Console()
 cognito_app = typer.Typer(help="Cognito auth integration commands (via daycog)")
-config_app = typer.Typer(help="daycog config file utilities")
+config_app = typer.Typer(help="Daycog context utilities")
 cognito_app.add_typer(config_app, name="config")
 DEFAULT_COGNITO_CALLBACK_PORT = 8911
 REQUIRED_COGNITO_CLIENT_NAME = "tapdb"
@@ -153,26 +154,8 @@ def _validate_bound_cognito_uris(
     return expected_port, port_source, errors, notices
 
 
-def _read_env_file(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.exists():
-        return values
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        if key:
-            values[key] = value
-    return values
-
-
-def _daycog_config_dir() -> Path:
-    return Path.home() / ".config" / "daycog"
+def _daycog_config_path() -> Path:
+    return Path.home() / ".config" / "daycog" / "config.yaml"
 
 
 def _sanitize_filename_part(value: str) -> str:
@@ -187,29 +170,59 @@ def _default_pool_name(env: Environment) -> str:
     return re.sub(r"-{2,}", "-", name)
 
 
-def _score_daycog_env_match(
-    path: Path,
+def _parse_daycog_context_name(name: str) -> tuple[str, str, str]:
+    match = re.match(r"^(?P<pool>.+)\.(?P<region>[a-z]{2}(?:-[a-z0-9]+)+-\d+)(?:\.(?P<app>.+))?$", name)
+    if not match:
+        return "", "", ""
+    return (
+        (match.group("pool") or "").strip(),
+        (match.group("region") or "").strip(),
+        (match.group("app") or "").strip(),
+    )
+
+
+def _load_daycog_contexts() -> tuple[str, dict[str, dict[str, str]]]:
+    path = _daycog_config_path()
+    if not path.exists():
+        raise RuntimeError(f"daycog config store not found: {path}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"invalid daycog config store: {path}")
+    active_name = str(raw.get("active_context") or "").strip()
+    raw_contexts = raw.get("contexts") if isinstance(raw.get("contexts"), dict) else {}
+    contexts: dict[str, dict[str, str]] = {}
+    if isinstance(raw_contexts, dict):
+        for name, values in raw_contexts.items():
+            if not isinstance(values, dict):
+                continue
+            contexts[str(name)] = {
+                str(key): str(value) for key, value in values.items() if value is not None
+            }
+    return active_name, contexts
+
+
+def _score_daycog_context_match(
+    name: str,
     values: dict[str, str],
     *,
+    active_name: str = "",
     prefer_region: Optional[str] = None,
     prefer_client_name: Optional[str] = None,
 ) -> tuple[int, str]:
-    """Return sort key for daycog env preference (higher score is better)."""
+    """Return sort key for Daycog stored-context preference (higher score is better)."""
     score = 0
-    name = path.name
     region = (values.get("COGNITO_REGION") or values.get("AWS_REGION") or "").strip()
     client_name = (values.get("COGNITO_CLIENT_NAME") or "").strip()
 
-    if name != "default.env":
+    if name == active_name:
         score += 10
 
-    if region and name.endswith(f".{region}.env"):
-        # Pool-scoped file (<pool>.<region>.env) is canonical selected context.
+    pool_name, context_region, context_app = _parse_daycog_context_name(name)
+    if pool_name and context_region and not context_app:
         score += 70
-    elif region and client_name:
+    elif pool_name and context_region and context_app:
         safe_client = _sanitize_filename_part(client_name)
-        if name.endswith(f".{region}.{safe_client}.env"):
-            # App-scoped file (<pool>.<region>.<app>.env) is second-best.
+        if context_app == safe_client:
             score += 60
 
     if prefer_region and region == prefer_region:
@@ -220,28 +233,24 @@ def _score_daycog_env_match(
     return (score, name)
 
 
-def _find_pool_env_file_by_id(
+def _find_pool_context_by_id(
     pool_id: str,
     *,
     prefer_region: Optional[str] = None,
     prefer_client_name: Optional[str] = None,
-) -> tuple[Path, dict[str, str]]:
-    cfg_dir = _daycog_config_dir()
-    if not cfg_dir.exists():
-        raise RuntimeError(f"daycog config dir not found: {cfg_dir}")
-
-    files = sorted(cfg_dir.glob("*.env"))
-    matches: list[tuple[Path, dict[str, str]]] = []
-    for env_file in files:
-        values = _read_env_file(env_file)
+) -> tuple[str, dict[str, str]]:
+    active_name, contexts = _load_daycog_contexts()
+    matches: list[tuple[str, dict[str, str]]] = []
+    for context_name, values in contexts.items():
         if (values.get("COGNITO_USER_POOL_ID") or "").strip() == pool_id:
-            matches.append((env_file, values))
+            matches.append((context_name, values))
 
     if matches:
         matches.sort(
-            key=lambda item: _score_daycog_env_match(
+            key=lambda item: _score_daycog_context_match(
                 item[0],
                 item[1],
+                active_name=active_name,
                 prefer_region=prefer_region,
                 prefer_client_name=prefer_client_name,
             ),
@@ -250,9 +259,9 @@ def _find_pool_env_file_by_id(
         return matches[0]
 
     raise RuntimeError(
-        f"No daycog env file maps to pool ID {pool_id}. "
-        "Expected a daycog env file in "
-        f"{cfg_dir} (for example <pool>.<region>.env) with "
+        f"No Daycog stored context maps to pool ID {pool_id}. "
+        "Expected a Daycog context in "
+        f"{_daycog_config_path()} with "
         f"COGNITO_USER_POOL_ID={pool_id}."
     )
 
@@ -277,34 +286,31 @@ def _resolve_daycog_pool_id_after_setup(
     pool_name: str,
     region: str,
     client_name: str,
-) -> tuple[str, Path]:
-    """Resolve pool ID from daycog 0.1.24+ config file naming."""
-    cfg_dir = _daycog_config_dir()
-    pool_env = cfg_dir / f"{pool_name}.{region}.env"
-    sanitized_client = _sanitize_filename_part(client_name)
-    app_env = cfg_dir / f"{pool_name}.{region}.{sanitized_client}.env"
-    default_env = cfg_dir / "default.env"
+) -> tuple[str, str]:
+    """Resolve pool ID from the canonical Daycog YAML context store."""
+    active_name, contexts = _load_daycog_contexts()
+    pool_context_name = f"{pool_name}.{region}"
+    app_context_name = f"{pool_name}.{region}.{_sanitize_filename_part(client_name)}"
 
-    checked: list[Path] = []
-    for path in [pool_env, app_env, default_env]:
-        checked.append(path)
-        values = _read_env_file(path)
-        pool_id = (values.get("COGNITO_USER_POOL_ID") or "").strip()
-        if pool_id:
-            return pool_id, path
-
-    # Fallback for unusual setups: any env file matching pool+region prefix.
-    for path in sorted(cfg_dir.glob(f"{pool_name}.{region}*.env")):
-        if path in checked:
+    for context_name in [pool_context_name, app_context_name, active_name]:
+        if not context_name:
             continue
-        values = _read_env_file(path)
+        values = contexts.get(context_name) or {}
         pool_id = (values.get("COGNITO_USER_POOL_ID") or "").strip()
         if pool_id:
-            return pool_id, path
+            return pool_id, context_name
+
+    for context_name, values in sorted(contexts.items()):
+        candidate_pool, candidate_region, _candidate_app = _parse_daycog_context_name(context_name)
+        if candidate_pool != pool_name or candidate_region != region:
+            continue
+        pool_id = (values.get("COGNITO_USER_POOL_ID") or "").strip()
+        if pool_id:
+            return pool_id, context_name
 
     raise RuntimeError(
-        "daycog setup completed but pool ID was not found in expected files: "
-        f"{pool_env}, {app_env}, {default_env}"
+        "daycog setup completed but pool ID was not found in "
+        f"{_daycog_config_path()} for pool {pool_name} ({region})."
     )
 
 
@@ -468,7 +474,7 @@ def _finalize_setup_binding(
     region: str,
 ) -> None:
     try:
-        pool_id, pool_env_path = _resolve_daycog_pool_id_after_setup(
+        pool_id, context_name = _resolve_daycog_pool_id_after_setup(
             pool_name=selected_pool_name,
             region=region,
             client_name=selected_client_name,
@@ -479,7 +485,7 @@ def _finalize_setup_binding(
 
     # Ensure the selected daycog context is bound to the required TAPDB app client.
     try:
-        _env_file, values = _find_pool_env_file_by_id(
+        _context_name, values = _find_pool_context_by_id(
             pool_id,
             prefer_region=region,
             prefer_client_name=REQUIRED_COGNITO_CLIENT_NAME,
@@ -495,12 +501,14 @@ def _finalize_setup_binding(
     cfg_path = _write_pool_id_to_tapdb_config(env, pool_id)
     console.print(f"[green]✓[/green] Bound pool ID to tapdb config: {pool_id}")
     console.print(f"  TAPDB config: [dim]{cfg_path}[/dim]")
-    console.print(f"  daycog env:   [dim]{pool_env_path}[/dim]")
+    console.print(
+        f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]"
+    )
 
 
 def _resolve_bound_daycog_context(
     env: Environment,
-) -> tuple[str, Path, dict[str, str], dict[str, str]]:
+) -> tuple[str, str, dict[str, str], dict[str, str]]:
     cfg = get_db_config_for_env(env.value)
     pool_id = (cfg.get("cognito_user_pool_id") or "").strip()
     if not pool_id:
@@ -509,14 +517,14 @@ def _resolve_bound_daycog_context(
             f"Run: tapdb cognito setup {env.value}"
         )
 
-    env_file, values = _find_pool_env_file_by_id(
+    context_name, values = _find_pool_context_by_id(
         pool_id,
         prefer_client_name=REQUIRED_COGNITO_CLIENT_NAME,
     )
     _validate_required_client_name(values, context_label=f"env {env.value}")
     proc_env = os.environ.copy()
     proc_env.update(values)
-    return pool_id, env_file, values, proc_env
+    return pool_id, context_name, values, proc_env
 
 
 def _resolve_pool_command_context(
@@ -931,7 +939,7 @@ def cognito_bind(
 def cognito_status(
     env: Environment = typer.Argument(..., help="Target environment"),
 ) -> None:
-    """Show TAPDB Cognito binding and mapped daycog pool env file."""
+    """Show TAPDB Cognito binding and the mapped Daycog context."""
     cfg = get_db_config_for_env(env.value)
     pool_id = (cfg.get("cognito_user_pool_id") or "").strip()
     if not pool_id:
@@ -940,7 +948,7 @@ def cognito_status(
         )
         raise typer.Exit(1)
 
-    env_file, values = _find_pool_env_file_by_id(
+    context_name, values = _find_pool_context_by_id(
         pool_id,
         prefer_client_name=REQUIRED_COGNITO_CLIENT_NAME,
     )
@@ -959,7 +967,9 @@ def cognito_status(
     ui_pid_file = _ui_pid_file_for_env(env)
     console.print(f"[green]✓[/green] Env:        {env.value}")
     console.print(f"[green]✓[/green] Pool ID:    {pool_id}")
-    console.print(f"[green]✓[/green] daycog env: {env_file}")
+    console.print(
+        f"[green]✓[/green] Daycog context: {_daycog_config_path()} :: {context_name}"
+    )
     console.print(f"[green]✓[/green] Region:     {region}")
     console.print(f"[green]✓[/green] Client ID:  {client_id}")
     console.print(f"[green]✓[/green] Client:     {client_name}")
@@ -991,10 +1001,10 @@ def cognito_status(
 def cognito_list_pools(
     env: Environment = typer.Argument(..., help="Target environment"),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (fallback: daycog env context)"
+        None, "--profile", help="AWS profile (fallback: active Daycog context)"
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (fallback: daycog env context)"
+        None, "--region", "-r", help="AWS region (fallback: active Daycog context)"
     ),
 ) -> None:
     """List Cognito pools in the selected region via daycog."""
@@ -1016,10 +1026,10 @@ def cognito_list_apps(
         None, "--pool-name", help="Cognito pool name (default from env DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (fallback: daycog env context)"
+        None, "--profile", help="AWS profile (fallback: Daycog context)"
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (fallback: daycog env context)"
+        None, "--region", "-r", help="AWS region (fallback: Daycog context)"
     ),
 ) -> None:
     """List app clients for a Cognito pool via daycog."""
@@ -1046,10 +1056,10 @@ def cognito_add_app(
         None, "--pool-name", help="Cognito pool name (default from env DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (fallback: daycog env context)"
+        None, "--profile", help="AWS profile (fallback: Daycog context)"
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (fallback: daycog env context)"
+        None, "--region", "-r", help="AWS region (fallback: Daycog context)"
     ),
     logout_url: Optional[str] = typer.Option(
         None, "--logout-url", help="Optional logout URL"
@@ -1063,7 +1073,7 @@ def cognito_add_app(
     ),
     idps: str = typer.Option("COGNITO", "--idp", help="Identity providers CSV"),
     set_default: bool = typer.Option(
-        False, "--set-default", help="Update pool/default env context to this app"
+        False, "--set-default", help="Update the pool context and active Daycog context to this app"
     ),
 ) -> None:
     """Create a new app client in the pool via daycog."""
@@ -1127,16 +1137,16 @@ def cognito_edit_app(
     scopes: Optional[str] = typer.Option(None, "--scopes", help="OAuth scopes CSV"),
     idps: Optional[str] = typer.Option(None, "--idp", help="Identity providers CSV"),
     set_default: bool = typer.Option(
-        False, "--set-default", help="Update pool/default env context to this app"
+        False, "--set-default", help="Update the pool context and active Daycog context to this app"
     ),
     pool_name: Optional[str] = typer.Option(
         None, "--pool-name", help="Cognito pool name (default from env DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (fallback: daycog env context)"
+        None, "--profile", help="AWS profile (fallback: Daycog context)"
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (fallback: daycog env context)"
+        None, "--region", "-r", help="AWS region (fallback: Daycog context)"
     ),
 ) -> None:
     """Edit an existing app client in the pool via daycog."""
@@ -1185,16 +1195,16 @@ def cognito_remove_app(
         None, "--pool-name", help="Cognito pool name (default from env DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (fallback: daycog env context)"
+        None, "--profile", help="AWS profile (fallback: Daycog context)"
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (fallback: daycog env context)"
+        None, "--region", "-r", help="AWS region (fallback: Daycog context)"
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
     delete_config: bool = typer.Option(
         True,
         "--delete-config/--keep-config",
-        help="Delete per-app env file (default: true)",
+        help="Delete the app-scoped Daycog context (default: true)",
     ),
 ) -> None:
     """Remove an app client from the pool via daycog."""
@@ -1233,10 +1243,10 @@ def cognito_add_google_idp(
         None, "--pool-name", help="Cognito pool name (default from env DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (fallback: daycog env context)"
+        None, "--profile", help="AWS profile (fallback: Daycog context)"
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (fallback: daycog env context)"
+        None, "--region", "-r", help="AWS region (fallback: active Daycog context)"
     ),
     google_client_id: Optional[str] = typer.Option(
         None, "--google-client-id", help="Google OAuth client ID"
@@ -1308,10 +1318,10 @@ def cognito_config_print(
         None, "--pool-name", help="Cognito pool name (default from env DB name)"
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (fallback: daycog env context)"
+        None, "--region", "-r", help="AWS region (fallback: Daycog context)"
     ),
 ) -> None:
-    """Print daycog config file path + contents for the target pool context."""
+    """Print the Daycog context entry for the target pool."""
     selected_pool, proc_env, selected_region, _ = _resolve_pool_command_context(
         env,
         pool_name=pool_name,
@@ -1336,13 +1346,13 @@ def cognito_config_create(
         None, "--pool-name", help="Cognito pool name (default from env DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (fallback: daycog env context)"
+        None, "--profile", help="AWS profile (fallback: active Daycog context)"
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (fallback: daycog env context)"
+        None, "--region", "-r", help="AWS region (fallback: active Daycog context)"
     ),
 ) -> None:
-    """Create daycog pool config file from AWS and update default config."""
+    """Create a Daycog pool context from AWS and update the active context."""
     selected_pool, proc_env, selected_region, selected_profile = (
         _resolve_pool_command_context(
             env,
@@ -1371,13 +1381,13 @@ def cognito_config_update(
         None, "--pool-name", help="Cognito pool name (default from env DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (fallback: daycog env context)"
+        None, "--profile", help="AWS profile (fallback: active Daycog context)"
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (fallback: daycog env context)"
+        None, "--region", "-r", help="AWS region (fallback: active Daycog context)"
     ),
 ) -> None:
-    """Update daycog pool config file from AWS and refresh default config."""
+    """Update a Daycog pool context from AWS and refresh the active context."""
     selected_pool, proc_env, selected_region, selected_profile = (
         _resolve_pool_command_context(
             env,
@@ -1423,7 +1433,7 @@ def cognito_add_user(
         raise typer.Exit(1)
 
     try:
-        pool_id, env_file, _, proc_env = _resolve_bound_daycog_context(env)
+        pool_id, context_name, _, proc_env = _resolve_bound_daycog_context(env)
     except RuntimeError as e:
         console.print(f"[red]✗[/red] {e}")
         raise typer.Exit(1)
@@ -1449,5 +1459,7 @@ def cognito_add_user(
 
     console.print(f"[green]✓[/green] Created Cognito user: {email}")
     console.print(f"  Pool: [dim]{pool_id}[/dim]")
-    console.print(f"  daycog env: [dim]{env_file}[/dim]")
+    console.print(
+        f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]"
+    )
     console.print(f"  tapdb role: [dim]{role}[/dim]")

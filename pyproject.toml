@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daylily-tapdb"
-dynamic = ["version"]
+version = "2.0.1"
 description = "Templated Abstract Polymorphic Database - A flexible object model library"
 readme = "README.md"
 license = {text = "MIT"}
@@ -143,10 +143,3 @@ skips = [
     "B607",  # subprocess calls rely on known PATH tools (git, psql, lsof, etc.)
     "B608",  # SQL fragments are operator-authored/static, not raw user interpolation
 ]
-
-[tool.setuptools_scm]
-version_scheme = "guess-next-dev"
-local_scheme = "no-local-version"
-git_describe_command = "git describe --dirty --tags --long --match [0-9]*"
-write_to = "daylily_tapdb/_version.py"
-write_to_template = "__version__ = \"{version}\"\n"

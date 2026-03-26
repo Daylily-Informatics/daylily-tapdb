@@ -530,25 +530,6 @@ def load_db_inventory_context() -> dict:
     return ctx
 
 
-def _read_env_file_values(path: Path) -> Dict[str, str]:
-    """Parse KEY=VALUE pairs from a simple .env file."""
-    values: Dict[str, str] = {}
-    if not path.exists():
-        return values
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        if key:
-            values[key] = value
-    return values
-
-
 def _mask_sensitive_value(key: str, value: str) -> str:
     """Redact sensitive values for safe UI display."""
     key_u = key.upper()
@@ -570,24 +551,21 @@ def _normalize_cognito_domain(raw_domain: str) -> str:
 
 
 def _resolve_cognito_oauth_runtime(env_name: str) -> Dict[str, str]:
-    """Resolve OAuth/Hosted-UI settings from daycog context."""
+    """Resolve OAuth/Hosted-UI settings from TapDB config."""
     pool_cfg = resolve_tapdb_pool_config(env_name)
-    values = _read_env_file_values(pool_cfg.source_file)
-    domain = _normalize_cognito_domain(values.get("COGNITO_DOMAIN", ""))
-    callback_url = (values.get("COGNITO_CALLBACK_URL") or "").strip()
+    domain = _normalize_cognito_domain(pool_cfg.domain)
+    callback_url = (pool_cfg.callback_url or "").strip()
     if not callback_url:
-        raise RuntimeError("COGNITO_CALLBACK_URL is missing in daycog config")
-    client_id = (
-        values.get("COGNITO_APP_CLIENT_ID") or pool_cfg.app_client_id or ""
-    ).strip()
+        raise RuntimeError("cognito_callback_url is missing in tapdb config")
+    client_id = (pool_cfg.app_client_id or "").strip()
     if not client_id:
-        raise RuntimeError("COGNITO_APP_CLIENT_ID is missing in daycog config")
+        raise RuntimeError("cognito_app_client_id is missing in tapdb config")
     return {
         "domain": domain,
         "callback_url": callback_url,
         "client_id": client_id,
-        "client_secret": (values.get("COGNITO_APP_CLIENT_SECRET") or "").strip(),
-        "scope": (values.get("COGNITO_SCOPES") or "openid email profile").strip(),
+        "client_secret": pool_cfg.app_client_secret,
+        "scope": "openid email profile",
     }
 
 
@@ -1385,13 +1363,21 @@ async def info_page(request: Request):
             ("app_client_id", pool_cfg.app_client_id),
             ("region", pool_cfg.region),
             ("aws_profile", pool_cfg.aws_profile or "(not set)"),
-            ("source_file", str(pool_cfg.source_file)),
+            ("config_path", str(pool_cfg.source_file)),
+            ("client_name", pool_cfg.client_name),
+            ("domain", pool_cfg.domain or "(not set)"),
+            ("callback_url", pool_cfg.callback_url or "(not set)"),
+            ("logout_url", pool_cfg.logout_url or "(not set)"),
         ]
-        values = _read_env_file_values(pool_cfg.source_file)
-        for key in sorted(values.keys()):
-            if not (key.startswith("COGNITO_") or key.startswith("AWS_")):
-                continue
-            cognito_env_rows.append((key, _mask_sensitive_value(key, values[key])))
+        cognito_env_rows = [
+            ("COGNITO_USER_POOL_ID", pool_cfg.pool_id),
+            ("COGNITO_APP_CLIENT_ID", pool_cfg.app_client_id),
+            ("COGNITO_REGION", pool_cfg.region),
+            ("COGNITO_DOMAIN", pool_cfg.domain or "(not set)"),
+            ("COGNITO_CALLBACK_URL", pool_cfg.callback_url or "(not set)"),
+            ("COGNITO_LOGOUT_URL", pool_cfg.logout_url or "(not set)"),
+            ("AWS_PROFILE", pool_cfg.aws_profile or "(not set)"),
+        ]
     except Exception as exc:
         cognito_error = str(exc)
 
