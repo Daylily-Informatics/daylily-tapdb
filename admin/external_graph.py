@@ -11,7 +11,6 @@ from urllib.request import urlopen
 
 from fastapi import Request
 
-
 ALLOWED_AUTH_MODES = {"none", "same_origin"}
 
 
@@ -173,9 +172,10 @@ def fetch_remote_graph(
 
     url = urljoin(ref.base_url.rstrip("/") + "/", ref.graph_data_path.lstrip("/"))
     url = f"{url}?{urlencode(params)}"
+    url = _require_http_url(url)
     headers = {"Accept": "application/json"}
     _apply_forwarded_auth(request, ref, headers)
-    with urlopen(UrlRequest(url, headers=headers), timeout=20) as response:
+    with urlopen(UrlRequest(url, headers=headers), timeout=20) as response:  # nosec B310
         payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, dict):
         raise RuntimeError("Remote graph response must be a JSON object")
@@ -204,9 +204,10 @@ def fetch_remote_object_detail(
     if ref.tenant_id:
         joiner = "&" if "?" in url else "?"
         url = f"{url}{joiner}{urlencode({'tenant_id': ref.tenant_id})}"
+    url = _require_http_url(url)
     headers = {"Accept": "application/json"}
     _apply_forwarded_auth(request, ref, headers)
-    with urlopen(UrlRequest(url, headers=headers), timeout=20) as response:
+    with urlopen(UrlRequest(url, headers=headers), timeout=20) as response:  # nosec B310
         payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, dict):
         raise RuntimeError("Remote object response must be a JSON object")
@@ -321,3 +322,10 @@ def _apply_forwarded_auth(
         headers["Cookie"] = cookie
     if authorization:
         headers["Authorization"] = authorization
+
+
+def _require_http_url(url: str) -> str:
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        raise RuntimeError("External graph fetch requires an absolute http(s) URL")
+    return url
