@@ -142,6 +142,7 @@ def test_db_migrate_uses_installed_data_migrations(tmp_path, monkeypatch):
         return True, ""
 
     monkeypatch.setattr(m, "_run_psql", fake_run_psql)
+    monkeypatch.setattr(m, "_log_operation", lambda *_args, **_kwargs: None)
 
     m.db_migrate(m.Environment.dev, dry_run=False)
 

@@ -303,13 +303,6 @@ class TestCLICognito:
 
     def test_cognito_setup_uses_daycog_024_flags(self, tmp_path, monkeypatch):
         pool_name = "tapdb-dev-users"
-        cfg_dir = tmp_path / ".config" / "daycog"
-        cfg_dir.mkdir(parents=True, exist_ok=True)
-        (cfg_dir / f"{pool_name}.us-east-1.env").write_text(
-            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\nCOGNITO_CLIENT_NAME=tapdb\n",
-            encoding="utf-8",
-        )
-
         captured: dict[str, list[str]] = {}
 
         def _fake_run_daycog(args, env=None):
@@ -317,14 +310,10 @@ class TestCLICognito:
             return ""
 
         monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._daycog_config_dir",
-            lambda: cfg_dir,
+            "daylily_tapdb.cli.cognito._finalize_setup_binding",
+            lambda **_kwargs: None,
         )
         monkeypatch.setattr("daylily_tapdb.cli.cognito._run_daycog", _fake_run_daycog)
-        monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._write_pool_id_to_tapdb_config",
-            lambda *_args, **_kwargs: tmp_path / "tapdb-config.yaml",
-        )
 
         result = runner.invoke(
             app,
@@ -358,13 +347,6 @@ class TestCLICognito:
         self, tmp_path, monkeypatch
     ):
         pool_name = "tapdb-dev-users"
-        cfg_dir = tmp_path / ".config" / "daycog"
-        cfg_dir.mkdir(parents=True, exist_ok=True)
-        (cfg_dir / f"{pool_name}.us-east-1.env").write_text(
-            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\nCOGNITO_CLIENT_NAME=tapdb\n",
-            encoding="utf-8",
-        )
-
         captured: dict[str, list[str]] = {}
 
         def _fake_run_daycog(args, env=None):
@@ -372,14 +354,10 @@ class TestCLICognito:
             return ""
 
         monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._daycog_config_dir",
-            lambda: cfg_dir,
+            "daylily_tapdb.cli.cognito._finalize_setup_binding",
+            lambda **_kwargs: None,
         )
         monkeypatch.setattr("daylily_tapdb.cli.cognito._run_daycog", _fake_run_daycog)
-        monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._write_pool_id_to_tapdb_config",
-            lambda *_args, **_kwargs: tmp_path / "tapdb-config.yaml",
-        )
 
         result = runner.invoke(
             app,
@@ -404,13 +382,6 @@ class TestCLICognito:
 
     def test_cognito_setup_with_google_routes_to_daycog(self, tmp_path, monkeypatch):
         pool_name = "tapdb-dev-users"
-        cfg_dir = tmp_path / ".config" / "daycog"
-        cfg_dir.mkdir(parents=True, exist_ok=True)
-        (cfg_dir / f"{pool_name}.us-east-1.env").write_text(
-            "COGNITO_USER_POOL_ID=us-east-1_TESTPOOL\nCOGNITO_CLIENT_NAME=tapdb\n",
-            encoding="utf-8",
-        )
-
         captured: dict[str, list[str]] = {}
 
         def _fake_run_daycog(args, env=None):
@@ -418,14 +389,10 @@ class TestCLICognito:
             return ""
 
         monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._daycog_config_dir",
-            lambda: cfg_dir,
+            "daylily_tapdb.cli.cognito._finalize_setup_binding",
+            lambda **_kwargs: None,
         )
         monkeypatch.setattr("daylily_tapdb.cli.cognito._run_daycog", _fake_run_daycog)
-        monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._write_pool_id_to_tapdb_config",
-            lambda *_args, **_kwargs: tmp_path / "tapdb-config.yaml",
-        )
 
         result = runner.invoke(
             app,
@@ -571,9 +538,9 @@ class TestCLICognito:
             lambda _env: {"cognito_user_pool_id": "us-east-1_TESTPOOL"},
         )
         monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._find_pool_env_file_by_id",
+            "daylily_tapdb.cli.cognito._find_pool_context_by_id",
             lambda _pool_id, **_kwargs: (
-                Path("/tmp/testpool.env"),
+                "tapdb-dev-users.us-east-1",
                 {
                     "AWS_PROFILE": "test",
                     "AWS_REGION": "us-east-1",
@@ -604,9 +571,9 @@ class TestCLICognito:
             lambda _env: {"cognito_user_pool_id": "us-east-1_TESTPOOL"},
         )
         monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._find_pool_env_file_by_id",
+            "daylily_tapdb.cli.cognito._find_pool_context_by_id",
             lambda _pool_id, **_kwargs: (
-                Path("/tmp/testpool.env"),
+                "tapdb-dev-users.us-east-1",
                 {
                     "AWS_PROFILE": "test",
                     "AWS_REGION": "us-east-1",
@@ -636,9 +603,9 @@ class TestCLICognito:
             lambda _env: {"cognito_user_pool_id": "us-east-1_TESTPOOL"},
         )
         monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._find_pool_env_file_by_id",
+            "daylily_tapdb.cli.cognito._find_pool_context_by_id",
             lambda _pool_id, **_kwargs: (
-                Path("/tmp/testpool.env"),
+                "tapdb-dev-users.us-east-1",
                 {
                     "AWS_PROFILE": "test",
                     "AWS_REGION": "us-east-1",
@@ -668,9 +635,9 @@ class TestCLICognito:
             lambda _env: {"cognito_user_pool_id": "us-east-1_TESTPOOL"},
         )
         monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._find_pool_env_file_by_id",
+            "daylily_tapdb.cli.cognito._find_pool_context_by_id",
             lambda _pool_id, **_kwargs: (
-                Path("/tmp/testpool.env"),
+                "tapdb-dev-users.us-east-1",
                 {
                     "AWS_PROFILE": "test",
                     "AWS_REGION": "us-east-1",
@@ -720,9 +687,9 @@ class TestCLICognito:
             },
         )
         monkeypatch.setattr(
-            "daylily_tapdb.cli.cognito._find_pool_env_file_by_id",
+            "daylily_tapdb.cli.cognito._find_pool_context_by_id",
             lambda _pool_id, **_kwargs: (
-                Path("/tmp/testpool.env"),
+                "tapdb-dev-users.us-east-1",
                 {
                     "AWS_PROFILE": "test",
                     "AWS_REGION": "us-east-1",
