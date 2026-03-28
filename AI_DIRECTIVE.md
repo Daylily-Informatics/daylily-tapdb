@@ -207,6 +207,7 @@ Agent requirements:
 2. Use TAPDB EUID helpers where available.
 3. Do not replace EUIDs with UUID-only external identifiers.
 4. Preserve prefix + sequence behavior when creating new entities.
+5. Never rewrite a minted EUID, even when an older environment minted it imperfectly.
 
 ## Cognito Integration Policy
 TAPDB config stores only the pool reference per environment:

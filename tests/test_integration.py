@@ -28,6 +28,17 @@ from daylily_tapdb.models.template import (
 )
 from daylily_tapdb.templates.manager import TemplateManager
 
+_UNSET = object()
+
+
+def _set_runtime_prefix_env(monkeypatch, prefix=_UNSET) -> None:
+    monkeypatch.delenv("MERIDIAN_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("LSMC_ENV", raising=False)
+    if prefix is _UNSET:
+        monkeypatch.delenv("MERIDIAN_SANDBOX_PREFIX", raising=False)
+    else:
+        monkeypatch.setenv("MERIDIAN_SANDBOX_PREFIX", prefix)
+
 
 def _install_schema(dsn: str, schema_name: str, schema_sql_path: Path) -> None:
     try:
@@ -179,10 +190,11 @@ def _integration_templates() -> list[dict]:
     ]
 
 
-def test_postgres_schema_seed_action_audit_soft_delete():
+def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch):
     dsn = os.environ.get("TAPDB_TEST_DSN")
     if not dsn:
         pytest.skip("Set TAPDB_TEST_DSN to run Postgres integration tests")
+    _set_runtime_prefix_env(monkeypatch)
 
     repo_root = Path(__file__).resolve().parents[1]
     schema_sql_path = repo_root / "schema" / "tapdb_schema.sql"
@@ -241,13 +253,17 @@ def test_postgres_schema_seed_action_audit_soft_delete():
                 .first()
             )
             assert a is not None
-            assert a.euid.startswith("XX")
+            assert a.euid.startswith("T:XX-")
 
             action_tmpl = tm.get_template(session, "action/core/create-note/1.0")
             assert action_tmpl is not None
             assert str(a.template_uid) == str(action_tmpl.uid)
 
             assert session.query(audit_log).count() > 0
+            latest_audit_euid = session.execute(
+                text("SELECT euid FROM audit_log ORDER BY uid DESC LIMIT 1")
+            ).scalar_one()
+            assert latest_audit_euid.startswith("T:AD-")
 
             wf_uid = wf.uid
             session.delete(wf)
@@ -259,6 +275,70 @@ def test_postgres_schema_seed_action_audit_soft_delete():
             assert is_deleted is True
 
         conn.engine.dispose()
+    finally:
+        _drop_schema(dsn, schema_name)
+
+
+@pytest.mark.parametrize(
+    ("prefix_env", "expected_prefix"),
+    [
+        ("", "GT-"),
+        ("S", "S:GT-"),
+    ],
+)
+def test_postgres_identity_triggers_respect_runtime_prefix_override(
+    monkeypatch, prefix_env, expected_prefix
+):
+    dsn = os.environ.get("TAPDB_TEST_DSN")
+    if not dsn:
+        pytest.skip("Set TAPDB_TEST_DSN to run Postgres integration tests")
+    _set_runtime_prefix_env(monkeypatch, prefix_env)
+
+    repo_root = Path(__file__).resolve().parents[1]
+    schema_sql_path = repo_root / "schema" / "tapdb_schema.sql"
+
+    schema_name = (
+        f"tapdb_test_prefix_{int(time.time())}_{random.randint(1, 1_000_000_000)}"
+    )
+    _install_schema(dsn, schema_name, schema_sql_path)
+
+    try:
+        conn = TAPDBConnection(db_url=dsn, app_username="pytest")
+        with conn.session_scope(commit=False) as session:
+            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
+            row = session.execute(
+                text(
+                    """
+                    INSERT INTO generic_template (
+                        name, polymorphic_discriminator, category, type, subtype, version,
+                        instance_prefix, bstatus
+                    ) VALUES (
+                        'prefix-template', 'generic_template',
+                        'generic', 'test', 'prefix', '1.0',
+                        'GX', 'active'
+                    )
+                    RETURNING uid, euid, euid_prefix, euid_seq;
+                    """
+                )
+            ).one()
+            assert row.euid.startswith(expected_prefix)
+            assert row.euid_prefix == "GT"
+            assert row.euid_seq > 0
+
+            updated = session.execute(
+                text(
+                    """
+                    UPDATE generic_template
+                    SET name = 'prefix-template-renamed'
+                    WHERE uid = :uid
+                    RETURNING euid, euid_prefix, euid_seq;
+                    """
+                ),
+                {"uid": row.uid},
+            ).one()
+            assert updated.euid == row.euid
+            assert updated.euid_prefix == row.euid_prefix
+            assert updated.euid_seq == row.euid_seq
     finally:
         _drop_schema(dsn, schema_name)
 
@@ -403,7 +483,7 @@ def test_postgres_restricted_role_schema_install_and_identity_triggers():
             assert row is not None
             assert isinstance(row[0], int)
             assert row[0] > 0
-            assert isinstance(row[1], str) and row[1].startswith("GT-")
+            assert isinstance(row[1], str) and row[1].startswith("T:GT-")
             assert row[2] == "GT"
             assert isinstance(row[3], int) and row[3] > 0
         finally:
