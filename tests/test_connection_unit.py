@@ -46,6 +46,57 @@ def test_set_session_username_logs_and_swallows_execute_error(monkeypatch, caplo
         conn._set_session_username(BadSession())
 
 
+def test_set_session_sandbox_prefix_executes_for_postgresql(monkeypatch):
+    from daylily_tapdb import connection as m
+
+    monkeypatch.delenv("MERIDIAN_SANDBOX_PREFIX", raising=False)
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+    conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
+
+    captured: dict[str, object] = {}
+
+    class Sess:
+        def __init__(self):
+            self.bind = types.SimpleNamespace(
+                dialect=types.SimpleNamespace(name="postgresql")
+            )
+
+        def execute(self, stmt, params=None):
+            captured["stmt"] = str(stmt)
+            captured["params"] = params
+
+    conn._set_session_sandbox_prefix(Sess(), local=True)
+    assert captured["stmt"] == "SET LOCAL session.current_sandbox_prefix = :prefix"
+    assert captured["params"] == {"prefix": "T"}
+
+
+def test_set_session_sandbox_prefix_skips_non_postgresql(monkeypatch):
+    from daylily_tapdb import connection as m
+
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+    conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
+
+    calls = {"execute": 0}
+
+    class Sess:
+        def __init__(self):
+            self.bind = types.SimpleNamespace(
+                dialect=types.SimpleNamespace(name="sqlite")
+            )
+
+        def execute(self, *_a, **_k):
+            calls["execute"] += 1
+
+    conn._set_session_sandbox_prefix(Sess(), local=True)
+    assert calls["execute"] == 0
+
+
 def test_session_scope_commit_true_commits(monkeypatch):
     from daylily_tapdb import connection as m
 

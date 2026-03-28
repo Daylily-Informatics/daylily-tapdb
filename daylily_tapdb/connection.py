@@ -4,6 +4,7 @@ Moonshot Phase 2 policy:
 - No surprise commits inside the library
 - Callers control transaction boundaries
 - Audit username is set per-transaction using `SET LOCAL session.current_username`
+- Sandbox prefix is set per-session using `session.current_sandbox_prefix`
 
 Recommended usage:
 
@@ -26,6 +27,8 @@ from typing import Generator, Optional
 from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session, sessionmaker
+
+from daylily_tapdb.euid import resolve_runtime_sandbox_prefix
 
 logger = logging.getLogger(__name__)
 DEFAULT_TAPDB_POSTGRES_PORT = "5533"
@@ -94,6 +97,7 @@ class TAPDBConnection:
         # Resolve defaults from environment
         db_user = db_user or os.environ.get("USER", "tapdb")
         self.app_username = app_username or os.environ.get("USER", "tapdb_orm")
+        self.sandbox_prefix = resolve_runtime_sandbox_prefix()
 
         if echo_sql is None:
             echo_env = os.environ.get("ECHO_SQL", "").lower()
@@ -183,6 +187,23 @@ class TAPDBConnection:
         except Exception as e:
             self.logger.warning(f"Could not set session username: {e}")
 
+    def _set_session_sandbox_prefix(self, session: Session, *, local: bool) -> None:
+        """Set the sandbox prefix seen by SQL EUID triggers."""
+        if not self._is_postgresql_session(session):
+            return
+        statement = (
+            "SET LOCAL session.current_sandbox_prefix = :prefix"
+            if local
+            else "SET session.current_sandbox_prefix = :prefix"
+        )
+        try:
+            session.execute(
+                text(statement),
+                {"prefix": self.sandbox_prefix or ""},
+            )
+        except Exception as e:
+            self.logger.warning(f"Could not set session sandbox prefix: {e}")
+
     def get_session(self) -> Session:
         """
         Get a new session.
@@ -195,6 +216,7 @@ class TAPDBConnection:
         """
         session = self._Session()
         self._set_session_timezone_utc(session, local=False)
+        self._set_session_sandbox_prefix(session, local=False)
         return session
 
     @contextmanager
@@ -218,6 +240,7 @@ class TAPDBConnection:
         try:
             # Must happen inside a transaction for SET LOCAL.
             self._set_session_timezone_utc(session, local=True)
+            self._set_session_sandbox_prefix(session, local=True)
             self._set_session_username(session)
             yield session
             if commit:

@@ -6,9 +6,12 @@ from pathlib import Path
 import pytest
 
 from daylily_tapdb.euid import (
+    DEFAULT_SANDBOX_PREFIX,
     crockford_base32_encode,
     format_euid,
     meridian_checksum,
+    resolve_runtime_sandbox_prefix,
+    resolve_runtime_validation_context,
     validate_euid,
 )
 
@@ -188,6 +191,34 @@ class TestValidateEuid:
 
     def test_reject_missing_delimiter(self):
         assert validate_euid("TX14") is False
+
+
+class TestRuntimeSandboxPrefix:
+    def test_missing_prefix_defaults_to_t(self):
+        assert (
+            resolve_runtime_sandbox_prefix({})
+            == DEFAULT_SANDBOX_PREFIX
+        )
+
+    def test_explicit_empty_prefix_disables_prefixing(self):
+        assert resolve_runtime_sandbox_prefix({"MERIDIAN_SANDBOX_PREFIX": ""}) is None
+
+    def test_explicit_prefix_is_normalized(self):
+        assert resolve_runtime_sandbox_prefix({"MERIDIAN_SANDBOX_PREFIX": "s"}) == "S"
+
+    def test_runtime_validation_defaults_to_sandbox_t(self):
+        assert resolve_runtime_validation_context({}) == {
+            "environment": "sandbox",
+            "allowed_sandbox_prefixes": ["T"],
+        }
+
+    def test_runtime_validation_respects_production_env(self):
+        assert resolve_runtime_validation_context(
+            {
+                "MERIDIAN_ENVIRONMENT": "production",
+                "MERIDIAN_SANDBOX_PREFIX": "",
+            }
+        ) == {"environment": "production"}
 
 
 # ---------------------------------------------------------------------------

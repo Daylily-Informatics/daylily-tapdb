@@ -10,6 +10,7 @@ Calling code must treat EUIDs as opaque identifiers.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -35,6 +36,69 @@ _PRODUCTION_RE = re.compile(
 _SANDBOX_RE = re.compile(
     rf"^{_SANDBOX32}:{_LETTERS32}{{2,3}}-([1-9A-HJ-KMNP-TV-Z]{_ALNUM32}*){_ALNUM32}$"
 )
+
+DEFAULT_SANDBOX_PREFIX = "T"
+MERIDIAN_SANDBOX_PREFIX_ENV = "MERIDIAN_SANDBOX_PREFIX"
+MERIDIAN_ENVIRONMENT_ENV = "MERIDIAN_ENVIRONMENT"
+LSMC_ENV_ENV = "LSMC_ENV"
+
+
+def normalize_sandbox_prefix(prefix: str | None) -> str | None:
+    """Normalize and validate a sandbox prefix."""
+    if prefix is None:
+        return None
+    normalized = prefix.strip().upper()
+    if not normalized:
+        return None
+    if not re.fullmatch(_SANDBOX32, normalized):
+        raise ValueError(
+            f"Invalid sandbox prefix {prefix!r}; expected a single Meridian sandbox letter"
+        )
+    return normalized
+
+
+def resolve_runtime_sandbox_prefix(
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    """Resolve the runtime sandbox prefix.
+
+    Rules:
+    - missing env var => default ``T``
+    - explicit empty string => disable sandbox prefixing
+    - explicit non-empty value => validated single-letter prefix
+    """
+    env = environ or os.environ
+    raw_prefix = env.get(MERIDIAN_SANDBOX_PREFIX_ENV)
+    if raw_prefix is None:
+        return DEFAULT_SANDBOX_PREFIX
+    return normalize_sandbox_prefix(raw_prefix)
+
+
+def resolve_runtime_validation_context(
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Resolve EUID validation mode from runtime env vars."""
+    env = environ or os.environ
+    raw_environment = (
+        str(env.get(MERIDIAN_ENVIRONMENT_ENV) or env.get(LSMC_ENV_ENV) or "")
+        .strip()
+        .lower()
+    )
+    sandbox_prefix = resolve_runtime_sandbox_prefix(env)
+
+    if raw_environment == "sandbox":
+        return {
+            "environment": "sandbox",
+            "allowed_sandbox_prefixes": [sandbox_prefix] if sandbox_prefix else [],
+        }
+    if raw_environment:
+        return {"environment": "production"}
+    if sandbox_prefix:
+        return {
+            "environment": "sandbox",
+            "allowed_sandbox_prefixes": [sandbox_prefix],
+        }
+    return {"environment": "production"}
 
 
 def crockford_base32_encode(n: int) -> str:
