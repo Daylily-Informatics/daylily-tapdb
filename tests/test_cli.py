@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 import daylily_tapdb.cli as cli_mod
@@ -261,6 +262,76 @@ class TestCLIUI:
         result = runner.invoke(app, ["ui", "logs"])
         assert result.exit_code == 0
         assert "No log file" in result.output or "not found" in result.output.lower()
+
+
+class TestConfigUpdate:
+    """Tests for namespaced config mutation commands."""
+
+    def test_config_update_writes_selected_fields(self):
+        result = runner.invoke(
+            app,
+            [
+                "config",
+                "update",
+                "--env",
+                "dev",
+                "--host",
+                "db.internal",
+                "--port",
+                "6001",
+                "--ui-port",
+                "9443",
+                "--cognito-client-name",
+                "atlas",
+                "--support-email",
+                "support@example.com",
+            ],
+        )
+
+        assert result.exit_code == 0
+        config_path = (
+            Path(os.environ["HOME"])
+            / ".config"
+            / "tapdb"
+            / "testclient"
+            / "testdb"
+            / "tapdb-config.yaml"
+        )
+        payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        env_cfg = payload["environments"]["dev"]
+        assert env_cfg["host"] == "db.internal"
+        assert env_cfg["port"] == "6001"
+        assert env_cfg["ui_port"] == "9443"
+        assert env_cfg["cognito_client_name"] == "atlas"
+        assert env_cfg["support_email"] == "support@example.com"
+
+    def test_config_update_can_clear_fields(self):
+        result = runner.invoke(
+            app,
+            [
+                "config",
+                "update",
+                "--env",
+                "dev",
+                "--support-email",
+                "support@example.com",
+            ],
+        )
+        assert result.exit_code == 0
+
+        result = runner.invoke(app, ["config", "update", "--env", "dev", "--clear", "support_email"])
+        assert result.exit_code == 0
+
+        config_path = (
+            Path(os.environ["HOME"])
+            / ".config"
+            / "tapdb"
+            / "testclient"
+            / "testdb"
+            / "tapdb-config.yaml"
+        )
+        payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert payload["environments"]["dev"]["support_email"] == ""
 
 
 class TestCLICognito:

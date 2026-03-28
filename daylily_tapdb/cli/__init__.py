@@ -992,6 +992,165 @@ def build_app():
                 f"  {env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}"
             )
 
+    @config_root_app.command("update")
+    def config_update(
+        env: str = typer.Option(..., "--env", help="Environment to update"),
+        engine_type: Optional[str] = typer.Option(
+            None, "--engine-type", help="Database engine type for this environment"
+        ),
+        host: Optional[str] = typer.Option(None, "--host", help="Database host"),
+        port: Optional[int] = typer.Option(None, "--port", help="Database port"),
+        ui_port: Optional[int] = typer.Option(None, "--ui-port", help="TapDB UI port"),
+        user: Optional[str] = typer.Option(None, "--user", help="Database user"),
+        password: Optional[str] = typer.Option(None, "--password", help="Database password"),
+        database: Optional[str] = typer.Option(None, "--database", help="Database name"),
+        cognito_user_pool_id: Optional[str] = typer.Option(
+            None, "--cognito-user-pool-id", help="Bound Cognito user pool ID"
+        ),
+        cognito_app_client_id: Optional[str] = typer.Option(
+            None, "--cognito-app-client-id", help="Bound Cognito app client ID"
+        ),
+        cognito_app_client_secret: Optional[str] = typer.Option(
+            None, "--cognito-app-client-secret", help="Bound Cognito app client secret"
+        ),
+        cognito_client_name: Optional[str] = typer.Option(
+            None, "--cognito-client-name", help="Bound Cognito app client name"
+        ),
+        cognito_region: Optional[str] = typer.Option(
+            None, "--cognito-region", help="Bound Cognito region"
+        ),
+        cognito_domain: Optional[str] = typer.Option(
+            None, "--cognito-domain", help="Bound Cognito hosted UI domain"
+        ),
+        cognito_callback_url: Optional[str] = typer.Option(
+            None, "--cognito-callback-url", help="Bound Cognito callback URL"
+        ),
+        cognito_logout_url: Optional[str] = typer.Option(
+            None, "--cognito-logout-url", help="Bound Cognito logout URL"
+        ),
+        audit_log_euid_prefix: Optional[str] = typer.Option(
+            None, "--audit-log-euid-prefix", help="Audit-log EUID prefix"
+        ),
+        support_email: Optional[str] = typer.Option(
+            None, "--support-email", help="Support email address"
+        ),
+        clear: list[str] = typer.Option(
+            [],
+            "--clear",
+            help="Environment field to clear (repeatable)",
+        ),
+    ) -> None:
+        """Update fields inside a namespaced TAPDB v2 config."""
+        from daylily_tapdb.cli.db_config import get_config_path
+
+        ctx = _require_context()
+        env_name = str(env or "").strip().lower()
+        if not env_name:
+            raise RuntimeError("--env is required")
+
+        allowed_fields = {
+            "engine_type",
+            "host",
+            "port",
+            "ui_port",
+            "user",
+            "password",
+            "database",
+            "cognito_user_pool_id",
+            "cognito_app_client_id",
+            "cognito_app_client_secret",
+            "cognito_client_name",
+            "cognito_region",
+            "cognito_domain",
+            "cognito_callback_url",
+            "cognito_logout_url",
+            "audit_log_euid_prefix",
+            "support_email",
+        }
+        clear_fields = {str(item).strip() for item in clear if str(item).strip()}
+        invalid_fields = sorted(clear_fields - allowed_fields)
+        if invalid_fields:
+            raise RuntimeError(
+                "Unknown field(s) for --clear: " + ", ".join(invalid_fields)
+            )
+
+        config_path = get_config_path()
+        root = _read_yaml_or_json_file(config_path)
+        if not root:
+            raise RuntimeError(
+                f"No TAPDB config found at {config_path}. "
+                "Run: tapdb config init --client-id <id> --database-name <name>"
+            )
+
+        meta = root.get("meta") if isinstance(root, dict) else None
+        if not isinstance(meta, dict):
+            raise RuntimeError(
+                "Config metadata is required. "
+                f"Run: tapdb config init --client-id {ctx.client_id} --database-name {ctx.database_name}"
+            )
+
+        envs = root.setdefault("environments", {})
+        if not isinstance(envs, dict):
+            envs = {}
+            root["environments"] = envs
+        env_cfg = envs.setdefault(env_name, {})
+        if not isinstance(env_cfg, dict):
+            env_cfg = {}
+            envs[env_name] = env_cfg
+
+        updates: dict[str, str] = {}
+        if engine_type is not None:
+            updates["engine_type"] = str(engine_type).strip().lower()
+        if host is not None:
+            updates["host"] = str(host).strip()
+        if port is not None:
+            updates["port"] = str(port)
+        if ui_port is not None:
+            updates["ui_port"] = str(ui_port)
+        if user is not None:
+            updates["user"] = str(user).strip()
+        if password is not None:
+            updates["password"] = str(password)
+        if database is not None:
+            updates["database"] = str(database).strip()
+        if cognito_user_pool_id is not None:
+            updates["cognito_user_pool_id"] = str(cognito_user_pool_id).strip()
+        if cognito_app_client_id is not None:
+            updates["cognito_app_client_id"] = str(cognito_app_client_id).strip()
+        if cognito_app_client_secret is not None:
+            updates["cognito_app_client_secret"] = str(cognito_app_client_secret)
+        if cognito_client_name is not None:
+            updates["cognito_client_name"] = str(cognito_client_name).strip()
+        if cognito_region is not None:
+            updates["cognito_region"] = str(cognito_region).strip()
+        if cognito_domain is not None:
+            updates["cognito_domain"] = str(cognito_domain).strip()
+        if cognito_callback_url is not None:
+            updates["cognito_callback_url"] = str(cognito_callback_url).strip()
+        if cognito_logout_url is not None:
+            updates["cognito_logout_url"] = str(cognito_logout_url).strip()
+        if audit_log_euid_prefix is not None:
+            updates["audit_log_euid_prefix"] = str(audit_log_euid_prefix).strip()
+        if support_email is not None:
+            updates["support_email"] = str(support_email).strip()
+
+        if not updates and not clear_fields:
+            raise RuntimeError("No config changes requested.")
+
+        for field_name in clear_fields:
+            env_cfg[field_name] = ""
+        env_cfg.update(updates)
+
+        _write_yaml_or_json_file(config_path, root)
+        console.print("[green]✓[/green] TAPDB namespaced config updated")
+        console.print(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
+        console.print(f"  Path:      [dim]{config_path}[/dim]")
+        console.print(f"  Env:       [bold]{env_name}[/bold]")
+        for field_name in sorted(clear_fields):
+            console.print(f"  cleared:   {field_name}")
+        for field_name in sorted(updates.keys()):
+            console.print(f"  set:       {field_name}={env_cfg[field_name]}")
+
     @config_root_app.command("migrate-legacy")
     def config_migrate_legacy(
         client_id: str = typer.Option(..., "--client-id", help="Client namespace key"),

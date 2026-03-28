@@ -71,7 +71,7 @@ pip install -e ".[admin,dev,cli]"
 Optional convenience wrapper:
 
 ```bash
-source tapdb_activate.sh
+source ./activate
 ```
 
 ## Release Versioning
