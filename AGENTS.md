@@ -47,6 +47,12 @@ Canonical usage contract for AI agents (Augment, Claude, Copilot, etc.).
 
 ## CLI-First Principle
 
+Start each session from the repo root with:
+
+```bash
+source ./activate
+```
+
 Always use `tapdb` CLI commands for database operations. Never run raw SQL or shell scripts.
 
 ```bash
@@ -57,6 +63,13 @@ tapdb db data seed <env>       # Seed templates
 ```
 
 Required env vars: `TAPDB_CLIENT_ID`, `TAPDB_DATABASE_NAME`, `TAPDB_ENV`.
+
+## No Circumvention Policy
+
+- Use `tapdb ...` as the primary interface for normal TAPDB work.
+- Do not bypass `tapdb` with raw SQL, ad hoc shell commands, direct `python -m ...`, or direct config edits just because something is missing or broken.
+- If the intended CLI path is broken or incomplete, stop, diagnose, and ask for permission before circumventing it.
+- Prefer patience and repair of the intended CLI workflow over inventing a shortcut.
 
 ## Testing
 
@@ -110,4 +123,3 @@ pip install -e ".[dev,admin,cli]"    # Full install with admin UI
 - Add client-domain template packs to this repo
 - Push directly to `main`
 - Run `tapdb db delete` or `tapdb db schema reset` without explicit user intent
-

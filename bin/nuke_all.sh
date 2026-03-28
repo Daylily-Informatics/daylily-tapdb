@@ -208,7 +208,7 @@ if [ "${_tapdb_do_remote_db}" -eq 1 ]; then
   _tapdb_pg_envs="${TAPDB_NUKE_PG_ENVS:-dev test}"
   if ! command -v tapdb >/dev/null 2>&1; then
     _tapdb_err "tapdb CLI not found; cannot run remote DB deletion."
-    _tapdb_err "Activate your venv first: source ./tapdb_activate.sh"
+    _tapdb_err "Activate your venv first: source ./activate"
     exit 1
   fi
   for _tapdb_env in ${_tapdb_pg_envs}; do

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 from fastapi.testclient import TestClient
 
+import admin.main as admin_main
 from admin.main import app
 
 
@@ -40,3 +43,16 @@ def test_admin_rejects_disallowed_host() -> None:
         )
 
     assert response.status_code == 400
+
+
+def test_admin_shutdown_cleanup_runs(monkeypatch) -> None:
+    stop_all = Mock()
+    dispose_all = Mock()
+    monkeypatch.setattr(admin_main, "stop_all_writers", stop_all)
+    monkeypatch.setattr(admin_main, "dispose_all_engines", dispose_all)
+
+    with TestClient(app):
+        pass
+
+    stop_all.assert_called_once_with()
+    dispose_all.assert_called_once_with()
