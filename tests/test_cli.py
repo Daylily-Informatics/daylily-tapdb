@@ -1558,6 +1558,49 @@ class TestCLIDBSeed:
         )
         assert result.exit_code == 0
 
+    def test_db_validate_config_invalid_instance_prefix_fails(self, tmp_path: Path):
+        """Strict validation should reject invalid TapDB instance prefixes before seeding."""
+        (tmp_path / "generic").mkdir()
+        (tmp_path / "generic" / "generic.json").write_text(
+            json.dumps(
+                {
+                    "templates": [
+                        {
+                            "name": "Generic Object",
+                            "polymorphic_discriminator": "generic_template",
+                            "category": "generic",
+                            "type": "generic",
+                            "subtype": "client-generic-invalid-prefix",
+                            "version": "1.0",
+                            "instance_prefix": "LS",
+                            "is_singleton": False,
+                            "bstatus": "active",
+                            "json_addl": {},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "db",
+                "config",
+                "validate",
+                "--config",
+                str(tmp_path),
+                "--strict",
+                "--json",
+            ],
+        )
+        assert result.exit_code != 0
+        payload = json.loads(result.output)
+        assert payload["errors"] >= 1
+        messages = "\n".join(issue["message"] for issue in payload["issues"])
+        assert "Invalid TAPDB instance prefix" in messages
+
     def test_db_validate_config_merged_core_then_client_strict_ok(self, tmp_path: Path):
         """Strict validate should consider TAPDB core templates before client config."""
         (tmp_path / "generic").mkdir()

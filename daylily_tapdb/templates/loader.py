@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from daylily_tapdb.models.template import generic_template
-from daylily_tapdb.sequences import ensure_instance_prefix_sequence
+from daylily_tapdb.sequences import _normalize_instance_prefix, ensure_instance_prefix_sequence
 from daylily_tapdb.templates.mutation import allow_template_mutations
 from daylily_tapdb.validation.instantiation_layouts import (
     format_validation_error,
@@ -502,6 +502,20 @@ def validate_template_configs(
                     ),
                 )
             )
+
+        instance_prefix = str(template.get("instance_prefix") or "").strip()
+        if instance_prefix:
+            try:
+                _normalize_instance_prefix(instance_prefix)
+            except ValueError as exc:
+                issues.append(
+                    ConfigIssue(
+                        level="error",
+                        source_file=source_file,
+                        template_code=code,
+                        message=str(exc),
+                    )
+                )
 
         _validate_ref_container(template, source_file=source_file, template_code=code)
         if isinstance(template.get("json_addl"), dict):
