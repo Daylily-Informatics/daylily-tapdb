@@ -195,10 +195,7 @@ class TestValidateEuid:
 
 class TestRuntimeSandboxPrefix:
     def test_missing_prefix_defaults_to_t(self):
-        assert (
-            resolve_runtime_sandbox_prefix({})
-            == DEFAULT_SANDBOX_PREFIX
-        )
+        assert resolve_runtime_sandbox_prefix({}) == DEFAULT_SANDBOX_PREFIX
 
     def test_explicit_empty_prefix_disables_prefixing(self):
         assert resolve_runtime_sandbox_prefix({"MERIDIAN_SANDBOX_PREFIX": ""}) is None
