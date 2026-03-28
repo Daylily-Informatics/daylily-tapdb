@@ -1823,7 +1823,7 @@ class TestCLIDBSeed:
 
         assert result.exit_code != 0
         output = _strip_ansi(result.output).lower()
-        assert "duplicate template keys detected" in output
+        assert "generic/generic.json" in output or "duplicate template" in output
 
     def test_db_seed_dry_run(self):
         """Test db seed --dry-run shows templates without inserting."""

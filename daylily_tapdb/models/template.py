@@ -5,11 +5,20 @@ Phase 2 spec: ORM must match schema.
 - instance_prefix is NOT NULL
 """
 
+from __future__ import annotations
+
 from sqlalchemy import Column, Text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import relationship
+from sqlalchemy import event
+from sqlalchemy.inspection import inspect as sa_inspect
+from sqlalchemy.orm import Session, relationship
 
 from daylily_tapdb.models.base import tapdb_core
+from daylily_tapdb.templates.mutation import (
+    TemplateMutationGuardError,
+    template_mutation_error_message,
+    template_mutations_allowed,
+)
 
 
 class generic_template(tapdb_core):
@@ -155,3 +164,54 @@ class subject_template(generic_template):
         "polymorphic_identity": "subject_template",
         "confirm_deleted_rows": False,
     }
+
+
+def _is_generic_template_row(obj) -> bool:
+    try:
+        state = sa_inspect(obj)
+    except Exception:
+        return False
+    mapper = getattr(state, "mapper", None)
+    local_table = getattr(mapper, "local_table", None)
+    return str(getattr(local_table, "name", "") or "") == "generic_template"
+
+
+def _template_code_for_error(obj) -> str | None:
+    category = str(getattr(obj, "category", "") or "").strip()
+    type_name = str(getattr(obj, "type", "") or "").strip()
+    subtype = str(getattr(obj, "subtype", "") or "").strip()
+    version = str(getattr(obj, "version", "") or "").strip()
+    if all([category, type_name, subtype, version]):
+        return f"{category}/{type_name}/{subtype}/{version}/"
+    return None
+
+
+@event.listens_for(Session, "before_flush")
+def _block_direct_template_mutations(
+    session: Session,
+    flush_context,
+    instances,
+) -> None:  # pragma: no cover - exercised through client/session tests.
+    del flush_context, instances
+    if template_mutations_allowed():
+        return
+
+    for obj in session.new:
+        if _is_generic_template_row(obj):
+            raise TemplateMutationGuardError(
+                template_mutation_error_message(_template_code_for_error(obj))
+            )
+
+    for obj in session.dirty:
+        if _is_generic_template_row(obj) and session.is_modified(
+            obj, include_collections=False
+        ):
+            raise TemplateMutationGuardError(
+                template_mutation_error_message(_template_code_for_error(obj))
+            )
+
+    for obj in session.deleted:
+        if _is_generic_template_row(obj):
+            raise TemplateMutationGuardError(
+                template_mutation_error_message(_template_code_for_error(obj))
+            )

@@ -84,7 +84,28 @@ from daylily_tapdb.models.template import (
     workflow_step_template,
     workflow_template,
 )
-from daylily_tapdb.templates import TemplateManager
+from daylily_tapdb.templates.loader import (
+    ConfigIssue,
+    SeedSummary,
+    find_config_dir,
+    find_duplicate_template_keys,
+    find_tapdb_core_config_dir,
+    load_template_configs,
+    normalize_config_dirs,
+    resolve_seed_config_dirs,
+    seed_templates,
+    validate_template_configs,
+)
+from daylily_tapdb.templates.manager import TemplateManager
+from daylily_tapdb.templates.mutation import (
+    TemplateMutationGuardError,
+    allow_template_mutations,
+)
+from daylily_tapdb.templates.requirements import (
+    MissingSeededTemplateError,
+    require_seeded_template,
+    require_seeded_templates,
+)
 from daylily_tapdb.timezone_utils import (
     DEFAULT_DISPLAY_TIMEZONE,
     is_valid_display_timezone,
@@ -101,6 +122,21 @@ __all__ = [
     "InstanceFactory",
     "ActionDispatcher",
     "EUIDConfig",
+    "ConfigIssue",
+    "SeedSummary",
+    "MissingSeededTemplateError",
+    "TemplateMutationGuardError",
+    "allow_template_mutations",
+    "find_config_dir",
+    "find_duplicate_template_keys",
+    "find_tapdb_core_config_dir",
+    "load_template_configs",
+    "normalize_config_dirs",
+    "resolve_seed_config_dirs",
+    "require_seeded_template",
+    "require_seeded_templates",
+    "seed_templates",
+    "validate_template_configs",
     # Base
     "tapdb_core",
     "Base",

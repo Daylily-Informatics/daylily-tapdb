@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.daylilyinformatics.com/tapdb/template-pack.schema.v1.json",
+  "title": "TapDB Template Pack",
+  "type": "object",
+  "required": [
+    "templates"
+  ],
+  "properties": {
+    "$comment": {
+      "type": "string"
+    },
+    "templates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/template"
+      }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "template": {
+      "type": "object",
+      "required": [
+        "name",
+        "polymorphic_discriminator",
+        "category",
+        "type",
+        "subtype",
+        "version",
+        "instance_prefix"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "polymorphic_discriminator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subtype": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "instance_prefix": {
+          "type": "string",
+          "minLength": 2
+        },
+        "instance_polymorphic_identity": {
+          "type": "string"
+        },
+        "json_addl": {
+          "type": "object"
+        },
+        "json_addl_schema": {
+          "type": "object"
+        },
+        "bstatus": {
+          "type": "string"
+        },
+        "is_singleton": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

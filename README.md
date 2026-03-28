@@ -22,6 +22,19 @@ Use this repo when you need to:
 
 Primary Python package: `daylily_tapdb`
 
+## Ownership Boundary
+
+TapDB owns all canonical template-pack behavior:
+
+- the core template-pack schema
+- JSON validation
+- duplicate/reference checks
+- template writes into `generic_template`
+- runtime guards that block direct client-side template mutation
+
+Client repos own their JSON packs under `config/tapdb_templates/`, but they do
+not own template mutation logic.
+
 ## Main CLI Surface
 
 Entry command: `tapdb`
@@ -106,6 +119,23 @@ export TAPDB_ENV=dev
 tapdb config init --client-id "$TAPDB_CLIENT_ID" --database-name "$TAPDB_DATABASE_NAME" --env dev --db-port dev=5533 --ui-port dev=8911
 tapdb bootstrap local
 ```
+
+## JSON-Only Template Packs
+
+TapDB core templates ship from the packaged `daylily_tapdb/core_config`
+directory. That packaged path is the only canonical TapDB core pack.
+
+Service/client repos should place their app-owned packs under
+`config/tapdb_templates/` and load them through TapDB:
+
+```bash
+tapdb db config validate --config ./config/tapdb_templates --strict
+tapdb --client-id atlas --database-name lsmc-atlas db data seed dev --config ./config/tapdb_templates
+```
+
+Direct `generic_template` creation or mutation from client code is not a
+supported path. If runtime code needs a template, it should require an already
+seeded template rather than defining one in Python.
 
 For local PostgreSQL, TAPDB now uses a namespaced user-writable Unix socket
 directory under `~/.config/tapdb/<client>/<database>/<env>/postgres/run` by

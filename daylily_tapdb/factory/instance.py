@@ -341,10 +341,25 @@ class InstanceFactory:
                     child_template_code = root
                     count = 1
                     name_pattern = layout_name_pattern
+                    child_overrides: dict[str, Any] = {}
                 else:
                     child_template_code = root.template_code
                     count = root.count
                     name_pattern = root.name_pattern or layout_name_pattern
+                    child_overrides = dict(getattr(root, "model_extra", {}) or {})
+
+                child_template_code = self._resolve_template_code_pattern(
+                    session, child_template_code
+                )
+
+                if not name_pattern:
+                    override_json = child_overrides.get("json_addl")
+                    if isinstance(override_json, dict):
+                        properties = override_json.get("properties")
+                        if isinstance(properties, dict):
+                            candidate_name = _norm_text(properties.get("name"))
+                            if candidate_name:
+                                name_pattern = candidate_name
 
                 # child_template_code is validated as category/type/subtype/version
                 child_subtype = child_template_code.split("/")[2]
@@ -371,7 +386,48 @@ class InstanceFactory:
                         tenant_id=getattr(parent, "tenant_id", None),
                     )
 
+                    override_json = child_overrides.get("json_addl")
+                    if isinstance(override_json, dict):
+                        payload = dict(getattr(child_obj, "json_addl", {}) or {})
+                        payload.update(copy.deepcopy(override_json))
+                        child_obj.json_addl = payload
+                        session.flush()
+
                     self._create_lineage(session, parent, child_obj, relationship_type)
+
+    def _resolve_template_code_pattern(
+        self, session: Session, template_code: str
+    ) -> str:
+        """Resolve wildcard template-code patterns against seeded templates."""
+
+        normalized = normalize_template_code_str(str(template_code or ""))
+        if "*" not in normalized:
+            return f"{normalized}/"
+
+        parts = [part for part in normalized.split("/") if part]
+        if len(parts) != 4:
+            raise ValueError(f"Invalid child template pattern: {template_code!r}")
+
+        category, type_name, subtype, version = parts
+        query = session.query(generic_template).filter(generic_template.is_deleted.is_(False))
+        if category != "*":
+            query = query.filter(generic_template.category == category)
+        if type_name != "*":
+            query = query.filter(generic_template.type == type_name)
+        if subtype != "*":
+            query = query.filter(generic_template.subtype == subtype)
+        if version != "*":
+            query = query.filter(generic_template.version == version)
+
+        matches = query.order_by(generic_template.version.desc()).all()
+        if len(matches) != 1:
+            raise ValueError(
+                "Template pattern must resolve to exactly one seeded template: "
+                f"{template_code!r} -> {len(matches)} matches"
+            )
+
+        match = matches[0]
+        return f"{match.category}/{match.type}/{match.subtype}/{match.version}/"
 
     def _create_lineage(
         self,

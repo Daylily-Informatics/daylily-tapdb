@@ -22,7 +22,6 @@ PID_FILE = Path.home() / ".tapdb" / "ui.pid"
 LOG_FILE = Path.home() / ".tapdb" / "ui.log"
 NAMESPACE_REQUIRED_TOPLEVEL = {
     "bootstrap",
-    "db",
     "pg",
     "ui",
     "cognito",

@@ -37,7 +37,7 @@ def normalize_template_code_str(code: str) -> str:
     return s
 
 
-def validate_template_code_str(code: str) -> str:
+def validate_template_code_str(code: str, *, allow_wildcards: bool = False) -> str:
     """Validate a template-code-like string.
 
     Expected format: `{category}/{type}/{subtype}/{version}` (optional trailing `/`).
@@ -52,6 +52,8 @@ def validate_template_code_str(code: str) -> str:
             " (expected {category}/{type}/"
             "{subtype}/{version})"
         )
+    if not allow_wildcards and any(part == "*" for part in parts):
+        raise ValueError("wildcard template_code segments are not allowed here")
     return s
 
 
@@ -67,7 +69,7 @@ class ChildTemplateObject(BaseModel):
     @field_validator("template_code")
     @classmethod
     def _validate_template_code(cls, v: str) -> str:
-        return validate_template_code_str(v)
+        return validate_template_code_str(v, allow_wildcards=True)
 
     @field_validator("count")
     @classmethod
@@ -89,7 +91,7 @@ class ChildTemplate(RootModel[ChildTemplateObject | str]):
     @classmethod
     def _validate_root(cls, v: ChildTemplateObject | str):
         if isinstance(v, str):
-            return validate_template_code_str(v)
+            return validate_template_code_str(v, allow_wildcards=True)
         return v
 
 
