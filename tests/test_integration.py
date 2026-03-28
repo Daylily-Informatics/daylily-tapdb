@@ -483,7 +483,7 @@ def test_postgres_restricted_role_schema_install_and_identity_triggers():
             assert row is not None
             assert isinstance(row[0], int)
             assert row[0] > 0
-            assert isinstance(row[1], str) and row[1].startswith("GT-")
+            assert isinstance(row[1], str) and row[1].startswith("T:GT-")
             assert row[2] == "GT"
             assert isinstance(row[3], int) and row[3] > 0
         finally:
