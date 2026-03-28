@@ -13,6 +13,7 @@ import logging
 import os
 import secrets
 import subprocess
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -164,19 +165,24 @@ if IS_PROD and not os.environ.get("TAPDB_SESSION_SECRET"):
     raise RuntimeError("Refusing to start in prod without TAPDB_SESSION_SECRET")
 SESSION_SECRET = os.environ.get("TAPDB_SESSION_SECRET", secrets.token_hex(32))
 
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    try:
+        yield
+    finally:
+        # Best-effort cleanup for pooled DB + metrics writer.
+        stop_all_writers()
+        dispose_all_engines()
+
+
 # FastAPI app
 app = FastAPI(
     title="TAPDB Admin",
     description="Admin interface for TAPDB - Templated Abstract Polymorphic Database",
     version="0.1.0",
+    lifespan=_lifespan,
 )
-
-
-# Best-effort cleanup for pooled DB + metrics writer.
-@app.on_event("shutdown")
-def _shutdown_cleanup() -> None:
-    stop_all_writers()
-    dispose_all_engines()
 
 
 # Request context for DB metrics attribution (path/method).
