@@ -61,9 +61,12 @@ def test_execute_action_returns_error_when_handler_missing():
 
     assert result["status"] == "error"
     assert "No handler for action: missing" in result["message"]
-    assert instance.json_addl["action_groups"]["core_actions"]["missing"][
-        "action_executed"
-    ] == "0"
+    assert (
+        instance.json_addl["action_groups"]["core_actions"]["missing"][
+            "action_executed"
+        ]
+        == "0"
+    )
     assert session.added == []
 
 

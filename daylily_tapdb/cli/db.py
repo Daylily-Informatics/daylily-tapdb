@@ -1463,7 +1463,9 @@ def db_seed(
         raise typer.Exit(1)
 
     if not templates:
-        console.print("[yellow]⚠[/yellow] No templates found in configured seed directories")
+        console.print(
+            "[yellow]⚠[/yellow] No templates found in configured seed directories"
+        )
         return
 
     duplicates = _find_duplicate_template_keys(templates)

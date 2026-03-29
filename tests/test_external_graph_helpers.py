@@ -179,9 +179,7 @@ def test_fetch_remote_object_detail_passes_tenant_id(monkeypatch):
 
     assert payload == {"uid": 5, "euid": "AT-9"}
     assert captured["timeout"] == 20
-    assert (
-        captured["url"] == "https://atlas.local/api/object/AT-9?tenant_id=tenant-1"
-    )
+    assert captured["url"] == "https://atlas.local/api/object/AT-9?tenant_id=tenant-1"
 
 
 def test_apply_forwarded_auth_same_origin_mismatch_raises():

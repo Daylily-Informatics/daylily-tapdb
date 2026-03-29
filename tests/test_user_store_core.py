@@ -232,7 +232,10 @@ def test_get_by_login_identifier_returns_actor_user_and_applies_active_filter():
     assert user.username == "john@example.com"
     stmt, params = session.calls[0]
     assert "login_identifier" in stmt
-    assert "AND COALESCE(NULLIF(gi.json_addl->>'is_active', '')::boolean, TRUE) = TRUE" in stmt
+    assert (
+        "AND COALESCE(NULLIF(gi.json_addl->>'is_active', '')::boolean, TRUE) = TRUE"
+        in stmt
+    )
     assert params["identifier"] == "john@example.com"
 
 
@@ -323,7 +326,9 @@ def test_create_or_get_inserts_new_user(monkeypatch: pytest.MonkeyPatch):
     created_user = SimpleNamespace(uid=77, username="new@example.com")
     lookup_calls: list[tuple[str, bool]] = []
 
-    def _fake_get_by_login_identifier(_session, login_identifier, include_inactive=False):
+    def _fake_get_by_login_identifier(
+        _session, login_identifier, include_inactive=False
+    ):
         lookup_calls.append((login_identifier, include_inactive))
         return None
 
@@ -354,7 +359,9 @@ def test_create_or_get_inserts_new_user(monkeypatch: pytest.MonkeyPatch):
     assert lookup_calls == [("new@example.com", True)]
 
 
-def test_create_or_get_retries_lookup_after_integrity_error(monkeypatch: pytest.MonkeyPatch):
+def test_create_or_get_retries_lookup_after_integrity_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
     existing = SimpleNamespace(uid=88, username="race@example.com")
     calls = {"count": 0}
 
@@ -363,7 +370,9 @@ def test_create_or_get_retries_lookup_after_integrity_error(monkeypatch: pytest.
             calls["count"] += 1
             raise m.IntegrityError("insert failed", params, Exception("boom"))
 
-    def _fake_get_by_login_identifier(_session, login_identifier, include_inactive=False):
+    def _fake_get_by_login_identifier(
+        _session, login_identifier, include_inactive=False
+    ):
         if calls["count"] == 0:
             return None
         return existing
@@ -383,4 +392,6 @@ def test_create_or_get_retries_lookup_after_integrity_error(monkeypatch: pytest.
 
 def test_create_or_get_rejects_invalid_role():
     with pytest.raises(ValueError, match="invalid role"):
-        m.create_or_get(_FakeSession(), login_identifier="user@example.com", role="owner")
+        m.create_or_get(
+            _FakeSession(), login_identifier="user@example.com", role="owner"
+        )

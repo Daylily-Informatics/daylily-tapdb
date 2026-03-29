@@ -51,7 +51,9 @@ def test_upsert_template_inserts_when_missing(monkeypatch):
             for key, value in kwargs.items():
                 setattr(self, key, value)
 
-    monkeypatch.setattr(m, "_template_model_for_discriminator", lambda _disc: _FakeTemplate)
+    monkeypatch.setattr(
+        m, "_template_model_for_discriminator", lambda _disc: _FakeTemplate
+    )
     session = _FakeUpsertSession(existing=None)
 
     outcome, created = m._upsert_template(
@@ -93,7 +95,9 @@ def test_upsert_template_overwrite_false_skips_existing():
     )
     session = _FakeUpsertSession(existing=existing)
 
-    outcome, returned = m._upsert_template(session, template=_template_payload(), overwrite=False)
+    outcome, returned = m._upsert_template(
+        session, template=_template_payload(), overwrite=False
+    )
 
     assert outcome == "skipped"
     assert returned is existing

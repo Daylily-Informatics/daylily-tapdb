@@ -25,7 +25,9 @@ from daylily_tapdb.validation.instantiation_layouts import (
 
 try:
     from jsonschema import Draft202012Validator
-except ModuleNotFoundError:  # pragma: no cover - dependency failure is surfaced at runtime.
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - dependency failure is surfaced at runtime.
     Draft202012Validator = None  # type: ignore[assignment]
 
 
@@ -208,7 +210,9 @@ def _extract_template_refs(obj: Any) -> list[str]:
 
 
 def _load_template_pack_schema() -> dict[str, Any]:
-    schema_path = Path(__file__).resolve().parent / "schema" / "template-pack.schema.json"
+    schema_path = (
+        Path(__file__).resolve().parent / "schema" / "template-pack.schema.json"
+    )
     return json.loads(schema_path.read_text(encoding="utf-8"))
 
 
@@ -230,7 +234,10 @@ def _validate_json_schema(
 
     validator = Draft202012Validator(_load_template_pack_schema())
     for error in validator.iter_errors(payload):
-        location = "".join(f"[{part!r}]" if isinstance(part, str) else f"[{part}]" for part in error.path)
+        location = "".join(
+            f"[{part!r}]" if isinstance(part, str) else f"[{part}]"
+            for part in error.path
+        )
         issues.append(
             ConfigIssue(
                 level="error",
@@ -291,7 +298,9 @@ def validate_template_configs(
 
     unique_dirs = normalize_config_dirs(config_dirs)
     if not unique_dirs:
-        return [], [ConfigIssue(level="error", message="No config directories provided")]
+        return [], [
+            ConfigIssue(level="error", message="No config directories provided")
+        ]
 
     for config_dir in unique_dirs:
         if not config_dir.exists() or not config_dir.is_dir():
@@ -465,7 +474,9 @@ def validate_template_configs(
         else:
             keys_seen[key] = source_file or "(unknown)"
 
-        if template.get("json_addl") is not None and not isinstance(template.get("json_addl"), dict):
+        if template.get("json_addl") is not None and not isinstance(
+            template.get("json_addl"), dict
+        ):
             issues.append(
                 ConfigIssue(
                     level="error",
@@ -493,7 +504,9 @@ def validate_template_configs(
                 )
             )
 
-        if "is_singleton" in template and not isinstance(template.get("is_singleton"), bool):
+        if "is_singleton" in template and not isinstance(
+            template.get("is_singleton"), bool
+        ):
             issues.append(
                 ConfigIssue(
                     level="error",

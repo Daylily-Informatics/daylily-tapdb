@@ -30,7 +30,9 @@ class _FakeConn:
 
 def test_user_list_shows_no_users(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(user_mod, "_open_connection", lambda *_a, **_k: _FakeConn())
-    monkeypatch.setattr(user_mod, "list_users", lambda _session, include_inactive=False: [])
+    monkeypatch.setattr(
+        user_mod, "list_users", lambda _session, include_inactive=False: []
+    )
 
     result = runner.invoke(user_mod.user_app, ["list", "dev"])
 
@@ -105,7 +107,10 @@ def test_user_add_duplicate_exits_nonzero(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         user_mod,
         "create_or_get",
-        lambda session, **kwargs: (SimpleNamespace(username=kwargs["login_identifier"]), False),
+        lambda session, **kwargs: (
+            SimpleNamespace(username=kwargs["login_identifier"]),
+            False,
+        ),
     )
 
     result = runner.invoke(
@@ -153,7 +158,9 @@ def test_user_set_password_success(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(user_mod, "_hash_password", lambda value: f"hashed:{value}")
     captured: dict[str, object] = {}
 
-    def _fake_set_password_hash(_session, username, password_hash, *, require_password_change=None):
+    def _fake_set_password_hash(
+        _session, username, password_hash, *, require_password_change=None
+    ):
         captured["username"] = username
         captured["password_hash"] = password_hash
         captured["require_password_change"] = require_password_change

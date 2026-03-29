@@ -155,6 +155,7 @@ async def test_require_admin_allows_admin(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_get_user_permissions_defaults_to_user_role():
-    assert auth.get_user_permissions({"username": "user@example.com"}) == auth.PERMISSIONS[
-        "user"
-    ]
+    assert (
+        auth.get_user_permissions({"username": "user@example.com"})
+        == auth.PERMISSIONS["user"]
+    )
