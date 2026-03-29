@@ -49,7 +49,7 @@ class _SessionContext:
         return False
 
 
-class _StopLoop(Exception):
+class _StopLoopError(Exception):
     pass
 
 
@@ -89,14 +89,14 @@ def test_run_dispatch_loop_marks_delivered_on_success(monkeypatch: pytest.Monkey
 
     def _sleep(seconds: float):
         sleep_calls.append(seconds)
-        raise _StopLoop()
+        raise _StopLoopError()
 
     monkeypatch.setattr(worker, "claim_events", _claim_events)
     monkeypatch.setattr(worker, "mark_delivered", _mark_delivered)
     monkeypatch.setattr(worker, "mark_failed", _mark_failed)
     monkeypatch.setattr(worker.time, "sleep", _sleep)
 
-    with pytest.raises(_StopLoop):
+    with pytest.raises(_StopLoopError):
         worker.run_dispatch_loop(
             session_factory=session_factory,
             deliver_fn=_deliver_fn,
@@ -144,7 +144,7 @@ def test_run_dispatch_loop_marks_failed_and_schedules_retry(
         raise RuntimeError("network is down")
 
     def _sleep(_seconds: float):
-        raise _StopLoop()
+        raise _StopLoopError()
 
     monkeypatch.setattr(worker, "datetime", _FixedDateTime)
     monkeypatch.setattr(worker, "claim_events", _claim_events)
@@ -152,7 +152,7 @@ def test_run_dispatch_loop_marks_failed_and_schedules_retry(
     monkeypatch.setattr(worker, "mark_delivered", _mark_delivered)
     monkeypatch.setattr(worker.time, "sleep", _sleep)
 
-    with pytest.raises(_StopLoop):
+    with pytest.raises(_StopLoopError):
         worker.run_dispatch_loop(
             session_factory=session_factory,
             deliver_fn=_deliver_fn,
@@ -194,14 +194,14 @@ def test_run_dispatch_loop_max_attempts_schedules_far_future_retry(
         raise RuntimeError("retry exhausted")
 
     def _sleep(_seconds: float):
-        raise _StopLoop()
+        raise _StopLoopError()
 
     monkeypatch.setattr(worker, "datetime", _FixedDateTime)
     monkeypatch.setattr(worker, "claim_events", _claim_events)
     monkeypatch.setattr(worker, "mark_failed", _mark_failed)
     monkeypatch.setattr(worker.time, "sleep", _sleep)
 
-    with pytest.raises(_StopLoop):
+    with pytest.raises(_StopLoopError):
         worker.run_dispatch_loop(
             session_factory=session_factory,
             deliver_fn=_deliver_fn,

@@ -13,7 +13,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from daylily_tapdb.models.template import generic_template
-from daylily_tapdb.sequences import _normalize_instance_prefix, ensure_instance_prefix_sequence
+from daylily_tapdb.sequences import (
+    _normalize_instance_prefix,
+    ensure_instance_prefix_sequence,
+)
 from daylily_tapdb.templates.mutation import allow_template_mutations
 from daylily_tapdb.validation.instantiation_layouts import (
     format_validation_error,

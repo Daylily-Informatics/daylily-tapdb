@@ -7,9 +7,8 @@ Phase 2 spec: ORM must match schema.
 
 from __future__ import annotations
 
-from sqlalchemy import Column, Text
+from sqlalchemy import Column, Text, event
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy import event
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.orm import Session, relationship
 
