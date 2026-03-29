@@ -137,6 +137,39 @@ Direct `generic_template` creation or mutation from client code is not a
 supported path. If runtime code needs a template, it should require an already
 seeded template rather than defining one in Python.
 
+## Integrating TapDB Into a Parent FastAPI + Jinja2 App
+
+If your app already owns its own FastAPI and Jinja2 stack, treat TapDB as a
+library dependency rather than a standalone web shell. The Atlas workspace in
+`../../lsmc/lsmc-atlas` is the best current example of that pattern:
+
+- the parent app creates and configures `FastAPI()`
+- the parent app owns session middleware, auth gates, and trusted-host/origin checks
+- the parent app owns Jinja templates, static assets, and its route surface
+- TapDB is used through its persistence/runtime helpers, not by mutating core
+  templates directly
+- TapDB template packs are seeded from JSON packs, not authored dynamically at
+  runtime
+
+That same shape works well for any FastAPI + Jinja2 host app that wants to use
+TapDB-backed repositories while keeping the host application in control of UI
+composition and authorization.
+
+## Admin UI Integration
+
+The optional TAPDB admin UI can still be embedded in a parent app, but the
+mount strategy should be explicit:
+
+- `Host-gated mount`: the parent app protects `/tapdb` itself and sets
+  `TAPDB_ADMIN_DISABLE_AUTH=true` so the mounted admin app defers to host
+  authentication.
+- `Shared-auth mount`: use this only when the host can provide the signed
+  session cookie shape TAPDB currently expects. The session payload must expose
+  `user_data.email` and `user_data.role` for the shared-auth path to work.
+
+For the current supported admin-mount guidance, see
+[docs/tapdb_gui_inclusion.md](docs/tapdb_gui_inclusion.md).
+
 For local PostgreSQL, TAPDB now uses a namespaced user-writable Unix socket
 directory under `~/.config/tapdb/<client>/<database>/<env>/postgres/run` by
 default, so `tapdb pg start-local <env>` does not depend on system paths such
@@ -151,10 +184,11 @@ The admin UI is optional and ships with the `admin` extra.
 Key modes:
 
 - native TapDB auth
-- shared host-app auth
+- shared auth for compatible host cookies
 - auth-disabled local development
 
-See the embedding guide for the current supported patterns.
+See the integration section above for parent-app patterns and the focused
+mount guide for the supported admin embedding details.
 
 ## Timezone Policy
 
@@ -165,7 +199,7 @@ See the embedding guide for the current supported patterns.
 ## Current Docs
 
 - [Docs index](docs/README.md)
-- [GUI inclusion guide](docs/tapdb_gui_inclusion.md)
+- [GUI inclusion guide](docs/tapdb_gui_inclusion.md): admin mounting and auth modes
 
 Historical execution plans and breaking-change notes remain in `docs/` for background only.
 
