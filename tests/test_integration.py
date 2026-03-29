@@ -26,6 +26,12 @@ from daylily_tapdb.models.template import (
     workflow_step_template,
     workflow_template,
 )
+from daylily_tapdb.schema_inventory import (
+    build_expected_schema_inventory,
+    diff_schema_inventory,
+    load_live_schema_inventory,
+    schema_asset_files,
+)
 from daylily_tapdb.templates.manager import TemplateManager
 
 _UNSET = object()
@@ -359,6 +365,65 @@ def test_postgres_schema_install_is_idempotent():
     try:
         # Re-applying the schema to the same schema should not error.
         _apply_schema(dsn, schema_name, schema_sql_path)
+    finally:
+        _drop_schema(dsn, schema_name)
+
+
+def test_postgres_schema_drift_check_smoke():
+    dsn = os.environ.get("TAPDB_TEST_DSN")
+    if not dsn:
+        pytest.skip("Set TAPDB_TEST_DSN to run Postgres integration tests")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    schema_root = repo_root / "schema"
+    schema_sql_path = schema_root / "tapdb_schema.sql"
+
+    schema_name = (
+        f"tapdb_test_drift_{int(time.time())}_{random.randint(1, 1_000_000_000)}"
+    )
+    _install_schema(dsn, schema_name, schema_sql_path)
+
+    try:
+        conn = TAPDBConnection(db_url=dsn, app_username="pytest")
+        with conn.session_scope(commit=True) as session:
+            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
+            # db schema apply creates this sequence during identity-prefix sync.
+            session.execute(text("CREATE SEQUENCE IF NOT EXISTS ad_audit_seq"))
+
+        expected = build_expected_schema_inventory(
+            schema_asset_files(schema_root),
+            audit_sequence_name="ad_audit_seq",
+        )
+
+        with conn.session_scope(commit=False) as session:
+            live = load_live_schema_inventory(session, schema_name=schema_name)
+        clean_diff = diff_schema_inventory(
+            expected,
+            live,
+            env="test",
+            database="tapdb_test",
+            strict=True,
+        )
+        assert clean_diff.has_drift is False
+
+        with conn.session_scope(commit=True) as session:
+            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
+            session.execute(text("DROP INDEX IF EXISTS idx_generic_instance_euid"))
+
+        with conn.session_scope(commit=False) as session:
+            drifted_live = load_live_schema_inventory(session, schema_name=schema_name)
+        drifted = diff_schema_inventory(
+            expected,
+            drifted_live,
+            env="test",
+            database="tapdb_test",
+            strict=True,
+        )
+        assert drifted.has_drift is True
+        assert (
+            "generic_instance.idx_generic_instance_euid"
+            in drifted.missing["indexes"]
+        )
     finally:
         _drop_schema(dsn, schema_name)
 

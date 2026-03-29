@@ -8,7 +8,7 @@ import sysconfig
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
@@ -18,6 +18,14 @@ from rich.table import Table
 
 from daylily_tapdb import TAPDBConnection
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+from daylily_tapdb.schema_inventory import (
+    build_expected_schema_inventory,
+    diff_schema_inventory,
+    drift_entry_counts,
+    inventory_counts,
+    load_live_schema_inventory,
+    schema_asset_files,
+)
 from daylily_tapdb.templates import (
     ConfigIssue as _ConfigIssue,
 )
@@ -464,6 +472,48 @@ def _schema_exists(env: Environment) -> bool:
         return False
 
 
+def _run_schema_drift_check(
+    env: Environment,
+    *,
+    strict: bool,
+) -> tuple[dict[str, Any], bool]:
+    """Build drift payload for CLI output."""
+    cfg = _get_db_config(env)
+    schema_root = _find_schema_root(required_subpath=Path("tapdb_schema.sql"))
+    asset_paths = schema_asset_files(schema_root)
+    audit_prefix = _required_identity_prefixes(env)
+    audit_sequence = f"{audit_prefix.lower()}_audit_seq"
+
+    expected = build_expected_schema_inventory(
+        asset_paths,
+        audit_sequence_name=audit_sequence,
+    )
+    with _tapdb_connection_for_env(
+        env,
+        app_username="tapdb_schema_drift_check",
+    ) as conn:
+        with conn.session_scope(commit=False) as session:
+            live = load_live_schema_inventory(session)
+
+    drift_result = diff_schema_inventory(
+        expected,
+        live,
+        env=env.value,
+        database=str(cfg["database"]),
+        strict=strict,
+        expected_asset_paths=[str(path.resolve()) for path in asset_paths],
+    )
+    has_drift = drift_result.has_drift
+    payload = drift_result.to_payload()
+    payload["counts"] = {
+        "expected": inventory_counts(drift_result.expected),
+        "live": inventory_counts(drift_result.live),
+        "missing": drift_entry_counts(drift_result.missing),
+        "unexpected": drift_entry_counts(drift_result.unexpected),
+    }
+    return payload, has_drift
+
+
 # ============================================================================
 # CLI Commands
 # ============================================================================
@@ -732,6 +782,105 @@ def db_status(
         iam = cfg.get("iam_auth", "true").lower() in ("true", "1", "yes")
         console.print(f"  Auth:   {'IAM' if iam else 'password'}")
     console.print(f"  URL:  [dim]{_get_connection_string(env)}[/dim]")
+
+
+@schema_app.command("drift-check")
+def db_schema_drift_check(
+    env: Environment = typer.Argument(..., help="Target environment"),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit machine-readable JSON report"
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict/--no-strict",
+        help=(
+            "If strict, fail on unexpected TapDB-owned objects in the TapDB "
+            "schema in addition to missing expected objects."
+        ),
+    ),
+):
+    """Detect TAPDB schema drift against canonical TAPDB schema assets."""
+    cfg = _get_db_config(env)
+    if not _check_db_exists(env, cfg["database"]):
+        message = f"Database '{cfg['database']}' does not exist"
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "env": env.value,
+                        "database": cfg["database"],
+                        "schema_name": None,
+                        "strict": strict,
+                        "error": message,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            console.print(f"[red]✗[/red] {message}")
+        raise typer.Exit(2)
+
+    try:
+        payload, has_drift = _run_schema_drift_check(env, strict=strict)
+    except Exception as exc:
+        message = str(exc)
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "env": env.value,
+                        "database": cfg["database"],
+                        "schema_name": None,
+                        "strict": strict,
+                        "error": message,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            console.print(
+                f"[red]✗[/red] Drift check failed for {env.value}: {message}"
+            )
+        raise typer.Exit(2) from exc
+
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        raise typer.Exit(1 if has_drift else 0)
+
+    schema_name = payload.get("schema_name") or "(not found)"
+    console.print(
+        f"\n[bold cyan]━━━ TAPDB Schema Drift Check ({env.value}) ━━━[/bold cyan]"
+    )
+    console.print(f"  Database: {payload['database']}")
+    console.print(f"  Schema:   {schema_name}")
+    console.print(f"  Strict:   {'yes' if payload['strict'] else 'no'}")
+    counts = payload["counts"]
+    console.print(
+        "  Counts:   "
+        f"expected={counts['expected']} "
+        f"live={counts['live']}"
+    )
+
+    if has_drift:
+        console.print("\n[red]✗[/red] Drift detected")
+        for section_name in ("missing", "unexpected"):
+            entries = payload[section_name]
+            if not any(entries.values()):
+                continue
+            console.print(f"\n[bold]{section_name.title()}[/bold]")
+            for category, values in entries.items():
+                if not values:
+                    continue
+                console.print(f"  {category} ({len(values)}):")
+                for value in values:
+                    console.print(f"    - {value}")
+        raise typer.Exit(1)
+
+    console.print("\n[green]✓[/green] No TAPDB schema drift detected")
 
 
 @schema_app.command("reset")
