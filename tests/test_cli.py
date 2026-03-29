@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -2060,7 +2061,7 @@ class TestCLISubprocess:
     def test_cli_module_invocation(self):
         """Test CLI can be invoked as module."""
         result = subprocess.run(
-            ["python", "-m", "daylily_tapdb.cli", "--help"],
+            [sys.executable, "-m", "daylily_tapdb.cli", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -2071,7 +2072,7 @@ class TestCLISubprocess:
     def test_cli_db_help_subprocess(self):
         """Test db subcommand via subprocess."""
         result = subprocess.run(
-            ["python", "-m", "daylily_tapdb.cli", "db", "--help"],
+            [sys.executable, "-m", "daylily_tapdb.cli", "db", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -2083,7 +2084,7 @@ class TestCLISubprocess:
     def test_cli_pg_help_subprocess(self):
         """Test pg subcommand via subprocess."""
         result = subprocess.run(
-            ["python", "-m", "daylily_tapdb.cli", "pg", "--help"],
+            [sys.executable, "-m", "daylily_tapdb.cli", "pg", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
