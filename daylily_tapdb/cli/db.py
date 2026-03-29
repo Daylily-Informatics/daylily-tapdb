@@ -8,7 +8,7 @@ import sysconfig
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
