@@ -446,7 +446,33 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
             ],
         },
     )
-
+    monkeypatch.setattr(
+        admin_main,
+        "get_db_config_for_env",
+        lambda _env: {
+            "host": "127.0.0.1",
+            "port": 5432,
+            "database": "tapdb_dev_runtime",
+            "username": "tapdb",
+            "password": "secret",
+        },
+    )
+    monkeypatch.setattr(admin_main, "get_config_path", lambda: "/tmp/tapdb-config.yaml")
+    monkeypatch.setattr(
+        admin_main,
+        "resolve_tapdb_pool_config",
+        lambda _env: SimpleNamespace(
+            pool_id="pool-123",
+            app_client_id="client-123",
+            region="us-west-2",
+            aws_profile="default",
+            source_file="/tmp/tapdb-config.yaml",
+            client_name="tapdb-admin",
+            domain="example.auth.us-west-2.amazoncognito.com",
+            callback_url="https://localhost:8916/auth/callback",
+            logout_url="https://localhost:8916/login",
+        ),
+    )
     return TestClient(admin_main.app), state
 
 
@@ -627,6 +653,111 @@ def test_api_object_detail_includes_external_refs(
             "ref_index": 0,
         }
     ]
+
+
+def test_api_external_graph_proxy_route(route_client, monkeypatch: pytest.MonkeyPatch):
+    client, state = route_client
+
+    async def _admin_auth_user(_request):
+        return _admin_user()
+
+    monkeypatch.setattr(auth_mod, "get_current_user", _admin_auth_user)
+    state["instances"][0].json_addl = {
+        "properties": {
+            "external_payload": {
+                "tapdb_graph": {
+                    "system": "atlas",
+                    "base_url": "https://atlas.local",
+                    "root_euid": "AT-PAT-1",
+                    "tenant_id": "atlas-tenant-1",
+                    "graph_data_path": "/api/graph/data",
+                    "object_detail_path_template": "/api/graph/object/{euid}",
+                    "auth_mode": "none",
+                }
+            }
+        }
+    }
+
+    observed = {}
+
+    def _fake_fetch_remote_graph(_request, ref, *, depth):
+        observed["depth"] = depth
+        observed["ref_system"] = ref.system
+        return {"elements": {"nodes": [{"data": {"id": "AT-PAT-1"}}], "edges": []}}
+
+    def _fake_namespace_external_graph(payload, *, ref, ref_index, source_euid):
+        observed["source_euid"] = source_euid
+        observed["ref_index"] = ref_index
+        assert payload["elements"]["nodes"][0]["data"]["id"] == "AT-PAT-1"
+        assert ref.system == "atlas"
+        return {"elements": {"nodes": [], "edges": []}, "ok": True}
+
+    monkeypatch.setattr(admin_main, "fetch_remote_graph", _fake_fetch_remote_graph)
+    monkeypatch.setattr(
+        admin_main, "namespace_external_graph", _fake_namespace_external_graph
+    )
+
+    resp = client.get(
+        "/api/graph/external",
+        params={"source_euid": "GX11", "ref_index": 0, "depth": 3},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert observed == {
+        "depth": 3,
+        "ref_system": "atlas",
+        "source_euid": "GX11",
+        "ref_index": 0,
+    }
+
+
+def test_api_external_graph_object_proxy_route(
+    route_client, monkeypatch: pytest.MonkeyPatch
+):
+    client, state = route_client
+
+    async def _admin_auth_user(_request):
+        return _admin_user()
+
+    monkeypatch.setattr(auth_mod, "get_current_user", _admin_auth_user)
+    state["instances"][0].json_addl = {
+        "properties": {
+            "external_payload": {
+                "tapdb_graph": {
+                    "system": "atlas",
+                    "base_url": "https://atlas.local",
+                    "root_euid": "AT-PAT-1",
+                    "tenant_id": "atlas-tenant-1",
+                    "graph_data_path": "/api/graph/data",
+                    "object_detail_path_template": "/api/graph/object/{euid}",
+                    "auth_mode": "none",
+                }
+            }
+        }
+    }
+
+    observed = {}
+
+    def _fake_fetch_remote_object_detail(_request, ref, *, euid):
+        observed["ref_system"] = ref.system
+        observed["euid"] = euid
+        return {"euid": euid, "name": "External Node", "source": ref.system}
+
+    monkeypatch.setattr(
+        admin_main, "fetch_remote_object_detail", _fake_fetch_remote_object_detail
+    )
+
+    resp = client.get(
+        "/api/graph/external/object",
+        params={"source_euid": "GX11", "ref_index": 0, "euid": "AT-PAT-2"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "euid": "AT-PAT-2",
+        "name": "External Node",
+        "source": "atlas",
+    }
+    assert observed == {"ref_system": "atlas", "euid": "AT-PAT-2"}
 
 
 def test_home_query_and_audit_panels_admin(
