@@ -7,7 +7,7 @@ name = "daylily-tapdb"
 dynamic = ["version"]
 description = "Templated Abstract Polymorphic Database - A flexible object model library"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
     {name = "Daylily Informatics", email = "info@daylilyinformatics.com"}
@@ -15,7 +15,6 @@ authors = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
