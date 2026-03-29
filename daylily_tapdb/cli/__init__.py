@@ -1001,8 +1001,12 @@ def build_app():
         port: Optional[int] = typer.Option(None, "--port", help="Database port"),
         ui_port: Optional[int] = typer.Option(None, "--ui-port", help="TapDB UI port"),
         user: Optional[str] = typer.Option(None, "--user", help="Database user"),
-        password: Optional[str] = typer.Option(None, "--password", help="Database password"),
-        database: Optional[str] = typer.Option(None, "--database", help="Database name"),
+        password: Optional[str] = typer.Option(
+            None, "--password", help="Database password"
+        ),
+        database: Optional[str] = typer.Option(
+            None, "--database", help="Database name"
+        ),
         cognito_user_pool_id: Optional[str] = typer.Option(
             None, "--cognito-user-pool-id", help="Bound Cognito user pool ID"
         ),

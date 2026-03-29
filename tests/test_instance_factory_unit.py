@@ -355,7 +355,7 @@ def test_create_children_handles_string_and_object_child_templates_and_creates_l
     f._create_children(sess, parent=parent, template=tmpl, depth=0, visited=set())
 
     assert len(created) == 3
-    assert created[0][0] == "generic/generic/child1/1.0"
+    assert created[0][0] == "generic/generic/child1/1.0/"
     assert created[0][1] == "parent_child1_1"
     assert created[1][1] == "GX1:child2:1"
     assert created[2][1] == "GX1:child2:2"

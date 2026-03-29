@@ -45,4 +45,3 @@ def template_mutation_error_message(template_code: str | None = None) -> str:
         f"{target}. Define templates in a JSON pack and load them with "
         "`tapdb db data seed --config <dir>` or the TapDB template loader API."
     )
-

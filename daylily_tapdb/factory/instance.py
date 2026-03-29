@@ -409,7 +409,9 @@ class InstanceFactory:
             raise ValueError(f"Invalid child template pattern: {template_code!r}")
 
         category, type_name, subtype, version = parts
-        query = session.query(generic_template).filter(generic_template.is_deleted.is_(False))
+        query = session.query(generic_template).filter(
+            generic_template.is_deleted.is_(False)
+        )
         if category != "*":
             query = query.filter(generic_template.category == category)
         if type_name != "*":

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 __all__ = [
     "ConfigIssue",
     "MissingSeededTemplateError",
@@ -38,7 +37,11 @@ def __getattr__(name: str):
             "TemplateMutationGuardError": TemplateMutationGuardError,
             "allow_template_mutations": allow_template_mutations,
         }[name]
-    if name in {"MissingSeededTemplateError", "require_seeded_template", "require_seeded_templates"}:
+    if name in {
+        "MissingSeededTemplateError",
+        "require_seeded_template",
+        "require_seeded_templates",
+    }:
         from daylily_tapdb.templates.requirements import (
             MissingSeededTemplateError,
             require_seeded_template,

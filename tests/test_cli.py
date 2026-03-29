@@ -319,7 +319,9 @@ class TestConfigUpdate:
         )
         assert result.exit_code == 0
 
-        result = runner.invoke(app, ["config", "update", "--env", "dev", "--clear", "support_email"])
+        result = runner.invoke(
+            app, ["config", "update", "--env", "dev", "--clear", "support_email"]
+        )
         assert result.exit_code == 0
 
         config_path = (

@@ -1,76 +1,148 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 
-def test_upsert_template_overwrite_true_is_on_conflict_do_update(monkeypatch):
-    import daylily_tapdb.cli.db as m
+class _ScalarResult:
+    def __init__(self, value):
+        self._value = value
 
-    captured = {}
+    def scalar_one_or_none(self):
+        return self._value
 
-    def fake_run_psql(env, *, sql=None, file=None):
-        captured["sql"] = sql
-        captured["file"] = file
-        return True, "t"
 
-    monkeypatch.setattr(m, "_run_psql", fake_run_psql)
+class _FakeUpsertSession:
+    def __init__(self, existing=None):
+        self.existing = existing
+        self.added: list[object] = []
+        self.flush_count = 0
+        self.statements: list[object] = []
 
-    ok, _out = m._upsert_template(
-        m.Environment.dev,
+    def execute(self, stmt):
+        self.statements.append(stmt)
+        return _ScalarResult(self.existing)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    def flush(self):
+        self.flush_count += 1
+
+
+def _template_payload():
+    return {
+        "name": "x",
+        "polymorphic_discriminator": "generic_template",
+        "category": "generic",
+        "type": "tube",
+        "subtype": "micro",
+        "version": "1.0",
+        "instance_prefix": "GX",
+        "json_addl": {"k": "v"},
+    }
+
+
+def test_upsert_template_inserts_when_missing(monkeypatch):
+    import daylily_tapdb.templates.loader as m
+
+    class _FakeTemplate:
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    monkeypatch.setattr(
+        m, "_template_model_for_discriminator", lambda _disc: _FakeTemplate
+    )
+    session = _FakeUpsertSession(existing=None)
+
+    outcome, created = m._upsert_template(
+        session,
         template={
-            "name": "x",
-            "polymorphic_discriminator": "generic_template",
-            "category": "generic",
-            "type": "tube",
-            "subtype": "micro",
-            "version": "1.0",
-            "instance_prefix": "GX",
-            "json_addl": {"k": "v"},
+            **_template_payload(),
+            "instance_prefix": "gx",
         },
         overwrite=True,
     )
 
-    assert ok is True
-    assert captured["file"] is None
-    sql = captured["sql"]
-    assert "ON CONFLICT (category, type, subtype, version)" in sql
-    assert "DO UPDATE SET" in sql
-    assert "RETURNING" in sql
+    assert outcome == "inserted"
+    assert created in session.added
+    assert created.instance_prefix == "GX"
+    assert created.category == "generic"
+    assert created.type == "tube"
+    assert created.subtype == "micro"
+    assert created.version == "1.0"
+    assert session.flush_count == 1
 
 
-def test_upsert_template_overwrite_false_is_on_conflict_do_nothing(monkeypatch):
-    import daylily_tapdb.cli.db as m
+def test_upsert_template_overwrite_false_skips_existing():
+    import daylily_tapdb.templates.loader as m
 
-    captured = {}
+    existing = SimpleNamespace(
+        name="existing",
+        polymorphic_discriminator="generic_template",
+        category="generic",
+        type="tube",
+        subtype="micro",
+        version="1.0",
+        instance_prefix="GX",
+        instance_polymorphic_identity=None,
+        json_addl={"k": "old"},
+        json_addl_schema=None,
+        bstatus="active",
+        is_singleton=False,
+        is_deleted=False,
+    )
+    session = _FakeUpsertSession(existing=existing)
 
-    def fake_run_psql(env, *, sql=None, file=None):
-        captured["sql"] = sql
-        captured["file"] = file
-        return True, "1"
-
-    monkeypatch.setattr(m, "_run_psql", fake_run_psql)
-
-    ok, _out = m._upsert_template(
-        m.Environment.dev,
-        template={
-            "name": "x",
-            "polymorphic_discriminator": "generic_template",
-            "category": "generic",
-            "type": "tube",
-            "subtype": "micro",
-            "version": "1.0",
-            "instance_prefix": "GX",
-            "json_addl": {"k": "v"},
-        },
-        overwrite=False,
+    outcome, returned = m._upsert_template(
+        session, template=_template_payload(), overwrite=False
     )
 
-    assert ok is True
-    assert captured["file"] is None
-    sql = captured["sql"]
-    assert "ON CONFLICT (category, type, subtype, version)" in sql
-    assert "DO NOTHING" in sql
-    assert "RETURNING 1" in sql
+    assert outcome == "skipped"
+    assert returned is existing
+    assert existing.name == "existing"
+    assert session.flush_count == 0
+
+
+def test_upsert_template_overwrite_true_updates_existing():
+    import daylily_tapdb.templates.loader as m
+
+    existing = SimpleNamespace(
+        name="existing",
+        polymorphic_discriminator="generic_template",
+        category="generic",
+        type="tube",
+        subtype="micro",
+        version="1.0",
+        instance_prefix="GX",
+        instance_polymorphic_identity=None,
+        json_addl={"k": "old"},
+        json_addl_schema=None,
+        bstatus="inactive",
+        is_singleton=False,
+        is_deleted=True,
+    )
+    session = _FakeUpsertSession(existing=existing)
+
+    outcome, returned = m._upsert_template(
+        session,
+        template={
+            **_template_payload(),
+            "name": "updated",
+            "json_addl": {"k": "new"},
+            "bstatus": "active",
+        },
+        overwrite=True,
+    )
+
+    assert outcome == "updated"
+    assert returned is existing
+    assert existing.name == "updated"
+    assert existing.json_addl == {"k": "new"}
+    assert existing.bstatus == "active"
+    assert existing.is_deleted is False
+    assert session.flush_count == 1
 
 
 def test_db_migrate_idempotent_when_all_migrations_already_applied(
