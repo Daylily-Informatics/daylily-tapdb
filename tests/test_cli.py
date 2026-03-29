@@ -896,6 +896,131 @@ class TestCLIDB:
         assert result.exit_code == 0
         assert "DESTRUCTIVE" in result.output or "force" in result.output
 
+    def test_db_schema_drift_check_help(self):
+        """Test db schema drift-check --help."""
+        result = runner.invoke(app, ["db", "schema", "drift-check", "--help"])
+        assert result.exit_code == 0
+        out = _strip_ansi(result.output)
+        assert "--json" in out
+        assert "--strict" in out
+
+    def test_db_schema_drift_check_json_clean(self, monkeypatch):
+        """Clean drift-check emits JSON and exits 0."""
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.db._check_db_exists",
+            lambda _env, _db: True,
+        )
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.db._run_schema_drift_check",
+            lambda _env, strict: (
+                {
+                    "status": "clean",
+                    "env": "dev",
+                    "database": "tapdb_dev",
+                    "schema_name": "public",
+                    "strict": strict,
+                    "expected_asset_paths": ["/tmp/schema/tapdb_schema.sql"],
+                    "counts": {
+                        "expected": {"tables": 1},
+                        "live": {"tables": 1},
+                        "missing": {"tables": 0},
+                        "unexpected": {"tables": 0},
+                    },
+                    "missing": {
+                        "tables": [],
+                        "columns": [],
+                        "sequences": [],
+                        "functions": [],
+                        "triggers": [],
+                        "indexes": [],
+                    },
+                    "unexpected": {
+                        "tables": [],
+                        "columns": [],
+                        "sequences": [],
+                        "functions": [],
+                        "triggers": [],
+                        "indexes": [],
+                    },
+                },
+                False,
+            ),
+        )
+
+        result = runner.invoke(app, ["db", "schema", "drift-check", "dev", "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["status"] == "clean"
+        assert payload["schema_name"] == "public"
+        assert "counts" in payload
+        assert "missing" in payload
+        assert "unexpected" in payload
+
+    def test_db_schema_drift_check_json_drift_exit_one(self, monkeypatch):
+        """Drift-check exits 1 on detected drift."""
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.db._check_db_exists",
+            lambda _env, _db: True,
+        )
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.db._run_schema_drift_check",
+            lambda _env, strict: (
+                {
+                    "status": "drift",
+                    "env": "dev",
+                    "database": "tapdb_dev",
+                    "schema_name": "public",
+                    "strict": strict,
+                    "expected_asset_paths": ["/tmp/schema/tapdb_schema.sql"],
+                    "counts": {
+                        "expected": {"tables": 1},
+                        "live": {"tables": 0},
+                        "missing": {"tables": 1},
+                        "unexpected": {"tables": 0},
+                    },
+                    "missing": {
+                        "tables": ["generic_template"],
+                        "columns": [],
+                        "sequences": [],
+                        "functions": [],
+                        "triggers": [],
+                        "indexes": [],
+                    },
+                    "unexpected": {
+                        "tables": [],
+                        "columns": [],
+                        "sequences": [],
+                        "functions": [],
+                        "triggers": [],
+                        "indexes": [],
+                    },
+                },
+                True,
+            ),
+        )
+
+        result = runner.invoke(
+            app,
+            ["db", "schema", "drift-check", "dev", "--json", "--strict"],
+        )
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["status"] == "drift"
+        assert payload["strict"] is True
+        assert payload["missing"]["tables"] == ["generic_template"]
+
+    def test_db_schema_drift_check_json_operational_error_exit_two(self, monkeypatch):
+        """Drift-check exits 2 for operational errors."""
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.db._check_db_exists",
+            lambda _env, _db: False,
+        )
+        result = runner.invoke(app, ["db", "schema", "drift-check", "dev", "--json"])
+        assert result.exit_code == 2
+        payload = json.loads(result.output)
+        assert payload["status"] == "error"
+        assert "does not exist" in payload["error"]
+
     def test_get_db_config_defaults(self):
         """Test _get_db_config returns correct defaults when no config file exists."""
         # Mock load_config so the real ~/.config/tapdb/tapdb-config.yaml is ignored.
