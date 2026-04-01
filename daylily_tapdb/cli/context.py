@@ -14,6 +14,10 @@ from typing import Optional
 
 CONFIG_FILENAME = "tapdb-config.yaml"
 _KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_ACTIVE_CLIENT_ID: Optional[str] = None
+_ACTIVE_DATABASE_NAME: Optional[str] = None
+_ACTIVE_ENV_NAME: Optional[str] = None
+_ACTIVE_CONFIG_PATH: Optional[Path] = None
 
 
 def _normalize_key(value: Optional[str], *, field_name: str) -> Optional[str]:
@@ -38,14 +42,19 @@ class TapdbContext:
     client_id: str
     database_name: str
     env_name: Optional[str] = None
+    explicit_config_path: Optional[Path] = None
 
     def namespace_slug(self) -> str:
         return f"{self.client_id}/{self.database_name}"
 
     def config_dir(self) -> Path:
+        if self.explicit_config_path is not None:
+            return self.explicit_config_path.parent
         return Path.home() / ".config" / "tapdb" / self.client_id / self.database_name
 
     def config_path(self) -> Path:
+        if self.explicit_config_path is not None:
+            return self.explicit_config_path
         return self.config_dir() / CONFIG_FILENAME
 
     def runtime_dir(self, env_name: Optional[str] = None) -> Path:
@@ -67,49 +76,149 @@ class TapdbContext:
         return self.runtime_dir(env_name) / "locks"
 
 
+def set_cli_context(
+    *,
+    client_id: Optional[str] = None,
+    database_name: Optional[str] = None,
+    env_name: Optional[str] = None,
+    config_path: Optional[str | Path] = None,
+) -> None:
+    """Set process-local CLI context from explicit command-line inputs."""
+
+    global _ACTIVE_CLIENT_ID, _ACTIVE_DATABASE_NAME, _ACTIVE_ENV_NAME, _ACTIVE_CONFIG_PATH
+    _ACTIVE_CLIENT_ID = _normalize_key(client_id, field_name="client-id")
+    _ACTIVE_DATABASE_NAME = _normalize_key(database_name, field_name="database-name")
+    _ACTIVE_ENV_NAME = str(env_name or "").strip().lower() or None
+    if config_path is None or str(config_path).strip() == "":
+        _ACTIVE_CONFIG_PATH = None
+    else:
+        _ACTIVE_CONFIG_PATH = Path(config_path).expanduser().resolve()
+
+
+def clear_cli_context() -> None:
+    """Clear process-local CLI context."""
+
+    set_cli_context()
+
+
+def active_env_name(default: str = "dev") -> str:
+    """Return the current explicit TapDB env name for this process."""
+
+    return (_ACTIVE_ENV_NAME or os.environ.get("TAPDB_ENV") or default).strip()
+
+
+def active_config_path() -> Optional[Path]:
+    """Return the current explicit TapDB config path for this process, if any."""
+
+    return _ACTIVE_CONFIG_PATH
+
+
+def active_context_overrides() -> dict[str, Optional[str | Path]]:
+    """Return the current process-local CLI overrides."""
+
+    return {
+        "client_id": _ACTIVE_CLIENT_ID,
+        "database_name": _ACTIVE_DATABASE_NAME,
+        "env_name": _ACTIVE_ENV_NAME,
+        "config_path": _ACTIVE_CONFIG_PATH,
+    }
+
+
+def _load_meta_from_config_path(config_path: Path) -> tuple[Optional[str], Optional[str]]:
+    if not config_path.exists():
+        return None, None
+    raw = config_path.read_text(encoding="utf-8")
+    data: object
+    try:
+        import yaml  # type: ignore
+
+        data = yaml.safe_load(raw)
+    except ModuleNotFoundError:
+        import json
+
+        data = json.loads(raw)
+    if not isinstance(data, dict):
+        return None, None
+    meta = data.get("meta")
+    if not isinstance(meta, dict):
+        return None, None
+    return (
+        _normalize_key(meta.get("client_id"), field_name="client-id"),
+        _normalize_key(meta.get("database_name"), field_name="database-name"),
+    )
+
+
 def resolve_context(
     *,
     require_keys: bool = True,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
     env_name: Optional[str] = None,
+    config_path: Optional[str | Path] = None,
+    allow_namespace_fallback: bool = False,
 ) -> Optional[TapdbContext]:
-    """Resolve TAPDB namespace context from args/env.
+    """Resolve TAPDB namespace context from explicit config or namespace input.
 
     Precedence:
-    1. Explicit function args
-    2. Environment variables
+    1. Explicit config path / active CLI config path metadata
+    2. Explicit namespace args or active CLI namespace context when
+       ``allow_namespace_fallback`` is enabled
     """
 
-    resolved_client = _normalize_key(
-        client_id if client_id is not None else os.environ.get("TAPDB_CLIENT_ID"),
-        field_name="client-id",
-    )
-    resolved_db = _normalize_key(
-        database_name
-        if database_name is not None
-        else os.environ.get("TAPDB_DATABASE_NAME"),
-        field_name="database-name",
-    )
+    resolved_config_path: Optional[Path] = None
+    raw_config_path = config_path if config_path is not None else _ACTIVE_CONFIG_PATH
+    if raw_config_path is not None and str(raw_config_path).strip():
+        resolved_config_path = Path(raw_config_path).expanduser().resolve()
+
+    resolved_client: Optional[str] = None
+    resolved_db: Optional[str] = None
+
+    if resolved_config_path is not None:
+        meta_client, meta_db = _load_meta_from_config_path(resolved_config_path)
+        resolved_client = meta_client
+        resolved_db = meta_db
+
+    if allow_namespace_fallback and (not resolved_client or not resolved_db):
+        fallback_client = _normalize_key(
+            client_id
+            if client_id is not None
+            else (_ACTIVE_CLIENT_ID or os.environ.get("TAPDB_CLIENT_ID")),
+            field_name="client-id",
+        )
+        fallback_db = _normalize_key(
+            database_name
+            if database_name is not None
+            else (_ACTIVE_DATABASE_NAME or os.environ.get("TAPDB_DATABASE_NAME")),
+            field_name="database-name",
+        )
+        resolved_client = resolved_client or fallback_client
+        resolved_db = resolved_db or fallback_db
 
     if not resolved_client or not resolved_db:
         if not require_keys:
             return None
-        missing: list[str] = []
-        if not resolved_client:
-            missing.append("client-id")
-        if not resolved_db:
-            missing.append("database-name")
-        missing_text = ", ".join(missing)
-        raise RuntimeError(
-            "Missing TAPDB namespace key(s): "
-            f"{missing_text}. Set --client-id/--database-name or "
-            "TAPDB_CLIENT_ID/TAPDB_DATABASE_NAME."
-        )
+        if resolved_config_path is not None:
+            raise RuntimeError(
+                "TapDB config metadata is required to resolve runtime context. "
+                f"Initialize or fix {resolved_config_path}."
+            )
+        if allow_namespace_fallback:
+            missing: list[str] = []
+            if not resolved_client:
+                missing.append("client-id")
+            if not resolved_db:
+                missing.append("database-name")
+            missing_text = ", ".join(missing)
+            raise RuntimeError(
+                "Missing TAPDB namespace key(s): "
+                f"{missing_text}. Set --client-id/--database-name or --config."
+            )
+        raise RuntimeError("TapDB config path is required. Set --config.")
 
-    resolved_env = (env_name or os.environ.get("TAPDB_ENV") or "").strip() or None
+    resolved_env = (env_name or _ACTIVE_ENV_NAME or "").strip().lower() or None
     return TapdbContext(
         client_id=resolved_client,
         database_name=resolved_db,
         env_name=resolved_env,
+        explicit_config_path=resolved_config_path,
     )

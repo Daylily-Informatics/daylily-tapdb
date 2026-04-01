@@ -50,7 +50,7 @@ def _update_config_file(
 ) -> None:
     """Update TAPDB config file with Aurora endpoint info.
 
-    Honors TAPDB_CONFIG_PATH override and TAPDB_DATABASE_NAME scoping.
+    Uses the active explicit TapDB config path / namespace context.
     """
     from daylily_tapdb.cli.db_config import get_config_paths
 

@@ -32,7 +32,7 @@ class _TestDispatcher(m.ActionDispatcher):
 def _instance_with_action(action_key: str = "ok") -> SimpleNamespace:
     return SimpleNamespace(
         uid=101,
-        euid="GX-101",
+        euid="TGX-101",
         json_addl={
             "action_groups": {
                 "core_actions": {
@@ -227,7 +227,7 @@ def test_create_action_record_adds_action_instance(monkeypatch: pytest.MonkeyPat
 
     assert len(session.added) == 1
     record = session.added[0]
-    assert record.name == "ok@GX-101"
+    assert record.name == "ok@TGX-101"
     assert record.template_uid == 77
     assert record.subtype == "ok"
     assert record.json_addl["target_instance_uid"] == 101

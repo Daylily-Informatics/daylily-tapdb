@@ -8,7 +8,7 @@
       "type": "actor",
       "subtype": "generic",
       "version": "1.0",
-      "instance_prefix": "ACT",
+      "instance_prefix": "GX",
       "is_singleton": false,
       "bstatus": "active",
       "json_addl": {
@@ -35,7 +35,7 @@
       "type": "actor",
       "subtype": "system_user",
       "version": "1.0",
-      "instance_prefix": "ACT",
+      "instance_prefix": "GX",
       "is_singleton": false,
       "bstatus": "active",
       "json_addl": {

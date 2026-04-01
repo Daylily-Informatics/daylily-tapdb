@@ -65,6 +65,16 @@ def _get_project_root() -> Path:
     return Path.cwd()
 
 
+def _is_source_under_dir(source_file: str | None, directory: Path) -> bool:
+    if not source_file:
+        return False
+    try:
+        Path(source_file).resolve().relative_to(directory.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def find_config_dir() -> Path:
     """Return the canonical built-in TapDB core template config directory."""
     return find_tapdb_core_config_dir()
@@ -391,6 +401,7 @@ def validate_template_configs(
     keys_seen: dict[tuple[str, str, str, str], str] = {}
     codes: set[str] = set()
     refs: list[tuple[str, str, str]] = []
+    core_config_dir = find_tapdb_core_config_dir().resolve()
 
     def _validate_ref_container(
         container: Any, *, source_file: str | None, template_code: str
@@ -522,7 +533,7 @@ def validate_template_configs(
         instance_prefix = str(template.get("instance_prefix") or "").strip()
         if instance_prefix:
             try:
-                _normalize_instance_prefix(instance_prefix)
+                normalized_instance_prefix = _normalize_instance_prefix(instance_prefix)
             except ValueError as exc:
                 issues.append(
                     ConfigIssue(
@@ -532,6 +543,33 @@ def validate_template_configs(
                         message=str(exc),
                     )
                 )
+                normalized_instance_prefix = ""
+            if normalized_instance_prefix:
+                is_core_template = _is_source_under_dir(source_file, core_config_dir)
+                if is_core_template and normalized_instance_prefix != "GX":
+                    issues.append(
+                        ConfigIssue(
+                            level="error",
+                            source_file=source_file,
+                            template_code=code,
+                            message=(
+                                "TapDB bundled core templates must use placeholder "
+                                "instance_prefix 'GX'."
+                            ),
+                        )
+                    )
+                if not is_core_template and normalized_instance_prefix in {"GX", "TGX"}:
+                    issues.append(
+                        ConfigIssue(
+                            level="error",
+                            source_file=source_file,
+                            template_code=code,
+                            message=(
+                                f"Client templates cannot persist reserved "
+                                f"TapDB core instance_prefix {normalized_instance_prefix!r}."
+                            ),
+                        )
+                    )
 
         _validate_ref_container(template, source_file=source_file, template_code=code)
         if isinstance(template.get("json_addl"), dict):
@@ -655,17 +693,57 @@ def _upsert_template(
     return "skipped", existing
 
 
+def _prepare_seed_templates(
+    templates: list[dict[str, Any]],
+    *,
+    core_config_dir: Path,
+    core_instance_prefix: str,
+) -> list[dict[str, Any]]:
+    prepared: list[dict[str, Any]] = []
+    normalized_core_prefix = _normalize_instance_prefix(core_instance_prefix)
+
+    for template in templates:
+        source_file = str(template.get("_source_file") or "") or None
+        item = dict(template)
+        instance_prefix = str(item.get("instance_prefix") or "").strip().upper()
+        is_core_template = _is_source_under_dir(source_file, core_config_dir)
+
+        if is_core_template:
+            if instance_prefix != "GX":
+                raise ValueError(
+                    f"TapDB bundled core template {_template_code(item)!r} must "
+                    "use placeholder instance_prefix 'GX'."
+                )
+            item["instance_prefix"] = normalized_core_prefix
+        elif instance_prefix in {"GX", "TGX"}:
+            raise ValueError(
+                f"Client template {_template_code(item)!r} cannot persist reserved "
+                f"TapDB core instance_prefix {instance_prefix!r}."
+            )
+
+        prepared.append(item)
+
+    return prepared
+
+
 def seed_templates(
     session: Session,
     templates: list[dict[str, Any]],
     *,
     overwrite: bool,
+    core_config_dir: Path,
+    core_instance_prefix: str,
 ) -> SeedSummary:
     """Seed validated template definitions into a TapDB session."""
+    prepared_templates = _prepare_seed_templates(
+        templates,
+        core_config_dir=core_config_dir,
+        core_instance_prefix=core_instance_prefix,
+    )
     prefixes = sorted(
         {
             str(template.get("instance_prefix") or "").strip().upper()
-            for template in templates
+            for template in prepared_templates
             if str(template.get("instance_prefix") or "").strip()
         }
     )
@@ -678,7 +756,7 @@ def seed_templates(
         for prefix in prefixes:
             ensure_instance_prefix_sequence(session, prefix)
 
-        for template in templates:
+        for template in prepared_templates:
             outcome, _ = _upsert_template(session, template, overwrite=overwrite)
             if outcome == "inserted":
                 inserted += 1
@@ -688,7 +766,7 @@ def seed_templates(
                 skipped += 1
 
     return SeedSummary(
-        templates_loaded=len(templates),
+        templates_loaded=len(prepared_templates),
         inserted=inserted,
         updated=updated,
         skipped=skipped,

@@ -167,14 +167,14 @@ class SchemaDriftReport:
 
 
 def load_expected_schema_inventory(
-    schema_paths: Sequence[Path], *, audit_sequence_name: str
+    schema_paths: Sequence[Path], *, dynamic_sequence_name: str
 ) -> TapdbSchemaInventory:
     """Build expected TAPDB inventory from canonical schema assets."""
 
     inventory = TapdbSchemaInventory(schema_name=None)
     for path in schema_paths:
         _parse_schema_file(path, inventory)
-    inventory.add_sequence(audit_sequence_name)
+    inventory.add_sequence(dynamic_sequence_name)
     return inventory
 
 
@@ -403,12 +403,12 @@ def schema_asset_files(schema_root: Path) -> list[Path]:
 
 
 def build_expected_schema_inventory(
-    schema_paths: Sequence[Path], *, audit_sequence_name: str
+    schema_paths: Sequence[Path], *, dynamic_sequence_name: str
 ) -> TapdbSchemaInventory:
     """Compatibility wrapper for expected inventory construction."""
     return load_expected_schema_inventory(
         schema_paths,
-        audit_sequence_name=audit_sequence_name,
+        dynamic_sequence_name=dynamic_sequence_name,
     )
 
 
@@ -486,6 +486,7 @@ def _should_flag_unexpected_sequence(sequence_name: str) -> bool:
     return normalized.endswith("_audit_seq") or normalized in {
         "generic_template_seq",
         "generic_instance_lineage_seq",
+        "tgx_core_seq",
     }
 
 

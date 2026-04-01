@@ -16,13 +16,15 @@ from pathlib import Path
 import pytest
 
 from daylily_tapdb.aurora.config import AuroraConfig
+from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 
 
 @pytest.fixture(autouse=True)
 def _reset_namespace_env(monkeypatch):
     monkeypatch.setenv("TAPDB_STRICT_NAMESPACE", "0")
-    monkeypatch.setenv("TAPDB_CLIENT_ID", "clientx")
-    monkeypatch.setenv("TAPDB_DATABASE_NAME", "dbx")
+    clear_cli_context()
+    yield
+    clear_cli_context()
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +115,7 @@ def _yaml_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
           config_version: 2
           client_id: clientx
           database_name: dbx
+          euid_client_code: C
         environments:
           dev:
             host: localhost
@@ -121,6 +124,7 @@ def _yaml_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             user: daylily
             password: ""
             database: tapdb_dev
+            audit_log_euid_prefix: CGX
           aurora_dev:
             engine_type: aurora
             host: my-cluster.us-west-2.rds.amazonaws.com
@@ -128,13 +132,14 @@ def _yaml_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             user: tapdb_admin
             password: ""
             database: tapdb_dev
+            audit_log_euid_prefix: CGX
             region: us-west-2
             cluster_identifier: my-cluster
             iam_auth: true
             ssl: true
         """)
     )
-    monkeypatch.setenv("TAPDB_CONFIG_PATH", str(cfg_file))
+    set_cli_context(config_path=cfg_file)
     return cfg_file
 
 
@@ -195,6 +200,7 @@ class TestGetDbConfigEngineType:
               config_version: 2
               client_id: clientx
               database_name: dbx
+              euid_client_code: C
             environments:
               dev:
                 host: localhost
@@ -203,24 +209,16 @@ class TestGetDbConfigEngineType:
                 user: daylily
                 password: ""
                 database: tapdb_dev
+                audit_log_euid_prefix: CGX
             """)
         )
         monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("TAPDB_CONFIG_PATH", str(cfg_file))
-        monkeypatch.setenv("TAPDB_CLIENT_ID", "clientx")
-        monkeypatch.setenv("TAPDB_DATABASE_NAME", "dbx")
+        set_cli_context(config_path=cfg_file)
 
         cfg = get_db_config_for_env("dev")
 
         assert cfg["unix_socket_dir"] == str(
-            tmp_path
-            / ".config"
-            / "tapdb"
-            / "clientx"
-            / "dbx"
-            / "dev"
-            / "postgres"
-            / "run"
+            cfg_file.parent / "dev" / "postgres" / "run"
         )
 
     def test_local_env_unix_socket_dir_env_override(
@@ -235,6 +233,7 @@ class TestGetDbConfigEngineType:
               config_version: 2
               client_id: clientx
               database_name: dbx
+              euid_client_code: C
             environments:
               dev:
                 host: localhost
@@ -244,14 +243,14 @@ class TestGetDbConfigEngineType:
                 password: ""
                 database: tapdb_dev
                 unix_socket_dir: /tmp/from-config
+                audit_log_euid_prefix: CGX
             """)
         )
-        monkeypatch.setenv("TAPDB_CONFIG_PATH", str(cfg_file))
-        monkeypatch.setenv("TAPDB_DEV_UNIX_SOCKET_DIR", "/tmp/from-env")
+        set_cli_context(config_path=cfg_file)
 
         cfg = get_db_config_for_env("dev")
 
-        assert cfg["unix_socket_dir"] == "/tmp/from-env"
+        assert cfg["unix_socket_dir"] == "/tmp/from-config"
 
     @pytest.mark.usefixtures("_yaml_config")
     def test_aurora_env_does_not_expose_unix_socket_dir(self):
@@ -265,11 +264,9 @@ class TestConfigPathScoping:
     def test_database_name_scoped_paths(self, monkeypatch: pytest.MonkeyPatch):
         from daylily_tapdb.cli.db_config import get_config_paths
 
-        monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
-        monkeypatch.setenv("TAPDB_CLIENT_ID", "clientx")
-        monkeypatch.setenv("TAPDB_DATABASE_NAME", "atlas")
+        set_cli_context(client_id="clientx", database_name="atlas")
 
-        paths = get_config_paths()
+        paths = get_config_paths(allow_namespace_fallback=True)
         assert paths == [
             Path.home()
             / ".config"
@@ -285,9 +282,5 @@ class TestConfigPathScoping:
         from daylily_tapdb.cli.db_config import get_config_paths
 
         override = tmp_path / "custom.yaml"
-        monkeypatch.setenv("TAPDB_CLIENT_ID", "clientx")
-        monkeypatch.setenv("TAPDB_DATABASE_NAME", "atlas")
-        monkeypatch.setenv("TAPDB_CONFIG_PATH", str(override))
-
-        paths = get_config_paths()
+        paths = get_config_paths(config_path=override)
         assert paths == [override]

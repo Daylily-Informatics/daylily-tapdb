@@ -34,7 +34,11 @@ REQUIRED_COGNITO_CLIENT_NAME = "tapdb"
 
 
 def _ui_pid_file_for_env(env: Environment) -> Path:
-    ctx = resolve_context(require_keys=True, env_name=env.value)
+    ctx = resolve_context(
+        require_keys=True,
+        env_name=env.value,
+        allow_namespace_fallback=True,
+    )
     return ctx.ui_dir(env.value) / "ui.pid"
 
 
@@ -99,10 +103,6 @@ def _resolve_expected_ui_port(env: Environment) -> tuple[int, str]:
     configured = (cfg.get("ui_port") or "").strip()
     if configured.isdigit():
         return int(configured), f"config environments.{env.value}.ui_port"
-
-    explicit = (os.environ.get("TAPDB_UI_PORT") or "").strip()
-    if explicit.isdigit():
-        return int(explicit), "TAPDB_UI_PORT"
 
     running_port, source = _detect_running_ui_port(env)
     if running_port is not None:

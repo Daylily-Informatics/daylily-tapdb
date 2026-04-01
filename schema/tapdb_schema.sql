@@ -6,12 +6,6 @@
 -- SEQUENCES
 --------------------------------------------------------------------------------
 
--- Core sequences (always required)
-CREATE SEQUENCE IF NOT EXISTS generic_template_seq;
--- GX is the default instance prefix
-CREATE SEQUENCE IF NOT EXISTS gx_instance_seq;
-CREATE SEQUENCE IF NOT EXISTS generic_instance_lineage_seq;
-
 -- Optional library sequences
 CREATE SEQUENCE IF NOT EXISTS wx_instance_seq;   -- WX (workflow)
 CREATE SEQUENCE IF NOT EXISTS wsx_instance_seq;  -- WSX (workflow_step)
@@ -28,15 +22,6 @@ CREATE TABLE IF NOT EXISTS tapdb_identity_prefix_config (
     prefix TEXT NOT NULL,
     updated_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
--- Default identity prefixes required by triggers.
---
--- audit_log EUID generation is config-driven (see set_audit_log_euid()).
--- Ensure a sane default exists for fresh installs/tests; operators may override
--- this by updating tapdb_identity_prefix_config as needed.
-INSERT INTO tapdb_identity_prefix_config (entity, prefix)
-VALUES ('audit_log', 'AD')
-ON CONFLICT (entity) DO NOTHING;
 
 -- generic_template: Blueprint definitions
 CREATE TABLE IF NOT EXISTS generic_template (
@@ -535,7 +520,15 @@ BEGIN
             entity_name;
     END IF;
 
-    RETURN tapdb_validate_meridian_prefix(prefix);
+    prefix := tapdb_validate_meridian_prefix(prefix);
+    IF prefix IN ('GX', 'TGX') THEN
+        RAISE EXCEPTION
+            'Identity entity "%" is configured with unresolved/reserved prefix "%"',
+            entity_name,
+            prefix;
+    END IF;
+
+    RETURN prefix;
 END;
 $$;
 
@@ -546,10 +539,18 @@ DECLARE
     prefix TEXT;
     sandbox_prefix TEXT;
     seq_val BIGINT;
+    seq_name TEXT;
 BEGIN
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
-        prefix := 'GT';
-        seq_val := nextval('generic_template_seq');
+        prefix := tapdb_get_identity_prefix('generic_template');
+        seq_name := lower(prefix) || '_instance_seq';
+        BEGIN
+            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+        EXCEPTION WHEN undefined_table OR undefined_object THEN
+            RAISE EXCEPTION
+                'Missing EUID sequence % for prefix %. Create and initialize it before inserting rows.',
+                seq_name, prefix;
+        END;
         NEW.euid_prefix := prefix;
         NEW.euid_seq := seq_val;
         NEW.euid := meridian_generate_euid(prefix, seq_val);
@@ -582,13 +583,17 @@ BEGIN
         -- Get prefix from template
         SELECT instance_prefix INTO prefix FROM generic_template WHERE uid = NEW.template_uid;
 
-        -- Default prefix if template not found or no prefix set
         IF prefix IS NULL THEN
-            prefix := 'GX';
+            RAISE EXCEPTION
+                'Missing template instance_prefix for template_uid % while inserting generic_instance',
+                NEW.template_uid;
         END IF;
         prefix := tapdb_validate_meridian_prefix(prefix);
-
-        -- Dynamic sequence resolution (allows new prefixes without trigger changes)
+        IF prefix IN ('GX', 'TGX') THEN
+            RAISE EXCEPTION
+                'Unresolved/reserved instance_prefix % cannot be persisted in generic_instance',
+                prefix;
+        END IF;
         seq_name := lower(prefix) || '_instance_seq';
 
         BEGIN
@@ -625,10 +630,18 @@ DECLARE
     prefix TEXT;
     sandbox_prefix TEXT;
     seq_val BIGINT;
+    seq_name TEXT;
 BEGIN
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
-        prefix := 'GN';
-        seq_val := nextval('generic_instance_lineage_seq');
+        prefix := tapdb_get_identity_prefix('generic_instance_lineage');
+        seq_name := lower(prefix) || '_instance_seq';
+        BEGIN
+            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+        EXCEPTION WHEN undefined_table OR undefined_object THEN
+            RAISE EXCEPTION
+                'Missing EUID sequence % for prefix %. Create and initialize it before inserting rows.',
+                seq_name, prefix;
+        END;
         NEW.euid_prefix := prefix;
         NEW.euid_seq := seq_val;
         NEW.euid := meridian_generate_euid(prefix, seq_val);
@@ -659,9 +672,14 @@ DECLARE
 BEGIN
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('audit_log');
-        seq_name := lower(prefix) || '_audit_seq';
-        EXECUTE format('CREATE SEQUENCE IF NOT EXISTS %I', seq_name);
-        EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+        seq_name := lower(prefix) || '_instance_seq';
+        BEGIN
+            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+        EXCEPTION WHEN undefined_table OR undefined_object THEN
+            RAISE EXCEPTION
+                'Missing EUID sequence % for prefix %. Create and initialize it before inserting rows.',
+                seq_name, prefix;
+        END;
 
         NEW.euid_prefix := prefix;
         NEW.euid_seq := seq_val;

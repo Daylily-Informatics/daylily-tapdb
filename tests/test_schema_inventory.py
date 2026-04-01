@@ -26,14 +26,14 @@ def _repo_schema_root() -> Path:
 def test_build_expected_schema_inventory_parses_repo_assets():
     inventory = build_expected_schema_inventory(
         schema_asset_files(_repo_schema_root()),
-        audit_sequence_name="AD_AUDIT_SEQ",
+        dynamic_sequence_name="AGX_INSTANCE_SEQ",
     )
 
     assert "generic_template" in inventory.tables
     assert "outbox_event" in inventory.tables
     assert "_tapdb_migrations" in inventory.tables
     assert "tenant_id" in inventory.columns["audit_log"]
-    assert "ad_audit_seq" in inventory.sequences
+    assert "agx_instance_seq" in inventory.sequences
     assert "record_insert()" in inventory.functions
     assert "set_audit_log_euid()" in inventory.functions
     assert "audit_update_generic_instance" in inventory.triggers["generic_instance"]
@@ -45,8 +45,7 @@ def test_diff_schema_inventory_strict_mode_flags_only_tapdb_owned_extras():
     expected.add_table("generic_template")
     expected.add_column("generic_template", "uid")
     expected.add_column("generic_template", "name")
-    expected.add_sequence("gx_instance_seq")
-    expected.add_sequence("ad_audit_seq")
+    expected.add_sequence("agx_instance_seq")
     expected.add_function("tapdb_get_identity_prefix(entity_name text)")
     expected.add_trigger("generic_template", "audit_insert_generic_template")
     expected.add_index("generic_template", "idx_generic_template_type")
@@ -55,7 +54,6 @@ def test_diff_schema_inventory_strict_mode_flags_only_tapdb_owned_extras():
     live.add_table("generic_template")
     live.add_column("generic_template", "uid")
     live.add_column("generic_template", "extra_col")
-    live.add_sequence("gx_instance_seq")
     live.add_sequence("zz_instance_seq")
     live.add_sequence("qa_audit_seq")
     live.add_function("tapdb_get_identity_prefix(entity_name text)")
@@ -77,7 +75,7 @@ def test_diff_schema_inventory_strict_mode_flags_only_tapdb_owned_extras():
     )
     assert non_strict.has_drift is True
     assert "generic_template.name" in non_strict.missing["columns"]
-    assert "ad_audit_seq" in non_strict.missing["sequences"]
+    assert "agx_instance_seq" in non_strict.missing["sequences"]
     assert all(not values for values in non_strict.unexpected.values())
 
     strict = diff_schema_inventory(
@@ -110,11 +108,11 @@ def test_live_inventory_and_diff_against_real_postgres():
     engine = create_engine(dsn)
     try:
         with engine.begin() as conn:
-            conn.execute(text(f'CREATE SEQUENCE IF NOT EXISTS "{schema_name}"."ad_audit_seq"'))
+            conn.execute(text(f'CREATE SEQUENCE IF NOT EXISTS "{schema_name}"."agx_instance_seq"'))
 
         expected = build_expected_schema_inventory(
             schema_asset_files(schema_root),
-            audit_sequence_name="ad_audit_seq",
+            dynamic_sequence_name="agx_instance_seq",
         )
 
         with Session(engine) as session:

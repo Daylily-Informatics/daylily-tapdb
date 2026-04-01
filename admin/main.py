@@ -68,6 +68,7 @@ from admin.external_graph import (
     resolve_external_graph_refs,
 )
 from daylily_tapdb import InstanceFactory, TemplateManager, __version__
+from daylily_tapdb.cli.context import active_env_name
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
 from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.instance import generic_instance
@@ -89,7 +90,11 @@ templates = Environment(
     autoescape=select_autoescape(["html", "htm", "xml"]),
 )
 
-APP_ENV = os.environ.get("TAPDB_ENV", "dev").lower()
+def _active_tapdb_env() -> str:
+    return active_env_name("dev").lower()
+
+
+APP_ENV = _active_tapdb_env()
 IS_PROD = APP_ENV == "prod"
 DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
 DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/daylily-tapdb"
@@ -298,16 +303,9 @@ def get_db():
     """Get database connection.
 
     Uses the canonical config loader from daylily_tapdb.cli.db_config.
-    Respects TAPDB_ENV environment variable (dev/test/prod).
-    Defaults to 'dev' environment.
-
-    Config resolution order (highest precedence first):
-    1. TAPDB_<ENV>_* environment variables
-    2. PG* environment variables
-    3. ~/.config/tapdb/tapdb-config.yaml or ./config/tapdb-config.yaml
-    4. Hard-coded defaults
+    The active env comes from explicit TapDB CLI/app context and defaults to 'dev'.
     """
-    env = os.environ.get("TAPDB_ENV", "dev").lower()
+    env = _active_tapdb_env()
     return get_db_connection(env)
 
 
@@ -344,7 +342,7 @@ templates.globals["is_reserved_template"] = _is_reserved_template
 
 def load_db_metrics_context(*, limit: int = 5000) -> dict:
     """Load DB metrics data for the admin metrics page (test-friendly wrapper)."""
-    env = os.environ.get("TAPDB_ENV", "dev").lower()
+    env = _active_tapdb_env()
     return build_metrics_page_context(env, limit=limit)
 
 
@@ -808,7 +806,7 @@ async def oauth_login(
     if user:
         return RedirectResponse(tapdb_url(request, "/"), status_code=302)
 
-    env_name = os.environ.get("TAPDB_ENV", "dev").lower()
+    env_name = _active_tapdb_env()
     try:
         runtime = _resolve_cognito_oauth_runtime(env_name)
     except Exception as exc:
@@ -847,7 +845,7 @@ async def oauth_callback(
     error_description: Optional[str] = None,
 ):
     """Handle Cognito Hosted UI OAuth callback."""
-    env_name = os.environ.get("TAPDB_ENV", "dev").lower()
+    env_name = _active_tapdb_env()
     if error:
         details = error_description or error
         content = templates.get_template("login.html").render(
@@ -1336,7 +1334,7 @@ async def info_page(request: Request):
     """Runtime info page with DB and Cognito connection details."""
     user = request.state.user
     permissions = get_user_permissions(user)
-    env = os.environ.get("TAPDB_ENV", "dev").lower()
+    env = _active_tapdb_env()
     cfg = get_db_config_for_env(env)
     is_admin = str(user.get("role") or "").strip().lower() == "admin"
 

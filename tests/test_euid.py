@@ -26,33 +26,32 @@ class TestEUIDConfig:
 
     def test_core_prefixes(self, euid_config):
         """Test that core prefixes are present."""
-        assert "GT" in euid_config.CORE_PREFIXES
-        assert "GX" in euid_config.CORE_PREFIXES
-        assert "GN" in euid_config.CORE_PREFIXES
+        assert euid_config.CORE_PREFIXES["generic_template"] == "GX"
+        assert euid_config.CORE_PREFIXES["generic_instance"] == "GX"
+        assert euid_config.CORE_PREFIXES["generic_instance_lineage"] == "GX"
 
     def test_optional_prefixes(self, euid_config):
         """Test that optional prefixes are present."""
-        assert "WX" in euid_config.OPTIONAL_PREFIXES
-        assert "WSX" in euid_config.OPTIONAL_PREFIXES
-        assert "XX" in euid_config.OPTIONAL_PREFIXES
+        assert euid_config.OPTIONAL_PREFIXES["workflow_instance"] == "WX"
+        assert euid_config.OPTIONAL_PREFIXES["workflow_step_instance"] == "WSX"
+        assert euid_config.OPTIONAL_PREFIXES["action_instance"] == "XX"
 
     def test_get_discriminator_for_prefix(self, euid_config):
         """Test looking up canonical discriminator from a canonical prefix."""
-        assert euid_config.get_discriminator_for_prefix("GT") == "generic_template"
-        assert euid_config.get_discriminator_for_prefix("GX") == "generic_instance"
+        assert euid_config.get_discriminator_for_prefix("GX") is None
         assert euid_config.get_discriminator_for_prefix("WX") == "workflow_instance"
         assert euid_config.get_discriminator_for_prefix("ZZ") is None
 
     def test_get_all_prefixes(self, euid_config):
         """Test getting all canonical prefixes."""
         all_prefixes = euid_config.get_all_prefixes()
-        assert "GT" in all_prefixes
-        assert "WX" in all_prefixes
-        assert "XX" in all_prefixes
+        assert all_prefixes["generic_template"] == "GX"
+        assert all_prefixes["workflow_instance"] == "WX"
+        assert all_prefixes["action_instance"] == "XX"
 
     def test_is_canonical_prefix(self, euid_config):
         """Only TapDB-managed prefixes are reported as canonical."""
-        assert euid_config.is_canonical_prefix("GT") is True
+        assert euid_config.is_canonical_prefix("GX") is True
         assert euid_config.is_canonical_prefix("XX") is True
         assert euid_config.is_canonical_prefix("CX") is False
 
@@ -144,7 +143,7 @@ class TestFormatEuid:
         assert euid == "TX-1C"
 
     def test_format_has_delimiter(self):
-        euid = format_euid("GX", 42)
+        euid = format_euid("AGX", 42)
         assert "-" in euid
 
     def test_format_sandbox(self):

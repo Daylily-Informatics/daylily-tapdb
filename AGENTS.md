@@ -56,13 +56,17 @@ source ./activate
 Always use `tapdb` CLI commands for database operations. Never run raw SQL or shell scripts.
 
 ```bash
-tapdb bootstrap local          # Full local setup
-tapdb db schema apply <env>    # Apply schema
-tapdb db schema migrate <env>  # Run migrations
-tapdb db data seed <env>       # Seed templates
+tapdb --config <path> --env <name> bootstrap local         # Full local setup
+tapdb --config <path> --env <name> db schema apply <env>   # Apply schema
+tapdb --config <path> --env <name> db schema migrate <env> # Run migrations
+tapdb --config <path> --env <name> db data seed <env>      # Seed templates
 ```
 
-Required env vars: `TAPDB_CLIENT_ID`, `TAPDB_DATABASE_NAME`, `TAPDB_ENV`.
+Use explicit TapDB context for runtime commands:
+
+```bash
+tapdb --config <path> --env <name> ...
+```
 
 ## No Circumvention Policy
 
@@ -94,11 +98,11 @@ python -m pytest tests/test_models.py -q
 ## Configuration
 
 DB config resolution order (highest precedence first):
-1. `TAPDB_<ENV>_*` environment variables
-2. `PG*` environment variables
-3. `~/.config/tapdb/<client>/<database>/tapdb-config.yaml`
-4. `./config/tapdb-config.yaml` (repo-local fallback)
-5. Hard-coded defaults
+1. explicit `--config`
+2. config metadata from the selected config file
+3. explicit namespace keys only for config creation/migration flows
+
+Ambient `TAPDB_*` and `PG*` values are not authoritative runtime inputs for the managed TapDB flow.
 
 ## Schema Changes
 

@@ -5,13 +5,14 @@ A reusable library for building template-driven database applications
 with PostgreSQL and SQLAlchemy.
 
 Example:
-    import os
     from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory
     from daylily_tapdb.cli.db_config import get_db_config_for_env
 
-    # Connect using canonical config loader (recommended)
-    env = os.environ.get("TAPDB_ENV", "dev")
-    cfg = get_db_config_for_env(env)
+    # Connect using an explicit TapDB config + env (recommended)
+    cfg = get_db_config_for_env(
+        "dev",
+        config_path="~/.config/tapdb/tapdb/tapdb/tapdb-config.yaml",
+    )
     db = TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_user=cfg["user"],
