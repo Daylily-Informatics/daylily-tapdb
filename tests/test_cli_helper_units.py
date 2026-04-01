@@ -6,16 +6,18 @@ from types import SimpleNamespace
 
 import pytest
 
+from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 import daylily_tapdb.cli.db as db_mod
 import daylily_tapdb.cli.pg as pg_mod
 import daylily_tapdb.cli.user as user_mod
+from daylily_tapdb.euid import normalize_euid_client_code, resolve_client_scoped_core_prefix
 
 
 def test_normalize_meridian_prefix_accepts_valid_uppercases():
     assert db_mod._normalize_meridian_prefix("ab", "audit_log_euid_prefix") == "AB"
 
 
-@pytest.mark.parametrize("value", ["", "   ", "GT", "I0", "A1", "ABCD"])
+@pytest.mark.parametrize("value", ["", "   ", "GX", "TGX", "I0", "A1", "ABCD"])
 def test_normalize_meridian_prefix_rejects_invalid_values(value: str):
     with pytest.raises(ValueError):
         db_mod._normalize_meridian_prefix(value, "audit_log_euid_prefix")
@@ -25,15 +27,32 @@ def test_required_identity_prefixes_reads_and_validates_config(monkeypatch):
     monkeypatch.setattr(
         db_mod,
         "_get_db_config",
-        lambda _env: {"audit_log_euid_prefix": "bcd"},
+        lambda _env: {
+            "core_euid_prefix": "bcd",
+            "audit_log_euid_prefix": "bcd",
+        },
     )
-    assert db_mod._required_identity_prefixes(db_mod.Environment.dev) == "BCD"
+    assert db_mod._required_identity_prefixes(db_mod.Environment.dev) == {
+        "generic_template": "BCD",
+        "generic_instance": "BCD",
+        "generic_instance_lineage": "BCD",
+        "audit_log": "BCD",
+    }
 
 
 def test_sync_identity_prefix_config_runs_expected_sql(monkeypatch):
     captured: dict[str, str] = {}
 
-    monkeypatch.setattr(db_mod, "_required_identity_prefixes", lambda _env: "BCD")
+    monkeypatch.setattr(
+        db_mod,
+        "_required_identity_prefixes",
+        lambda _env: {
+            "generic_template": "BCD",
+            "generic_instance": "BCD",
+            "generic_instance_lineage": "BCD",
+            "audit_log": "BCD",
+        },
+    )
 
     def _fake_run_psql(_env, sql=None, file=None, database=None):
         _ = (file, database)
@@ -46,12 +65,24 @@ def test_sync_identity_prefix_config_runs_expected_sql(monkeypatch):
 
     sql = captured["sql"]
     assert "tapdb_identity_prefix_config" in sql
-    assert "VALUES ('audit_log', 'BCD')" in sql
-    assert 'CREATE SEQUENCE IF NOT EXISTS "bcd_audit_seq"' in sql
+    assert "('generic_template', 'BCD')" in sql
+    assert "('generic_instance', 'BCD')" in sql
+    assert "('generic_instance_lineage', 'BCD')" in sql
+    assert "('audit_log', 'BCD')" in sql
+    assert 'CREATE SEQUENCE IF NOT EXISTS "bcd_instance_seq"' in sql
 
 
 def test_sync_identity_prefix_config_raises_on_psql_failure(monkeypatch):
-    monkeypatch.setattr(db_mod, "_required_identity_prefixes", lambda _env: "BCD")
+    monkeypatch.setattr(
+        db_mod,
+        "_required_identity_prefixes",
+        lambda _env: {
+            "generic_template": "BCD",
+            "generic_instance": "BCD",
+            "generic_instance_lineage": "BCD",
+            "audit_log": "BCD",
+        },
+    )
     monkeypatch.setattr(
         db_mod,
         "_run_psql",
@@ -59,6 +90,13 @@ def test_sync_identity_prefix_config_raises_on_psql_failure(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="Failed to sync identity prefix config"):
         db_mod._sync_identity_prefix_config(db_mod.Environment.dev)
+
+
+def test_euid_client_code_helpers():
+    assert normalize_euid_client_code("a") == "A"
+    assert resolve_client_scoped_core_prefix("b") == "BGX"
+    with pytest.raises(ValueError):
+        normalize_euid_client_code("T")
 
 
 def test_get_connection_string_aurora_and_local(monkeypatch):
@@ -182,13 +220,18 @@ def test_pg_port_conflict_details_fallback_on_exception(monkeypatch):
 
 def test_pg_active_env_defaults_and_invalid(monkeypatch):
     monkeypatch.delenv("TAPDB_ENV", raising=False)
+    clear_cli_context()
     assert pg_mod._active_env() == db_mod.Environment.dev
 
     monkeypatch.setenv("TAPDB_ENV", "bogus")
     assert pg_mod._active_env() == db_mod.Environment.dev
 
     monkeypatch.setenv("TAPDB_ENV", "TEST")
+    assert pg_mod._active_env() == db_mod.Environment.dev
+
+    set_cli_context(env_name="TEST")
     assert pg_mod._active_env() == db_mod.Environment.test
+    clear_cli_context()
 
 
 def test_user_open_connection_maps_config(monkeypatch):

@@ -13,7 +13,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from daylily_tapdb.cli.context import resolve_context
+from daylily_tapdb.cli.context import active_env_name, resolve_context
 from daylily_tapdb.cli.db import Environment
 from daylily_tapdb.cli.db_config import get_db_config_for_env
 
@@ -31,14 +31,22 @@ def _get_postgres_data_dir(env: "Environment") -> Path:
     if env.value == "prod":
         # Production uses system default
         return Path(os.environ.get("PGDATA", "/var/lib/postgresql/data"))
-    ctx = resolve_context(require_keys=True, env_name=env.value)
+    ctx = resolve_context(
+        require_keys=True,
+        env_name=env.value,
+        allow_namespace_fallback=True,
+    )
     return ctx.postgres_dir(env.value) / "data"
 
 
 def _get_postgres_log_file(env: "Environment") -> Path:
     if env.value == "prod":
         return Path("/var/log/postgresql/postgresql.log")
-    ctx = resolve_context(require_keys=True, env_name=env.value)
+    ctx = resolve_context(
+        require_keys=True,
+        env_name=env.value,
+        allow_namespace_fallback=True,
+    )
     return ctx.postgres_dir(env.value) / "postgresql.log"
 
 
@@ -49,14 +57,22 @@ def _get_postgres_socket_dir(env: "Environment") -> Path:
     configured = str(cfg.get("unix_socket_dir") or "").strip()
     if configured:
         return Path(configured).expanduser()
-    ctx = resolve_context(require_keys=True, env_name=env.value)
+    ctx = resolve_context(
+        require_keys=True,
+        env_name=env.value,
+        allow_namespace_fallback=True,
+    )
     return ctx.postgres_socket_dir(env.value)
 
 
 def _get_instance_lock_file(env: "Environment") -> Path:
     if env.value == "prod":
         return Path(tempfile.gettempdir()) / "tapdb-prod-instance.lock"
-    ctx = resolve_context(require_keys=True, env_name=env.value)
+    ctx = resolve_context(
+        require_keys=True,
+        env_name=env.value,
+        allow_namespace_fallback=True,
+    )
     return ctx.lock_dir(env.value) / "instance.lock"
 
 
@@ -102,7 +118,7 @@ def _is_port_available(port: int) -> bool:
 
 
 def _active_env() -> Environment:
-    raw = (os.environ.get("TAPDB_ENV") or "dev").strip().lower()
+    raw = active_env_name("dev").strip()
     try:
         return Environment(raw)
     except ValueError:
@@ -115,7 +131,8 @@ def _get_pg_service_cmd() -> tuple[str, list[str], list[str], Path]:
 
     This is intended for production environments where PostgreSQL is managed as a
     system service (e.g., systemd on Linux). Local dev/test should use the
-    data-dir based commands: `tapdb pg init` + `tapdb pg start-local`.
+    data-dir based commands: `tapdb --config <path> --env <name> pg init`
+    + `tapdb --config <path> --env <name> pg start-local`.
 
     Returns: (method, start_cmd, stop_cmd, log_path)
     """
@@ -182,7 +199,8 @@ def _is_pg_running() -> tuple[bool, str]:
 def pg_start():
     """Start system PostgreSQL service (production only).
 
-    For local development, prefer: tapdb pg start-local <env>
+    For local development, prefer:
+    tapdb --config <path> --env <name> pg start-local <env>
     """
     running, details = _is_pg_running()
     if running:
@@ -199,7 +217,9 @@ def pg_start():
         console.print(
             "  [cyan]tapdb pg init dev[/cyan]         # Initialize data directory"
         )
-        console.print("  [cyan]tapdb pg start-local dev[/cyan]  # Start local instance")
+        console.print(
+            "  [cyan]tapdb --config <path> --env dev pg start-local dev[/cyan]  # Start local instance"
+        )
         console.print("")
         console.print(
             "[dim]Install PostgreSQL so initdb/pg_ctl"
@@ -325,10 +345,17 @@ def pg_status():
         console.print("[green]●[/green] Local PostgreSQL is [green]running[/green]")
     else:
         console.print("[red]○[/red] Local PostgreSQL is [red]not running[/red]")
-        console.print(f"  Start with: [cyan]tapdb pg start-local {env.value}[/cyan]")
+        console.print(
+            f"  Start with: [cyan]tapdb --config <path> --env {env.value} "
+            f"pg start-local {env.value}[/cyan]"
+        )
 
     console.print("\n[bold]Local Runtime:[/bold]")
-    ctx = resolve_context(require_keys=True, env_name=env.value)
+    ctx = resolve_context(
+        require_keys=True,
+        env_name=env.value,
+        allow_namespace_fallback=True,
+    )
     console.print(f"  Namespace: {ctx.namespace_slug()}")
     console.print(f"  Host:      {host}")
     console.print(f"  Port:      {port}")
@@ -434,7 +461,8 @@ def pg_init(
     ~/.config/tapdb/<client-id>/<database-name>/<env>/postgres/data
     for development and testing. Production uses system PostgreSQL.
 
-    After init, start with: tapdb pg start-local <env>
+    After init, start with:
+    tapdb --config <path> --env <name> pg start-local <env>
     """
     if env == Environment.prod:
         console.print("[red]✗[/red] Cannot init prod environment locally")
@@ -484,10 +512,12 @@ def pg_init(
             console.print("[green]✓[/green] PostgreSQL data directory initialized")
             console.print("\n[bold]Next steps:[/bold]")
             console.print(
-                f"  [cyan]tapdb pg start-local {env.value}[/cyan]  # Start PostgreSQL"
+                f"  [cyan]tapdb --config <path> --env {env.value} "
+                f"pg start-local {env.value}[/cyan]  # Start PostgreSQL"
             )
             console.print(
-                f"  [cyan]tapdb db setup {env.value}[/cyan]"
+                f"  [cyan]tapdb --config <path> --env {env.value} "
+                f"db setup {env.value}[/cyan]"
                 "        # Create DB + schema + seed"
             )
         else:
@@ -619,12 +649,10 @@ def pg_start_local(
                 encoding="utf-8",
             )
             console.print(f"  Lock: {lock_file}")
-
-            # Set env vars hint
-            console.print("\n[bold]Set environment:[/bold]")
-            env_prefix = f"TAPDB_{env.value.upper()}_"
-            console.print(f"  export {env_prefix}HOST=localhost")
-            console.print(f"  export {env_prefix}PORT={port}")
+            console.print("\n[bold]Next step:[/bold]")
+            console.print(
+                f"  [cyan]tapdb --env {env.value} db setup {env.value}[/cyan]"
+            )
         else:
             console.print("[red]✗[/red] Failed to start PostgreSQL")
             console.print(f"  {result.stderr}")

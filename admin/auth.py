@@ -17,6 +17,7 @@ from itsdangerous import BadSignature
 
 from admin.cognito import get_cognito_auth
 from admin.db_pool import get_db_connection
+from daylily_tapdb.cli.context import active_env_name
 from daylily_tapdb.user_store import (
     create_or_get,
     get_by_login_or_email,
@@ -158,15 +159,8 @@ def _tapdb_url(request: Request, path: str) -> str:
 
 
 def get_db():
-    """Get database connection using the canonical config loader.
-
-    Config resolution order (highest precedence first):
-    1. TAPDB_<ENV>_* environment variables
-    2. PG* environment variables
-    3. ~/.config/tapdb/tapdb-config.yaml or ./config/tapdb-config.yaml
-    4. Hard-coded defaults
-    """
-    env = os.environ.get("TAPDB_ENV", "dev").lower()
+    """Get a DB connection using the active explicit TapDB env."""
+    env = active_env_name("dev").lower()
     return get_db_connection(env)
 
 

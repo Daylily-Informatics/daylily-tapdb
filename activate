@@ -225,7 +225,7 @@ printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb ui start|stop|status" "M
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb --help" "Full help"
 printf "\n"
 printf "${_tapdb_bold}Environments:${_tapdb_reset} dev | test | prod\n"
-printf "${_tapdb_bold}Quick Start:${_tapdb_reset}  export TAPDB_ENV=dev && tapdb bootstrap local\n"
+printf "${_tapdb_bold}Quick Start:${_tapdb_reset}  tapdb --env dev --config ~/.config/tapdb/tapdb/tapdb/tapdb-config.yaml bootstrap local\n"
 printf "\n"
 
 # Show UI status if running

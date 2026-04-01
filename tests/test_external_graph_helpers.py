@@ -209,7 +209,7 @@ def test_namespace_external_graph_namespaces_nodes_edges_and_bridge():
         payload,
         ref=ref,
         ref_index=2,
-        source_euid="GX-10",
+        source_euid="TGX-10",
     )
 
     nodes = out["elements"]["nodes"]
@@ -222,6 +222,6 @@ def test_namespace_external_graph_namespaces_nodes_edges_and_bridge():
     assert edges[0]["data"]["source"] == "ext::atlas::tenant-1::R-1"
     assert edges[0]["data"]["target"] == "ext::atlas::tenant-1::R-2"
     assert edges[1]["data"]["is_external_bridge"] is True
-    assert edges[1]["data"]["source"] == "GX-10"
+    assert edges[1]["data"]["source"] == "TGX-10"
     assert out["meta"]["node_count"] == 1
     assert out["meta"]["edge_count"] == 2

@@ -82,12 +82,12 @@ def test_resolve_lineage_targets_or_raise_missing_parent_and_child_raises():
 def test_new_graph_lineage_populates_required_non_null_fields():
     parent = SimpleNamespace(
         uid=101,
-        euid="ACT-P",
+        euid="TGX-P",
         polymorphic_discriminator="actor_instance",
     )
     child = SimpleNamespace(
         uid=202,
-        euid="ACT-C",
+        euid="TGX-C",
         polymorphic_discriminator="actor_instance",
     )
 
@@ -97,7 +97,7 @@ def test_new_graph_lineage_populates_required_non_null_fields():
         relationship_type="depends_on",
     )
 
-    assert lineage.name == "ACT-P->ACT-C:depends_on"
+    assert lineage.name == "TGX-P->TGX-C:depends_on"
     assert lineage.polymorphic_discriminator == "generic_instance_lineage"
     assert lineage.category == "lineage"
     assert lineage.type == "lineage"
@@ -115,12 +115,12 @@ def test_new_graph_lineage_populates_required_non_null_fields():
 def test_new_graph_lineage_defaults_blank_relationship_to_generic():
     parent = SimpleNamespace(
         uid=101,
-        euid="ACT-P",
+        euid="TGX-P",
         polymorphic_discriminator="actor_instance",
     )
     child = SimpleNamespace(
         uid=202,
-        euid="ACT-C",
+        euid="TGX-C",
         polymorphic_discriminator="actor_instance",
     )
 
@@ -131,4 +131,4 @@ def test_new_graph_lineage_defaults_blank_relationship_to_generic():
     )
 
     assert lineage.relationship_type == "generic"
-    assert lineage.name == "ACT-P->ACT-C:generic"
+    assert lineage.name == "TGX-P->TGX-C:generic"

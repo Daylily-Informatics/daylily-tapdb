@@ -41,6 +41,8 @@ DEFAULT_SANDBOX_PREFIX = "T"
 MERIDIAN_SANDBOX_PREFIX_ENV = "MERIDIAN_SANDBOX_PREFIX"
 MERIDIAN_ENVIRONMENT_ENV = "MERIDIAN_ENVIRONMENT"
 LSMC_ENV_ENV = "LSMC_ENV"
+CORE_TEMPLATE_PLACEHOLDER_PREFIX = "GX"
+_EUID_CLIENT_CODE_RE = re.compile(rf"^{_LETTERS32}$")
 
 
 def normalize_sandbox_prefix(prefix: str | None) -> str | None:
@@ -101,6 +103,27 @@ def resolve_runtime_validation_context(
     return {"environment": "production"}
 
 
+def normalize_euid_client_code(code: str | None) -> str:
+    """Normalize and validate a one-letter client code for TapDB core prefixes."""
+    normalized = str(code or "").strip().upper()
+    if not normalized:
+        raise ValueError("euid_client_code is required")
+    if not _EUID_CLIENT_CODE_RE.fullmatch(normalized):
+        raise ValueError(
+            "euid_client_code must be a single Meridian-safe letter (A-Z, excluding I/L/O/U)"
+        )
+    if normalized == DEFAULT_SANDBOX_PREFIX:
+        raise ValueError(
+            f"euid_client_code {normalized!r} is reserved for TapDB sandbox/runtime use"
+        )
+    return normalized
+
+
+def resolve_client_scoped_core_prefix(code: str | None) -> str:
+    """Return the namespace-scoped concrete TapDB core prefix for a client code."""
+    return f"{normalize_euid_client_code(code)}{CORE_TEMPLATE_PLACEHOLDER_PREFIX}"
+
+
 def crockford_base32_encode(n: int) -> str:
     """Encode a positive integer to Crockford Base32 (unpadded, no leading zeros).
 
@@ -146,7 +169,7 @@ def format_euid(prefix: str, seq_val: int, *, sandbox: str | None = None) -> str
     """Build a Meridian-conformant EUID string.
 
     Args:
-        prefix: Category prefix (e.g. "TX", "GX"). 2-3 uppercase Crockford letters.
+        prefix: Category prefix (e.g. "TX", "AGX"). 2-3 uppercase Crockford letters.
         seq_val: Positive integer from the sequence.
         sandbox: Optional single-letter sandbox prefix.
 
@@ -215,17 +238,17 @@ def validate_euid(
 
 _CANONICAL_CORE_PREFIXES = MappingProxyType(
     {
-        "GT": "generic_template",
-        "GX": "generic_instance",
-        "GN": "generic_instance_lineage",
+        "generic_template": CORE_TEMPLATE_PLACEHOLDER_PREFIX,
+        "generic_instance": CORE_TEMPLATE_PLACEHOLDER_PREFIX,
+        "generic_instance_lineage": CORE_TEMPLATE_PLACEHOLDER_PREFIX,
     }
 )
 
 _CANONICAL_OPTIONAL_PREFIXES = MappingProxyType(
     {
-        "WX": "workflow_instance",
-        "WSX": "workflow_step_instance",
-        "XX": "action_instance",
+        "workflow_instance": "WX",
+        "workflow_step_instance": "WSX",
+        "action_instance": "XX",
     }
 )
 
@@ -248,15 +271,22 @@ class EUIDConfig:
     )
 
     def get_all_prefixes(self) -> Dict[str, str]:
-        """Return a copy of all canonical TapDB-managed prefixes."""
+        """Return a copy of canonical discriminator-to-prefix mappings."""
         result = dict(self.CORE_PREFIXES)
         result.update(self.OPTIONAL_PREFIXES)
         return result
 
     def get_discriminator_for_prefix(self, prefix: str) -> Optional[str]:
-        """Return the canonical discriminator for a TapDB-managed prefix."""
-        return self.get_all_prefixes().get(prefix)
+        """Return the canonical discriminator for a uniquely owned prefix."""
+        matches = [
+            discriminator
+            for discriminator, owned_prefix in self.get_all_prefixes().items()
+            if owned_prefix == prefix
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     def is_canonical_prefix(self, prefix: str) -> bool:
         """Return True when *prefix* is part of the TapDB-managed catalog."""
-        return prefix in self.CORE_PREFIXES or prefix in self.OPTIONAL_PREFIXES
+        return prefix in self.CORE_PREFIXES.values() or prefix in self.OPTIONAL_PREFIXES.values()

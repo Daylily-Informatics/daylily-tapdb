@@ -125,7 +125,7 @@ class _FakeSession:
 
     def add(self, obj):
         if getattr(obj, "euid", None) is None:
-            obj.euid = f"GN{len(self._state['lineages']) + 200}"
+            obj.euid = f"TGX{len(self._state['lineages']) + 200}"
         if getattr(obj, "uid", None) is None:
             obj.uid = len(self._state["lineages"]) + 200
         obj.is_deleted = False
@@ -778,7 +778,7 @@ def test_home_query_and_audit_panels_admin(
     assert ctx["user_audit_rows"]
 
     # Simple object query by text.
-    resp = client.get("/?q=GX&scope=all")
+    resp = client.get("/?q=TGX&scope=all")
     assert resp.status_code == 200
     ctx = _last_render_context(state, "index.html")
     assert any(row["euid"] == "GX11" for row in ctx["object_results"])
@@ -826,7 +826,7 @@ def test_complex_query_page_filters(route_client, monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(auth_mod, "get_current_user", _admin_auth_user)
 
-    resp = client.get("/query?kind=instance&euid_like=GX")
+    resp = client.get("/query?kind=instance&euid_like=TGX")
     assert resp.status_code == 200
     ctx = _last_render_context(state, "complex_query.html")
     assert ctx["query_params"]["kind"] == "instance"

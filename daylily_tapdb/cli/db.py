@@ -55,7 +55,7 @@ from daylily_tapdb.timezone_utils import utc_now
 console = Console()
 
 _MERIDIAN_PREFIX_RE = re.compile(r"^[A-HJ-KMNP-TV-Z]{2,3}$")
-_RESERVED_PREFIXES = {"GT", "GX", "GN", "WX", "WSX", "XX", "AY"}
+_RESERVED_PREFIXES = {"GX", "TGX", "WX", "WSX", "XX", "AY"}
 
 
 def _normalize_instance_prefix(prefix: str) -> str:
@@ -92,33 +92,56 @@ def _normalize_meridian_prefix(prefix: str, field_name: str) -> str:
     return normalized
 
 
-def _required_identity_prefixes(env: "Environment") -> str:
-    """Return validated audit_log_prefix for env config."""
+def _shared_sequence_name(prefix: str) -> str:
+    return f"{_normalize_instance_prefix(prefix).lower()}_instance_seq"
+
+
+def _required_identity_prefixes(env: "Environment") -> dict[str, str]:
+    """Return validated TapDB-managed identity prefixes for the namespace."""
     cfg = _get_db_config(env)
+    core_prefix = _normalize_meridian_prefix(
+        cfg.get("core_euid_prefix", ""),
+        "core_euid_prefix",
+    )
     audit_prefix = _normalize_meridian_prefix(
         cfg.get("audit_log_euid_prefix", ""),
         "audit_log_euid_prefix",
     )
-    return audit_prefix
+    if audit_prefix != core_prefix:
+        raise ValueError(
+            "audit_log_euid_prefix must match the namespace-scoped TapDB core "
+            f"prefix {core_prefix!r}"
+        )
+    return {
+        "generic_template": core_prefix,
+        "generic_instance": core_prefix,
+        "generic_instance_lineage": core_prefix,
+        "audit_log": audit_prefix,
+    }
 
 
 def _sync_identity_prefix_config(env: "Environment") -> None:
     """Persist required identity prefix config and ensure backing sequences."""
-    audit_prefix = _required_identity_prefixes(env)
-    audit_seq = f"{audit_prefix.lower()}_audit_seq"
+    prefixes = _required_identity_prefixes(env)
+    values_sql = ",\n        ".join(
+        f"('{entity}', '{prefix}')"
+        for entity, prefix in prefixes.items()
+    )
+    sequences_sql = "\n    ".join(
+        f'CREATE SEQUENCE IF NOT EXISTS "{_shared_sequence_name(prefix)}";'
+        for prefix in sorted(set(prefixes.values()))
+    )
     sql = f"""
     INSERT INTO tapdb_identity_prefix_config(entity, prefix)
-    VALUES ('audit_log', '{audit_prefix}')
+    VALUES {values_sql}
     ON CONFLICT (entity) DO UPDATE
       SET prefix = EXCLUDED.prefix, updated_dt = NOW();
 
-    CREATE SEQUENCE IF NOT EXISTS "{audit_seq}";
+    {sequences_sql}
     """
     success, output = _run_psql(env, sql=sql)
     if not success:
-        raise RuntimeError(
-            f"Failed to sync identity prefix config for audit_log: {output[:200]}"
-        )
+        raise RuntimeError(f"Failed to sync identity prefix config: {output[:200]}")
 
 
 def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
@@ -133,7 +156,7 @@ def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
     if not prefix or not prefix.isalpha():
         raise ValueError(f"Instance prefix must be alphabetic, got: {prefix!r}")
 
-    seq_name = f"{prefix.lower()}_instance_seq"
+    seq_name = _shared_sequence_name(prefix)
 
     sql = f"""
     CREATE SEQUENCE IF NOT EXISTS "{seq_name}";
@@ -146,8 +169,15 @@ def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
           COALESCE(
             (
               SELECT max(euid_seq)
-              FROM generic_instance
-              WHERE euid_prefix = '{prefix}'
+              FROM (
+                SELECT euid_seq FROM generic_template WHERE euid_prefix = '{prefix}'
+                UNION ALL
+                SELECT euid_seq FROM generic_instance WHERE euid_prefix = '{prefix}'
+                UNION ALL
+                SELECT euid_seq FROM generic_instance_lineage WHERE euid_prefix = '{prefix}'
+                UNION ALL
+                SELECT euid_seq FROM audit_log WHERE euid_prefix = '{prefix}'
+              ) all_euid_rows
             ),
             0
           ) + 1 AS next_val
@@ -481,12 +511,12 @@ def _run_schema_drift_check(
     cfg = _get_db_config(env)
     schema_root = _find_schema_root(required_subpath=Path("tapdb_schema.sql"))
     asset_paths = schema_asset_files(schema_root)
-    audit_prefix = _required_identity_prefixes(env)
-    audit_sequence = f"{audit_prefix.lower()}_audit_seq"
+    identity_prefixes = _required_identity_prefixes(env)
+    dynamic_sequence = _shared_sequence_name(identity_prefixes["generic_template"])
 
     expected = build_expected_schema_inventory(
         asset_paths,
-        audit_sequence_name=audit_sequence,
+        dynamic_sequence_name=dynamic_sequence,
     )
     with _tapdb_connection_for_env(
         env,
@@ -682,7 +712,7 @@ def db_schema_apply(
             f"[dim]○[/dim] Schema already exists in {cfg['database']} (skipping apply)"
         )
         console.print(
-            "[yellow]►[/yellow] Syncing required identity prefixes (audit_log)..."
+            "[yellow]►[/yellow] Syncing required identity prefixes..."
         )
         try:
             _sync_identity_prefix_config(env)
@@ -702,7 +732,7 @@ def db_schema_apply(
     _log_operation(env.value, "SCHEMA_APPLY", f"Schema applied from {schema_file}")
     console.print("[green]✓[/green] Schema applied successfully")
     console.print(
-        "[yellow]►[/yellow] Syncing required identity prefixes (audit_log)..."
+        "[yellow]►[/yellow] Syncing required identity prefixes..."
     )
     try:
         _sync_identity_prefix_config(env)
@@ -1019,14 +1049,23 @@ def db_nuke(
     DROP TABLE IF EXISTS generic_template CASCADE;
     DROP TABLE IF EXISTS tapdb_identity_prefix_config CASCADE;
 
-    -- Drop sequences
-    DROP SEQUENCE IF EXISTS generic_template_seq;
-    DROP SEQUENCE IF EXISTS gx_instance_seq;
-    DROP SEQUENCE IF EXISTS generic_instance_lineage_seq;
-    DROP SEQUENCE IF EXISTS wx_instance_seq;
-    DROP SEQUENCE IF EXISTS wsx_instance_seq;
-    DROP SEQUENCE IF EXISTS xx_instance_seq;
-    DROP SEQUENCE IF EXISTS ay_instance_seq;
+    -- Drop dynamic/shared sequences
+    DO $$
+    DECLARE
+        seq_record RECORD;
+    BEGIN
+        FOR seq_record IN
+            SELECT sequencename
+            FROM pg_sequences
+            WHERE schemaname = current_schema()
+              AND (
+                  sequencename LIKE '%_instance_seq'
+                  OR sequencename LIKE '%_audit_seq'
+              )
+        LOOP
+            EXECUTE format('DROP SEQUENCE IF EXISTS %I CASCADE', seq_record.sequencename);
+        END LOOP;
+    END $$;
 
     -- Drop functions
     DROP FUNCTION IF EXISTS set_generic_template_euid();
@@ -1661,6 +1700,8 @@ def db_seed(
                     session,
                     templates,
                     overwrite=overwrite,
+                    core_config_dir=_loader_find_tapdb_core_config_dir(),
+                    core_instance_prefix=str(_get_db_config(env)["core_euid_prefix"]),
                 )
     except Exception as exc:
         console.print(f"[red]✗[/red] Template seed failed: {exc}")

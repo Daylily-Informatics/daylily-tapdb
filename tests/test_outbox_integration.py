@@ -36,10 +36,10 @@ def test_postgres_outbox_enqueue_claim_and_mark_delivered():
                 session=session,
                 tenant_id=tenant_id,
                 event_type="order.created",
-                aggregate_euid="GX-ABC",
+                aggregate_euid="TGX-ABC",
                 payload={"order_number": "ORD-1"},
                 destination="atlas",
-                dedupe_key="atlas|order.created|GX-ABC",
+                dedupe_key="atlas|order.created|TGX-ABC",
             )
 
             row = session.execute(

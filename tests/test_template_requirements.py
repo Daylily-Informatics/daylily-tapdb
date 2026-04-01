@@ -44,7 +44,7 @@ def test_require_seeded_template_raises_when_missing():
 
 
 def test_require_seeded_template_raises_on_prefix_mismatch():
-    template = SimpleNamespace(instance_prefix="GX")
+    template = SimpleNamespace(instance_prefix="AGX")
     manager = _FakeManager({"generic/item/foo/1.0": template})
 
     with pytest.raises(
@@ -60,14 +60,14 @@ def test_require_seeded_template_raises_on_prefix_mismatch():
 
 
 def test_require_seeded_template_returns_template_on_success():
-    template = SimpleNamespace(instance_prefix="GX")
+    template = SimpleNamespace(instance_prefix="AGX")
     session = object()
     manager = _FakeManager({"generic/item/foo/1.0": template})
 
     resolved = m.require_seeded_template(
         session,
         "generic/item/foo/1.0",
-        expected_prefix="gx",
+        expected_prefix="agx",
         template_manager=manager,
     )
 
@@ -76,7 +76,7 @@ def test_require_seeded_template_returns_template_on_success():
 
 
 def test_require_seeded_template_blank_expected_prefix_raises_mismatch():
-    template = SimpleNamespace(instance_prefix="GX")
+    template = SimpleNamespace(instance_prefix="AGX")
     manager = _FakeManager({"generic/item/foo/1.0": template})
 
     with pytest.raises(
@@ -93,7 +93,7 @@ def test_require_seeded_template_blank_expected_prefix_raises_mismatch():
 
 def test_require_seeded_templates_resolves_all_in_order():
     session = object()
-    first = SimpleNamespace(instance_prefix="GX")
+    first = SimpleNamespace(instance_prefix="AGX")
     second = SimpleNamespace(instance_prefix="WX")
     manager = _FakeManager(
         {
@@ -105,7 +105,7 @@ def test_require_seeded_templates_resolves_all_in_order():
     resolved = m.require_seeded_templates(
         session,
         [
-            ("generic/a/one/1.0", "GX"),
+            ("generic/a/one/1.0", "AGX"),
             ("generic/b/two/1.0", "WX"),
         ],
         app_name="atlas",

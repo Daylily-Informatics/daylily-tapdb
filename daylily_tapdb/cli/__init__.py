@@ -12,7 +12,17 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from daylily_tapdb.cli.context import TapdbContext, resolve_context
+from daylily_tapdb.euid import (
+    normalize_euid_client_code,
+    resolve_client_scoped_core_prefix,
+)
+from daylily_tapdb.cli.context import (
+    TapdbContext,
+    active_context_overrides,
+    active_env_name,
+    resolve_context,
+    set_cli_context,
+)
 
 DEFAULT_UI_PORT = 8911
 DEFAULT_UI_HOST = "localhost"
@@ -32,13 +42,16 @@ NAMESPACE_REQUIRED_TOPLEVEL = {
 
 
 def _active_env_name() -> str:
-    return (os.environ.get("TAPDB_ENV") or "dev").strip().lower()
+    return active_env_name("dev").strip().lower()
 
 
-def _require_context(*, env_name: Optional[str] = None) -> TapdbContext:
+def _require_context(
+    *, env_name: Optional[str] = None, allow_namespace_fallback: bool = True
+) -> TapdbContext:
     return resolve_context(
         require_keys=True,
         env_name=env_name if env_name is not None else _active_env_name(),
+        allow_namespace_fallback=allow_namespace_fallback,
     )
 
 
@@ -242,41 +255,60 @@ def build_app():
         client_id: Optional[str] = typer.Option(
             None,
             "--client-id",
-            help=(
-                "Client/application namespace key. Required for runtime/DB commands."
-            ),
+            help="Namespace metadata key for config init/migration flows.",
         ),
         database_name: Optional[str] = typer.Option(
             None,
             "--database-name",
-            help=("Database namespace key. Required for runtime/DB commands."),
+            help="Namespace metadata key for config init/migration flows.",
+        ),
+        config_path: Optional[Path] = typer.Option(
+            None,
+            "--config",
+            exists=False,
+            file_okay=True,
+            dir_okay=False,
+            readable=False,
+            help="Explicit TapDB config file path for this invocation.",
+        ),
+        env_name: Optional[str] = typer.Option(
+            None,
+            "--env",
+            help="Explicit TapDB environment name for this invocation.",
         ),
     ):
         """Set global CLI context options."""
-        os.environ["TAPDB_STRICT_NAMESPACE"] = "0"
         if ctx.resilient_parsing:
             return
-        if client_id:
-            os.environ["TAPDB_CLIENT_ID"] = client_id
-        if database_name:
-            os.environ["TAPDB_DATABASE_NAME"] = database_name
+        current = active_context_overrides()
+        set_cli_context(
+            client_id=client_id if client_id is not None else current["client_id"],
+            database_name=(
+                database_name
+                if database_name is not None
+                else current["database_name"]
+            ),
+            env_name=env_name if env_name is not None else current["env_name"],
+            config_path=(
+                config_path if config_path is not None else current["config_path"]
+            ),
+        )
 
         if any(arg in ("--help", "-h") for arg in sys.argv[1:]):
             return
 
         invoked = (ctx.invoked_subcommand or "").strip().lower()
         strict = invoked in NAMESPACE_REQUIRED_TOPLEVEL
-        os.environ["TAPDB_STRICT_NAMESPACE"] = "1" if strict else "0"
         if not strict:
             return
 
         try:
-            _require_context()
+            _require_context(allow_namespace_fallback=True)
         except RuntimeError as exc:
             console.print(f"[red]✗[/red] {exc}")
             console.print(
-                "  Example: [cyan]tapdb --client-id atlas --database-name app "
-                "info[/cyan]"
+                "  Example: [cyan]tapdb --config "
+                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]"
             )
             raise typer.Exit(1)
 
@@ -336,7 +368,7 @@ def build_app():
         ),
     ):
         """Start the TAPDB Admin UI server."""
-        from daylily_tapdb.cli.db_config import get_db_config_for_env
+        from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
 
         env_name = _active_env_name()
         pid_file, log_file, _ = _ui_runtime_paths(env_name)
@@ -384,22 +416,20 @@ def build_app():
             raise typer.Exit(1)
 
         try:
-            admin_module = _find_admin_module()
-        except ValueError as e:
-            console.print(f"[red]✗[/red]  {e}")
-            raise typer.Exit(1)
-
-        try:
             cert_path, key_path = _ensure_tls_certificates(host, env_name=env_name)
         except RuntimeError as e:
             console.print(f"[red]✗[/red]  {e}")
             raise typer.Exit(1)
 
+        effective_config_path = get_config_path()
         cmd = [
             sys.executable,
             "-m",
-            "uvicorn",
-            admin_module,
+            "daylily_tapdb.cli.admin_server",
+            "--config",
+            str(effective_config_path),
+            "--env",
+            env_name,
             "--host",
             host,
             "--port",
@@ -511,7 +541,7 @@ def build_app():
             console.print("   Set env overrides before start:")
             console.print(f"   [cyan]export TAPDB_UI_SSL_CERT={cert_path}[/cyan]")
             console.print(f"   [cyan]export TAPDB_UI_SSL_KEY={key_path}[/cyan]")
-        console.print("   Restart UI: [cyan]tapdb ui restart[/cyan]")
+        console.print("   Restart UI: [cyan]tapdb --config <path> --env <name> ui restart[/cyan]")
 
     @ui_app.command("stop")
     def ui_stop():
@@ -607,15 +637,17 @@ def build_app():
         ui_start(port=port, host=host, reload=False, background=True)
 
     def _resolve_bootstrap_env() -> DbEnvironment:
-        raw = (os.environ.get("TAPDB_ENV") or "").strip().lower()
+        raw = active_env_name("").strip().lower()
         if not raw:
             console.print("[red]✗[/red] TAPDB_ENV must be set for bootstrap")
-            console.print("  Example: [cyan]export TAPDB_ENV=dev[/cyan]")
+            console.print(
+                "  Example: [cyan]tapdb --config <path> --env dev bootstrap local[/cyan]"
+            )
             raise typer.Exit(1)
         try:
             return DbEnvironment(raw)
         except ValueError:
-            console.print(f"[red]✗[/red] Unsupported TAPDB_ENV '{raw}'")
+            console.print(f"[red]✗[/red] Unsupported TapDB env '{raw}'")
             console.print("  Supported values: dev, test, prod")
             raise typer.Exit(1)
 
@@ -639,7 +671,8 @@ def build_app():
             console.print(f"[yellow]⚠[/yellow] DB is ready, but UI start failed: {e}")
             console.print(
                 "  Recover with: "
-                f"[cyan]tapdb ui start --background --port {ui_port}[/cyan]"
+                f"[cyan]tapdb --config <path> --env {env_name} "
+                f"ui start --background --port {ui_port}[/cyan]"
             )
 
     @bootstrap_app.command("local")
@@ -898,6 +931,11 @@ def build_app():
         database_name: str = typer.Option(
             ..., "--database-name", help="Database namespace key"
         ),
+        euid_client_code: str = typer.Option(
+            ...,
+            "--euid-client-code",
+            help="Single-letter client code used to derive the namespace TapDB core prefix",
+        ),
         env: list[str] = typer.Option(
             ["dev"],
             "--env",
@@ -920,14 +958,19 @@ def build_app():
         """Initialize a namespaced TAPDB v2 config."""
         from daylily_tapdb.cli.db_config import get_config_path
 
-        os.environ["TAPDB_CLIENT_ID"] = client_id
-        os.environ["TAPDB_DATABASE_NAME"] = database_name
-        ctx = _require_context()
-        config_path = get_config_path()
+        set_cli_context(client_id=client_id, database_name=database_name)
+        ctx = _require_context(allow_namespace_fallback=True)
+        config_path = get_config_path(
+            client_id=client_id,
+            database_name=database_name,
+            allow_namespace_fallback=True,
+        )
 
         env_names = sorted({e.strip().lower() for e in env if str(e).strip()})
         if not env_names:
             raise RuntimeError("At least one --env must be provided")
+        normalized_client_code = normalize_euid_client_code(euid_client_code)
+        core_euid_prefix = resolve_client_scoped_core_prefix(normalized_client_code)
 
         existing = _read_yaml_or_json_file(config_path)
         existing_meta = existing.get("meta") if isinstance(existing, dict) else None
@@ -949,6 +992,7 @@ def build_app():
             "config_version": 2,
             "client_id": client_id,
             "database_name": database_name,
+            "euid_client_code": normalized_client_code,
         }
         envs = root.setdefault("environments", {})
         for env_name in env_names:
@@ -977,7 +1021,7 @@ def build_app():
                     prior.get("database") or f"tapdb_{database_name}_{env_name}"
                 ),
                 "cognito_user_pool_id": str(prior.get("cognito_user_pool_id") or ""),
-                "audit_log_euid_prefix": str(prior.get("audit_log_euid_prefix") or ""),
+                "audit_log_euid_prefix": core_euid_prefix,
                 "support_email": str(prior.get("support_email") or ""),
             }
 
@@ -1160,6 +1204,11 @@ def build_app():
         database_name: str = typer.Option(
             ..., "--database-name", help="Database namespace key"
         ),
+        euid_client_code: str = typer.Option(
+            ...,
+            "--euid-client-code",
+            help="Single-letter client code used to derive the namespace TapDB core prefix",
+        ),
         db_port: list[str] = typer.Option(
             [],
             "--db-port",
@@ -1182,9 +1231,10 @@ def build_app():
         """Migrate a legacy TAPDB config into namespaced v2 format."""
         from daylily_tapdb.cli.db_config import get_legacy_config_paths
 
-        os.environ["TAPDB_CLIENT_ID"] = client_id
-        os.environ["TAPDB_DATABASE_NAME"] = database_name
-        ctx = _require_context()
+        normalized_client_code = normalize_euid_client_code(euid_client_code)
+        core_euid_prefix = resolve_client_scoped_core_prefix(normalized_client_code)
+        set_cli_context(client_id=client_id, database_name=database_name)
+        ctx = _require_context(allow_namespace_fallback=True)
         target_path = ctx.config_path()
 
         if target_path.exists() and not force:
@@ -1224,6 +1274,7 @@ def build_app():
                 "config_version": 2,
                 "client_id": client_id,
                 "database_name": database_name,
+                "euid_client_code": normalized_client_code,
             },
             "environments": {},
         }
@@ -1256,6 +1307,7 @@ def build_app():
             }
             # tapdb_user no longer exists; keep legacy configs readable but do not emit.
             env_cfg.pop("tapdb_user_euid_prefix", None)
+            env_cfg["audit_log_euid_prefix"] = core_euid_prefix
             migrated["environments"][env_key] = env_cfg
 
         _write_yaml_or_json_file(target_path, migrated)
@@ -1283,7 +1335,7 @@ def build_app():
             "--check-all-envs",
             help=(
                 "Probe PostgreSQL status for dev/test/prod (may contact remote hosts). "
-                "Default probes only TAPDB_ENV."
+                "Default probes only the active TapDB env."
             ),
         ),
         as_json: bool = typer.Option(
@@ -1430,7 +1482,7 @@ def build_app():
                 result["error"] = str(e)
                 return result
 
-        tapdb_env = os.environ.get("TAPDB_ENV", "dev").lower()
+        tapdb_env = _active_env_name()
         test_dsn = os.environ.get("TAPDB_TEST_DSN", "")
 
         def _pg_probe(env_name: str, cfg: dict[str, str]) -> dict[str, object]:
@@ -1543,11 +1595,11 @@ def build_app():
         general.add_column("Value")
         general.add_row("Version", __version__)
         general.add_row("Python", sys.version.split()[0])
-        general.add_row("TAPDB_ENV", tapdb_env)
+        general.add_row("TapDB Env", tapdb_env)
         general.add_row("Client ID", ctx.client_id)
         general.add_row("Database Name", ctx.database_name)
         general.add_row("Namespace", ctx.namespace_slug())
-        general.add_row("DB probes", "all envs" if check_all_envs else "TAPDB_ENV only")
+        general.add_row("DB probes", "all envs" if check_all_envs else "active env only")
         if test_dsn:
             general.add_row("TAPDB_TEST_DSN", f"[dim]{_sanitize_url(test_dsn)}[/dim]")
 

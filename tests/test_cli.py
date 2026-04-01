@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 
 import daylily_tapdb.cli as cli_mod
 from daylily_tapdb.cli import app
+from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 from daylily_tapdb.cli.db import (
     Environment,
     _ensure_dirs,
@@ -66,6 +67,7 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "  config_version: 2\n"
         "  client_id: testclient\n"
         "  database_name: testdb\n"
+        "  euid_client_code: C\n"
         "environments:\n"
         "  dev:\n"
         "    engine_type: local\n"
@@ -75,6 +77,7 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "    user: test\n"
         '    password: ""\n'
         "    database: tapdb_dev\n"
+        '    audit_log_euid_prefix: "CGX"\n'
         "  test:\n"
         "    engine_type: local\n"
         "    host: localhost\n"
@@ -83,6 +86,7 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "    user: test\n"
         '    password: ""\n'
         "    database: tapdb_test\n"
+        '    audit_log_euid_prefix: "CGX"\n'
         "  prod:\n"
         "    engine_type: local\n"
         "    host: localhost\n"
@@ -90,12 +94,17 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "    ui_port: 8913\n"
         "    user: test\n"
         '    password: ""\n'
-        "    database: tapdb_prod\n",
+        "    database: tapdb_prod\n"
+        '    audit_log_euid_prefix: "CGX"\n',
         encoding="utf-8",
     )
     os.chmod(cfg_path, 0o600)
+    clear_cli_context()
+    set_cli_context(client_id="testclient", database_name="testdb", env_name="dev")
     monkeypatch.setattr(cli_mod, "PID_FILE", tmp_path / "ui.pid")
     monkeypatch.setattr(cli_mod, "LOG_FILE", tmp_path / "ui.log")
+    yield
+    clear_cli_context()
 
 
 class TestCLIMain:
@@ -166,13 +175,19 @@ class TestCLIMain:
 
     def test_context_missing_client_id_fails(self, monkeypatch):
         monkeypatch.delenv("TAPDB_CLIENT_ID", raising=False)
+        clear_cli_context()
+        set_cli_context(database_name="testdb", env_name="dev")
         result = runner.invoke(app, ["db", "create", "dev"])
+        clear_cli_context()
         assert result.exit_code != 0
         assert "client-id" in _strip_ansi(result.output)
 
     def test_context_missing_database_name_fails(self, monkeypatch):
         monkeypatch.delenv("TAPDB_DATABASE_NAME", raising=False)
+        clear_cli_context()
+        set_cli_context(client_id="testclient", env_name="dev")
         result = runner.invoke(app, ["ui", "status"])
+        clear_cli_context()
         assert result.exit_code != 0
         assert "database-name" in _strip_ansi(result.output)
 
@@ -838,8 +853,11 @@ class TestCLIBootstrap:
 
     def test_bootstrap_local_requires_tapdb_env(self, monkeypatch):
         monkeypatch.delenv("TAPDB_ENV", raising=False)
+        clear_cli_context()
+        set_cli_context(client_id="testclient", database_name="testdb")
         fresh_app = cli_mod.build_app()
         result = runner.invoke(fresh_app, ["bootstrap", "local", "--no-gui"])
+        clear_cli_context()
         assert result.exit_code != 0
         assert "TAPDB_ENV" in result.output
 
@@ -1355,7 +1373,7 @@ class TestCLIDBSeed:
                             "type": "generic",
                             "subtype": "client-generic-valid-minimal",
                             "version": "1.0",
-                            "instance_prefix": "GX",
+                            "instance_prefix": "AGX",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {
@@ -1418,7 +1436,7 @@ class TestCLIDBSeed:
                             "type": "generic",
                             "subtype": "client-generic-valid-layouts",
                             "version": "1.0",
-                            "instance_prefix": "GX",
+                            "instance_prefix": "AGX",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {
@@ -1464,7 +1482,7 @@ class TestCLIDBSeed:
                             "type": "generic",
                             "subtype": "client-generic-missing-ref-layouts",
                             "version": "1.0",
-                            "instance_prefix": "GX",
+                            "instance_prefix": "AGX",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {
@@ -1534,7 +1552,7 @@ class TestCLIDBSeed:
                             "type": "generic",
                             "subtype": "client-generic-invalid-count",
                             "version": "1.0",
-                            "instance_prefix": "GX",
+                            "instance_prefix": "AGX",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {
@@ -1585,7 +1603,7 @@ class TestCLIDBSeed:
                             "type": "generic",
                             "subtype": "client-generic-missing-template-code",
                             "version": "1.0",
-                            "instance_prefix": "GX",
+                            "instance_prefix": "AGX",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {
@@ -1626,7 +1644,7 @@ class TestCLIDBSeed:
                             "type": "generic",
                             "subtype": "client-generic-missing-ref-strict",
                             "version": "1.0",
-                            "instance_prefix": "GX",
+                            "instance_prefix": "AGX",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {
@@ -1666,7 +1684,7 @@ class TestCLIDBSeed:
                             "type": "generic",
                             "subtype": "client-generic-missing-ref-nonstrict",
                             "version": "1.0",
-                            "instance_prefix": "GX",
+                            "instance_prefix": "AGX",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {
@@ -1743,7 +1761,7 @@ class TestCLIDBSeed:
                             "type": "generic",
                             "subtype": "client-probe",
                             "version": "1.0",
-                            "instance_prefix": "GX",
+                            "instance_prefix": "AGX",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {
@@ -1791,7 +1809,7 @@ class TestCLIDBSeed:
                             "type": "generic",
                             "subtype": "custom-generic",
                             "version": "1.0",
-                            "instance_prefix": "GX",
+                            "instance_prefix": "AGX",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {},
@@ -1829,7 +1847,7 @@ class TestCLIDBSeed:
                             "type": "generic",
                             "subtype": "generic",
                             "version": "1.0",
-                            "instance_prefix": "GX",
+                            "instance_prefix": "AGX",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {},
@@ -1964,7 +1982,7 @@ class TestCLIDBSeed:
                             "type": "generic",
                             "subtype": "generic",
                             "version": "1.0",
-                            "instance_prefix": "GX",
+                            "instance_prefix": "AGX",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {},

@@ -132,6 +132,25 @@ def _seed_templates(session, tmpl_list: list[dict]) -> None:
     session.flush()
 
 
+def _seed_identity_prefixes(session, prefix: str = "AGX") -> None:
+    session.execute(
+        text(
+            """
+            INSERT INTO tapdb_identity_prefix_config(entity, prefix)
+            VALUES
+                ('generic_template', :prefix),
+                ('generic_instance', :prefix),
+                ('generic_instance_lineage', :prefix),
+                ('audit_log', :prefix)
+            ON CONFLICT (entity) DO UPDATE
+              SET prefix = EXCLUDED.prefix, updated_dt = NOW();
+            """
+        ),
+        {"prefix": prefix},
+    )
+    session.execute(text(f'CREATE SEQUENCE IF NOT EXISTS "{prefix.lower()}_instance_seq"'))
+
+
 def _integration_templates() -> list[dict]:
     return [
         {
@@ -288,8 +307,8 @@ def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch):
 @pytest.mark.parametrize(
     ("prefix_env", "expected_prefix"),
     [
-        ("", "GT-"),
-        ("S", "S:GT-"),
+        ("", "AGX-"),
+        ("S", "S:AGX-"),
     ],
 )
 def test_postgres_identity_triggers_respect_runtime_prefix_override(
@@ -312,6 +331,7 @@ def test_postgres_identity_triggers_respect_runtime_prefix_override(
         conn = TAPDBConnection(db_url=dsn, app_username="pytest")
         with conn.session_scope(commit=False) as session:
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
+            _seed_identity_prefixes(session, "AGX")
             row = session.execute(
                 text(
                     """
@@ -321,14 +341,14 @@ def test_postgres_identity_triggers_respect_runtime_prefix_override(
                     ) VALUES (
                         'prefix-template', 'generic_template',
                         'generic', 'test', 'prefix', '1.0',
-                        'GX', 'active'
+                        'AGX', 'active'
                     )
                     RETURNING uid, euid, euid_prefix, euid_seq;
                     """
                 )
             ).one()
             assert row.euid.startswith(expected_prefix)
-            assert row.euid_prefix == "GT"
+            assert row.euid_prefix == "AGX"
             assert row.euid_seq > 0
 
             updated = session.execute(
@@ -387,12 +407,11 @@ def test_postgres_schema_drift_check_smoke():
         conn = TAPDBConnection(db_url=dsn, app_username="pytest")
         with conn.session_scope(commit=True) as session:
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
-            # db schema apply creates this sequence during identity-prefix sync.
-            session.execute(text("CREATE SEQUENCE IF NOT EXISTS ad_audit_seq"))
+            _seed_identity_prefixes(session, "AGX")
 
         expected = build_expected_schema_inventory(
             schema_asset_files(schema_root),
-            audit_sequence_name="ad_audit_seq",
+            dynamic_sequence_name="agx_instance_seq",
         )
 
         with conn.session_scope(commit=False) as session:
@@ -530,6 +549,19 @@ def test_postgres_restricted_role_schema_install_and_identity_triggers():
             role_cur.execute(
                 psql.SQL("SET search_path TO {};").format(psql.Identifier(schema_name))
             )
+            role_cur.execute(
+                """
+                INSERT INTO tapdb_identity_prefix_config(entity, prefix)
+                VALUES
+                    ('generic_template', 'AGX'),
+                    ('generic_instance', 'AGX'),
+                    ('generic_instance_lineage', 'AGX'),
+                    ('audit_log', 'AGX')
+                ON CONFLICT (entity) DO UPDATE
+                  SET prefix = EXCLUDED.prefix, updated_dt = NOW();
+                """
+            )
+            role_cur.execute('CREATE SEQUENCE IF NOT EXISTS "agx_instance_seq"')
 
             role_cur.execute(
                 """
@@ -539,7 +571,7 @@ def test_postgres_restricted_role_schema_install_and_identity_triggers():
                 ) VALUES (
                     'restricted-template', 'generic_template',
                     'generic', 'test', 'restricted', '1.0',
-                    'GX', 'active'
+                    'AGX', 'active'
                 )
                 RETURNING uid, euid, euid_prefix, euid_seq;
                 """
@@ -548,8 +580,8 @@ def test_postgres_restricted_role_schema_install_and_identity_triggers():
             assert row is not None
             assert isinstance(row[0], int)
             assert row[0] > 0
-            assert isinstance(row[1], str) and row[1].startswith("T:GT-")
-            assert row[2] == "GT"
+            assert isinstance(row[1], str) and row[1].startswith("T:AGX-")
+            assert row[2] == "AGX"
             assert isinstance(row[3], int) and row[3] > 0
         finally:
             role_cur.close()

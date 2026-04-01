@@ -1,8 +1,9 @@
 """Sequence helpers for TapDB-backed EUID issuance.
 
-TapDB uses per-prefix PostgreSQL sequences (for example: "gx_instance_seq") to
-issue monotonic `euid_seq` values. This module centralizes the logic for
-creating and safely initializing these sequences.
+TapDB uses shared per-prefix PostgreSQL sequences (for example:
+``agx_instance_seq``) across every table that emits the same prefix. This
+module centralizes the logic for creating and safely initializing these
+sequences.
 """
 
 from __future__ import annotations
@@ -32,8 +33,15 @@ def _build_ensure_instance_prefix_sequence_sql(seq_name: str) -> str:
           COALESCE(
             (
               SELECT max(euid_seq)
-              FROM generic_instance
-              WHERE euid_prefix = :prefix
+              FROM (
+                SELECT euid_seq FROM generic_template WHERE euid_prefix = :prefix
+                UNION ALL
+                SELECT euid_seq FROM generic_instance WHERE euid_prefix = :prefix
+                UNION ALL
+                SELECT euid_seq FROM generic_instance_lineage WHERE euid_prefix = :prefix
+                UNION ALL
+                SELECT euid_seq FROM audit_log WHERE euid_prefix = :prefix
+              ) all_euid_rows
             ),
             0
           ) + 1 AS next_val

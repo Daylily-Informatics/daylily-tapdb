@@ -24,19 +24,18 @@ TAPDB is namespace-isolated. For commands that touch config/runtime/db/ui/cognit
 - `client-id`
 - `database-name`
 
-Provide either by CLI flags or environment variables:
-- CLI: `--client-id <id> --database-name <name>`
-- env: `TAPDB_CLIENT_ID`, `TAPDB_DATABASE_NAME`
+Provide runtime context explicitly:
+- CLI: `--config <path> --env <name>`
 
-Environment selector:
-- `TAPDB_ENV` (`dev|test|prod`)
+Use `--client-id` and `--database-name` only for config creation and migration
+commands such as `tapdb config init` and `tapdb config migrate-legacy`.
 
 Resolution precedence:
-1. CLI flags
-2. env vars
-3. no fallback
+1. explicit `--config`
+2. config metadata from that file
+3. no runtime fallback
 
-If either key is missing, commands should fail with actionable guidance.
+If runtime config is missing, commands should fail with actionable guidance.
 
 ## Namespace Path Model
 Config root:
@@ -87,15 +86,17 @@ Use these functional groups only:
 Preferred setup path:
 
 ```sh
-export TAPDB_CLIENT_ID=<client>
-export TAPDB_DATABASE_NAME=<database>
-export TAPDB_ENV=dev
+tapdb --config ~/.config/tapdb/<client>/<database>/tapdb-config.yaml config init \
+  --client-id <client> \
+  --database-name <database> \
+  --env dev
 
 # Local runtime + logical setup + optional GUI
-tapdb bootstrap local
+tapdb --config ~/.config/tapdb/<client>/<database>/tapdb-config.yaml --env dev bootstrap local
 
 # or Aurora infra + logical setup + optional GUI
-tapdb bootstrap aurora --cluster <cluster-id> --region <region>
+tapdb --config ~/.config/tapdb/<client>/<database>/tapdb-config.yaml --env dev \
+  bootstrap aurora --cluster <cluster-id> --region <region>
 ```
 
 Use `--no-gui` when you need headless setup.
@@ -161,12 +162,13 @@ Rules:
 Prefer TAPDB APIs over low-level SQL.
 
 ```python
-import os
 from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory
 from daylily_tapdb.cli.db_config import get_db_config_for_env
 
-env = os.environ.get("TAPDB_ENV", "dev")
-cfg = get_db_config_for_env(env)
+cfg = get_db_config_for_env(
+    "dev",
+    config_path="~/.config/tapdb/<client>/<database>/tapdb-config.yaml",
+)
 
 conn = TAPDBConnection(
     db_hostname=f"{cfg['host']}:{cfg['port']}",
@@ -257,10 +259,10 @@ mkcert -cert-file ~/.config/tapdb/<client>/<database>/<env>/ui/certs/localhost.c
 
 ## Multi-Client Safety Checklist
 Before running commands in shared OS accounts:
-1. Verify `TAPDB_CLIENT_ID`, `TAPDB_DATABASE_NAME`, `TAPDB_ENV`.
-2. Run `tapdb info` and confirm namespace paths.
+1. Verify the intended `--config` path and `--env`.
+2. Run `tapdb --config <path> --env <name> info` and confirm namespace paths.
 3. Confirm DB/UI ports are from active namespace config.
-4. Run `tapdb cognito status <env>` and verify pool/app/callback.
+4. Run `tapdb --config <path> --env <name> cognito status <env>` and verify pool/app/callback.
 
 ## Destructive Operation Guardrails
 Only execute with explicit user intent:

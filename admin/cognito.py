@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
 from daylily_tapdb.cli.cognito import REQUIRED_COGNITO_CLIENT_NAME
-from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+from daylily_tapdb.cli.context import active_env_name
+from daylily_tapdb.cli.db_config import get_db_config_for_env
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ class TapdbPoolConfig:
 
 def resolve_tapdb_pool_config(env_name: Optional[str] = None) -> TapdbPoolConfig:
     """Resolve TAPDB Cognito runtime config for an environment."""
-    env_key = (env_name or os.environ.get("TAPDB_ENV") or "dev").strip().lower()
+    env_key = (env_name or active_env_name("dev")).strip().lower()
     cfg = get_db_config_for_env(env_key)
     pool_id = (cfg.get("cognito_user_pool_id") or "").strip()
     if not pool_id:
@@ -70,7 +70,7 @@ def resolve_tapdb_pool_config(env_name: Optional[str] = None) -> TapdbPoolConfig
         domain=(cfg.get("cognito_domain") or "").strip(),
         callback_url=(cfg.get("cognito_callback_url") or "").strip(),
         logout_url=(cfg.get("cognito_logout_url") or "").strip(),
-        source_file=get_config_path(),
+        source_file=Path(str(cfg["config_path"])),
     )
 
 

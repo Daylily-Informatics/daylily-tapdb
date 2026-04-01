@@ -43,12 +43,13 @@ flowchart LR
 
 ```bash
 source ./activate
-export TAPDB_CLIENT_ID=tapdb
-export TAPDB_DATABASE_NAME=tapdb
-export TAPDB_ENV=dev
-
-tapdb config init --client-id "$TAPDB_CLIENT_ID" --database-name "$TAPDB_DATABASE_NAME" --env dev --db-port dev=5533 --ui-port dev=8911
-tapdb bootstrap local
+tapdb --config ~/.config/tapdb/tapdb/tapdb/tapdb-config.yaml config init \
+  --client-id tapdb \
+  --database-name tapdb \
+  --env dev \
+  --db-port dev=5533 \
+  --ui-port dev=8911
+tapdb --config ~/.config/tapdb/tapdb/tapdb/tapdb-config.yaml --env dev bootstrap local
 ```
 
 ## Architecture
@@ -102,13 +103,14 @@ Approximate only.
 
 - Canonical local entry path: `source ./activate`
 - Use `tapdb ...` for database lifecycle operations rather than raw SQL or shell shortcuts
-- Required env vars are typically `TAPDB_CLIENT_ID`, `TAPDB_DATABASE_NAME`, and `TAPDB_ENV`
+- Runtime commands should use explicit `--config` and `--env`
 
 Useful checks:
 
 ```bash
 source ./activate
 tapdb --help
+tapdb --config ~/.config/tapdb/tapdb/tapdb/tapdb-config.yaml --env dev info
 pytest tests/ -q --deselect tests/test_admin_routes_smoke.py
 ```
 

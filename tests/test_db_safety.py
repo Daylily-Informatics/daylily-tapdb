@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 class _ScalarResult:
     def __init__(self, value):
@@ -38,7 +40,7 @@ def _template_payload():
         "type": "tube",
         "subtype": "micro",
         "version": "1.0",
-        "instance_prefix": "GX",
+        "instance_prefix": "AGX",
         "json_addl": {"k": "v"},
     }
 
@@ -60,14 +62,14 @@ def test_upsert_template_inserts_when_missing(monkeypatch):
         session,
         template={
             **_template_payload(),
-            "instance_prefix": "gx",
+            "instance_prefix": "agx",
         },
         overwrite=True,
     )
 
     assert outcome == "inserted"
     assert created in session.added
-    assert created.instance_prefix == "GX"
+    assert created.instance_prefix == "AGX"
     assert created.category == "generic"
     assert created.type == "tube"
     assert created.subtype == "micro"
@@ -85,7 +87,7 @@ def test_upsert_template_overwrite_false_skips_existing():
         type="tube",
         subtype="micro",
         version="1.0",
-        instance_prefix="GX",
+        instance_prefix="AGX",
         instance_polymorphic_identity=None,
         json_addl={"k": "old"},
         json_addl_schema=None,
@@ -115,7 +117,7 @@ def test_upsert_template_overwrite_true_updates_existing():
         type="tube",
         subtype="micro",
         version="1.0",
-        instance_prefix="GX",
+        instance_prefix="AGX",
         instance_polymorphic_identity=None,
         json_addl={"k": "old"},
         json_addl_schema=None,
@@ -252,7 +254,60 @@ def test_ensure_instance_prefix_sequence_quotes_sql(monkeypatch):
         return True, ""
 
     monkeypatch.setattr(m, "_run_psql", fake_run_psql)
-    m._ensure_instance_prefix_sequence(m.Environment.dev, "GX")
+    m._ensure_instance_prefix_sequence(m.Environment.dev, "AGX")
 
     sql = captured["sql"]
-    assert '"gx_instance_seq"' in sql
+    assert '"agx_instance_seq"' in sql
+
+
+def test_prepare_seed_templates_rewrites_core_placeholder(tmp_path: Path):
+    import daylily_tapdb.templates.loader as m
+
+    core_dir = tmp_path / "core"
+    client_dir = tmp_path / "client"
+    core_file = core_dir / "generic" / "generic.json"
+    client_file = client_dir / "generic" / "client.json"
+    core_file.parent.mkdir(parents=True)
+    client_file.parent.mkdir(parents=True)
+
+    prepared = m._prepare_seed_templates(
+        [
+            {
+                **_template_payload(),
+                "instance_prefix": "GX",
+                "_source_file": str(core_file),
+            },
+            {
+                **_template_payload(),
+                "subtype": "client",
+                "instance_prefix": "QGX",
+                "_source_file": str(client_file),
+            },
+        ],
+        core_config_dir=core_dir,
+        core_instance_prefix="AGX",
+    )
+
+    assert prepared[0]["instance_prefix"] == "AGX"
+    assert prepared[1]["instance_prefix"] == "QGX"
+
+
+def test_prepare_seed_templates_rejects_client_reserved_prefix(tmp_path: Path):
+    import daylily_tapdb.templates.loader as m
+
+    client_dir = tmp_path / "client"
+    client_file = client_dir / "generic" / "client.json"
+    client_file.parent.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="cannot persist reserved TapDB core"):
+        m._prepare_seed_templates(
+            [
+                {
+                    **_template_payload(),
+                    "instance_prefix": "GX",
+                    "_source_file": str(client_file),
+                }
+            ],
+            core_config_dir=tmp_path / "core",
+            core_instance_prefix="AGX",
+        )

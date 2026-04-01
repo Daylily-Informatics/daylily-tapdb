@@ -130,10 +130,8 @@ def _metrics_root_dir(env_name: str) -> Path:
     override = (os.environ.get("TAPDB_DB_METRICS_DIR") or "").strip()
     if override:
         return Path(override).expanduser() / env
-    ctx = resolve_context(require_keys=False, env_name=env)
-    if ctx:
-        return ctx.runtime_dir(env) / "metrics"
-    return Path.home() / ".config" / "tapdb" / "_legacy" / env / "metrics"
+    ctx = resolve_context(require_keys=True, env_name=env)
+    return ctx.runtime_dir(env) / "metrics"
 
 
 def two_week_period_start_utc(now_utc: datetime) -> datetime:

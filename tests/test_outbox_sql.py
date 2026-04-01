@@ -19,10 +19,10 @@ def test_outbox_enqueue_uses_conflict_handling():
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             event_type="order.created",
-            aggregate_euid="GX-ABC",
+            aggregate_euid="TGX-ABC",
             payload={"hello": "world"},
             destination="atlas",
-            dedupe_key="atlas|order.created|GX-ABC",
+            dedupe_key="atlas|order.created|TGX-ABC",
         ).compile(dialect=postgresql.dialect())
     ).lower()
     assert "on conflict" in sql
