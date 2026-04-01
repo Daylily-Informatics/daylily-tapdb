@@ -5,13 +5,24 @@ from __future__ import annotations
 from sqlalchemy import create_engine as sa_create_engine
 
 import admin.auth as auth_mod
+import admin.db_metrics as metrics_mod
 import admin.db_pool as pool_mod
 import admin.main as main_mod
 
 
 def test_admin_get_db_reuses_single_engine_bundle(monkeypatch):
     pool_mod._clear_engine_cache_for_tests()
-    monkeypatch.setenv("TAPDB_ENV", "dev")
+    monkeypatch.setattr(
+        pool_mod,
+        "_admin_settings",
+        lambda _env: {
+            "db_pool_size": 5,
+            "db_max_overflow": 10,
+            "db_pool_timeout": 30,
+            "db_pool_recycle": 1800,
+        },
+    )
+    monkeypatch.setattr(metrics_mod, "_admin_settings", lambda: {"metrics_enabled": False})
     monkeypatch.setattr(
         pool_mod,
         "get_db_config_for_env",
@@ -27,8 +38,8 @@ def test_admin_get_db_reuses_single_engine_bundle(monkeypatch):
 
     calls = {"count": 0}
 
-    def _fake_create_engine(_url, *, echo_sql):
-        _ = echo_sql
+    def _fake_create_engine(_url, *, echo_sql, env_name):
+        _ = echo_sql, env_name
         calls["count"] += 1
         return sa_create_engine("sqlite:///:memory:")
 

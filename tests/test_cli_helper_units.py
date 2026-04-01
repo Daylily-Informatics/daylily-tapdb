@@ -219,19 +219,55 @@ def test_pg_port_conflict_details_fallback_on_exception(monkeypatch):
 
 
 def test_pg_active_env_defaults_and_invalid(monkeypatch):
-    monkeypatch.delenv("TAPDB_ENV", raising=False)
     clear_cli_context()
-    assert pg_mod._active_env() == db_mod.Environment.dev
-
-    monkeypatch.setenv("TAPDB_ENV", "bogus")
-    assert pg_mod._active_env() == db_mod.Environment.dev
-
-    monkeypatch.setenv("TAPDB_ENV", "TEST")
     assert pg_mod._active_env() == db_mod.Environment.dev
 
     set_cli_context(env_name="TEST")
     assert pg_mod._active_env() == db_mod.Environment.test
     clear_cli_context()
+
+
+def test_ensure_local_role_repairs_missing_postgres_role(monkeypatch):
+    monkeypatch.setattr(
+        db_mod,
+        "_get_db_config",
+        lambda _env: {
+            "engine_type": "local",
+            "user": "postgres",
+            "host": "localhost",
+            "port": "5533",
+            "password": "",
+            "database": "tapdb_dev",
+        },
+    )
+    monkeypatch.setenv("USER", "jmajor")
+
+    calls: list[tuple[str, str | None, str | None]] = []
+
+    def _fake_run_psql(_env, sql=None, file=None, database=None, user=None):
+        _ = file
+        calls.append((user or "", database, sql))
+        if sql == "SELECT 1" and user == "postgres":
+            return False, 'psql: error: FATAL:  role "postgres" does not exist'
+        if sql == "SELECT 1" and user == "jmajor":
+            return True, "1"
+        if sql and "CREATE ROLE" in sql and user == "jmajor":
+            return True, ""
+        raise AssertionError((user, database, sql))
+
+    monkeypatch.setattr(db_mod, "_run_psql", _fake_run_psql)
+
+    db_mod._ensure_local_role(db_mod.Environment.dev, "postgres")
+
+    assert calls == [
+        ("postgres", "postgres", "SELECT 1"),
+        ("jmajor", "postgres", "SELECT 1"),
+        (
+            "jmajor",
+            "postgres",
+            'DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = \'postgres\') THEN CREATE ROLE "postgres" LOGIN SUPERUSER CREATEDB CREATEROLE; END IF; END $$;',
+        ),
+    ]
 
 
 def test_user_open_connection_maps_config(monkeypatch):

@@ -27,8 +27,8 @@ TAPDB is namespace-isolated. For commands that touch config/runtime/db/ui/cognit
 Provide runtime context explicitly:
 - CLI: `--config <path> --env <name>`
 
-Use `--client-id` and `--database-name` only for config creation and migration
-commands such as `tapdb config init` and `tapdb config migrate-legacy`.
+Use `--client-id` and `--database-name` only for config creation commands such
+as `tapdb --config <path> config init`.
 
 Resolution precedence:
 1. explicit `--config`
@@ -125,9 +125,14 @@ Namespace config (`tapdb-config.yaml`) should include:
 
 ```yaml
 meta:
-  config_version: 2
+  config_version: 3
   client_id: <client-id>
   database_name: <database-name>
+admin:
+  auth:
+    mode: tapdb|shared_host|disabled
+  session:
+    secret: <session-secret>
 environments:
   dev:
     engine_type: local|aurora

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import random
 import time
 from pathlib import Path
@@ -16,6 +15,7 @@ from daylily_tapdb.schema_inventory import (
     load_live_schema_inventory,
     schema_asset_files,
 )
+from tests.conftest import resolve_tapdb_test_dsn
 from tests.test_integration import _drop_schema, _install_schema
 
 
@@ -95,10 +95,8 @@ def test_diff_schema_inventory_strict_mode_flags_only_tapdb_owned_extras():
     assert strict.unexpected["tables"] == []
 
 
-def test_live_inventory_and_diff_against_real_postgres():
-    dsn = os.environ.get("TAPDB_TEST_DSN")
-    if not dsn:
-        pytest.skip("Set TAPDB_TEST_DSN to run Postgres integration tests")
+def test_live_inventory_and_diff_against_real_postgres(pytestconfig):
+    dsn = resolve_tapdb_test_dsn(pytestconfig)
 
     schema_root = _repo_schema_root()
     schema_sql_path = schema_root / "tapdb_schema.sql"

@@ -112,7 +112,7 @@ def _yaml_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg_file.write_text(
         textwrap.dedent("""\
         meta:
-          config_version: 2
+          config_version: 3
           client_id: clientx
           database_name: dbx
           euid_client_code: C
@@ -197,7 +197,7 @@ class TestGetDbConfigEngineType:
         cfg_file.write_text(
             textwrap.dedent("""\
             meta:
-              config_version: 2
+              config_version: 3
               client_id: clientx
               database_name: dbx
               euid_client_code: C
@@ -230,7 +230,7 @@ class TestGetDbConfigEngineType:
         cfg_file.write_text(
             textwrap.dedent("""\
             meta:
-              config_version: 2
+              config_version: 3
               client_id: clientx
               database_name: dbx
               euid_client_code: C

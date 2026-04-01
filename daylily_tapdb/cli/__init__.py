@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import secrets
 import shutil
 import signal
 import socket
@@ -32,6 +33,7 @@ PID_FILE = Path.home() / ".tapdb" / "ui.pid"
 LOG_FILE = Path.home() / ".tapdb" / "ui.log"
 NAMESPACE_REQUIRED_TOPLEVEL = {
     "bootstrap",
+    "db",
     "pg",
     "ui",
     "cognito",
@@ -46,7 +48,7 @@ def _active_env_name() -> str:
 
 
 def _require_context(
-    *, env_name: Optional[str] = None, allow_namespace_fallback: bool = True
+    *, env_name: Optional[str] = None, allow_namespace_fallback: bool = False
 ) -> TapdbContext:
     return resolve_context(
         require_keys=True,
@@ -65,22 +67,50 @@ def _ui_runtime_paths(env_name: Optional[str] = None) -> tuple[Path, Path, Path]
     )
 
 
-def _resolve_tls_paths(env_name: Optional[str] = None) -> tuple[Path, Path]:
-    """Resolve TLS cert/key paths, allowing env overrides."""
+def _resolve_tls_paths(
+    env_name: Optional[str] = None,
+    *,
+    cert_file: Optional[Path] = None,
+    key_file: Optional[Path] = None,
+) -> tuple[Path, Path]:
+    """Resolve TLS cert/key paths from CLI overrides, config, or runtime defaults."""
+    from daylily_tapdb.cli.db_config import get_admin_settings_for_env
+
     pid_file, _, certs_dir = _ui_runtime_paths(env_name)
     _ = pid_file  # path access validates context + env
     default_cert = certs_dir / "localhost.crt"
     default_key = certs_dir / "localhost.key"
-    cert = Path(os.environ.get("TAPDB_UI_SSL_CERT", str(default_cert)))
-    key = Path(os.environ.get("TAPDB_UI_SSL_KEY", str(default_key)))
+    resolved_env = env_name or _active_env_name()
+    admin_settings = get_admin_settings_for_env(resolved_env)
+    if cert_file is not None:
+        cert = cert_file.expanduser()
+    elif admin_settings.get("tls_cert_path"):
+        cert = Path(str(admin_settings["tls_cert_path"])).expanduser()
+    else:
+        cert = default_cert
+
+    if key_file is not None:
+        key = key_file.expanduser()
+    elif admin_settings.get("tls_key_path"):
+        key = Path(str(admin_settings["tls_key_path"])).expanduser()
+    else:
+        key = default_key
     return cert, key
 
 
 def _ensure_tls_certificates(
-    host: str, *, env_name: Optional[str] = None
+    host: str,
+    *,
+    env_name: Optional[str] = None,
+    cert_file: Optional[Path] = None,
+    key_file: Optional[Path] = None,
 ) -> tuple[Path, Path]:
     """Ensure TLS cert/key exist for HTTPS UI startup."""
-    cert_path, key_path = _resolve_tls_paths(env_name)
+    cert_path, key_path = _resolve_tls_paths(
+        env_name,
+        cert_file=cert_file,
+        key_file=key_file,
+    )
     if cert_path.exists() and key_path.exists():
         return cert_path, key_path
 
@@ -90,7 +120,7 @@ def _ensure_tls_certificates(
     if not openssl:
         raise RuntimeError(
             "openssl is required to start the UI over HTTPS. "
-            "Install openssl or set TAPDB_UI_SSL_CERT/TAPDB_UI_SSL_KEY."
+            "Install openssl or set admin.ui.tls.cert_path/admin.ui.tls.key_path."
         )
 
     san = "DNS:localhost"
@@ -280,21 +310,32 @@ def build_app():
         """Set global CLI context options."""
         if ctx.resilient_parsing:
             return
-        current = active_context_overrides()
+        prior_context = active_context_overrides()
+        requested_help = any(
+            arg in ("--help", "-h")
+            for arg in [
+                *list(getattr(ctx, "args", []) or []),
+                *sys.argv[1:],
+            ]
+        )
         set_cli_context(
-            client_id=client_id if client_id is not None else current["client_id"],
+            client_id=(
+                client_id if client_id is not None else prior_context.get("client_id")
+            ),
             database_name=(
                 database_name
                 if database_name is not None
-                else current["database_name"]
+                else prior_context.get("database_name")
             ),
-            env_name=env_name if env_name is not None else current["env_name"],
+            env_name=env_name if env_name is not None else prior_context.get("env_name"),
             config_path=(
-                config_path if config_path is not None else current["config_path"]
+                config_path
+                if config_path is not None
+                else prior_context.get("config_path")
             ),
         )
 
-        if any(arg in ("--help", "-h") for arg in sys.argv[1:]):
+        if requested_help:
             return
 
         invoked = (ctx.invoked_subcommand or "").strip().lower()
@@ -302,8 +343,19 @@ def build_app():
         if not strict:
             return
 
+        current = active_context_overrides()
+        if not current["config_path"] or not current["env_name"]:
+            console.print(
+                "[red]✗[/red] Runtime TapDB commands require both --config and --env."
+            )
+            console.print(
+                "  Example: [cyan]tapdb --config "
+                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]"
+            )
+            raise typer.Exit(1)
+
         try:
-            _require_context(allow_namespace_fallback=True)
+            _require_context(allow_namespace_fallback=False)
         except RuntimeError as exc:
             console.print(f"[red]✗[/red] {exc}")
             console.print(
@@ -366,6 +418,16 @@ def build_app():
         background: bool = typer.Option(
             True, "--background/--foreground", "-b/-f", help="Run in background"
         ),
+        ssl_certfile: Optional[Path] = typer.Option(
+            None,
+            "--ssl-certfile",
+            help="Explicit TLS certificate path for this invocation",
+        ),
+        ssl_keyfile: Optional[Path] = typer.Option(
+            None,
+            "--ssl-keyfile",
+            help="Explicit TLS private key path for this invocation",
+        ),
     ):
         """Start the TAPDB Admin UI server."""
         from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
@@ -416,7 +478,12 @@ def build_app():
             raise typer.Exit(1)
 
         try:
-            cert_path, key_path = _ensure_tls_certificates(host, env_name=env_name)
+            cert_path, key_path = _ensure_tls_certificates(
+                host,
+                env_name=env_name,
+                cert_file=ssl_certfile,
+                key_file=ssl_keyfile,
+            )
         except RuntimeError as e:
             console.print(f"[red]✗[/red]  {e}")
             raise typer.Exit(1)
@@ -537,10 +604,6 @@ def build_app():
         console.print("[green]✓[/green] mkcert certificate ready for TAPDB UI HTTPS")
         console.print(f"   Cert: [dim]{cert_path}[/dim]")
         console.print(f"   Key:  [dim]{key_path}[/dim]")
-        if cert_file or key_file:
-            console.print("   Set env overrides before start:")
-            console.print(f"   [cyan]export TAPDB_UI_SSL_CERT={cert_path}[/cyan]")
-            console.print(f"   [cyan]export TAPDB_UI_SSL_KEY={key_path}[/cyan]")
         console.print("   Restart UI: [cyan]tapdb --config <path> --env <name> ui restart[/cyan]")
 
     @ui_app.command("stop")
@@ -637,9 +700,11 @@ def build_app():
         ui_start(port=port, host=host, reload=False, background=True)
 
     def _resolve_bootstrap_env() -> DbEnvironment:
-        raw = active_env_name("").strip().lower()
+        raw = str(active_context_overrides().get("env_name") or "").strip().lower()
         if not raw:
-            console.print("[red]✗[/red] TAPDB_ENV must be set for bootstrap")
+            console.print(
+                "[red]✗[/red] TapDB bootstrap requires an explicit --env value."
+            )
             console.print(
                 "  Example: [cyan]tapdb --config <path> --env dev bootstrap local[/cyan]"
             )
@@ -925,6 +990,56 @@ def build_app():
             f"Set via --db-port {env_name}=<port> or --ui-port {env_name}=<port>."
         )
 
+    def _require_explicit_config_flag() -> Path:
+        config_path = active_context_overrides().get("config_path")
+        if not config_path:
+            raise RuntimeError(
+                "TapDB config commands require --config. "
+                "Example: tapdb --config ~/.config/tapdb/atlas/app/tapdb-config.yaml "
+                "config init --client-id atlas --database-name app --euid-client-code A"
+            )
+        return Path(config_path)
+
+    def _default_admin_config() -> dict:
+        return {
+            "footer": {
+                "repo_url": "https://github.com/Daylily-Informatics/daylily-tapdb",
+            },
+            "session": {
+                "secret": secrets.token_hex(32),
+            },
+            "auth": {
+                "mode": "tapdb",
+                "disabled_user": {
+                    "email": "tapdb-admin@localhost",
+                    "role": "admin",
+                },
+                "shared_host": {
+                    "session_secret": "",
+                    "session_cookie": "session",
+                    "session_max_age_seconds": 1209600,
+                },
+            },
+            "cors": {
+                "allowed_origins": [],
+            },
+            "ui": {
+                "tls": {
+                    "cert_path": "",
+                    "key_path": "",
+                },
+            },
+            "metrics": {
+                "enabled": True,
+                "queue_max": 20000,
+                "flush_seconds": 1.0,
+            },
+            "db_pool_size": 5,
+            "db_max_overflow": 10,
+            "db_pool_timeout": 30,
+            "db_pool_recycle": 1800,
+        }
+
     @config_root_app.command("init")
     def config_init(
         client_id: str = typer.Option(..., "--client-id", help="Client namespace key"),
@@ -955,16 +1070,15 @@ def build_app():
             False, "--force", help="Overwrite existing config metadata if needed"
         ),
     ) -> None:
-        """Initialize a namespaced TAPDB v2 config."""
-        from daylily_tapdb.cli.db_config import get_config_path
-
-        set_cli_context(client_id=client_id, database_name=database_name)
-        ctx = _require_context(allow_namespace_fallback=True)
-        config_path = get_config_path(
+        """Initialize a namespaced TAPDB v3 config."""
+        current = active_context_overrides()
+        set_cli_context(
             client_id=client_id,
             database_name=database_name,
-            allow_namespace_fallback=True,
+            config_path=current["config_path"],
         )
+        ctx = _require_context(allow_namespace_fallback=True)
+        config_path = _require_explicit_config_flag()
 
         env_names = sorted({e.strip().lower() for e in env if str(e).strip()})
         if not env_names:
@@ -989,11 +1103,25 @@ def build_app():
 
         root = existing if isinstance(existing, dict) else {}
         root["meta"] = {
-            "config_version": 2,
+            "config_version": 3,
             "client_id": client_id,
             "database_name": database_name,
             "euid_client_code": normalized_client_code,
         }
+        admin_root = root.get("admin")
+        if not isinstance(admin_root, dict) or force:
+            root["admin"] = _default_admin_config()
+        else:
+            merged_admin = _default_admin_config()
+            for key, value in admin_root.items():
+                if key in {"footer", "session", "auth", "cors", "ui", "metrics"} and isinstance(
+                    value, dict
+                ):
+                    merged_admin[key].update(value)
+                else:
+                    merged_admin[key] = value
+            root["admin"] = merged_admin
+
         envs = root.setdefault("environments", {})
         for env_name in env_names:
             prior = envs.get(env_name, {}) or {}
@@ -1081,13 +1209,59 @@ def build_app():
         support_email: Optional[str] = typer.Option(
             None, "--support-email", help="Support email address"
         ),
+        admin_repo_url: Optional[str] = typer.Option(
+            None, "--admin-repo-url", help="Admin footer repository URL"
+        ),
+        admin_session_secret: Optional[str] = typer.Option(
+            None, "--admin-session-secret", help="Admin session signing secret"
+        ),
+        admin_auth_mode: Optional[str] = typer.Option(
+            None, "--admin-auth-mode", help="Admin auth mode: tapdb, shared_host, or disabled"
+        ),
+        admin_disabled_user_email: Optional[str] = typer.Option(
+            None, "--admin-disabled-user-email", help="Synthetic disabled-auth admin email"
+        ),
+        admin_disabled_user_role: Optional[str] = typer.Option(
+            None, "--admin-disabled-user-role", help="Synthetic disabled-auth admin role"
+        ),
+        admin_shared_host_session_secret: Optional[str] = typer.Option(
+            None, "--admin-shared-host-session-secret", help="Shared-host session signing secret"
+        ),
+        admin_shared_host_session_cookie: Optional[str] = typer.Option(
+            None, "--admin-shared-host-session-cookie", help="Shared-host session cookie name"
+        ),
+        admin_shared_host_session_max_age_seconds: Optional[int] = typer.Option(
+            None,
+            "--admin-shared-host-session-max-age-seconds",
+            help="Shared-host session max age in seconds",
+        ),
+        admin_allowed_origin: list[str] = typer.Option(
+            [],
+            "--admin-allowed-origin",
+            help="Allowed admin CORS origin (repeatable)",
+        ),
+        admin_tls_cert_path: Optional[str] = typer.Option(
+            None, "--admin-tls-cert-path", help="Configured admin TLS certificate path"
+        ),
+        admin_tls_key_path: Optional[str] = typer.Option(
+            None, "--admin-tls-key-path", help="Configured admin TLS private key path"
+        ),
+        admin_metrics_enabled: Optional[bool] = typer.Option(
+            None, "--admin-metrics-enabled/--no-admin-metrics-enabled", help="Enable admin DB metrics"
+        ),
+        admin_metrics_queue_max: Optional[int] = typer.Option(
+            None, "--admin-metrics-queue-max", help="Admin DB metrics queue size"
+        ),
+        admin_metrics_flush_seconds: Optional[float] = typer.Option(
+            None, "--admin-metrics-flush-seconds", help="Admin DB metrics flush interval"
+        ),
         clear: list[str] = typer.Option(
             [],
             "--clear",
             help="Environment field to clear (repeatable)",
         ),
     ) -> None:
-        """Update fields inside a namespaced TAPDB v2 config."""
+        """Update fields inside a namespaced TAPDB v3 config."""
         from daylily_tapdb.cli.db_config import get_config_path
 
         ctx = _require_context()
@@ -1145,6 +1319,19 @@ def build_app():
             env_cfg = {}
             envs[env_name] = env_cfg
 
+        admin_root = root.setdefault("admin", _default_admin_config())
+        if not isinstance(admin_root, dict):
+            raise RuntimeError("Config admin section must be a mapping.")
+        footer = admin_root.setdefault("footer", {})
+        session = admin_root.setdefault("session", {})
+        auth = admin_root.setdefault("auth", {})
+        disabled_user = auth.setdefault("disabled_user", {})
+        shared_host = auth.setdefault("shared_host", {})
+        cors = admin_root.setdefault("cors", {})
+        ui_root = admin_root.setdefault("ui", {})
+        tls = ui_root.setdefault("tls", {})
+        metrics = admin_root.setdefault("metrics", {})
+
         updates: dict[str, str] = {}
         if engine_type is not None:
             updates["engine_type"] = str(engine_type).strip().lower()
@@ -1181,7 +1368,57 @@ def build_app():
         if support_email is not None:
             updates["support_email"] = str(support_email).strip()
 
-        if not updates and not clear_fields:
+        admin_changed = False
+        if admin_repo_url is not None:
+            footer["repo_url"] = str(admin_repo_url).strip()
+            admin_changed = True
+        if admin_session_secret is not None:
+            session["secret"] = str(admin_session_secret)
+            admin_changed = True
+        if admin_auth_mode is not None:
+            auth["mode"] = str(admin_auth_mode).strip().lower()
+            admin_changed = True
+        if admin_disabled_user_email is not None:
+            disabled_user["email"] = str(admin_disabled_user_email).strip().lower()
+            admin_changed = True
+        if admin_disabled_user_role is not None:
+            disabled_user["role"] = str(admin_disabled_user_role).strip().lower()
+            admin_changed = True
+        if admin_shared_host_session_secret is not None:
+            shared_host["session_secret"] = str(admin_shared_host_session_secret)
+            admin_changed = True
+        if admin_shared_host_session_cookie is not None:
+            shared_host["session_cookie"] = str(
+                admin_shared_host_session_cookie
+            ).strip()
+            admin_changed = True
+        if admin_shared_host_session_max_age_seconds is not None:
+            shared_host["session_max_age_seconds"] = int(
+                admin_shared_host_session_max_age_seconds
+            )
+            admin_changed = True
+        if admin_allowed_origin:
+            cors["allowed_origins"] = [
+                str(item).strip() for item in admin_allowed_origin if str(item).strip()
+            ]
+            admin_changed = True
+        if admin_tls_cert_path is not None:
+            tls["cert_path"] = str(admin_tls_cert_path).strip()
+            admin_changed = True
+        if admin_tls_key_path is not None:
+            tls["key_path"] = str(admin_tls_key_path).strip()
+            admin_changed = True
+        if admin_metrics_enabled is not None:
+            metrics["enabled"] = bool(admin_metrics_enabled)
+            admin_changed = True
+        if admin_metrics_queue_max is not None:
+            metrics["queue_max"] = int(admin_metrics_queue_max)
+            admin_changed = True
+        if admin_metrics_flush_seconds is not None:
+            metrics["flush_seconds"] = float(admin_metrics_flush_seconds)
+            admin_changed = True
+
+        if not updates and not clear_fields and not admin_changed:
             raise RuntimeError("No config changes requested.")
 
         for field_name in clear_fields:
@@ -1197,129 +1434,6 @@ def build_app():
             console.print(f"  cleared:   {field_name}")
         for field_name in sorted(updates.keys()):
             console.print(f"  set:       {field_name}={env_cfg[field_name]}")
-
-    @config_root_app.command("migrate-legacy")
-    def config_migrate_legacy(
-        client_id: str = typer.Option(..., "--client-id", help="Client namespace key"),
-        database_name: str = typer.Option(
-            ..., "--database-name", help="Database namespace key"
-        ),
-        euid_client_code: str = typer.Option(
-            ...,
-            "--euid-client-code",
-            help="Single-letter client code used to derive the namespace TapDB core prefix",
-        ),
-        db_port: list[str] = typer.Option(
-            [],
-            "--db-port",
-            help="Per-env DB port mapping (ENV=PORT, repeatable)",
-        ),
-        ui_port: list[str] = typer.Option(
-            [],
-            "--ui-port",
-            help="Per-env UI port mapping (ENV=PORT, repeatable)",
-        ),
-        source: Optional[Path] = typer.Option(
-            None,
-            "--source",
-            help="Optional legacy config source path",
-        ),
-        force: bool = typer.Option(
-            False, "--force", help="Overwrite target if it already exists"
-        ),
-    ) -> None:
-        """Migrate a legacy TAPDB config into namespaced v2 format."""
-        from daylily_tapdb.cli.db_config import get_legacy_config_paths
-
-        normalized_client_code = normalize_euid_client_code(euid_client_code)
-        core_euid_prefix = resolve_client_scoped_core_prefix(normalized_client_code)
-        set_cli_context(client_id=client_id, database_name=database_name)
-        ctx = _require_context(allow_namespace_fallback=True)
-        target_path = ctx.config_path()
-
-        if target_path.exists() and not force:
-            raise RuntimeError(
-                f"Target config already exists: {target_path}. "
-                "Use --force to overwrite."
-            )
-
-        if source:
-            source_path = source.expanduser()
-            if not source_path.exists():
-                raise RuntimeError(f"Legacy source config not found: {source_path}")
-        else:
-            source_path = None
-            for candidate in get_legacy_config_paths(database_name=database_name):
-                if candidate.exists():
-                    source_path = candidate
-                    break
-            if source_path is None:
-                raise RuntimeError(
-                    "No legacy TAPDB config found to migrate. "
-                    "Use --source or run tapdb config init."
-                )
-
-        legacy = _read_yaml_or_json_file(source_path)
-        legacy_envs = legacy.get("environments") if isinstance(legacy, dict) else None
-        if not isinstance(legacy_envs, dict) or not legacy_envs:
-            raise RuntimeError(
-                f"Legacy config has no environments to migrate: {source_path}"
-            )
-
-        db_ports = _parse_env_port_pairs(db_port, flag="--db-port")
-        ui_ports = _parse_env_port_pairs(ui_port, flag="--ui-port")
-
-        migrated: dict = {
-            "meta": {
-                "config_version": 2,
-                "client_id": client_id,
-                "database_name": database_name,
-                "euid_client_code": normalized_client_code,
-            },
-            "environments": {},
-        }
-        for env_name in sorted(legacy_envs.keys()):
-            env_key = str(env_name).strip().lower()
-            legacy_cfg = legacy_envs.get(env_name, {}) or {}
-            engine_type = str(legacy_cfg.get("engine_type") or "local").strip().lower()
-
-            resolved_db_port = _resolve_required_port(
-                env_name=env_key,
-                field="port",
-                explicit_map=db_ports,
-                existing_env_cfg=legacy_cfg,
-            )
-            resolved_ui_port = _resolve_required_port(
-                env_name=env_key,
-                field="ui_port",
-                explicit_map=ui_ports,
-                existing_env_cfg=legacy_cfg,
-            )
-            host = str(legacy_cfg.get("host") or "localhost")
-            if engine_type != "aurora":
-                host = "localhost"
-            env_cfg = {
-                **legacy_cfg,
-                "engine_type": engine_type,
-                "host": host,
-                "port": str(resolved_db_port),
-                "ui_port": str(resolved_ui_port),
-            }
-            # tapdb_user no longer exists; keep legacy configs readable but do not emit.
-            env_cfg.pop("tapdb_user_euid_prefix", None)
-            env_cfg["audit_log_euid_prefix"] = core_euid_prefix
-            migrated["environments"][env_key] = env_cfg
-
-        _write_yaml_or_json_file(target_path, migrated)
-        console.print("[green]✓[/green] Legacy config migrated to namespaced v2 format")
-        console.print(f"  Source: [dim]{source_path}[/dim]")
-        console.print(f"  Target: [dim]{target_path}[/dim]")
-        console.print(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
-        for env_name in sorted(migrated["environments"].keys()):
-            env_cfg = migrated["environments"][env_name]
-            console.print(
-                f"  {env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}"
-            )
 
     @app.command("version")
     def version():
@@ -1351,7 +1465,6 @@ def build_app():
         from daylily_tapdb import __version__
         from daylily_tapdb.cli.db_config import (
             get_config_path,
-            get_config_paths,
             get_db_config_for_env,
         )
 
@@ -1483,7 +1596,6 @@ def build_app():
                 return result
 
         tapdb_env = _active_env_name()
-        test_dsn = os.environ.get("TAPDB_TEST_DSN", "")
 
         def _pg_probe(env_name: str, cfg: dict[str, str]) -> dict[str, object]:
             url = f"postgresql://{cfg['user']}@{cfg['host']}:{cfg['port']}/{cfg['database']}"
@@ -1517,7 +1629,6 @@ def build_app():
         # NOTE: This function is nested inside build_app();
         # keep indentation purely spaces to avoid TabError.
         ctx = _require_context(env_name=tapdb_env)
-        config_paths = get_config_paths()
         effective_config_path = get_config_path()
         ui_pid_file, ui_log_file, _ = _ui_runtime_paths(tapdb_env)
         runtime_root = ctx.runtime_dir(tapdb_env)
@@ -1562,13 +1673,9 @@ def build_app():
                 "client_id": ctx.client_id,
                 "database_name": ctx.database_name,
                 "check_all_envs": check_all_envs,
-                "tapdb_test_dsn": _sanitize_url(test_dsn) if test_dsn else None,
                 "paths": {
                     "ui_pid_file": str(ui_pid_file),
                     "ui_log_file": str(ui_log_file),
-                    "config_search_order": [
-                        {"path": str(p), "exists": p.exists()} for p in config_paths
-                    ],
                     "effective_config": {
                         "path": str(effective_config_path),
                         "exists": effective_config_path.exists(),
@@ -1600,8 +1707,6 @@ def build_app():
         general.add_row("Database Name", ctx.database_name)
         general.add_row("Namespace", ctx.namespace_slug())
         general.add_row("DB probes", "all envs" if check_all_envs else "active env only")
-        if test_dsn:
-            general.add_row("TAPDB_TEST_DSN", f"[dim]{_sanitize_url(test_dsn)}[/dim]")
 
         general.add_row("UI Server", f"Running (PID {ui_pid})" if ui_pid else "Stopped")
         if ui_times and ui_times.get("start_time"):
@@ -1615,13 +1720,6 @@ def build_app():
         config_table = Table(title="Config", show_header=True)
         config_table.add_column("Property", style="cyan")
         config_table.add_column("Value")
-
-        config_table.add_row(
-            "Config search order",
-            "\n".join(
-                [f"{p} ({'exists' if p.exists() else 'missing'})" for p in config_paths]
-            ),
-        )
 
         exists_label = "exists" if effective_config_path.exists() else "missing"
         config_table.add_row(

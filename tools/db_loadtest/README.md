@@ -28,10 +28,13 @@ python tools/db_loadtest/generate_synthetic_data.py --help
 If you need a fresh local TAPDB first:
 
 ```bash
-export TAPDB_CLIENT_ID=tapdb
-export TAPDB_DATABASE_NAME=tapdb
-export TAPDB_ENV=dev
-tapdb bootstrap local --no-gui
+mkdir -p "$HOME/.config/tapdb/tapdb/tapdb"
+tapdb config init \
+  --config "$HOME/.config/tapdb/tapdb/tapdb/tapdb-config.yaml" \
+  --client-id tapdb \
+  --database-name tapdb \
+  --euid-client-code T
+tapdb --config "$HOME/.config/tapdb/tapdb/tapdb/tapdb-config.yaml" --env dev bootstrap local --no-gui
 ```
 
 ## 1) Generate Synthetic Data

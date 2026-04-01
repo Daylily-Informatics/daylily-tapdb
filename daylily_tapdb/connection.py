@@ -76,8 +76,8 @@ class TAPDBConnection:
         Args:
             db_url: Full database URL (overrides other db_* params)
             db_url_prefix: Database URL prefix (default: postgresql://)
-            db_hostname: Database host:port (default: localhost:$PGPORT or 5533)
-            db_pass: Database password (default: $PGPASSWORD)
+            db_hostname: Database host:port (default: localhost:5533)
+            db_pass: Database password
             db_user: Database user (default: $USER)
             db_name: Database name (default: tapdb)
             app_username: Username for audit logging (default: $USER)
@@ -136,10 +136,8 @@ class TAPDBConnection:
             )
         else:
             # Local PostgreSQL (original behaviour)
-            db_hostname = db_hostname or (
-                f"localhost:{os.environ.get('PGPORT', DEFAULT_TAPDB_POSTGRES_PORT)}"
-            )
-            db_pass = db_pass or os.environ.get("PGPASSWORD", "")
+            db_hostname = db_hostname or f"localhost:{DEFAULT_TAPDB_POSTGRES_PORT}"
+            db_pass = db_pass or ""
             self._db_url = f"{db_url_prefix}{db_user}:{db_pass}@{db_hostname}/{db_name}"
 
         # Create engine with connection pooling

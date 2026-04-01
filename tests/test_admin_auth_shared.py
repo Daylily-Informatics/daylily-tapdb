@@ -21,8 +21,15 @@ def _signed_bloom_cookie(
 
 
 def test_extract_bloom_user_parses_signed_cookie(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("TAPDB_ADMIN_BLOOM_SESSION_SECRET", "secret-a")
-    monkeypatch.setenv("TAPDB_ADMIN_BLOOM_SESSION_COOKIE", "session")
+    monkeypatch.setattr(
+        auth,
+        "_admin_settings",
+        lambda: {
+            "shared_host_session_secret": "secret-a",
+            "shared_host_session_cookie": "session",
+            "shared_host_session_max_age_seconds": 1209600,
+        },
+    )
     cookie = _signed_bloom_cookie(
         secret="secret-a",
         payload={"user_data": {"email": "ADMIN@EXAMPLE.COM", "role": "admin"}},
@@ -37,8 +44,15 @@ def test_extract_bloom_user_parses_signed_cookie(monkeypatch: pytest.MonkeyPatch
 def test_extract_bloom_user_invalid_cookie_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setenv("TAPDB_ADMIN_BLOOM_SESSION_SECRET", "secret-a")
-    monkeypatch.setenv("TAPDB_ADMIN_BLOOM_SESSION_COOKIE", "session")
+    monkeypatch.setattr(
+        auth,
+        "_admin_settings",
+        lambda: {
+            "shared_host_session_secret": "secret-a",
+            "shared_host_session_cookie": "session",
+            "shared_host_session_max_age_seconds": 1209600,
+        },
+    )
     request = SimpleNamespace(cookies={"session": "not-a-valid-cookie"})
 
     assert auth._extract_bloom_user(request) is None
@@ -47,7 +61,15 @@ def test_extract_bloom_user_invalid_cookie_returns_none(
 def test_extract_bloom_user_invalid_role_defaults_to_user(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setenv("TAPDB_ADMIN_BLOOM_SESSION_SECRET", "secret-a")
+    monkeypatch.setattr(
+        auth,
+        "_admin_settings",
+        lambda: {
+            "shared_host_session_secret": "secret-a",
+            "shared_host_session_cookie": "session",
+            "shared_host_session_max_age_seconds": 1209600,
+        },
+    )
     cookie = _signed_bloom_cookie(
         secret="secret-a",
         payload={"user_data": {"email": "user@example.com", "role": "super-admin"}},

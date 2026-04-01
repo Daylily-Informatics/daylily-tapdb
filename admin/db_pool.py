@@ -25,20 +25,14 @@ from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from daylily_tapdb.aurora.connection import AuroraConnectionBuilder
+from daylily_tapdb.cli.db_config import get_admin_settings_for_env
 from daylily_tapdb.cli.db_config import get_db_config_for_env
 
 logger = logging.getLogger(__name__)
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = (os.environ.get(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        logger.warning("Invalid %s=%r; using %s", name, raw, default)
-        return default
+def _admin_settings(env_name: str) -> dict[str, object]:
+    return get_admin_settings_for_env(env_name)
 
 
 def _parse_bool(value: object, *, default: bool) -> bool:
@@ -120,11 +114,17 @@ _engine_lock = threading.Lock()
 _bundles_by_env: dict[str, EngineBundle] = {}
 
 
-def _create_engine(url: URL, *, echo_sql: bool) -> Engine:
-    pool_size = _env_int("TAPDB_DB_POOL_SIZE", 5)
-    max_overflow = _env_int("TAPDB_DB_MAX_OVERFLOW", 10)
-    pool_timeout = _env_int("TAPDB_DB_POOL_TIMEOUT", 30)
-    pool_recycle = _env_int("TAPDB_DB_POOL_RECYCLE", 1800)
+def _create_engine(
+    url: URL,
+    *,
+    echo_sql: bool,
+    env_name: str,
+) -> Engine:
+    settings = _admin_settings(env_name)
+    pool_size = int(settings.get("db_pool_size") or 5)
+    max_overflow = int(settings.get("db_max_overflow") or 10)
+    pool_timeout = int(settings.get("db_pool_timeout") or 30)
+    pool_recycle = int(settings.get("db_pool_recycle") or 1800)
 
     return create_engine(
         url,
@@ -199,7 +199,7 @@ def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
             database=database,
             query={"sslmode": "verify-full", "sslrootcert": str(ca_path)},
         )
-        engine = _create_engine(url, echo_sql=echo_sql)
+        engine = _create_engine(url, echo_sql=echo_sql, env_name=env_name)
         _attach_aurora_password_provider(
             engine,
             region=region,
@@ -220,7 +220,7 @@ def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
         port=port,
         database=database,
     )
-    return _create_engine(url, echo_sql=echo_sql)
+    return _create_engine(url, echo_sql=echo_sql, env_name=env_name)
 
 
 def get_engine_bundle(env_name: str) -> EngineBundle:

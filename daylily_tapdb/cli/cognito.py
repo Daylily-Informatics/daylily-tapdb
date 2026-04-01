@@ -343,10 +343,12 @@ def _write_pool_id_to_tapdb_config(env: Environment, pool_id: str) -> Path:
     except RuntimeError:
         ctx = None
     if ctx:
+        meta = existing.get("meta") if isinstance(existing, dict) else None
         existing["meta"] = {
-            "config_version": 2,
+            "config_version": 3,
             "client_id": ctx.client_id,
             "database_name": ctx.database_name,
+            "euid_client_code": str((meta or {}).get("euid_client_code") or ""),
         }
 
     try:

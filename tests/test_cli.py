@@ -49,22 +49,16 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Keep CLI tests hermetic.
 
     - Avoid touching the user's real ~/.tapdb PID/log files.
-    - Avoid probing unexpected environments (e.g. TAPDB_ENV=prod in a dev shell).
+    - Avoid probing unexpected environments.
     """
-    monkeypatch.setenv("TAPDB_ENV", "dev")
-    monkeypatch.setenv("TAPDB_CLIENT_ID", "testclient")
-    monkeypatch.setenv("TAPDB_DATABASE_NAME", "testdb")
-    monkeypatch.setenv("TAPDB_STRICT_NAMESPACE", "0")
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("TAPDB_TEST_DSN", raising=False)
-    monkeypatch.delenv("TAPDB_CONFIG_PATH", raising=False)
     cfg_path = (
         tmp_path / ".config" / "tapdb" / "testclient" / "testdb" / "tapdb-config.yaml"
     )
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text(
         "meta:\n"
-        "  config_version: 2\n"
+        "  config_version: 3\n"
         "  client_id: testclient\n"
         "  database_name: testdb\n"
         "  euid_client_code: C\n"
@@ -100,7 +94,12 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     os.chmod(cfg_path, 0o600)
     clear_cli_context()
-    set_cli_context(client_id="testclient", database_name="testdb", env_name="dev")
+    set_cli_context(
+        client_id="testclient",
+        database_name="testdb",
+        env_name="dev",
+        config_path=cfg_path,
+    )
     monkeypatch.setattr(cli_mod, "PID_FILE", tmp_path / "ui.pid")
     monkeypatch.setattr(cli_mod, "LOG_FILE", tmp_path / "ui.log")
     yield
@@ -162,34 +161,31 @@ class TestCLIMain:
         for env_name in ["dev", "test", "prod"]:
             assert env_name in pg
 
-    def test_database_name_option_scopes_config_paths(self):
-        """Test --database-name changes config search path naming."""
+    def test_database_name_option_does_not_override_explicit_config_metadata(self):
+        """Test config metadata stays authoritative once --config is resolved."""
         with patch("shutil.which", return_value=None):
             result = runner.invoke(app, ["--database-name", "atlas", "info", "--json"])
         assert result.exit_code == 0
         payload = json.loads(result.output)
-        paths = payload["paths"]["config_search_order"]
-        assert any(
-            "/testclient/atlas/tapdb-config.yaml" in entry["path"] for entry in paths
-        ), paths
+        assert payload["database_name"] == "testdb"
+        assert (
+            "/testclient/testdb/tapdb-config.yaml"
+            in payload["paths"]["effective_config"]["path"]
+        )
 
-    def test_context_missing_client_id_fails(self, monkeypatch):
-        monkeypatch.delenv("TAPDB_CLIENT_ID", raising=False)
+    def test_runtime_command_without_config_fails(self):
         clear_cli_context()
-        set_cli_context(database_name="testdb", env_name="dev")
         result = runner.invoke(app, ["db", "create", "dev"])
         clear_cli_context()
         assert result.exit_code != 0
-        assert "client-id" in _strip_ansi(result.output)
+        assert "require both --config and --env" in _strip_ansi(result.output)
 
-    def test_context_missing_database_name_fails(self, monkeypatch):
-        monkeypatch.delenv("TAPDB_DATABASE_NAME", raising=False)
+    def test_runtime_command_without_config_for_ui_fails(self):
         clear_cli_context()
-        set_cli_context(client_id="testclient", env_name="dev")
         result = runner.invoke(app, ["ui", "status"])
         clear_cli_context()
         assert result.exit_code != 0
-        assert "database-name" in _strip_ansi(result.output)
+        assert "require both --config and --env" in _strip_ansi(result.output)
 
 
 class TestCLIUI:
@@ -376,14 +372,34 @@ class TestCLICognito:
     def test_cognito_bind_writes_pool_id(self, tmp_path, monkeypatch):
         cfg_path = tmp_path / "tapdb-config.yaml"
         cfg_path.write_text(
-            "environments:\n  dev:\n    host: localhost\n    port: 5432\n"
-            "    user: test\n    database: tapdb_dev\n",
+            "meta:\n"
+            "  config_version: 3\n"
+            "  client_id: testclient\n"
+            "  database_name: testdb\n"
+            "  euid_client_code: C\n"
+            "environments:\n"
+            "  dev:\n"
+            "    engine_type: local\n"
+            "    host: localhost\n"
+            "    port: 5432\n"
+            "    ui_port: 8911\n"
+            "    user: test\n"
+            "    database: tapdb_dev\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("TAPDB_CONFIG_PATH", str(cfg_path))
         result = runner.invoke(
             app,
-            ["cognito", "bind", "dev", "--pool-id", "us-east-1_TESTPOOL"],
+            [
+                "--config",
+                str(cfg_path),
+                "--env",
+                "dev",
+                "cognito",
+                "bind",
+                "dev",
+                "--pool-id",
+                "us-east-1_TESTPOOL",
+            ],
         )
         assert result.exit_code == 0
         content = cfg_path.read_text(encoding="utf-8")
@@ -851,15 +867,13 @@ class TestCLIBootstrap:
         assert "local" in out
         assert "aurora" in out
 
-    def test_bootstrap_local_requires_tapdb_env(self, monkeypatch):
-        monkeypatch.delenv("TAPDB_ENV", raising=False)
+    def test_bootstrap_local_requires_explicit_runtime_context(self):
         clear_cli_context()
-        set_cli_context(client_id="testclient", database_name="testdb")
         fresh_app = cli_mod.build_app()
         result = runner.invoke(fresh_app, ["bootstrap", "local", "--no-gui"])
         clear_cli_context()
         assert result.exit_code != 0
-        assert "TAPDB_ENV" in result.output
+        assert "require both --config and --env" in _strip_ansi(result.output)
 
     def test_bootstrap_local_no_gui(self, monkeypatch):
         monkeypatch.setenv("TAPDB_ENV", "dev")
@@ -1060,8 +1074,8 @@ class TestCLIDB:
             assert config["host"] == "localhost"
             assert config["port"] == "5533"
 
-    def test_get_db_config_env_override(self):
-        """Test local host policy rejects non-local host overrides."""
+    def test_get_db_config_ignores_removed_env_overrides(self):
+        """Test removed TAPDB_<ENV>_* overrides no longer affect config resolution."""
         # Mock load_config to isolate from real config file.
         with (
             patch("daylily_tapdb.cli.db_config.load_config", return_value={}),
@@ -1074,11 +1088,10 @@ class TestCLIDB:
                 },
             ),
         ):
-            with pytest.raises(
-                RuntimeError,
-                match="Local TAPDB must use host 'localhost'",
-            ):
-                _get_db_config(Environment.test)
+            config = _get_db_config(Environment.test)
+            assert config["host"] == "localhost"
+            assert config["port"] == "5534"
+            assert config["database"] == "tapdb_test"
 
     def test_find_schema_file(self):
         """Test _find_schema_file locates the schema."""
@@ -1208,6 +1221,48 @@ class TestCLIPG:
         result = runner.invoke(app, ["pg", "init", "prod"])
         assert result.exit_code != 0
         assert "prod" in result.output.lower() or "cannot" in result.output.lower()
+
+    def test_pg_init_uses_configured_superuser(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Test pg init creates the local cluster with the configured DB user."""
+        import daylily_tapdb.cli.pg as pg_mod
+
+        data_dir = tmp_path / "pgdata"
+        calls: list[list[str]] = []
+
+        def _fake_run(cmd, capture_output=True, text=True, timeout=60):
+            calls.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(pg_mod, "_get_postgres_data_dir", lambda _env: data_dir)
+        monkeypatch.setattr(pg_mod.shutil, "which", lambda _name: "/usr/bin/initdb")
+        monkeypatch.setattr(
+            pg_mod,
+            "get_db_config_for_env",
+            lambda _env: {
+                "user": "postgres",
+                "host": "localhost",
+                "port": "5533",
+            },
+        )
+        monkeypatch.setattr(pg_mod.subprocess, "run", _fake_run)
+
+        result = runner.invoke(app, ["pg", "init", "dev"])
+
+        assert result.exit_code == 0
+        assert calls == [
+            [
+                "/usr/bin/initdb",
+                "-D",
+                str(data_dir),
+                "--no-locale",
+                "-E",
+                "UTF8",
+                "-U",
+                "postgres",
+            ]
+        ]
 
     def test_pg_start_local_help(self):
         """Test pg start-local --help."""
