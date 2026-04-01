@@ -1,11 +1,5 @@
-"""Postgres integration test for Phase 2 acceptance.
+"""Postgres integration test for Phase 2 acceptance."""
 
-Gated by TAPDB_TEST_DSN.
-Creates an isolated schema, installs tapdb_schema.sql, seeds templates from config,
-creates an instance+children+lineage, executes an action, verifies audit+soft delete.
-"""
-
-import os
 import random
 import time
 import uuid
@@ -33,6 +27,7 @@ from daylily_tapdb.schema_inventory import (
     schema_asset_files,
 )
 from daylily_tapdb.templates.manager import TemplateManager
+from tests.conftest import resolve_tapdb_test_dsn
 
 _UNSET = object()
 
@@ -215,10 +210,8 @@ def _integration_templates() -> list[dict]:
     ]
 
 
-def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch):
-    dsn = os.environ.get("TAPDB_TEST_DSN")
-    if not dsn:
-        pytest.skip("Set TAPDB_TEST_DSN to run Postgres integration tests")
+def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch, pytestconfig):
+    dsn = resolve_tapdb_test_dsn(pytestconfig)
     _set_runtime_prefix_env(monkeypatch)
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -312,11 +305,9 @@ def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch):
     ],
 )
 def test_postgres_identity_triggers_respect_runtime_prefix_override(
-    monkeypatch, prefix_env, expected_prefix
+    monkeypatch, prefix_env, expected_prefix, pytestconfig
 ):
-    dsn = os.environ.get("TAPDB_TEST_DSN")
-    if not dsn:
-        pytest.skip("Set TAPDB_TEST_DSN to run Postgres integration tests")
+    dsn = resolve_tapdb_test_dsn(pytestconfig)
     _set_runtime_prefix_env(monkeypatch, prefix_env)
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -369,10 +360,8 @@ def test_postgres_identity_triggers_respect_runtime_prefix_override(
         _drop_schema(dsn, schema_name)
 
 
-def test_postgres_schema_install_is_idempotent():
-    dsn = os.environ.get("TAPDB_TEST_DSN")
-    if not dsn:
-        pytest.skip("Set TAPDB_TEST_DSN to run Postgres integration tests")
+def test_postgres_schema_install_is_idempotent(pytestconfig):
+    dsn = resolve_tapdb_test_dsn(pytestconfig)
 
     repo_root = Path(__file__).resolve().parents[1]
     schema_sql_path = repo_root / "schema" / "tapdb_schema.sql"
@@ -389,10 +378,8 @@ def test_postgres_schema_install_is_idempotent():
         _drop_schema(dsn, schema_name)
 
 
-def test_postgres_schema_drift_check_smoke():
-    dsn = os.environ.get("TAPDB_TEST_DSN")
-    if not dsn:
-        pytest.skip("Set TAPDB_TEST_DSN to run Postgres integration tests")
+def test_postgres_schema_drift_check_smoke(pytestconfig):
+    dsn = resolve_tapdb_test_dsn(pytestconfig)
 
     repo_root = Path(__file__).resolve().parents[1]
     schema_root = repo_root / "schema"
@@ -447,16 +434,14 @@ def test_postgres_schema_drift_check_smoke():
         _drop_schema(dsn, schema_name)
 
 
-def test_postgres_restricted_role_schema_install_and_identity_triggers():
+def test_postgres_restricted_role_schema_install_and_identity_triggers(pytestconfig):
     """Production-like behavior under restricted role privileges.
 
     - Connect as a non-superuser role to a fresh DB
     - Schema install succeeds without UUID extension helpers
     - Identity/EUID triggers produce bigint ID + Meridian EUID fields
     """
-    dsn = os.environ.get("TAPDB_TEST_DSN")
-    if not dsn:
-        pytest.skip("Set TAPDB_TEST_DSN to run Postgres integration tests")
+    dsn = resolve_tapdb_test_dsn(pytestconfig)
 
     try:
         import psycopg2

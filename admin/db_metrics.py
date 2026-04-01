@@ -26,7 +26,8 @@ from typing import Iterable, Optional
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
-from daylily_tapdb.cli.context import resolve_context
+from daylily_tapdb.cli.context import active_env_name, resolve_context
+from daylily_tapdb.cli.db_config import get_admin_settings_for_env
 
 # Request attribution (set by middleware and session_scope).
 request_path_var: ContextVar[str] = ContextVar("tapdb_request_path", default="")
@@ -58,31 +59,15 @@ def _parse_bool(value: object, *, default: bool) -> bool:
     return default
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = (os.environ.get(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = (os.environ.get(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
+def _admin_settings() -> dict[str, object]:
+    env_name = active_env_name("dev").strip().lower()
+    return get_admin_settings_for_env(env_name)
 
 
 def metrics_enabled() -> bool:
-    # Default enabled for real GUI runs, disabled under pytest unless explicitly forced.
     if "pytest" in sys.modules:
-        return _parse_bool(os.environ.get("TAPDB_DB_METRICS"), default=False)
-    return _parse_bool(os.environ.get("TAPDB_DB_METRICS"), default=True)
+        return _parse_bool(_admin_settings().get("metrics_enabled"), default=False)
+    return _parse_bool(_admin_settings().get("metrics_enabled"), default=True)
 
 
 def _sanitize_tsv(value: object) -> str:
@@ -127,9 +112,6 @@ def _extract_table_hint(statement: str, op: str) -> str:
 
 def _metrics_root_dir(env_name: str) -> Path:
     env = (env_name or "dev").strip().lower()
-    override = (os.environ.get("TAPDB_DB_METRICS_DIR") or "").strip()
-    if override:
-        return Path(override).expanduser() / env
     ctx = resolve_context(require_keys=True, env_name=env)
     return ctx.runtime_dir(env) / "metrics"
 
@@ -185,8 +167,9 @@ class MetricsRow:
 class TSVMetricsWriter:
     def __init__(self, env_name: str):
         self._env_name = (env_name or "dev").strip().lower()
-        self._queue_max = _env_int("TAPDB_DB_METRICS_QUEUE_MAX", 20000)
-        self._flush_secs = _env_float("TAPDB_DB_METRICS_FLUSH_SECS", 1.0)
+        settings = _admin_settings()
+        self._queue_max = int(settings.get("metrics_queue_max") or 20000)
+        self._flush_secs = float(settings.get("metrics_flush_seconds") or 1.0)
         self._queue: queue.Queue[str] = queue.Queue(maxsize=self._queue_max)
         self._dropped = 0
         self._dropped_lock = threading.Lock()
@@ -486,7 +469,10 @@ def build_metrics_page_context(env_name: str, *, limit: int = 5000) -> dict:
 
     message = ""
     if not enabled:
-        message = "DB metrics collection is disabled. Set TAPDB_DB_METRICS=1 to enable."
+        message = (
+            "DB metrics collection is disabled. "
+            "Set admin.metrics.enabled in tapdb-config.yaml to enable."
+        )
     elif not path.exists():
         message = "No metrics file yet for the current period. Generate some DB traffic and refresh."
 

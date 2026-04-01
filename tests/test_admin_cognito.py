@@ -34,7 +34,7 @@ def test_resolve_tapdb_pool_config_from_tapdb_yaml(
     _write(
         cfg_path,
         "meta:\n"
-        "  config_version: 2\n"
+        "  config_version: 3\n"
         "  client_id: local\n"
         "  database_name: tapdb\n"
         "  euid_client_code: C\n"
@@ -73,7 +73,7 @@ def test_resolve_tapdb_pool_config_requires_pool_id(
     _write(
         cfg_path,
         "meta:\n"
-        "  config_version: 2\n"
+        "  config_version: 3\n"
         "  client_id: local\n"
         "  database_name: tapdb\n"
         "  euid_client_code: C\n"
@@ -100,7 +100,7 @@ def test_resolve_tapdb_pool_config_requires_client_id(
     _write(
         cfg_path,
         "meta:\n"
-        "  config_version: 2\n"
+        "  config_version: 3\n"
         "  client_id: local\n"
         "  database_name: tapdb\n"
         "  euid_client_code: C\n"
@@ -130,7 +130,7 @@ def test_resolve_tapdb_pool_config_requires_tapdb_client_name(
     _write(
         cfg_path,
         "meta:\n"
-        "  config_version: 2\n"
+        "  config_version: 3\n"
         "  client_id: local\n"
         "  database_name: tapdb\n"
         "  euid_client_code: C\n"

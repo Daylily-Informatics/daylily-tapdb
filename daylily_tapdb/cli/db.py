@@ -1,5 +1,6 @@
 """Database management commands for TAPDB CLI."""
 
+import getpass
 import json
 import os
 import re
@@ -369,7 +370,11 @@ def _find_schema_file() -> Path:
 
 
 def _run_psql(
-    env: Environment, sql: str = None, file: Path = None, database: str = None
+    env: Environment,
+    sql: str = None,
+    file: Path = None,
+    database: str = None,
+    user: Optional[str] = None,
 ) -> tuple[bool, str]:
     """Run psql command and return (success, output).
 
@@ -387,7 +392,7 @@ def _run_psql(
         return AuroraSchemaDeployer.run_psql(
             host=cfg["host"],
             port=int(cfg["port"]),
-            user=cfg["user"],
+            user=user or cfg["user"],
             database=db,
             region=cfg.get("region", "us-west-2"),
             iam_auth=iam_auth,
@@ -407,7 +412,7 @@ def _run_psql(
         "-p",
         cfg["port"],
         "-U",
-        cfg["user"],
+        user or cfg["user"],
         "-d",
         db,
         "-v",
@@ -437,6 +442,74 @@ def _run_psql(
         return False, "psql not found. Please install PostgreSQL client."
     except Exception as e:
         return False, str(e)
+
+
+def _quoted_sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _quoted_sql_ident(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _bootstrap_user_candidates(preferred_user: str) -> list[str]:
+    candidates: list[str] = []
+    for candidate in [preferred_user, os.environ.get("USER"), getpass.getuser(), "postgres"]:
+        normalized = str(candidate or "").strip()
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+    return candidates
+
+
+def _ensure_local_role(env: Environment, role_name: str) -> None:
+    cfg = _get_db_config(env)
+    if env == Environment.prod or cfg.get("engine_type") != "local":
+        return
+
+    requested_role = str(role_name or "").strip()
+    if not requested_role:
+        return
+
+    ok, out = _run_psql(
+        env,
+        sql="SELECT 1",
+        database="postgres",
+        user=requested_role,
+    )
+    if ok:
+        return
+    if f'role "{requested_role}" does not exist' not in out:
+        return
+
+    for bootstrap_user in _bootstrap_user_candidates(requested_role):
+        if bootstrap_user == requested_role:
+            continue
+        bootstrap_ok, _ = _run_psql(
+            env,
+            sql="SELECT 1",
+            database="postgres",
+            user=bootstrap_user,
+        )
+        if not bootstrap_ok:
+            continue
+        create_sql = (
+            "DO $$ BEGIN "
+            f"IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {_quoted_sql_literal(requested_role)}) THEN "
+            f"CREATE ROLE {_quoted_sql_ident(requested_role)} LOGIN SUPERUSER CREATEDB CREATEROLE; "
+            "END IF; "
+            "END $$;"
+        )
+        create_ok, create_out = _run_psql(
+            env,
+            sql=create_sql,
+            database="postgres",
+            user=bootstrap_user,
+        )
+        if not create_ok:
+            raise RuntimeError(
+                f"Failed to create missing local PostgreSQL role {requested_role!r}: {create_out}"
+            )
+        return
 
 
 def _check_db_exists(env: Environment, database: str) -> bool:
@@ -599,6 +672,12 @@ def db_create(
     console.print(f"  Host:     {cfg['host']}:{cfg['port']}")
     console.print(f"  Database: {db_name}")
     console.print(f"  Owner:    {db_owner}")
+
+    try:
+        _ensure_local_role(env, cfg["user"])
+    except RuntimeError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(1) from exc
 
     ok, out = _run_psql(env, sql="SELECT 1", database="postgres")
     if not ok:

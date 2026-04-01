@@ -498,11 +498,22 @@ def pg_init(
     data_dir.parent.mkdir(parents=True, exist_ok=True)
 
     console.print("[yellow]►[/yellow] Running initdb...")
+    cfg = get_db_config_for_env(env.value)
+    initdb_superuser = str(cfg.get("user") or "postgres").strip() or "postgres"
 
     # Run initdb
     try:
         result = subprocess.run(
-            [initdb_path, "-D", str(data_dir), "--no-locale", "-E", "UTF8"],
+            [
+                initdb_path,
+                "-D",
+                str(data_dir),
+                "--no-locale",
+                "-E",
+                "UTF8",
+                "-U",
+                initdb_superuser,
+            ],
             capture_output=True,
             text=True,
             timeout=60,

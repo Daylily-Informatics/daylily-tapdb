@@ -20,10 +20,38 @@ def _write_config(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "meta:\n"
-        "  config_version: 2\n"
+        "  config_version: 3\n"
         "  client_id: alpha\n"
         "  database_name: beta\n"
         "  euid_client_code: A\n"
+        "admin:\n"
+        "  footer:\n"
+        "    repo_url: https://example.com/tapdb\n"
+        "  session:\n"
+        "    secret: secret123\n"
+        "  auth:\n"
+        "    mode: tapdb\n"
+        "    disabled_user:\n"
+        "      email: tapdb-admin@localhost\n"
+        "      role: admin\n"
+        "    shared_host:\n"
+        "      session_secret: shared-secret\n"
+        "      session_cookie: session\n"
+        "      session_max_age_seconds: 1209600\n"
+        "  cors:\n"
+        "    allowed_origins: []\n"
+        "  ui:\n"
+        "    tls:\n"
+        "      cert_path: ''\n"
+        "      key_path: ''\n"
+        "  metrics:\n"
+        "    enabled: true\n"
+        "    queue_max: 20000\n"
+        "    flush_seconds: 1.0\n"
+        "  db_pool_size: 5\n"
+        "  db_max_overflow: 10\n"
+        "  db_pool_timeout: 30\n"
+        "  db_pool_recycle: 1800\n"
         "environments:\n"
         "  dev:\n"
         "    engine_type: local\n"
@@ -93,11 +121,17 @@ def test_get_db_config_for_env_ignores_ambient_env_fallbacks(
     assert cfg["config_path"] == str(cfg_path)
 
 
-def test_runtime_command_allows_namespace_context_without_explicit_config_path():
-    result = runner.invoke(
-        app,
-        ["--client-id", "alpha", "--database-name", "beta", "info"],
+def test_runtime_command_requires_explicit_config_and_env(tmp_path: Path):
+    cfg_path = _write_config(
+        tmp_path / ".config" / "tapdb" / "alpha" / "beta" / "tapdb-config.yaml"
     )
+
+    result = runner.invoke(app, ["info"])
+
+    assert result.exit_code != 0
+    assert "--config and --env" in result.output
+
+    result = runner.invoke(app, ["--config", str(cfg_path), "--env", "dev", "info"])
 
     assert result.exit_code == 0
     assert "alpha" in result.output
@@ -140,7 +174,10 @@ def test_ui_start_launches_admin_server_with_explicit_context(
     monkeypatch.setattr(
         cli_mod,
         "_ensure_tls_certificates",
-        lambda _host, env_name=None: (cert_path, key_path),
+        lambda _host, env_name=None, cert_file=None, key_file=None: (
+            cert_path,
+            key_path,
+        ),
     )
     monkeypatch.setattr(cli_mod.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(cli_mod.time, "sleep", lambda _secs: None)

@@ -3,15 +3,43 @@
 # Save as:
 #   ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml
 #
-# The CLI resolves config in this order:
-# 1) TAPDB_CONFIG_PATH
-# 2) ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml
+# Runtime commands require:
+#   tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml --env <name> ...
 
 meta:
-  config_version: 2
+  config_version: 3
   client_id: local
   database_name: tapdb
   euid_client_code: C
+
+admin:
+  footer:
+    repo_url: https://github.com/Daylily-Informatics/daylily-tapdb
+  session:
+    secret: replace-me
+  auth:
+    mode: tapdb
+    disabled_user:
+      email: tapdb-admin@localhost
+      role: admin
+    shared_host:
+      session_secret: ""
+      session_cookie: session
+      session_max_age_seconds: 1209600
+  cors:
+    allowed_origins: []
+  ui:
+    tls:
+      cert_path: ""
+      key_path: ""
+  metrics:
+    enabled: true
+    queue_max: 20000
+    flush_seconds: 1.0
+  db_pool_size: 5
+  db_max_overflow: 10
+  db_pool_timeout: 30
+  db_pool_recycle: 1800
 
 environments:
   dev:

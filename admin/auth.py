@@ -5,7 +5,6 @@ Session-based authentication with role-based access control.
 """
 
 import json
-import os
 from base64 import b64decode
 from functools import wraps
 from typing import Any, Callable, Optional
@@ -18,6 +17,7 @@ from itsdangerous import BadSignature
 from admin.cognito import get_cognito_auth
 from admin.db_pool import get_db_connection
 from daylily_tapdb.cli.context import active_env_name
+from daylily_tapdb.cli.db_config import get_admin_settings_for_env
 from daylily_tapdb.user_store import (
     create_or_get,
     get_by_login_or_email,
@@ -32,25 +32,29 @@ SESSION_COOKIE_NAME = "tapdb_session"
 SESSION_MAX_AGE = 86400  # 24 hours
 
 
+def _admin_settings() -> dict[str, Any]:
+    env_name = active_env_name("dev").strip().lower()
+    return get_admin_settings_for_env(env_name)
+
+
 def _auth_disabled() -> bool:
     """Return True when TAPDB admin auth is explicitly disabled."""
-    raw = (os.environ.get("TAPDB_ADMIN_DISABLE_AUTH") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    return str(_admin_settings().get("auth_mode") or "").strip().lower() == "disabled"
 
 
 def _shared_auth_enabled() -> bool:
     """Return True when TAPDB admin trusts Bloom's authenticated session."""
-    raw = (os.environ.get("TAPDB_ADMIN_SHARED_AUTH") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    return str(_admin_settings().get("auth_mode") or "").strip().lower() == "shared_host"
 
 
 def _disabled_auth_user() -> dict:
     """Synthetic user used when TAPDB admin auth is disabled."""
-    email = (os.environ.get("TAPDB_ADMIN_DISABLED_USER_EMAIL") or "").strip().lower()
+    settings = _admin_settings()
+    email = str(settings.get("disabled_user_email") or "").strip().lower()
     if not email:
         email = "tapdb-admin@localhost"
 
-    role = (os.environ.get("TAPDB_ADMIN_DISABLED_USER_ROLE") or "admin").strip().lower()
+    role = str(settings.get("disabled_user_role") or "admin").strip().lower()
     if role not in {"admin", "user"}:
         role = "admin"
 
@@ -67,19 +71,15 @@ def _disabled_auth_user() -> dict:
 
 def _bloom_session_secret() -> str:
     """Resolve the signing key used for Bloom's SessionMiddleware cookie."""
-    return (
-        (os.environ.get("TAPDB_ADMIN_BLOOM_SESSION_SECRET") or "").strip()
-        or (os.environ.get("BLOOM_SESSION_SECRET") or "").strip()
-        or "your-secret-key"
-    )
+    return str(_admin_settings().get("shared_host_session_secret") or "").strip()
 
 
 def _bloom_session_cookie_name() -> str:
-    return (os.environ.get("TAPDB_ADMIN_BLOOM_SESSION_COOKIE") or "session").strip()
+    return str(_admin_settings().get("shared_host_session_cookie") or "session").strip()
 
 
 def _bloom_session_max_age() -> int:
-    raw = (os.environ.get("TAPDB_ADMIN_BLOOM_SESSION_MAX_AGE") or "").strip()
+    raw = str(_admin_settings().get("shared_host_session_max_age_seconds") or "").strip()
     if raw.isdigit():
         return int(raw)
     return 14 * 24 * 60 * 60

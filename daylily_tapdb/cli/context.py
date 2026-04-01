@@ -6,7 +6,6 @@ isolate config, runtime state, and local services per namespace.
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -104,7 +103,7 @@ def clear_cli_context() -> None:
 def active_env_name(default: str = "dev") -> str:
     """Return the current explicit TapDB env name for this process."""
 
-    return (_ACTIVE_ENV_NAME or os.environ.get("TAPDB_ENV") or default).strip()
+    return (_ACTIVE_ENV_NAME or default).strip()
 
 
 def active_config_path() -> Optional[Path]:
@@ -182,13 +181,13 @@ def resolve_context(
         fallback_client = _normalize_key(
             client_id
             if client_id is not None
-            else (_ACTIVE_CLIENT_ID or os.environ.get("TAPDB_CLIENT_ID")),
+            else _ACTIVE_CLIENT_ID,
             field_name="client-id",
         )
         fallback_db = _normalize_key(
             database_name
             if database_name is not None
-            else (_ACTIVE_DATABASE_NAME or os.environ.get("TAPDB_DATABASE_NAME")),
+            else _ACTIVE_DATABASE_NAME,
             field_name="database-name",
         )
         resolved_client = resolved_client or fallback_client

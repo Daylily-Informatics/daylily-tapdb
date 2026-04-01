@@ -1,4 +1,3 @@
-import os
 import random
 import time
 import uuid
@@ -10,13 +9,12 @@ from sqlalchemy import select, text
 from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.models.outbox import outbox_event
 from daylily_tapdb.outbox.repository import claim_events, enqueue_event, mark_delivered
+from tests.conftest import resolve_tapdb_test_dsn
 from tests.test_integration import _drop_schema, _install_schema
 
 
-def test_postgres_outbox_enqueue_claim_and_mark_delivered():
-    dsn = os.environ.get("TAPDB_TEST_DSN")
-    if not dsn:
-        pytest.skip("Set TAPDB_TEST_DSN to run Postgres integration tests")
+def test_postgres_outbox_enqueue_claim_and_mark_delivered(pytestconfig):
+    dsn = resolve_tapdb_test_dsn(pytestconfig)
 
     repo_root = Path(__file__).resolve().parents[1]
     schema_sql_path = repo_root / "schema" / "tapdb_schema.sql"

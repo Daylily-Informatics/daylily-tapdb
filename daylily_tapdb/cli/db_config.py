@@ -23,33 +23,20 @@ from daylily_tapdb.euid import (
 DEFAULT_CONFIG_FILENAME = CONFIG_FILENAME
 DEFAULT_TAPDB_POSTGRES_PORT = "5533"
 DEFAULT_UI_PORT = "8911"
-
-
-def _legacy_default_config_path() -> Path:
-    return Path.home() / ".config" / "tapdb" / DEFAULT_CONFIG_FILENAME
-
-
-def _legacy_repo_config_path() -> Path:
-    return Path.cwd() / "config" / DEFAULT_CONFIG_FILENAME
-
-
-def _legacy_scoped_config_paths(database_name: str) -> list[Path]:
-    suffix = f"tapdb-config-{database_name}.yaml"
-    return [
-        Path.home() / ".config" / "tapdb" / suffix,
-        Path.cwd() / "config" / suffix,
-    ]
-
-
-def get_legacy_config_paths(*, database_name: Optional[str] = None) -> list[Path]:
-    """Return legacy TAPDB config search paths (for migration tooling)."""
-    default_user = _legacy_default_config_path()
-    default_repo = _legacy_repo_config_path()
-    db_name = database_name
-    if db_name:
-        user_scoped, repo_scoped = _legacy_scoped_config_paths(db_name)
-        return [user_scoped, default_user, repo_scoped, default_repo]
-    return [default_user, default_repo]
+SUPPORTED_CONFIG_VERSION = "3"
+DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
+DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/daylily-tapdb"
+DEFAULT_ADMIN_SHARED_SESSION_COOKIE = "session"
+DEFAULT_ADMIN_SHARED_SESSION_MAX_AGE = 14 * 24 * 60 * 60
+DEFAULT_ADMIN_METRICS_QUEUE_MAX = 20000
+DEFAULT_ADMIN_METRICS_FLUSH_SECONDS = 1.0
+DEFAULT_ADMIN_AUTH_MODE = "tapdb"
+DEFAULT_DISABLED_ADMIN_EMAIL = "tapdb-admin@localhost"
+DEFAULT_DISABLED_ADMIN_ROLE = "admin"
+DEFAULT_DB_POOL_SIZE = 5
+DEFAULT_DB_MAX_OVERFLOW = 10
+DEFAULT_DB_POOL_TIMEOUT = 30
+DEFAULT_DB_POOL_RECYCLE = 1800
 
 
 def get_config_paths(
@@ -60,7 +47,7 @@ def get_config_paths(
     allow_namespace_fallback: bool = False,
 ) -> list[Path]:
     """Return ordered TAPDB config paths for the active namespace context."""
-    override = config_path or active_config_path() or os.environ.get("TAPDB_CONFIG_PATH")
+    override = config_path or active_config_path()
     if override:
         return [Path(override).expanduser().resolve()]
 
@@ -68,15 +55,14 @@ def get_config_paths(
         require_keys=False,
         client_id=client_id,
         database_name=database_name,
-        allow_namespace_fallback=True,
+        allow_namespace_fallback=allow_namespace_fallback,
     )
     if ctx:
         return [ctx.config_path()]
 
-    if not allow_namespace_fallback:
-        raise RuntimeError("TapDB config path is required. Set --config.")
-
-    raise RuntimeError("TapDB namespace is required. Set --client-id/--database-name.")
+    if allow_namespace_fallback:
+        raise RuntimeError("TapDB namespace is required. Set --client-id/--database-name.")
+    raise RuntimeError("TapDB config path is required. Set --config.")
 
 
 def get_config_path(
@@ -128,13 +114,6 @@ def _load_yaml_or_json(path: Path) -> dict[str, Any]:
     return data
 
 
-def _env_override(env_key: str, field_name: str) -> str | None:
-    value = os.environ.get(f"TAPDB_{env_key.upper()}_{field_name.upper()}")
-    if value is None:
-        return None
-    return str(value)
-
-
 def _load_config_with_path(
     *,
     config_path: Optional[str | Path] = None,
@@ -169,9 +148,11 @@ def _validate_meta_for_context(root: dict[str, Any], ctx: TapdbContext) -> None:
         )
 
     cfg_version = meta.get("config_version")
-    version_ok = str(cfg_version).strip() == "2"
+    version_ok = str(cfg_version).strip() == SUPPORTED_CONFIG_VERSION
     if not version_ok:
-        raise RuntimeError(f"Unsupported config_version {cfg_version!r}. Expected 2.")
+        raise RuntimeError(
+            f"Unsupported config_version {cfg_version!r}. Expected {SUPPORTED_CONFIG_VERSION}."
+        )
 
     cfg_client = str(meta.get("client_id") or "").strip()
     cfg_db = str(meta.get("database_name") or "").strip()
@@ -283,27 +264,6 @@ def get_db_config_for_env(
     cfg["core_euid_prefix"] = core_euid_prefix
     cfg["config_path"] = str(resolved_config_path)
 
-    explicit_config_mode = bool(config_path or active_config_path())
-    if not explicit_config_mode:
-        override_fields = [
-            "host",
-            "port",
-            "ui_port",
-            "user",
-            "password",
-            "database",
-            "audit_log_euid_prefix",
-            "region",
-            "cluster_identifier",
-            "iam_auth",
-            "ssl",
-            "unix_socket_dir",
-        ]
-        for field_name in override_fields:
-            override = _env_override(env_key, field_name)
-            if override is not None:
-                cfg[field_name] = override
-
     if engine_type == "aurora":
         cfg.setdefault("region", _file_str("region") or "us-west-2")
         cfg.setdefault("cluster_identifier", _file_str("cluster_identifier") or "")
@@ -343,3 +303,172 @@ def get_db_config_for_env(
         )
 
     return cfg
+
+
+def _as_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{field_name} must be a mapping in TapDB config.")
+    return value
+
+
+def _string(value: Any, *, default: str = "") -> str:
+    if value is None:
+        return default
+    return str(value).strip()
+
+
+def _bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _int(value: Any, *, default: int) -> int:
+    raw = _string(value)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _float(value: Any, *, default: float) -> float:
+    raw = _string(value)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
+def get_admin_settings_for_env(
+    env_name: str,
+    *,
+    config_path: Optional[str | Path] = None,
+    client_id: Optional[str] = None,
+    database_name: Optional[str] = None,
+    allow_namespace_fallback: bool = False,
+) -> dict[str, Any]:
+    """Resolve normalized admin/UI settings from the active TapDB config."""
+    env_key = str(env_name or "").strip().lower()
+    if not env_key:
+        raise RuntimeError("TapDB env name is required to load admin settings.")
+
+    cfg = get_db_config_for_env(
+        env_key,
+        config_path=config_path,
+        client_id=client_id,
+        database_name=database_name,
+        allow_namespace_fallback=allow_namespace_fallback,
+    )
+    root, resolved_config_path, config_exists = _load_config_with_path(
+        config_path=config_path,
+        client_id=cfg.get("client_id"),
+        database_name=cfg.get("database_name"),
+        allow_namespace_fallback=allow_namespace_fallback,
+    )
+    if not config_exists:
+        raise RuntimeError(f"No TAPDB config found at {resolved_config_path}.")
+
+    admin = _as_mapping(root.get("admin"), field_name="admin")
+    footer = _as_mapping(admin.get("footer"), field_name="admin.footer")
+    session = _as_mapping(admin.get("session"), field_name="admin.session")
+    auth = _as_mapping(admin.get("auth"), field_name="admin.auth")
+    disabled_user = _as_mapping(
+        auth.get("disabled_user"),
+        field_name="admin.auth.disabled_user",
+    )
+    shared_host = _as_mapping(
+        auth.get("shared_host"),
+        field_name="admin.auth.shared_host",
+    )
+    cors = _as_mapping(admin.get("cors"), field_name="admin.cors")
+    ui = _as_mapping(admin.get("ui"), field_name="admin.ui")
+    tls = _as_mapping(ui.get("tls"), field_name="admin.ui.tls")
+    metrics = _as_mapping(admin.get("metrics"), field_name="admin.metrics")
+
+    auth_mode = _string(auth.get("mode"), default=DEFAULT_ADMIN_AUTH_MODE).lower()
+    if auth_mode not in {"tapdb", "shared_host", "disabled"}:
+        raise RuntimeError(
+            "TapDB config admin.auth.mode must be one of: tapdb, shared_host, disabled."
+        )
+
+    return {
+        "config_path": str(resolved_config_path),
+        "env_name": env_key,
+        "support_email": _string(
+            cfg.get("support_email"),
+            default=DEFAULT_SUPPORT_EMAIL,
+        ),
+        "repo_url": _string(
+            footer.get("repo_url"),
+            default=DEFAULT_GITHUB_REPO_URL,
+        ),
+        "session_secret": _string(session.get("secret")),
+        "auth_mode": auth_mode,
+        "disabled_user_email": _string(
+            disabled_user.get("email"),
+            default=DEFAULT_DISABLED_ADMIN_EMAIL,
+        ).lower(),
+        "disabled_user_role": _string(
+            disabled_user.get("role"),
+            default=DEFAULT_DISABLED_ADMIN_ROLE,
+        ).lower(),
+        "shared_host_session_secret": _string(shared_host.get("session_secret")),
+        "shared_host_session_cookie": _string(
+            shared_host.get("session_cookie"),
+            default=DEFAULT_ADMIN_SHARED_SESSION_COOKIE,
+        ),
+        "shared_host_session_max_age_seconds": _int(
+            shared_host.get("session_max_age_seconds"),
+            default=DEFAULT_ADMIN_SHARED_SESSION_MAX_AGE,
+        ),
+        "allowed_origins": _string_list(cors.get("allowed_origins")),
+        "tls_cert_path": _string(tls.get("cert_path")),
+        "tls_key_path": _string(tls.get("key_path")),
+        "metrics_enabled": _bool(metrics.get("enabled"), default=True),
+        "metrics_queue_max": _int(
+            metrics.get("queue_max"),
+            default=DEFAULT_ADMIN_METRICS_QUEUE_MAX,
+        ),
+        "metrics_flush_seconds": _float(
+            metrics.get("flush_seconds"),
+            default=DEFAULT_ADMIN_METRICS_FLUSH_SECONDS,
+        ),
+        "db_pool_size": _int(
+            admin.get("db_pool_size"),
+            default=DEFAULT_DB_POOL_SIZE,
+        ),
+        "db_max_overflow": _int(
+            admin.get("db_max_overflow"),
+            default=DEFAULT_DB_MAX_OVERFLOW,
+        ),
+        "db_pool_timeout": _int(
+            admin.get("db_pool_timeout"),
+            default=DEFAULT_DB_POOL_TIMEOUT,
+        ),
+        "db_pool_recycle": _int(
+            admin.get("db_pool_recycle"),
+            default=DEFAULT_DB_POOL_RECYCLE,
+        ),
+    }

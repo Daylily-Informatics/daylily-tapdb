@@ -69,7 +69,11 @@ from admin.external_graph import (
 )
 from daylily_tapdb import InstanceFactory, TemplateManager, __version__
 from daylily_tapdb.cli.context import active_env_name
-from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+from daylily_tapdb.cli.db_config import (
+    get_admin_settings_for_env,
+    get_config_path,
+    get_db_config_for_env,
+)
 from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
@@ -101,6 +105,41 @@ DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/daylily-tapdb"
 _RESERVED_TEMPLATE_COORDS = {("generic", "actor", "system_user")}
 
 
+def _default_admin_settings() -> dict[str, Any]:
+    return {
+        "support_email": DEFAULT_SUPPORT_EMAIL,
+        "repo_url": DEFAULT_GITHUB_REPO_URL,
+        "session_secret": "",
+        "auth_mode": "tapdb",
+        "disabled_user_email": "tapdb-admin@localhost",
+        "disabled_user_role": "admin",
+        "shared_host_session_secret": "",
+        "shared_host_session_cookie": "session",
+        "shared_host_session_max_age_seconds": 1209600,
+        "allowed_origins": [],
+        "tls_cert_path": "",
+        "tls_key_path": "",
+        "metrics_enabled": True,
+        "metrics_queue_max": 20000,
+        "metrics_flush_seconds": 1.0,
+        "db_pool_size": 5,
+        "db_max_overflow": 10,
+        "db_pool_timeout": 30,
+        "db_pool_recycle": 1800,
+    }
+
+
+def _load_admin_settings() -> dict[str, Any]:
+    try:
+        return get_admin_settings_for_env(APP_ENV)
+    except Exception as exc:
+        logger.warning("Could not resolve TAPDB admin settings from config: %s", exc)
+        return _default_admin_settings()
+
+
+ADMIN_SETTINGS = _load_admin_settings()
+
+
 def _require_https_url(url: str, *, label: str) -> str:
     """Reject non-HTTPS URLs before network access."""
     parsed = urlsplit(url)
@@ -127,20 +166,8 @@ def _git_output(*args: str) -> str:
 
 
 def _resolve_support_email() -> str:
-    """Resolve support email from env or TAPDB env config."""
-    env_override = (os.environ.get("TAPDB_SUPPORT_EMAIL") or "").strip()
-    if env_override:
-        return env_override
-
-    try:
-        cfg = get_db_config_for_env(APP_ENV)
-        cfg_email = (cfg.get("support_email") or "").strip()
-        if cfg_email:
-            return cfg_email
-    except Exception as exc:
-        logger.warning("Could not resolve support_email from config: %s", exc)
-
-    return DEFAULT_SUPPORT_EMAIL
+    """Resolve support email from TapDB config."""
+    return str(ADMIN_SETTINGS.get("support_email") or DEFAULT_SUPPORT_EMAIL).strip()
 
 
 def _build_footer_metadata() -> Dict[str, str]:
@@ -159,16 +186,16 @@ def _build_footer_metadata() -> Dict[str, str]:
         "tag": git_tag,
         "hash": git_hash,
         "support_email": _resolve_support_email(),
-        "repo_url": os.environ.get("TAPDB_GITHUB_REPO_URL", DEFAULT_GITHUB_REPO_URL),
+        "repo_url": str(ADMIN_SETTINGS.get("repo_url") or DEFAULT_GITHUB_REPO_URL),
     }
 
 
 templates.globals["tapdb_footer"] = _build_footer_metadata()
 
 # Session secret key
-if IS_PROD and not os.environ.get("TAPDB_SESSION_SECRET"):
-    raise RuntimeError("Refusing to start in prod without TAPDB_SESSION_SECRET")
-SESSION_SECRET = os.environ.get("TAPDB_SESSION_SECRET", secrets.token_hex(32))
+if IS_PROD and not str(ADMIN_SETTINGS.get("session_secret") or "").strip():
+    raise RuntimeError("Refusing to start in prod without admin.session.secret")
+SESSION_SECRET = str(ADMIN_SETTINGS.get("session_secret") or "").strip() or secrets.token_hex(32)
 
 
 @asynccontextmanager
@@ -222,7 +249,7 @@ def _parse_allowed_origins(raw: str) -> List[str]:
 
 allow_local_domain_access = not IS_PROD
 allowed_origins = validate_allowed_origins(
-    _parse_allowed_origins(os.environ.get("TAPDB_ADMIN_ALLOWED_ORIGINS", "")),
+    [str(item) for item in ADMIN_SETTINGS.get("allowed_origins") or []],
     allow_local=allow_local_domain_access,
 )
 
