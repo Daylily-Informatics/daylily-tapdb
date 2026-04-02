@@ -38,7 +38,6 @@ NAMESPACE_REQUIRED_TOPLEVEL = {
     "ui",
     "cognito",
     "user",
-    "aurora",
     "info",
 }
 

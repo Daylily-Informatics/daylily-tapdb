@@ -18,6 +18,10 @@ def _strip(s: str) -> str:
     return _ANSI_RE.sub("", s)
 
 
+def _namespaced(args: list[str]) -> list[str]:
+    return ["--client-id", "testclient", "--database-name", "testdb", *args]
+
+
 @pytest.fixture(autouse=True)
 def _namespace_env(tmp_path, monkeypatch):
     monkeypatch.setenv("TAPDB_CLIENT_ID", "testclient")
@@ -106,7 +110,9 @@ class TestAuroraCreate:
         mock_mgr = _mock_stack_manager()
         mock_mgr_cls.return_value = mock_mgr
 
-        result = runner.invoke(app, ["aurora", "create", "dev", "--vpc-id", "vpc-123"])
+        result = runner.invoke(
+            app, _namespaced(["aurora", "create", "dev", "--vpc-id", "vpc-123"])
+        )
         assert result.exit_code == 0
         out = _strip(result.output)
         assert "created" in out.lower() or "✓" in result.output
@@ -115,7 +121,7 @@ class TestAuroraCreate:
     @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
     def test_create_failure(self, mock_mgr_cls, app):
         mock_mgr_cls.return_value.create_stack.side_effect = RuntimeError("boom")
-        result = runner.invoke(app, ["aurora", "create", "dev"])
+        result = runner.invoke(app, _namespaced(["aurora", "create", "dev"]))
         assert result.exit_code == 1
 
 
@@ -276,7 +282,7 @@ class TestConfigUpdate:
         mock_mgr = _mock_stack_manager()
         mock_mgr_cls.return_value = mock_mgr
 
-        result = runner.invoke(app, ["aurora", "create", "staging"])
+        result = runner.invoke(app, _namespaced(["aurora", "create", "staging"]))
         assert result.exit_code == 0
 
         config_path = (
@@ -304,7 +310,10 @@ class TestAuroraCreateBackground:
         mock_mgr_cls.return_value = mock_mgr
 
         result = runner.invoke(
-            app, ["aurora", "create", "dev", "--background", "--vpc-id", "vpc-123"]
+            app,
+            _namespaced(
+                ["aurora", "create", "dev", "--background", "--vpc-id", "vpc-123"]
+            ),
         )
         assert result.exit_code == 0
         out = _strip(result.output)
@@ -321,7 +330,9 @@ class TestAuroraCreateBackground:
         mock_mgr = _mock_stack_manager()
         mock_mgr_cls.return_value = mock_mgr
 
-        result = runner.invoke(app, ["aurora", "create", "dev", "--vpc-id", "vpc-123"])
+        result = runner.invoke(
+            app, _namespaced(["aurora", "create", "dev", "--vpc-id", "vpc-123"])
+        )
         assert result.exit_code == 0
         mock_mgr.create_stack.assert_called_once()
         mock_mgr.initiate_create_stack.assert_not_called()
