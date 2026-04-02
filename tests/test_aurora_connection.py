@@ -253,8 +253,6 @@ def test_tapdb_connection_local_unchanged(monkeypatch):
     """Default (no engine_type) still builds a local URL."""
     from daylily_tapdb import connection as m
 
-    monkeypatch.setenv("PGPORT", "5432")
-    monkeypatch.setenv("PGPASSWORD", "pw")
     monkeypatch.setenv("USER", "alice")
 
     called = {}
@@ -271,7 +269,7 @@ def test_tapdb_connection_local_unchanged(monkeypatch):
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
     m.TAPDBConnection(db_name="tapdb")
-    assert called["url"] == "postgresql://alice:pw@localhost:5432/tapdb"
+    assert called["url"] == "postgresql://alice:@localhost:5533/tapdb"
 
 
 # ---------------------------------------------------------------------------

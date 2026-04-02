@@ -125,8 +125,7 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
     """Persist required identity prefix config and ensure backing sequences."""
     prefixes = _required_identity_prefixes(env)
     values_sql = ",\n        ".join(
-        f"('{entity}', '{prefix}')"
-        for entity, prefix in prefixes.items()
+        f"('{entity}', '{prefix}')" for entity, prefix in prefixes.items()
     )
     sequences_sql = "\n    ".join(
         f'CREATE SEQUENCE IF NOT EXISTS "{_shared_sequence_name(prefix)}";'
@@ -454,7 +453,12 @@ def _quoted_sql_ident(value: str) -> str:
 
 def _bootstrap_user_candidates(preferred_user: str) -> list[str]:
     candidates: list[str] = []
-    for candidate in [preferred_user, os.environ.get("USER"), getpass.getuser(), "postgres"]:
+    for candidate in [
+        preferred_user,
+        os.environ.get("USER"),
+        getpass.getuser(),
+        "postgres",
+    ]:
         normalized = str(candidate or "").strip()
         if normalized and normalized not in candidates:
             candidates.append(normalized)
@@ -790,9 +794,7 @@ def db_schema_apply(
         console.print(
             f"[dim]○[/dim] Schema already exists in {cfg['database']} (skipping apply)"
         )
-        console.print(
-            "[yellow]►[/yellow] Syncing required identity prefixes..."
-        )
+        console.print("[yellow]►[/yellow] Syncing required identity prefixes...")
         try:
             _sync_identity_prefix_config(env)
             console.print("[green]✓[/green] Identity prefixes synced")
@@ -810,9 +812,7 @@ def db_schema_apply(
 
     _log_operation(env.value, "SCHEMA_APPLY", f"Schema applied from {schema_file}")
     console.print("[green]✓[/green] Schema applied successfully")
-    console.print(
-        "[yellow]►[/yellow] Syncing required identity prefixes..."
-    )
+    console.print("[yellow]►[/yellow] Syncing required identity prefixes...")
     try:
         _sync_identity_prefix_config(env)
         console.print("[green]✓[/green] Identity prefixes synced")
@@ -951,9 +951,7 @@ def db_schema_drift_check(
                 )
             )
         else:
-            console.print(
-                f"[red]✗[/red] Drift check failed for {env.value}: {message}"
-            )
+            console.print(f"[red]✗[/red] Drift check failed for {env.value}: {message}")
         raise typer.Exit(2) from exc
 
     if json_output:
@@ -968,11 +966,7 @@ def db_schema_drift_check(
     console.print(f"  Schema:   {schema_name}")
     console.print(f"  Strict:   {'yes' if payload['strict'] else 'no'}")
     counts = payload["counts"]
-    console.print(
-        "  Counts:   "
-        f"expected={counts['expected']} "
-        f"live={counts['live']}"
-    )
+    console.print(f"  Counts:   expected={counts['expected']} live={counts['live']}")
 
     if has_drift:
         console.print("\n[red]✗[/red] Drift detected")

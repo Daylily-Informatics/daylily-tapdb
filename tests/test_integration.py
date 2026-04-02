@@ -143,7 +143,9 @@ def _seed_identity_prefixes(session, prefix: str = "AGX") -> None:
         ),
         {"prefix": prefix},
     )
-    session.execute(text(f'CREATE SEQUENCE IF NOT EXISTS "{prefix.lower()}_instance_seq"'))
+    session.execute(
+        text(f'CREATE SEQUENCE IF NOT EXISTS "{prefix.lower()}_instance_seq"')
+    )
 
 
 def _integration_templates() -> list[dict]:
@@ -427,8 +429,7 @@ def test_postgres_schema_drift_check_smoke(pytestconfig):
         )
         assert drifted.has_drift is True
         assert (
-            "generic_instance.idx_generic_instance_euid"
-            in drifted.missing["indexes"]
+            "generic_instance.idx_generic_instance_euid" in drifted.missing["indexes"]
         )
     finally:
         _drop_schema(dsn, schema_name)

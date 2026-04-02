@@ -25,7 +25,9 @@ def resolve_tapdb_test_dsn(pytestconfig) -> str:
     config_path = str(pytestconfig.getoption("--tapdb-config") or "").strip()
     env_name = str(pytestconfig.getoption("--tapdb-env") or "").strip().lower()
     if not config_path or not env_name:
-        pytest.skip("Set --tapdb-config and --tapdb-env to run Postgres integration tests")
+        pytest.skip(
+            "Set --tapdb-config and --tapdb-env to run Postgres integration tests"
+        )
 
     from daylily_tapdb.cli.db_config import get_db_config_for_env
 

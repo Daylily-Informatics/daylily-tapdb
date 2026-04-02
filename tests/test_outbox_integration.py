@@ -3,7 +3,6 @@ import time
 import uuid
 from pathlib import Path
 
-import pytest
 from sqlalchemy import select, text
 
 from daylily_tapdb.connection import TAPDBConnection

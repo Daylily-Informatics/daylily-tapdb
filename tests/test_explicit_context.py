@@ -10,7 +10,11 @@ from typer.testing import CliRunner
 import daylily_tapdb.cli as cli_mod
 from admin.db_metrics import current_metrics_path
 from daylily_tapdb.cli import app
-from daylily_tapdb.cli.context import clear_cli_context, resolve_context, set_cli_context
+from daylily_tapdb.cli.context import (
+    clear_cli_context,
+    resolve_context,
+    set_cli_context,
+)
 from daylily_tapdb.cli.db_config import get_db_config_for_env
 
 runner = CliRunner()

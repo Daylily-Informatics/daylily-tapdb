@@ -32,7 +32,9 @@ def _context_file_path() -> Path:
     return Path.cwd() / _CONTEXT_FILENAME
 
 
-def _write_context_file(*, config_path: str, env_name: str, host: str, port: int) -> Path:
+def _write_context_file(
+    *, config_path: str, env_name: str, host: str, port: int
+) -> Path:
     ctx = resolve_context(
         require_keys=True,
         config_path=config_path,

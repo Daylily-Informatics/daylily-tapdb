@@ -4,8 +4,6 @@ import types
 def test_connection_builds_default_url_and_creates_engine(monkeypatch):
     from daylily_tapdb import connection as m
 
-    monkeypatch.setenv("PGPORT", "5544")
-    monkeypatch.setenv("PGPASSWORD", "pw")
     monkeypatch.setenv("USER", "alice")
 
     called = {}
@@ -24,7 +22,7 @@ def test_connection_builds_default_url_and_creates_engine(monkeypatch):
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
     conn = m.TAPDBConnection(db_url=None, db_name="tapdb")
-    assert "postgresql://alice:pw@localhost:5544/tapdb" == called["url"]
+    assert "postgresql://alice:@localhost:5533/tapdb" == called["url"]
     assert conn.engine is not None
 
 

@@ -54,7 +54,7 @@ def _update_config_file(
     """
     from daylily_tapdb.cli.db_config import get_config_paths
 
-    config_path = get_config_paths()[0]
+    config_path = get_config_paths(allow_namespace_fallback=True)[0]
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing: dict = {}
