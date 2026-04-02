@@ -268,7 +268,7 @@ def test_ensure_local_role_repairs_missing_postgres_role(monkeypatch):
         (
             "jmajor",
             "postgres",
-            'DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = \'postgres\') THEN CREATE ROLE "postgres" LOGIN SUPERUSER CREATEDB CREATEROLE; END IF; END $$;',
+            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'postgres') THEN CREATE ROLE \"postgres\" LOGIN SUPERUSER CREATEDB CREATEROLE; END IF; END $$;",
         ),
     ]
 

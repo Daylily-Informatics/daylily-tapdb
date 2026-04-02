@@ -289,4 +289,7 @@ class EUIDConfig:
 
     def is_canonical_prefix(self, prefix: str) -> bool:
         """Return True when *prefix* is part of the TapDB-managed catalog."""
-        return prefix in self.CORE_PREFIXES.values() or prefix in self.OPTIONAL_PREFIXES.values()
+        return (
+            prefix in self.CORE_PREFIXES.values()
+            or prefix in self.OPTIONAL_PREFIXES.values()
+        )

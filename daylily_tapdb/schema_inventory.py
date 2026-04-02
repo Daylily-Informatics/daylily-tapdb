@@ -322,7 +322,8 @@ def diff_schema_inventory(
         f"{table_name}.{column_name}"
         for table_name in sorted(shared_tables)
         for column_name in sorted(
-            expected.columns.get(table_name, set()) - live.columns.get(table_name, set())
+            expected.columns.get(table_name, set())
+            - live.columns.get(table_name, set())
         )
     )
     missing["sequences"] = sorted(expected.sequences - live.sequences)
@@ -331,14 +332,16 @@ def diff_schema_inventory(
         f"{table_name}.{trigger_name}"
         for table_name in sorted(shared_tables)
         for trigger_name in sorted(
-            expected.triggers.get(table_name, set()) - live.triggers.get(table_name, set())
+            expected.triggers.get(table_name, set())
+            - live.triggers.get(table_name, set())
         )
     )
     missing["indexes"] = sorted(
         f"{table_name}.{index_name}"
         for table_name in sorted(shared_tables)
         for index_name in sorted(
-            expected.indexes.get(table_name, set()) - live.indexes.get(table_name, set())
+            expected.indexes.get(table_name, set())
+            - live.indexes.get(table_name, set())
         )
     )
 
@@ -352,21 +355,24 @@ def diff_schema_inventory(
             f"{table_name}.{column_name}"
             for table_name in sorted(shared_tables)
             for column_name in sorted(
-                live.columns.get(table_name, set()) - expected.columns.get(table_name, set())
+                live.columns.get(table_name, set())
+                - expected.columns.get(table_name, set())
             )
         )
         unexpected["triggers"] = sorted(
             f"{table_name}.{trigger_name}"
             for table_name in sorted(shared_tables)
             for trigger_name in sorted(
-                live.triggers.get(table_name, set()) - expected.triggers.get(table_name, set())
+                live.triggers.get(table_name, set())
+                - expected.triggers.get(table_name, set())
             )
         )
         unexpected["indexes"] = sorted(
             f"{table_name}.{index_name}"
             for table_name in sorted(shared_tables)
             for index_name in sorted(
-                live.indexes.get(table_name, set()) - expected.indexes.get(table_name, set())
+                live.indexes.get(table_name, set())
+                - expected.indexes.get(table_name, set())
             )
         )
         unexpected["functions"] = sorted(

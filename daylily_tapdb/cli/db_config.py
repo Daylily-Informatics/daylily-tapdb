@@ -61,7 +61,9 @@ def get_config_paths(
         return [ctx.config_path()]
 
     if allow_namespace_fallback:
-        raise RuntimeError("TapDB namespace is required. Set --client-id/--database-name.")
+        raise RuntimeError(
+            "TapDB namespace is required. Set --client-id/--database-name."
+        )
     raise RuntimeError("TapDB config path is required. Set --config.")
 
 
@@ -205,9 +207,7 @@ def get_db_config_for_env(
         _validate_meta_for_context(root, ctx)
     meta = root.get("meta") if isinstance(root, dict) else None
     if not isinstance(meta, dict):
-        raise RuntimeError(
-            f"Config metadata is required in {resolved_config_path}."
-        )
+        raise RuntimeError(f"Config metadata is required in {resolved_config_path}.")
     try:
         euid_client_code = normalize_euid_client_code(meta.get("euid_client_code"))
     except ValueError as exc:

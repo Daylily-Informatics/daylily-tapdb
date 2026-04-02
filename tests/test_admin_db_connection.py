@@ -22,7 +22,9 @@ def test_admin_get_db_reuses_single_engine_bundle(monkeypatch):
             "db_pool_recycle": 1800,
         },
     )
-    monkeypatch.setattr(metrics_mod, "_admin_settings", lambda: {"metrics_enabled": False})
+    monkeypatch.setattr(
+        metrics_mod, "_admin_settings", lambda: {"metrics_enabled": False}
+    )
     monkeypatch.setattr(
         pool_mod,
         "get_db_config_for_env",

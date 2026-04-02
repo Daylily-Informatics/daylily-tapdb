@@ -44,7 +44,9 @@ def _auth_disabled() -> bool:
 
 def _shared_auth_enabled() -> bool:
     """Return True when TAPDB admin trusts Bloom's authenticated session."""
-    return str(_admin_settings().get("auth_mode") or "").strip().lower() == "shared_host"
+    return (
+        str(_admin_settings().get("auth_mode") or "").strip().lower() == "shared_host"
+    )
 
 
 def _disabled_auth_user() -> dict:
@@ -79,7 +81,9 @@ def _bloom_session_cookie_name() -> str:
 
 
 def _bloom_session_max_age() -> int:
-    raw = str(_admin_settings().get("shared_host_session_max_age_seconds") or "").strip()
+    raw = str(
+        _admin_settings().get("shared_host_session_max_age_seconds") or ""
+    ).strip()
     if raw.isdigit():
         return int(raw)
     return 14 * 24 * 60 * 60

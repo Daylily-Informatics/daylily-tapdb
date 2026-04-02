@@ -84,7 +84,11 @@ def set_cli_context(
 ) -> None:
     """Set process-local CLI context from explicit command-line inputs."""
 
-    global _ACTIVE_CLIENT_ID, _ACTIVE_DATABASE_NAME, _ACTIVE_ENV_NAME, _ACTIVE_CONFIG_PATH
+    global \
+        _ACTIVE_CLIENT_ID, \
+        _ACTIVE_DATABASE_NAME, \
+        _ACTIVE_ENV_NAME, \
+        _ACTIVE_CONFIG_PATH
     _ACTIVE_CLIENT_ID = _normalize_key(client_id, field_name="client-id")
     _ACTIVE_DATABASE_NAME = _normalize_key(database_name, field_name="database-name")
     _ACTIVE_ENV_NAME = str(env_name or "").strip().lower() or None
@@ -123,7 +127,9 @@ def active_context_overrides() -> dict[str, Optional[str | Path]]:
     }
 
 
-def _load_meta_from_config_path(config_path: Path) -> tuple[Optional[str], Optional[str]]:
+def _load_meta_from_config_path(
+    config_path: Path,
+) -> tuple[Optional[str], Optional[str]]:
     if not config_path.exists():
         return None, None
     raw = config_path.read_text(encoding="utf-8")
@@ -179,15 +185,11 @@ def resolve_context(
 
     if allow_namespace_fallback and (not resolved_client or not resolved_db):
         fallback_client = _normalize_key(
-            client_id
-            if client_id is not None
-            else _ACTIVE_CLIENT_ID,
+            client_id if client_id is not None else _ACTIVE_CLIENT_ID,
             field_name="client-id",
         )
         fallback_db = _normalize_key(
-            database_name
-            if database_name is not None
-            else _ACTIVE_DATABASE_NAME,
+            database_name if database_name is not None else _ACTIVE_DATABASE_NAME,
             field_name="database-name",
         )
         resolved_client = resolved_client or fallback_client

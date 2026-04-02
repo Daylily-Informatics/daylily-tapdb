@@ -105,7 +105,11 @@ def test_live_inventory_and_diff_against_real_postgres(pytestconfig):
     engine = create_engine(dsn)
     try:
         with engine.begin() as conn:
-            conn.execute(text(f'CREATE SEQUENCE IF NOT EXISTS "{schema_name}"."agx_instance_seq"'))
+            conn.execute(
+                text(
+                    f'CREATE SEQUENCE IF NOT EXISTS "{schema_name}"."agx_instance_seq"'
+                )
+            )
 
         expected = build_expected_schema_inventory(
             schema_asset_files(schema_root),
@@ -126,7 +130,7 @@ def test_live_inventory_and_diff_against_real_postgres(pytestconfig):
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    f'DROP TRIGGER audit_update_generic_instance '
+                    f"DROP TRIGGER audit_update_generic_instance "
                     f'ON "{schema_name}"."generic_instance"'
                 )
             )

@@ -93,6 +93,7 @@ templates = Environment(
     autoescape=select_autoescape(["html", "htm", "xml"]),
 )
 
+
 def _active_tapdb_env() -> str:
     return active_env_name("dev").lower()
 
@@ -194,7 +195,9 @@ templates.globals["tapdb_footer"] = _build_footer_metadata()
 # Session secret key
 if IS_PROD and not str(ADMIN_SETTINGS.get("session_secret") or "").strip():
     raise RuntimeError("Refusing to start in prod without admin.session.secret")
-SESSION_SECRET = str(ADMIN_SETTINGS.get("session_secret") or "").strip() or secrets.token_hex(32)
+SESSION_SECRET = str(
+    ADMIN_SETTINGS.get("session_secret") or ""
+).strip() or secrets.token_hex(32)
 
 
 @asynccontextmanager

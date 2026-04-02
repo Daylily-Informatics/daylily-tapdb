@@ -327,7 +327,9 @@ def build_app():
                 if database_name is not None
                 else prior_context.get("database_name")
             ),
-            env_name=env_name if env_name is not None else prior_context.get("env_name"),
+            env_name=env_name
+            if env_name is not None
+            else prior_context.get("env_name"),
             config_path=(
                 config_path
                 if config_path is not None
@@ -604,7 +606,9 @@ def build_app():
         console.print("[green]✓[/green] mkcert certificate ready for TAPDB UI HTTPS")
         console.print(f"   Cert: [dim]{cert_path}[/dim]")
         console.print(f"   Key:  [dim]{key_path}[/dim]")
-        console.print("   Restart UI: [cyan]tapdb --config <path> --env <name> ui restart[/cyan]")
+        console.print(
+            "   Restart UI: [cyan]tapdb --config <path> --env <name> ui restart[/cyan]"
+        )
 
     @ui_app.command("stop")
     def ui_stop():
@@ -1114,9 +1118,14 @@ def build_app():
         else:
             merged_admin = _default_admin_config()
             for key, value in admin_root.items():
-                if key in {"footer", "session", "auth", "cors", "ui", "metrics"} and isinstance(
-                    value, dict
-                ):
+                if key in {
+                    "footer",
+                    "session",
+                    "auth",
+                    "cors",
+                    "ui",
+                    "metrics",
+                } and isinstance(value, dict):
                     merged_admin[key].update(value)
                 else:
                     merged_admin[key] = value
@@ -1216,19 +1225,29 @@ def build_app():
             None, "--admin-session-secret", help="Admin session signing secret"
         ),
         admin_auth_mode: Optional[str] = typer.Option(
-            None, "--admin-auth-mode", help="Admin auth mode: tapdb, shared_host, or disabled"
+            None,
+            "--admin-auth-mode",
+            help="Admin auth mode: tapdb, shared_host, or disabled",
         ),
         admin_disabled_user_email: Optional[str] = typer.Option(
-            None, "--admin-disabled-user-email", help="Synthetic disabled-auth admin email"
+            None,
+            "--admin-disabled-user-email",
+            help="Synthetic disabled-auth admin email",
         ),
         admin_disabled_user_role: Optional[str] = typer.Option(
-            None, "--admin-disabled-user-role", help="Synthetic disabled-auth admin role"
+            None,
+            "--admin-disabled-user-role",
+            help="Synthetic disabled-auth admin role",
         ),
         admin_shared_host_session_secret: Optional[str] = typer.Option(
-            None, "--admin-shared-host-session-secret", help="Shared-host session signing secret"
+            None,
+            "--admin-shared-host-session-secret",
+            help="Shared-host session signing secret",
         ),
         admin_shared_host_session_cookie: Optional[str] = typer.Option(
-            None, "--admin-shared-host-session-cookie", help="Shared-host session cookie name"
+            None,
+            "--admin-shared-host-session-cookie",
+            help="Shared-host session cookie name",
         ),
         admin_shared_host_session_max_age_seconds: Optional[int] = typer.Option(
             None,
@@ -1247,13 +1266,17 @@ def build_app():
             None, "--admin-tls-key-path", help="Configured admin TLS private key path"
         ),
         admin_metrics_enabled: Optional[bool] = typer.Option(
-            None, "--admin-metrics-enabled/--no-admin-metrics-enabled", help="Enable admin DB metrics"
+            None,
+            "--admin-metrics-enabled/--no-admin-metrics-enabled",
+            help="Enable admin DB metrics",
         ),
         admin_metrics_queue_max: Optional[int] = typer.Option(
             None, "--admin-metrics-queue-max", help="Admin DB metrics queue size"
         ),
         admin_metrics_flush_seconds: Optional[float] = typer.Option(
-            None, "--admin-metrics-flush-seconds", help="Admin DB metrics flush interval"
+            None,
+            "--admin-metrics-flush-seconds",
+            help="Admin DB metrics flush interval",
         ),
         clear: list[str] = typer.Option(
             [],
@@ -1706,7 +1729,9 @@ def build_app():
         general.add_row("Client ID", ctx.client_id)
         general.add_row("Database Name", ctx.database_name)
         general.add_row("Namespace", ctx.namespace_slug())
-        general.add_row("DB probes", "all envs" if check_all_envs else "active env only")
+        general.add_row(
+            "DB probes", "all envs" if check_all_envs else "active env only"
+        )
 
         general.add_row("UI Server", f"Running (PID {ui_pid})" if ui_pid else "Stopped")
         if ui_times and ui_times.get("start_time"):
