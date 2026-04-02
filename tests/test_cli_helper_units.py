@@ -6,11 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 import daylily_tapdb.cli.db as db_mod
 import daylily_tapdb.cli.pg as pg_mod
 import daylily_tapdb.cli.user as user_mod
-from daylily_tapdb.euid import normalize_euid_client_code, resolve_client_scoped_core_prefix
+from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
+from daylily_tapdb.euid import (
+    normalize_euid_client_code,
+    resolve_client_scoped_core_prefix,
+)
 
 
 def test_normalize_meridian_prefix_accepts_valid_uppercases():

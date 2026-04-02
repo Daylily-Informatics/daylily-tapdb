@@ -10,7 +10,6 @@ Usage:
 import base64
 import json
 import logging
-import os
 import secrets
 import subprocess
 from contextlib import asynccontextmanager

@@ -4,14 +4,13 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
-
 from admin.db_metrics import (
     MetricsRow,
     TSVMetricsWriter,
     current_metrics_path,
     two_week_period_start_utc,
 )
+from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 
 
 def _write_config(path: Path, *, queue_max: int) -> Path:

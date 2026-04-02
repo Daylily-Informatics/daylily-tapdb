@@ -13,16 +13,16 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from daylily_tapdb.euid import (
-    normalize_euid_client_code,
-    resolve_client_scoped_core_prefix,
-)
 from daylily_tapdb.cli.context import (
     TapdbContext,
     active_context_overrides,
     active_env_name,
     resolve_context,
     set_cli_context,
+)
+from daylily_tapdb.euid import (
+    normalize_euid_client_code,
+    resolve_client_scoped_core_prefix,
 )
 
 DEFAULT_UI_PORT = 8911
