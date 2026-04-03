@@ -42,8 +42,8 @@ dev = [
     "ruff>=0.1",
     "mypy>=1.0",
     "httpx",
-    "pre-commit>=3.0",
-    "bandit>=1.7",
+    "pre-commit>=3.8.0",
+    "bandit[toml]>=1.8.0",
     "detect-secrets>=1.4",
     "setuptools_scm>=8.0",
 ]
