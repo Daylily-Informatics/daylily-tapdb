@@ -49,19 +49,33 @@ _tapdb_script_path() {
     fi
 }
 
-_tapdb_module_is_from_repo() {
+_tapdb_distribution_is_editable_from_repo() {
     python - "$1" >/dev/null 2>&1 <<'PY'
-import importlib
 import pathlib
+import subprocess
 import sys
 
 repo_root = pathlib.Path(sys.argv[1]).resolve()
-module = importlib.import_module("daylily_tapdb")
-module_file = getattr(module, "__file__", "")
-if not module_file:
+proc = subprocess.run(
+    [sys.executable, "-m", "pip", "show", "daylily-tapdb"],
+    check=False,
+    capture_output=True,
+    text=True,
+)
+if proc.returncode != 0:
     raise SystemExit(1)
-module_path = pathlib.Path(module_file).resolve()
-raise SystemExit(0 if module_path == repo_root or repo_root in module_path.parents else 1)
+
+editable_location = ""
+for line in proc.stdout.splitlines():
+    if line.startswith("Editable project location:"):
+        editable_location = line.split(":", 1)[1].strip()
+        break
+
+if not editable_location:
+    raise SystemExit(1)
+
+editable_path = pathlib.Path(editable_location).resolve()
+raise SystemExit(0 if editable_path == repo_root else 1)
 PY
 }
 
@@ -143,7 +157,7 @@ _tapdb_bin_dir="${VIRTUAL_ENV:-${_tapdb_venv_dir}}/bin"
 _tapdb_tapdb="${_tapdb_bin_dir}/tapdb"
 
 # Check if tapdb CLI is installed from *this* repo in *this* venv.
-if [ ! -x "${_tapdb_tapdb}" ] || ! _tapdb_module_is_from_repo "${_tapdb_repo_root}"; then
+if [ ! -x "${_tapdb_tapdb}" ] || ! _tapdb_distribution_is_editable_from_repo "${_tapdb_repo_root}"; then
     if [ "${_tapdb_smoke}" = "1" ]; then
         printf "${_tapdb_yellow}⚠${_tapdb_reset} tapdb CLI not installed from this repo (smoke mode: skipping install).\n"
         printf "  Install with: ${_tapdb_cyan}(cd %s && python -m pip install -e \".[cli,admin,aurora,dev]\")${_tapdb_reset}\n" "${_tapdb_repo_root}"
@@ -154,8 +168,8 @@ if [ ! -x "${_tapdb_tapdb}" ] || ! _tapdb_module_is_from_repo "${_tapdb_repo_roo
             printf "${_tapdb_red}✗${_tapdb_reset} Failed to install tapdb.\n"
             return 1 2>/dev/null || exit 1
         fi
-        if ! _tapdb_module_is_from_repo "${_tapdb_repo_root}"; then
-            printf "${_tapdb_red}✗${_tapdb_reset} tapdb still resolves outside ${_tapdb_repo_root}\n"
+        if ! _tapdb_distribution_is_editable_from_repo "${_tapdb_repo_root}"; then
+            printf "${_tapdb_red}✗${_tapdb_reset} tapdb is not installed editable from ${_tapdb_repo_root}\n"
             return 1 2>/dev/null || exit 1
         fi
         printf "${_tapdb_green}✓${_tapdb_reset} tapdb installed.\n"
@@ -246,6 +260,6 @@ unset _tapdb_repo_root _tapdb_venv_dir _tapdb_python _tapdb_shell _tapdb_ui_stat
 unset _tapdb_candidate
 unset _tapdb_bin_dir _tapdb_tapdb
 unset _tapdb_arg _tapdb_smoke _tapdb_is_interactive
-unset _tapdb_module_is_from_repo
+unset _tapdb_distribution_is_editable_from_repo
 unset _tapdb_script_path
 unset _tapdb_red _tapdb_green _tapdb_cyan _tapdb_yellow _tapdb_bold _tapdb_reset
