@@ -31,6 +31,7 @@ dependencies = [
     "jsonschema>=4.0",
     "typer",
     "rich",
+    "cli-core-yo @ file://localhost/Users/jmajor/projects/cli_refactor/cli-core-yo",
 ]
 
 [project.optional-dependencies]

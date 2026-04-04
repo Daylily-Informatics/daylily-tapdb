@@ -1808,10 +1808,35 @@ except Exception:
     app = None
 
 
+def register(registry, spec) -> None:
+    cli_app = app or build_app()
+    for cmd in getattr(cli_app, "registered_commands", []):
+        cmd_name = cmd.name or cmd.callback.__name__.replace("_", "-")
+        if cmd_name in ("version", "info", "config"):
+            continue
+        registry.add_command(
+            group_path=None,
+            name=cmd_name,
+            callback=cmd.callback,
+            help_text=cmd.help or "",
+        )
+    for group in getattr(cli_app, "registered_groups", []):
+        group_name = group.name or group.typer_instance.info.name
+        if group_name == "config":
+            group_name = "db-config"
+        registry.add_typer_app(
+            group_path=None,
+            typer_app=group.typer_instance,
+            name=group_name,
+            help_text=group.help or group.typer_instance.info.help or "",
+        )
+
 def main():
     """Main CLI entry point."""
-    cli_app = app or build_app()
-    cli_app()
+    import sys
+    from cli_core_yo.app import run
+    from daylily_tapdb.cli.spec import spec
+    sys.exit(run(spec))
 
 
 if __name__ == "__main__":
