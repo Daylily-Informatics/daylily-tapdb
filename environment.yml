@@ -1,1 +1,11 @@
-daylily_tapdb_env.yaml
+name: TAPDB-local
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - setuptools<81
+  - postgresql
+  - pip:
+      - -e .[dev,cli,admin,aurora]
