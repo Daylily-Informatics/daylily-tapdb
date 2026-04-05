@@ -35,13 +35,8 @@ _PRODUCTION_RE = re.compile(
 _DOMAIN_RE = re.compile(
     rf"^{_LETTERS32}{{1,4}}:{_LETTERS32}{{2,3}}-([1-9A-HJ-KMNP-TV-Z]{_ALNUM32}*){_ALNUM32}$"
 )
-# Backward compat alias
-_SANDBOX_RE = _DOMAIN_RE
-
 DEFAULT_DOMAIN_CODE = "T"
-DEFAULT_SANDBOX_PREFIX = DEFAULT_DOMAIN_CODE  # backward compat
 MERIDIAN_DOMAIN_CODE_ENV = "MERIDIAN_DOMAIN_CODE"
-MERIDIAN_SANDBOX_PREFIX_ENV = MERIDIAN_DOMAIN_CODE_ENV  # backward compat
 MERIDIAN_ENVIRONMENT_ENV = "MERIDIAN_ENVIRONMENT"
 LSMC_ENV_ENV = "LSMC_ENV"
 CORE_TEMPLATE_PLACEHOLDER_PREFIX = "GX"
@@ -62,29 +57,27 @@ def normalize_domain_code(code: str | None) -> str | None:
     return normalized
 
 
-# Backward compat alias
-normalize_sandbox_prefix = normalize_domain_code
-
-
 def resolve_runtime_domain_code(
     environ: Mapping[str, str] | None = None,
-) -> str | None:
+) -> str:
     """Resolve the runtime domain code.
 
     Rules:
     - missing env var => default ``T``
-    - explicit empty string => disable domain code prefixing
+    - explicit empty string => raises ValueError (fail-fast)
     - explicit non-empty value => validated 1-4 letter domain code
     """
     env = environ or os.environ
     raw_code = env.get(MERIDIAN_DOMAIN_CODE_ENV)
     if raw_code is None:
         return DEFAULT_DOMAIN_CODE
-    return normalize_domain_code(raw_code)
-
-
-# Backward compat alias
-resolve_runtime_sandbox_prefix = resolve_runtime_domain_code
+    normalized = normalize_domain_code(raw_code)
+    if normalized is None:
+        raise ValueError(
+            f"MERIDIAN_DOMAIN_CODE is set to empty string. "
+            f"A valid 1-4 char Crockford Base32 domain code is required."
+        )
+    return normalized
 
 
 def resolve_runtime_validation_context(
@@ -99,7 +92,7 @@ def resolve_runtime_validation_context(
     )
     domain_code = resolve_runtime_domain_code(env)
 
-    if raw_environment in ("sandbox", "domain"):
+    if raw_environment == "domain":
         return {
             "environment": "domain",
             "allowed_domain_codes": [domain_code] if domain_code else [],
@@ -181,7 +174,6 @@ def format_euid(
     seq_val: int,
     *,
     domain_code: str | None = None,
-    sandbox: str | None = None,  # backward compat alias
 ) -> str:
     """Build a Meridian-conformant EUID string.
 
@@ -189,12 +181,11 @@ def format_euid(
         prefix: Category prefix (e.g. "TX", "AGX"). 2-3 uppercase Crockford letters.
         seq_val: Positive integer from the sequence.
         domain_code: Optional 1-4 letter domain code prefix.
-        sandbox: Deprecated alias for domain_code.
 
     Returns:
         Formatted EUID, e.g. ``TX-1C`` or ``T:TX-1C``.
     """
-    dc = domain_code or sandbox
+    dc = domain_code
     body = crockford_base32_encode(seq_val)
     if dc:
         payload = dc + prefix + body
@@ -211,16 +202,14 @@ def validate_euid(
     *,
     environment: str = "production",
     allowed_domain_codes: list[str] | None = None,
-    allowed_sandbox_prefixes: list[str] | None = None,  # backward compat alias
 ) -> bool:
     """Validate an EUID string against Meridian spec.
 
     Returns True if the EUID is syntactically valid and checksum-correct
     for the given environment.
     """
-    allowed = allowed_domain_codes or allowed_sandbox_prefixes
-    # Accept "sandbox" as alias for "domain"
-    env = "domain" if environment == "sandbox" else environment
+    allowed = allowed_domain_codes
+    env = environment
 
     # §8.1 — reject non-ASCII, whitespace, lowercase
     if not euid.isascii():

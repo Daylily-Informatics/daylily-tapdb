@@ -24,7 +24,6 @@ from daylily_tapdb.outbox.contracts import DeliveryResult
 from daylily_tapdb.outbox.repository import (
     claim_events,
     mark_dead_letter,
-    mark_delivered,
     mark_failed,
     mark_processed,
     mark_received,
@@ -196,7 +195,7 @@ def dispatch_batch(
 def _invoke_deliver_fn(
     deliver_fn: Callable, ev: outbox_event
 ) -> DeliveryResult:
-    """Call deliver_fn, handling both new (DeliveryResult) and legacy (None/raise) signatures."""
+    """Call deliver_fn. Must return a DeliveryResult."""
     try:
         result = deliver_fn(ev)
     except Exception as e:
@@ -208,17 +207,10 @@ def _invoke_deliver_fn(
         )
         return DeliveryResult.transport_failed(str(e)[:10_000])
 
-    # Legacy deliver_fn returns None on success
-    if result is None:
-        return DeliveryResult(success=True, transport_status="receipt_valid")
+    if not isinstance(result, DeliveryResult):
+        raise TypeError(
+            f"deliver_fn must return DeliveryResult, got {type(result).__name__}. "
+            f"Legacy None-return is no longer supported."
+        )
 
-    if isinstance(result, DeliveryResult):
-        return result
-
-    # Unexpected return type — treat as success (backward compat)
-    logger.warning(
-        "deliver_fn returned unexpected type %s for event %s; treating as success",
-        type(result).__name__,
-        ev.id,
-    )
-    return DeliveryResult(success=True, transport_status="receipt_valid")
+    return result

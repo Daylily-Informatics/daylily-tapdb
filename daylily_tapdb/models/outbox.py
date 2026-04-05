@@ -47,7 +47,7 @@ class outbox_event(Base):
     created_dt = Column(
         DateTime(timezone=True), nullable=False, server_default=FetchedValue()
     )
-    delivered_dt = Column(DateTime(timezone=True), nullable=True)  # deprecated
+
 
     # Claim / lease management
     claimed_by = Column(Text, nullable=True)

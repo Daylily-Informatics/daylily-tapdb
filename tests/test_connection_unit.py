@@ -1,5 +1,14 @@
 import types
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _preset_domain_env(monkeypatch):
+    """All connection tests default to T/TAPD domain/app codes."""
+    monkeypatch.setenv("MERIDIAN_DOMAIN_CODE", "T")
+    monkeypatch.setenv("TAPDB_APP_CODE", "TAPD")
+
 
 def test_connection_builds_default_url_and_creates_engine(monkeypatch):
     from daylily_tapdb import connection as m

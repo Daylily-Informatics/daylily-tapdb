@@ -301,15 +301,6 @@ def claim_events(
     return rows
 
 
-def mark_delivered(session: Session, row_id: int) -> None:
-    """Mark an outbox row delivered (deprecated — use mark_received)."""
-    session.execute(
-        update(outbox_event)
-        .where(outbox_event.id == row_id)
-        .values(status="delivered", delivered_dt=func.now())
-    )
-    session.flush()
-
 
 def mark_received(
     session: Session,
@@ -377,6 +368,36 @@ def mark_dead_letter(session: Session, row_id: int, *, error: str = "") -> None:
             dead_letter_dt=func.now(),
             last_error=error[:10_000] if error else None,
         )
+    )
+    session.flush()
+
+
+def requeue_dead_letter(
+    session: Session,
+    row_id: int,
+    *,
+    reset_attempt_count: bool = False,
+) -> None:
+    """Requeue a dead-lettered event for re-delivery.
+
+    Transitions ``dead_letter`` → ``pending``, resets next_attempt_at,
+    and optionally resets the attempt counter.
+    """
+    values: dict = {
+        "status": "pending",
+        "next_attempt_at": func.now(),
+        "last_error": None,
+        "claim_token": None,
+        "claimed_dt": None,
+        "lease_expires_dt": None,
+        "dead_letter_dt": None,
+    }
+    if reset_attempt_count:
+        values["attempt_count"] = 0
+    session.execute(
+        update(outbox_event)
+        .where(outbox_event.id == row_id, outbox_event.status == "dead_letter")
+        .values(**values)
     )
     session.flush()
 

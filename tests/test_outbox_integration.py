@@ -12,7 +12,7 @@ from daylily_tapdb.outbox.repository import (
     claim_events,
     enqueue_event,
     enqueue_fanout,
-    mark_delivered,
+    mark_received,
 )
 from tests.conftest import resolve_tapdb_test_dsn
 from tests.test_integration import (
@@ -144,12 +144,12 @@ def test_postgres_outbox_claim_and_deliver(pytestconfig):
             assert ev.message.json_addl["event_type"] == "trf.transition"
             assert ev.message.json_addl["payload"]["to_state"] == "SUBMITTED"
 
-            mark_delivered(session, ev.id)
-            delivered = session.execute(
+            mark_received(session, ev.id)
+            received = session.execute(
                 select(outbox_event).where(outbox_event.id == ev.id)
             ).scalar_one()
-            assert delivered.status == "delivered"
-            assert delivered.delivered_dt is not None
+            assert received.status == "received"
+            assert received.receipt_received_dt is not None
     finally:
         _drop_schema(dsn, schema_name)
 

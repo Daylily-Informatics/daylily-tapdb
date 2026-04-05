@@ -72,7 +72,6 @@ class TAPDBConnection:
         secret_arn: Optional[str] = None,
         domain_code: Optional[str] = None,
         issuer_app_code: Optional[str] = None,
-        sandbox_prefix: Optional[str] = None,  # backward compat alias for domain_code
     ):
         """
         Initialize database connection.
@@ -95,19 +94,24 @@ class TAPDBConnection:
             region: AWS region (only used when engine_type="aurora").
             iam_auth: Use IAM database authentication (Aurora only).
             secret_arn: Secrets Manager ARN for password (Aurora fallback).
-            domain_code: Domain code for session scoping (1-4 chars).
-            issuer_app_code: Issuer app code for session scoping (1-4 chars).
-            sandbox_prefix: Deprecated alias for domain_code.
+            domain_code: Domain code for session scoping (1-4 chars). Required.
+            issuer_app_code: Issuer app code for session scoping (1-4 chars). Required.
         """
         self.logger = logging.getLogger(__name__ + ".TAPDBConnection")
 
         # Resolve defaults from environment
         db_user = db_user or os.environ.get("USER", "tapdb")
         self.app_username = app_username or os.environ.get("USER", "tapdb_orm")
-        self.domain_code = domain_code or sandbox_prefix or resolve_runtime_domain_code()
-        self.issuer_app_code = issuer_app_code or os.environ.get("TAPDB_APP_CODE", "TAPD")
-        # Backward compat
-        self.sandbox_prefix = self.domain_code
+        self.domain_code = domain_code or resolve_runtime_domain_code()
+        self.issuer_app_code = issuer_app_code or os.environ.get("TAPDB_APP_CODE")
+        if not self.domain_code:
+            raise ValueError(
+                "domain_code is required. Set MERIDIAN_DOMAIN_CODE env var or pass domain_code= param."
+            )
+        if not self.issuer_app_code:
+            raise ValueError(
+                "issuer_app_code is required. Set TAPDB_APP_CODE env var or pass issuer_app_code= param."
+            )
 
         if echo_sql is None:
             echo_env = os.environ.get("ECHO_SQL", "").lower()

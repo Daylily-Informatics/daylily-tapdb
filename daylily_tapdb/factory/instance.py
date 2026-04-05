@@ -45,7 +45,12 @@ def _parse_bool(value: Any, *, default: bool) -> bool:
 
 
 def materialize_actions(
-    session: Session, template: generic_template, template_manager
+    session: Session,
+    template: generic_template,
+    template_manager,
+    *,
+    domain_code: Optional[str] = None,
+    issuer_app_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Materialize action_imports into action_groups for an instance.
@@ -66,7 +71,14 @@ def materialize_actions(
     for action_key, template_code in template.json_addl.get(
         "action_imports", {}
     ).items():
-        action_tmpl = template_manager.get_template(session, template_code)
+        scope_kwargs: Dict[str, str] = {}
+        if domain_code is not None:
+            scope_kwargs["domain_code"] = domain_code
+        if issuer_app_code is not None:
+            scope_kwargs["issuer_app_code"] = issuer_app_code
+        action_tmpl = template_manager.get_template(
+            session, template_code, **scope_kwargs
+        )
         if action_tmpl is None:
             continue
 
@@ -115,14 +127,34 @@ class InstanceFactory:
     # Maximum recursion depth for instantiation_layouts
     MAX_INSTANTIATION_DEPTH = 10
 
-    def __init__(self, template_manager):
+    def __init__(
+        self,
+        template_manager,
+        *,
+        domain_code: Optional[str] = None,
+        issuer_app_code: Optional[str] = None,
+    ):
         """
         Initialize instance factory.
 
         Args:
             template_manager: TemplateManager for template resolution.
+            domain_code: Filter templates by domain code.
+            issuer_app_code: Filter templates by issuer app code.
         """
         self.template_manager = template_manager
+        self.domain_code = domain_code
+        self.issuer_app_code = issuer_app_code
+
+    @property
+    def _scope_kwargs(self) -> Dict[str, str]:
+        """Domain/app scope kwargs for get_template calls."""
+        kw: Dict[str, str] = {}
+        if self.domain_code is not None:
+            kw["domain_code"] = self.domain_code
+        if self.issuer_app_code is not None:
+            kw["issuer_app_code"] = self.issuer_app_code
+        return kw
 
     def create_instance(
         self,
@@ -178,8 +210,10 @@ class InstanceFactory:
             )
         _visited.add(template_code)
 
-        # Get template
-        template = self.template_manager.get_template(session, template_code)
+        # Get template (scoped by domain/app if configured)
+        template = self.template_manager.get_template(
+            session, template_code, **self._scope_kwargs
+        )
         if not template:
             raise ValueError(f"Template not found: {template_code}")
 
@@ -292,7 +326,7 @@ class InstanceFactory:
         json_addl = {
             "properties": copy.deepcopy(template.json_addl.get("properties", {})),
             "action_groups": materialize_actions(
-                session, template, self.template_manager
+                session, template, self.template_manager, **self._scope_kwargs
             ),
             "audit_log": [],
         }
@@ -502,7 +536,9 @@ class InstanceFactory:
 
         Semantics (per Major): do not resurrect soft-deleted rows.
         """
-        template = self.template_manager.get_template(session, template_code)
+        template = self.template_manager.get_template(
+            session, template_code, **self._scope_kwargs
+        )
         if template is None:
             raise ValueError(f"Template not found: {template_code}")
         if not bool(template.is_singleton):

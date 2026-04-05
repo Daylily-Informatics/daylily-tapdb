@@ -18,10 +18,14 @@ CREATE SEQUENCE IF NOT EXISTS msg_instance_seq;  -- MSG (system messages)
 --------------------------------------------------------------------------------
 
 -- Prefix configuration for identity tables whose EUID prefixes are env-configured
+-- Scoped by domain_code + issuer_app_code for shared-DB safety
 CREATE TABLE IF NOT EXISTS tapdb_identity_prefix_config (
-    entity TEXT PRIMARY KEY,
+    entity TEXT NOT NULL,
+    domain_code TEXT NOT NULL DEFAULT '',
+    issuer_app_code TEXT NOT NULL DEFAULT '',
     prefix TEXT NOT NULL,
-    updated_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (entity, domain_code, issuer_app_code)
 );
 
 -- generic_template: Blueprint definitions
@@ -65,7 +69,7 @@ CREATE TABLE IF NOT EXISTS generic_template (
     created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT unique_generic_template_prefix_seq UNIQUE (euid_prefix, euid_seq)
+    CONSTRAINT unique_generic_template_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq)
 );
 
 -- generic_instance: Concrete objects created from templates
@@ -108,7 +112,7 @@ CREATE TABLE IF NOT EXISTS generic_instance (
     created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT unique_generic_instance_prefix_seq UNIQUE (euid_prefix, euid_seq)
+    CONSTRAINT unique_generic_instance_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq)
 );
 
 -- generic_instance_lineage: Directed edges between instances
@@ -152,7 +156,7 @@ CREATE TABLE IF NOT EXISTS generic_instance_lineage (
     created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT unique_generic_instance_lineage_prefix_seq UNIQUE (euid_prefix, euid_seq)
+    CONSTRAINT unique_generic_instance_lineage_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq)
 );
 
 -- audit_log: Change tracking
@@ -199,14 +203,12 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN (
             'pending', 'delivering', 'received', 'processed',
-            'failed', 'dead_letter', 'rejected', 'canceled',
-            'delivered'  -- deprecated, kept for backward compat
+            'failed', 'dead_letter', 'rejected', 'canceled'
         )),
     attempt_count INT NOT NULL DEFAULT 0,
     next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_error TEXT,
     created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    delivered_dt TIMESTAMP WITH TIME ZONE,  -- deprecated; use receipt_received_dt
 
     -- Claim / lease management
     claimed_by TEXT,
@@ -326,6 +328,8 @@ ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS tenant_id UUID;
 
 -- generic_template indexes
 CREATE INDEX IF NOT EXISTS idx_generic_template_domain ON generic_template(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_generic_template_domain_code_lookup
+    ON generic_template(domain_code, category, type, subtype, version);
 CREATE INDEX IF NOT EXISTS idx_generic_template_polymorphic_discriminator ON generic_template(polymorphic_discriminator);
 CREATE INDEX IF NOT EXISTS idx_generic_template_type ON generic_template(type);
 CREATE INDEX IF NOT EXISTS idx_generic_template_is_deleted ON generic_template(is_deleted);
@@ -335,6 +339,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_unique_singleton_key
     ON generic_instance (category, type, subtype, version)
     WHERE is_singleton = TRUE;
 CREATE INDEX IF NOT EXISTS idx_generic_instance_domain ON generic_instance(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_template
+    ON generic_instance(domain_code, issuer_app_code, template_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_type
+    ON generic_instance(domain_code, issuer_app_code, category, type, subtype, version);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_tenant
+    ON generic_instance(domain_code, tenant_id);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_polymorphic_discriminator ON generic_instance(polymorphic_discriminator);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_type ON generic_instance(type);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_euid ON generic_instance(euid);
@@ -363,6 +373,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_lineage_unique_edge
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_domain ON generic_instance_lineage(domain_code, issuer_app_code);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_parent ON generic_instance_lineage(parent_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_child ON generic_instance_lineage(child_instance_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_domain_parent
+    ON generic_instance_lineage(domain_code, issuer_app_code, parent_instance_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_domain_child
+    ON generic_instance_lineage(domain_code, issuer_app_code, child_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_is_deleted ON generic_instance_lineage(is_deleted);
 
 -- audit_log indexes
@@ -375,6 +389,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_operation_type ON audit_log(operation_t
 CREATE INDEX IF NOT EXISTS idx_audit_log_changed_at ON audit_log(changed_at);
 CREATE INDEX IF NOT EXISTS idx_audit_log_changed_by ON audit_log(changed_by);
 CREATE INDEX IF NOT EXISTS idx_audit_log_json_addl_gin ON audit_log USING GIN (json_addl);
+CREATE INDEX IF NOT EXISTS idx_audit_log_domain_entity
+    ON audit_log(domain_code, issuer_app_code, rel_table_name, rel_table_uid_fk);
+CREATE INDEX IF NOT EXISTS idx_audit_log_domain_timeline
+    ON audit_log(domain_code, issuer_app_code, changed_at DESC);
 
 -- generic_instance machine_uuid index
 CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_machine_uuid
@@ -398,12 +416,39 @@ CREATE INDEX IF NOT EXISTS idx_outbox_event_lease
 CREATE INDEX IF NOT EXISTS idx_outbox_attempt_event_id
     ON outbox_event_attempt(outbox_event_id, attempt_no);
 
+-- outbox: scoped dispatch, destination, admin
+CREATE INDEX IF NOT EXISTS idx_outbox_event_domain_status_next
+    ON outbox_event(domain_code, issuer_app_code, status, next_attempt_at)
+    WHERE status IN ('pending', 'failed');
+CREATE INDEX IF NOT EXISTS idx_outbox_event_destination_status
+    ON outbox_event(destination, status);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_claim_token
+    ON outbox_event(claim_token)
+    WHERE claim_token IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_outbox_event_domain_status_created
+    ON outbox_event(domain_code, status, created_dt);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_receipt_machine_uuid
+    ON outbox_event(receipt_machine_uuid)
+    WHERE receipt_machine_uuid IS NOT NULL;
+
+-- outbox_event_attempt: time-ordered
+CREATE INDEX IF NOT EXISTS idx_outbox_attempt_event_time
+    ON outbox_event_attempt(outbox_event_id, attempted_at DESC);
+
 -- inbox_message indexes
 CREATE INDEX IF NOT EXISTS idx_inbox_message_domain
     ON inbox_message(domain_code, issuer_app_code);
 CREATE INDEX IF NOT EXISTS idx_inbox_message_status
     ON inbox_message(status)
     WHERE status IN ('received', 'processing');
+CREATE INDEX IF NOT EXISTS idx_inbox_message_domain_status
+    ON inbox_message(domain_code, issuer_app_code, status);
+CREATE INDEX IF NOT EXISTS idx_inbox_message_source_event
+    ON inbox_message(source_outbox_event_id)
+    WHERE source_outbox_event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_inbox_message_machine_uuid
+    ON inbox_message(machine_uuid)
+    WHERE machine_uuid IS NOT NULL;
 
 --------------------------------------------------------------------------------
 -- FUNCTIONS
@@ -517,7 +562,9 @@ BEGIN
 
     raw_code := trim(raw_code);
     IF raw_code = '' THEN
-        RETURN NULL;
+        RAISE EXCEPTION
+            'session.current_domain_code is set to empty string. '
+            'A valid 1-4 char Crockford Base32 domain code is required.';
     END IF;
 
     RETURN tapdb_validate_domain_code(raw_code);
@@ -538,7 +585,9 @@ BEGIN
 
     raw_code := trim(raw_code);
     IF raw_code = '' THEN
-        RETURN 'TAPD';
+        RAISE EXCEPTION
+            'session.current_app_code is set to empty string. '
+            'A valid 1-4 char Crockford Base32 app code is required.';
     END IF;
 
     RETURN tapdb_validate_app_code(raw_code);
@@ -665,20 +714,38 @@ BEGIN
 END;
 $$;
 
--- Resolve configured EUID prefix for identity table
+-- Resolve configured EUID prefix for identity table.
+-- Scoped by session domain_code + issuer_app_code, falling back to global ('','') if not found.
 CREATE OR REPLACE FUNCTION tapdb_get_identity_prefix(entity_name TEXT)
 RETURNS TEXT LANGUAGE plpgsql STABLE STRICT AS $$
 DECLARE
     prefix TEXT;
+    dc TEXT;
+    ac TEXT;
 BEGIN
+    dc := coalesce(tapdb_current_domain_code(), '');
+    ac := coalesce(tapdb_current_app_code(), '');
+
+    -- Try domain/app-scoped lookup first
     SELECT p.prefix INTO prefix
     FROM tapdb_identity_prefix_config p
-    WHERE p.entity = entity_name;
+    WHERE p.entity = entity_name
+      AND p.domain_code = dc
+      AND p.issuer_app_code = ac;
+
+    -- Fallback to global (empty domain/app) if not found
+    IF prefix IS NULL AND (dc <> '' OR ac <> '') THEN
+        SELECT p.prefix INTO prefix
+        FROM tapdb_identity_prefix_config p
+        WHERE p.entity = entity_name
+          AND p.domain_code = ''
+          AND p.issuer_app_code = '';
+    END IF;
 
     IF prefix IS NULL THEN
         RAISE EXCEPTION
-            'Missing EUID prefix configuration for entity "%" in tapdb_identity_prefix_config',
-            entity_name;
+            'Missing EUID prefix configuration for entity "%" (domain=%, app=%) in tapdb_identity_prefix_config',
+            entity_name, dc, ac;
     END IF;
 
     prefix := tapdb_validate_meridian_prefix(prefix);
