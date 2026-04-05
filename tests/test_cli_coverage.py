@@ -5,17 +5,14 @@ Uses the same hermetic test infrastructure as test_cli.py (set_cli_context + app
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import socket
-import subprocess
 from pathlib import Path
 from unittest import mock
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
-import yaml
 from typer.testing import CliRunner
 
 import daylily_tapdb.cli as cli_mod
@@ -35,7 +32,9 @@ def _strip(s: str) -> str:
 def _isolate_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Hermetic CLI environment matching test_cli.py pattern."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    cfg_path = tmp_path / ".config" / "tapdb" / "testclient" / "testdb" / "tapdb-config.yaml"
+    cfg_path = (
+        tmp_path / ".config" / "tapdb" / "testclient" / "testdb" / "tapdb-config.yaml"
+    )
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text(
         "meta:\n"
@@ -58,7 +57,10 @@ def _isolate_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     os.chmod(cfg_path, 0o600)
     clear_cli_context()
     set_cli_context(
-        client_id="testclient", database_name="testdb", env_name="dev", config_path=cfg_path
+        client_id="testclient",
+        database_name="testdb",
+        env_name="dev",
+        config_path=cfg_path,
     )
     monkeypatch.setattr(cli_mod, "PID_FILE", tmp_path / "ui.pid")
     monkeypatch.setattr(cli_mod, "LOG_FILE", tmp_path / "ui.log")
@@ -74,10 +76,12 @@ def _isolate_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 class TestCliUtilFunctions:
     def test_port_is_available_open(self):
         from daylily_tapdb.cli import _port_is_available
+
         assert _port_is_available("localhost", 59999) is True
 
     def test_port_is_not_available(self):
         from daylily_tapdb.cli import _port_is_available
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("localhost", 0))
             port = s.getsockname()[1]
@@ -86,16 +90,19 @@ class TestCliUtilFunctions:
 
     def test_get_pid_no_file(self, tmp_path):
         from daylily_tapdb.cli import _get_pid
+
         assert _get_pid(tmp_path / "nonexistent.pid") is None
 
     def test_get_pid_valid_running(self, tmp_path):
         from daylily_tapdb.cli import _get_pid
+
         pid_file = tmp_path / "test.pid"
         pid_file.write_text(str(os.getpid()))
         assert _get_pid(pid_file) == os.getpid()
 
     def test_get_pid_stale(self, tmp_path):
         from daylily_tapdb.cli import _get_pid
+
         pid_file = tmp_path / "test.pid"
         pid_file.write_text("999999999")
         assert _get_pid(pid_file) is None
@@ -103,26 +110,31 @@ class TestCliUtilFunctions:
 
     def test_get_pid_invalid_text(self, tmp_path):
         from daylily_tapdb.cli import _get_pid
+
         pid_file = tmp_path / "test.pid"
         pid_file.write_text("not_a_number")
         assert _get_pid(pid_file) is None
 
     def test_port_conflict_details(self):
         from daylily_tapdb.cli import _port_conflict_details
+
         result = _port_conflict_details(99999)
         assert isinstance(result, str)
 
     def test_find_admin_module(self):
         from daylily_tapdb.cli import _find_admin_module
+
         result = _find_admin_module()
         assert "admin" in result
 
     def test_require_admin_extras_installed(self):
         from daylily_tapdb.cli import _require_admin_extras
+
         _require_admin_extras()
 
     def test_require_admin_extras_missing(self):
         from daylily_tapdb.cli import _require_admin_extras
+
         with mock.patch.dict("sys.modules", {"fastapi": None}):
             with mock.patch("importlib.util.find_spec", return_value=None):
                 with pytest.raises(SystemExit):
@@ -231,86 +243,103 @@ class TestCliCommandsNoContext:
 
 class TestPgHelpers:
     def test_get_postgres_data_dir_dev(self):
-        from daylily_tapdb.cli.pg import _get_postgres_data_dir, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_data_dir
+
         result = _get_postgres_data_dir(Environment.dev)
         assert "postgres" in str(result)
         assert "data" in str(result)
 
     def test_get_postgres_data_dir_prod(self):
-        from daylily_tapdb.cli.pg import _get_postgres_data_dir, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_data_dir
+
         result = _get_postgres_data_dir(Environment.prod)
         assert isinstance(result, Path)
 
     def test_get_postgres_log_file_dev(self):
-        from daylily_tapdb.cli.pg import _get_postgres_log_file, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_log_file
+
         result = _get_postgres_log_file(Environment.dev)
         assert "postgresql.log" in str(result)
 
     def test_get_postgres_log_file_prod(self):
-        from daylily_tapdb.cli.pg import _get_postgres_log_file, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_log_file
+
         result = _get_postgres_log_file(Environment.prod)
         assert "postgresql.log" in str(result)
 
     def test_get_postgres_socket_dir_dev(self):
-        from daylily_tapdb.cli.pg import _get_postgres_socket_dir, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_socket_dir
+
         result = _get_postgres_socket_dir(Environment.dev)
         assert isinstance(result, Path)
 
     def test_get_postgres_socket_dir_prod(self):
-        from daylily_tapdb.cli.pg import _get_postgres_socket_dir, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_socket_dir
+
         result = _get_postgres_socket_dir(Environment.prod)
         assert str(result) == "/var/run/postgresql"
 
     def test_get_instance_lock_file_dev(self):
-        from daylily_tapdb.cli.pg import _get_instance_lock_file, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_instance_lock_file
+
         result = _get_instance_lock_file(Environment.dev)
         assert "instance.lock" in str(result)
 
     def test_get_instance_lock_file_prod(self):
-        from daylily_tapdb.cli.pg import _get_instance_lock_file, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_instance_lock_file
+
         result = _get_instance_lock_file(Environment.prod)
         assert "prod" in str(result)
 
     def test_build_pg_ctl_options(self):
         from daylily_tapdb.cli.pg import _build_pg_ctl_options
+
         result = _build_pg_ctl_options(5432, Path("/tmp/sockets"))
         assert "-p 5432" in result
         assert "localhost" in result
 
     def test_port_conflict_details(self):
         from daylily_tapdb.cli.pg import _port_conflict_details
+
         result = _port_conflict_details(99999)
         assert "port 99999" in result
 
     def test_is_port_available_open(self):
         from daylily_tapdb.cli.pg import _is_port_available
+
         assert _is_port_available(59999) is True
 
     def test_is_port_available_exception(self):
         from daylily_tapdb.cli.pg import _is_port_available
+
         with patch("subprocess.run", side_effect=Exception("fail")):
             assert _is_port_available(5432) is True
 
     def test_active_env_default(self):
-        from daylily_tapdb.cli.pg import _active_env, Environment
+        from daylily_tapdb.cli.pg import Environment, _active_env
+
         result = _active_env()
         assert isinstance(result, Environment)
 
     def test_get_pg_service_cmd(self):
         from daylily_tapdb.cli.pg import _get_pg_service_cmd
+
         method, start_cmd, stop_cmd, log_path = _get_pg_service_cmd()
         assert isinstance(method, str)
 
     def test_is_pg_running_not_found(self):
         from daylily_tapdb.cli.pg import _is_pg_running
+
         with patch("subprocess.run", side_effect=FileNotFoundError):
             running, detail = _is_pg_running()
             assert running is False
             assert "not found" in detail
 
     def test_is_pg_running_timeout(self):
-        from daylily_tapdb.cli.pg import _is_pg_running
         import subprocess as sp
+
+        from daylily_tapdb.cli.pg import _is_pg_running
+
         with patch("subprocess.run", side_effect=sp.TimeoutExpired("pg_isready", 5)):
             running, detail = _is_pg_running()
             assert running is False
@@ -338,26 +367,31 @@ class TestPgHelpers:
 class TestDbHelpers:
     def test_ensure_dirs(self):
         from daylily_tapdb.cli.db import _ensure_dirs
+
         # _ensure_dirs() takes no args — uses get_config_path() internally
         _ensure_dirs()
 
     def test_find_schema_file(self):
         from daylily_tapdb.cli.db import _find_schema_file
+
         result = _find_schema_file()
         assert result.name == "tapdb_schema.sql" or result is not None
 
     def test_find_config_dir(self):
         from daylily_tapdb.cli.db import _find_config_dir
+
         result = _find_config_dir()
         assert result is not None
 
     def test_find_tapdb_core_config_dir(self):
         from daylily_tapdb.cli.db import _find_tapdb_core_config_dir
+
         result = _find_tapdb_core_config_dir()
         assert result is not None
 
     def test_get_db_config_dev(self):
-        from daylily_tapdb.cli.db import _get_db_config, Environment
+        from daylily_tapdb.cli.db import Environment, _get_db_config
+
         cfg = _get_db_config(Environment.dev)
         assert "host" in cfg
         assert "port" in cfg

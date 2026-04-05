@@ -13,10 +13,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from cli_core_yo import ccyo_out
+
 from daylily_tapdb.cli.context import (
     TapdbContext,
     active_context_overrides,
     active_env_name,
+    clear_cli_context,
     resolve_context,
     set_cli_context,
 )
@@ -24,7 +27,6 @@ from daylily_tapdb.euid import (
     normalize_euid_client_code,
     resolve_client_scoped_core_prefix,
 )
-from cli_core_yo import ccyo_out
 
 DEFAULT_UI_PORT = 8911
 DEFAULT_UI_HOST = "localhost"
@@ -47,9 +49,7 @@ def _active_env_name() -> str:
     return active_env_name("dev").strip().lower()
 
 
-def _require_context(
-    *, env_name: Optional[str] = None
-) -> TapdbContext:
+def _require_context(*, env_name: Optional[str] = None) -> TapdbContext:
     return resolve_context(
         require_keys=True,
         env_name=env_name if env_name is not None else _active_env_name(),
@@ -251,10 +251,7 @@ def build_app():
     Lazy-imports CLI deps so core installs can import daylily_tapdb.
     """
     import typer
-    from rich.console import Console
     from rich.table import Table
-
-    console = Console()
 
     # Import subcommand modules (require Typer/Rich)
     from daylily_tapdb.cli.cognito import cognito_app
@@ -347,16 +344,20 @@ def build_app():
         current = active_context_overrides()
         if not current["config_path"] or not current["env_name"]:
             ccyo_out.error("Runtime TapDB commands require both --config and --env.")
-            ccyo_out.print_text("  Example: [cyan]tapdb --config "
-                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]")
+            ccyo_out.print_text(
+                "  Example: [cyan]tapdb --config "
+                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]"
+            )
             raise typer.Exit(1)
 
         try:
             _require_context()
         except RuntimeError as exc:
             ccyo_out.error(f"{exc}")
-            ccyo_out.print_text("  Example: [cyan]tapdb --config "
-                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]")
+            ccyo_out.print_text(
+                "  Example: [cyan]tapdb --config "
+                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]"
+            )
             raise typer.Exit(1)
 
     bootstrap_app = typer.Typer(help="One-command environment bootstrap")
@@ -391,7 +392,9 @@ def build_app():
         @aurora_stub.callback(invoke_without_command=True)
         def _aurora_missing(ctx: typer.Context):
             ccyo_out.error("boto3 is required for Aurora commands.")
-            ccyo_out.print_text("  Install with: [cyan]pip install 'daylily-tapdb[aurora]'[/cyan]")
+            ccyo_out.print_text(
+                "  Install with: [cyan]pip install 'daylily-tapdb[aurora]'[/cyan]"
+            )
             raise typer.Exit(1)
 
         app.add_typer(aurora_stub, name="aurora")
@@ -436,21 +439,27 @@ def build_app():
             port = configured_port
         elif port != configured_port:
             ccyo_out.error("UI port override is not allowed in strict mode.")
-            ccyo_out.print_text(f"  Configured ui_port for env {env_name}: "
-                f"[cyan]{configured_port}[/cyan]")
+            ccyo_out.print_text(
+                f"  Configured ui_port for env {env_name}: "
+                f"[cyan]{configured_port}[/cyan]"
+            )
             raise typer.Exit(1)
 
         try:
             _require_admin_extras()
         except SystemExit:
             ccyo_out.error("Admin UI dependencies are not installed.")
-            ccyo_out.print_text("  Install with: [cyan]pip install 'daylily-tapdb[admin]'[/cyan]")
+            ccyo_out.print_text(
+                "  Install with: [cyan]pip install 'daylily-tapdb[admin]'[/cyan]"
+            )
             raise typer.Exit(1)
 
         pid = _get_pid(pid_file)
         if pid:
             ccyo_out.warning(f"UI server already running (PID {pid})")
-            ccyo_out.print_text(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
+            ccyo_out.print_text(
+                f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]"
+            )
             ccyo_out.print_text(f"   PID file: [dim]{pid_file}[/dim]")
             return
 
@@ -458,8 +467,10 @@ def build_app():
             ccyo_out.error(f"{_port_conflict_details(port)}")
             ns = _require_context(env_name=env_name).namespace_slug()
             ccyo_out.print_text(f"  Namespace: [dim]{ns}[/dim]")
-            ccyo_out.print_text("  Update environments."
-                f"{env_name}.ui_port in the namespaced config to a free port.")
+            ccyo_out.print_text(
+                "  Update environments."
+                f"{env_name}.ui_port in the namespaced config to a free port."
+            )
             raise typer.Exit(1)
 
         try:
@@ -511,12 +522,15 @@ def build_app():
 
             pid_file.write_text(str(proc.pid))
             ccyo_out.success(f"UI server started (PID {proc.pid})")
-            ccyo_out.print_text(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
+            ccyo_out.print_text(
+                f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]"
+            )
             ccyo_out.print_text(f"   Logs: [dim]{log_file}[/dim]")
             ccyo_out.print_text(f"   PID:  [dim]{pid_file}[/dim]")
         else:
-            ccyo_out.success(f"Starting UI server on "
-                f"{DEFAULT_UI_SCHEME}://{host}:{port}")
+            ccyo_out.success(
+                f"Starting UI server on {DEFAULT_UI_SCHEME}://{host}:{port}"
+            )
             ccyo_out.print_text("   Press Ctrl+C to stop\n")
             try:
                 subprocess.run(cmd)
@@ -541,7 +555,9 @@ def build_app():
         mkcert = shutil.which("mkcert")
         if not mkcert:
             ccyo_out.error("mkcert is required for trusted local HTTPS certs.")
-            ccyo_out.print_text("  Install mkcert first, then rerun [cyan]tapdb ui mkcert[/cyan].")
+            ccyo_out.print_text(
+                "  Install mkcert first, then rerun [cyan]tapdb ui mkcert[/cyan]."
+            )
             raise typer.Exit(1)
 
         default_cert, default_key = _resolve_tls_paths(env_name)
@@ -583,7 +599,9 @@ def build_app():
         ccyo_out.success("mkcert certificate ready for TAPDB UI HTTPS")
         ccyo_out.print_text(f"   Cert: [dim]{cert_path}[/dim]")
         ccyo_out.print_text(f"   Key:  [dim]{key_path}[/dim]")
-        ccyo_out.print_text("   Restart UI: [cyan]tapdb --config <path> --env <name> ui restart[/cyan]")
+        ccyo_out.print_text(
+            "   Restart UI: [cyan]tapdb --config <path> --env <name> ui restart[/cyan]"
+        )
 
     @ui_app.command("stop")
     def ui_stop():
@@ -678,7 +696,9 @@ def build_app():
         raw = str(active_context_overrides().get("env_name") or "").strip().lower()
         if not raw:
             ccyo_out.error("TapDB bootstrap requires an explicit --env value.")
-            ccyo_out.print_text("  Example: [cyan]tapdb --config <path> --env dev bootstrap local[/cyan]")
+            ccyo_out.print_text(
+                "  Example: [cyan]tapdb --config <path> --env dev bootstrap local[/cyan]"
+            )
             raise typer.Exit(1)
         try:
             return DbEnvironment(raw)
@@ -705,9 +725,11 @@ def build_app():
             )
         except Exception as e:
             ccyo_out.error(f"DB is ready, but UI start failed: {e}")
-            ccyo_out.print_text("  Recover with: "
+            ccyo_out.print_text(
+                "  Recover with: "
                 f"[cyan]tapdb --config <path> --env {env_name} "
-                f"ui start --background --port {ui_port}[/cyan]")
+                f"ui start --background --port {ui_port}[/cyan]"
+            )
 
     @bootstrap_app.command("local")
     def bootstrap_local(
@@ -735,10 +757,14 @@ def build_app():
             ccyo_out.error("Active target is Aurora; use bootstrap aurora")
             raise typer.Exit(1)
 
-        ccyo_out.print_text(f"\n[bold cyan]━━━ Bootstrap Local ({env.value}) ━━━[/bold cyan]")
+        ccyo_out.print_text(
+            f"\n[bold cyan]━━━ Bootstrap Local ({env.value}) ━━━[/bold cyan]"
+        )
 
         if env in (DbEnvironment.dev, DbEnvironment.test):
-            ccyo_out.print_text("\n[bold]Step 1/6: Ensure local PostgreSQL runtime[/bold]")
+            ccyo_out.print_text(
+                "\n[bold]Step 1/6: Ensure local PostgreSQL runtime[/bold]"
+            )
             pg_init(env=env, force=False)
             pg_start_local(env=env, port=None)
         else:
@@ -807,8 +833,10 @@ def build_app():
         env = _resolve_bootstrap_env()
         stack_name = _stack_name_for_env(cluster)
 
-        ccyo_out.print_text(f"\n[bold cyan]━━━ Bootstrap Aurora ({env.value} -> {cluster})"
-            " ━━━[/bold cyan]")
+        ccyo_out.print_text(
+            f"\n[bold cyan]━━━ Bootstrap Aurora ({env.value} -> {cluster})"
+            " ━━━[/bold cyan]"
+        )
 
         ccyo_out.print_text("\n[bold]Step 1/7: Ensure Aurora cluster[/bold]")
         mgr = AuroraStackManager(region=region)
@@ -1040,7 +1068,6 @@ def build_app():
             database_name=database_name,
             config_path=current["config_path"],
         )
-        ctx = _require_context()
         config_path = _require_explicit_config_flag()
 
         env_names = sorted({e.strip().lower() for e in env if str(e).strip()})
@@ -1123,11 +1150,13 @@ def build_app():
 
         _write_yaml_or_json_file(config_path, root)
         ccyo_out.success("TAPDB namespaced config initialized")
-        ccyo_out.print_text(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
+        ccyo_out.print_text(f"  Namespace: [bold]{client_id}/{database_name}[/bold]")
         ccyo_out.print_text(f"  Path:      [dim]{config_path}[/dim]")
         for env_name in env_names:
             env_cfg = root["environments"][env_name]
-            ccyo_out.print_text(f"  {env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}")
+            ccyo_out.print_text(
+                f"  {env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}"
+            )
 
     @config_root_app.command("update")
     def config_update(
@@ -1789,12 +1818,102 @@ def register(registry, spec) -> None:
             help_text=group.help or group.typer_instance.info.help or "",
         )
 
+
 def main():
     """Main CLI entry point."""
     import sys
+
     from cli_core_yo.app import run
+
     from daylily_tapdb.cli.spec import spec
-    sys.exit(run(spec))
+
+    argv = sys.argv[1:]
+    clear_cli_context()
+    argv = _prime_cli_context_from_argv(argv)
+    sys.exit(run(spec, argv))
+
+
+def _consume_root_option(
+    argv: list[str],
+    index: int,
+    option: str,
+) -> tuple[bool, Optional[str], int]:
+    arg = argv[index]
+    if arg == option:
+        if index + 1 >= len(argv):
+            return True, None, 1
+        return True, argv[index + 1], 2
+    prefix = f"{option}="
+    if arg.startswith(prefix):
+        return True, arg[len(prefix) :], 1
+    return False, None, 0
+
+
+def _prime_cli_context_from_argv(argv: list[str]) -> list[str]:
+    """Capture TAPDB root context flags before cli-core-yo parses argv."""
+
+    client_id: Optional[str] = None
+    database_name: Optional[str] = None
+    env_name: Optional[str] = None
+    config_path: Optional[str] = None
+    cleaned: list[str] = []
+    saw_command = False
+    index = 0
+
+    while index < len(argv):
+        arg = argv[index]
+        if saw_command:
+            cleaned.append(arg)
+            index += 1
+            continue
+
+        if arg == "--":
+            saw_command = True
+            cleaned.append(arg)
+            index += 1
+            continue
+
+        if not arg.startswith("-"):
+            saw_command = True
+            cleaned.append(arg)
+            index += 1
+            continue
+
+        matched, value, consumed = _consume_root_option(argv, index, "--config")
+        if matched:
+            config_path = value
+            cleaned.extend(argv[index : index + consumed])
+            index += consumed
+            continue
+
+        matched, value, consumed = _consume_root_option(argv, index, "--env")
+        if matched:
+            env_name = value
+            index += consumed
+            continue
+
+        matched, value, consumed = _consume_root_option(argv, index, "--client-id")
+        if matched:
+            client_id = value
+            index += consumed
+            continue
+
+        matched, value, consumed = _consume_root_option(argv, index, "--database-name")
+        if matched:
+            database_name = value
+            index += consumed
+            continue
+
+        cleaned.append(arg)
+        index += 1
+
+    set_cli_context(
+        client_id=client_id,
+        database_name=database_name,
+        env_name=env_name,
+        config_path=config_path,
+    )
+    return cleaned
 
 
 if __name__ == "__main__":

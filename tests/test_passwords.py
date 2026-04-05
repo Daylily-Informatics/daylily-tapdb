@@ -4,8 +4,6 @@ These tests are written to pass whether or not optional `passlib` is installed
 by monkeypatching the module-level `_PWD_CONTEXT`.
 """
 
-import hashlib
-
 import pytest
 
 

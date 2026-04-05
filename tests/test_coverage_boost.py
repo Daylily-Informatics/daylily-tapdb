@@ -9,13 +9,8 @@ cli/db_config.py, cli/aurora.py, templates/loader.py
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
 import uuid
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -103,10 +98,16 @@ class TestTemplatesLazyExports:
         )
 
         for obj in [
-            ConfigIssue, SeedSummary, find_config_dir,
-            find_duplicate_template_keys, find_tapdb_core_config_dir,
-            load_template_configs, normalize_config_dirs,
-            resolve_seed_config_dirs, seed_templates, validate_template_configs,
+            ConfigIssue,
+            SeedSummary,
+            find_config_dir,
+            find_duplicate_template_keys,
+            find_tapdb_core_config_dir,
+            load_template_configs,
+            normalize_config_dirs,
+            resolve_seed_config_dirs,
+            seed_templates,
+            validate_template_configs,
         ]:
             assert obj is not None
 
@@ -328,7 +329,7 @@ class TestConnection:
         mock_session.begin.return_value = mock_trans
         conn._Session = mock.MagicMock(return_value=mock_session)
         with pytest.raises(ValueError):
-            with conn.session_scope(commit=True) as session:
+            with conn.session_scope(commit=True):
                 raise ValueError("boom")
         mock_trans.rollback.assert_called()
 
@@ -341,7 +342,7 @@ class TestConnection:
         mock_trans = mock.MagicMock()
         mock_session.begin.return_value = mock_trans
         conn._Session = mock.MagicMock(return_value=mock_session)
-        with conn.session_scope(commit=False) as session:
+        with conn.session_scope(commit=False):
             pass
         mock_trans.commit.assert_not_called()
         mock_trans.rollback.assert_called()
@@ -350,11 +351,15 @@ class TestConnection:
     def test_aurora_engine_type(self, mock_ce):
         from daylily_tapdb.connection import TAPDBConnection
 
-        with mock.patch("daylily_tapdb.aurora.connection.AuroraConnectionBuilder") as mock_acb:
+        with mock.patch(
+            "daylily_tapdb.aurora.connection.AuroraConnectionBuilder"
+        ) as mock_acb:
             mock_acb.build_connection_url.return_value = "postgresql://aurora/test"
             conn = TAPDBConnection(
-                engine_type="aurora", db_hostname="cluster.aws.com:5432",
-                db_user="u", db_name="test"
+                engine_type="aurora",
+                db_hostname="cluster.aws.com:5432",
+                db_user="u",
+                db_name="test",
             )
             assert conn._db_url == "postgresql://aurora/test"
 
@@ -492,9 +497,7 @@ class TestOutboxRepository:
         mock_tm_cls = mock.MagicMock()
         mock_tm_cls.return_value.get_template.return_value = None
 
-        with mock.patch(
-            "daylily_tapdb.templates.manager.TemplateManager", mock_tm_cls
-        ):
+        with mock.patch("daylily_tapdb.templates.manager.TemplateManager", mock_tm_cls):
             with pytest.raises(ValueError, match="Message template not found"):
                 _create_message_instance(
                     mock_session,
@@ -518,9 +521,7 @@ class TestOutboxRepository:
         mock_tm_cls = mock.MagicMock()
         mock_tm_cls.return_value.get_template.return_value = mock_template
 
-        with mock.patch(
-            "daylily_tapdb.templates.manager.TemplateManager", mock_tm_cls
-        ):
+        with mock.patch("daylily_tapdb.templates.manager.TemplateManager", mock_tm_cls):
             _create_message_instance(
                 mock_session,
                 tenant_id=uuid.uuid4(),
@@ -568,7 +569,8 @@ class TestOutboxRepository:
 
         mock_session = mock.MagicMock()
         mock_session.execute.return_value.scalars.return_value.all.return_value = [
-            row1, row2
+            row1,
+            row2,
         ]
 
         result = claim_events(mock_session, batch_size=10, lock_timeout_s=60)

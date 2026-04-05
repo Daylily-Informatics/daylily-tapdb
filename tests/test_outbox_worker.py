@@ -7,13 +7,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from daylily_tapdb.outbox.contracts import DeliveryResult
 from daylily_tapdb.outbox import worker
+from daylily_tapdb.outbox.contracts import DeliveryResult
 
 
 @dataclass
 class _FakeMessage:
     """Simulates the generic_instance message object."""
+
     machine_uuid: str = "fake-uuid"
     json_addl: dict = None
 

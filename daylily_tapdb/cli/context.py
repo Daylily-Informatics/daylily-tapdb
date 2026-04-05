@@ -6,7 +6,9 @@ isolate config, runtime state, and local services per namespace.
 
 from __future__ import annotations
 
+import hashlib
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -69,7 +71,19 @@ class TapdbContext:
         return self.runtime_dir(env_name) / "postgres"
 
     def postgres_socket_dir(self, env_name: Optional[str] = None) -> Path:
-        return self.postgres_dir(env_name) / "run"
+        candidate = self.postgres_dir(env_name) / "run"
+        max_socket_path = 103
+        sample_socket = candidate / ".s.PGSQL.65535"
+        if len(str(sample_socket)) <= max_socket_path:
+            return candidate
+
+        resolved_env = (env_name or self.env_name or "").strip()
+        if not resolved_env:
+            raise RuntimeError("Environment name is required to resolve runtime_dir")
+        digest = hashlib.sha256(
+            f"{self.client_id}:{self.database_name}:{resolved_env}".encode("utf-8")
+        ).hexdigest()[:12]
+        return Path(tempfile.gettempdir()) / f"tapdb-pg-{digest}-{resolved_env}"
 
     def lock_dir(self, env_name: Optional[str] = None) -> Path:
         return self.runtime_dir(env_name) / "locks"
@@ -113,7 +127,23 @@ def active_env_name(default: str = "dev") -> str:
 def active_config_path() -> Optional[Path]:
     """Return the current explicit TapDB config path for this process, if any."""
 
-    return _ACTIVE_CONFIG_PATH
+    if _ACTIVE_CONFIG_PATH is not None:
+        return _ACTIVE_CONFIG_PATH
+
+    try:
+        from cli_core_yo.runtime import get_context
+    except Exception:
+        return None
+
+    try:
+        runtime_context = get_context()
+    except Exception:
+        return None
+
+    config_path = getattr(runtime_context, "config_path", None)
+    if not config_path:
+        return None
+    return Path(config_path).expanduser().resolve()
 
 
 def active_context_overrides() -> dict[str, Optional[str | Path]]:
@@ -123,7 +153,7 @@ def active_context_overrides() -> dict[str, Optional[str | Path]]:
         "client_id": _ACTIVE_CLIENT_ID,
         "database_name": _ACTIVE_DATABASE_NAME,
         "env_name": _ACTIVE_ENV_NAME,
-        "config_path": _ACTIVE_CONFIG_PATH,
+        "config_path": active_config_path(),
     }
 
 
@@ -169,7 +199,7 @@ def resolve_context(
     """
 
     resolved_config_path: Optional[Path] = None
-    raw_config_path = config_path if config_path is not None else _ACTIVE_CONFIG_PATH
+    raw_config_path = config_path if config_path is not None else active_config_path()
     if raw_config_path is not None and str(raw_config_path).strip():
         resolved_config_path = Path(raw_config_path).expanduser().resolve()
 
@@ -190,9 +220,7 @@ def resolve_context(
                 f"Config file {resolved_config_path} must contain "
                 "'client_id' and 'database_name' in its metadata section."
             )
-        raise RuntimeError(
-            "TapDB config path is required. Set --config."
-        )
+        raise RuntimeError("TapDB config path is required. Set --config.")
 
     resolved_env = (env_name or _ACTIVE_ENV_NAME or "").strip().lower() or None
     return TapdbContext(

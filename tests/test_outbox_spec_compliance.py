@@ -21,10 +21,10 @@ import pytest
 
 from daylily_tapdb.outbox.contracts import DeliveryResult, InboundReceipt
 
-
 # ---------------------------------------------------------------------------
 # §15 — DeliveryResult contract
 # ---------------------------------------------------------------------------
+
 
 class TestDeliveryResultContract:
     """DeliveryResult must support all factory methods."""
@@ -62,6 +62,7 @@ class TestDeliveryResultContract:
 # §15 — InboundReceipt contract
 # ---------------------------------------------------------------------------
 
+
 class TestInboundReceiptContract:
     """InboundReceipt must carry all required fields."""
 
@@ -95,6 +96,7 @@ class TestInboundReceiptContract:
 # ---------------------------------------------------------------------------
 # §16.5 — No backward compat: None-return is TypeError
 # ---------------------------------------------------------------------------
+
 
 class TestWorkerStrictContract:
     """deliver_fn MUST return DeliveryResult; None raises TypeError."""
@@ -146,22 +148,22 @@ class TestWorkerStrictContract:
         assert "network down" in result.error_message
 
 
-
 # ---------------------------------------------------------------------------
 # §21.1 — Sender/receiver round-trip (mocked session)
 # ---------------------------------------------------------------------------
+
 
 class TestSenderReceiverRoundTrip:
     """Enqueue → claim → deliver → receive_message → mark_inbox_processed."""
 
     def test_full_lifecycle_mocked(self):
         """Simulate the full lifecycle with mocked session."""
+        from daylily_tapdb.outbox.inbox import receive_message
         from daylily_tapdb.outbox.repository import (
             enqueue_event,
             mark_received,
             record_attempt,
         )
-        from daylily_tapdb.outbox.inbox import receive_message
 
         session = mock.MagicMock()
         tid = uuid.uuid4()
@@ -170,12 +172,14 @@ class TestSenderReceiverRoundTrip:
         # Mock the internal queries to simulate "no existing row"
         session.execute.return_value.scalar_one_or_none.side_effect = [
             None,  # _lookup_existing_machine_uuid
-            1,     # INSERT ... RETURNING id
+            1,  # INSERT ... RETURNING id
         ]
         mock_msg = mock.MagicMock()
         mock_msg.uid = 1
         mock_msg.machine_uuid = uuid.uuid4()
-        session.begin_nested.return_value.__enter__ = mock.MagicMock(return_value=session)
+        session.begin_nested.return_value.__enter__ = mock.MagicMock(
+            return_value=session
+        )
         session.begin_nested.return_value.__exit__ = mock.MagicMock(return_value=False)
         session.begin_nested.return_value.commit = mock.MagicMock()
 
@@ -241,6 +245,7 @@ class TestSenderReceiverRoundTrip:
 # §21.2 — Fanout
 # ---------------------------------------------------------------------------
 
+
 class TestFanout:
     """enqueue_fanout creates one row per destination."""
 
@@ -273,6 +278,7 @@ class TestFanout:
 # §21.3 — Requeue dead-letter
 # ---------------------------------------------------------------------------
 
+
 class TestRequeueDeadLetter:
     """requeue_dead_letter transitions dead_letter → pending."""
 
@@ -297,6 +303,7 @@ class TestRequeueDeadLetter:
 # ---------------------------------------------------------------------------
 # §21.4 — Admin query helpers
 # ---------------------------------------------------------------------------
+
 
 class TestAdminQueryHelpers:
     """Verify admin queries accept domain/status filters."""
@@ -341,6 +348,7 @@ class TestAdminQueryHelpers:
 # ---------------------------------------------------------------------------
 # §21.5 — Status summary (no 'delivered' status)
 # ---------------------------------------------------------------------------
+
 
 class TestStatusSummaryNoDelivered:
     """OutboxStatusSummary must not have a 'delivered' field."""

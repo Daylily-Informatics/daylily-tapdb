@@ -546,7 +546,7 @@ def validate_template_configs(
                 normalized_instance_prefix = ""
             if normalized_instance_prefix:
                 is_core_template = _is_source_under_dir(source_file, core_config_dir)
-                if is_core_template and normalized_instance_prefix != "GX":
+                if is_core_template and normalized_instance_prefix not in {"GX", "MSG"}:
                     issues.append(
                         ConfigIssue(
                             level="error",
@@ -554,11 +554,16 @@ def validate_template_configs(
                             template_code=code,
                             message=(
                                 "TapDB bundled core templates must use placeholder "
-                                "instance_prefix 'GX'."
+                                "instance_prefix 'GX' or reserved system message "
+                                "prefix 'MSG'."
                             ),
                         )
                     )
-                if not is_core_template and normalized_instance_prefix in {"GX", "TGX"}:
+                if not is_core_template and normalized_instance_prefix in {
+                    "GX",
+                    "TGX",
+                    "MSG",
+                }:
                     issues.append(
                         ConfigIssue(
                             level="error",
@@ -709,13 +714,17 @@ def _prepare_seed_templates(
         is_core_template = _is_source_under_dir(source_file, core_config_dir)
 
         if is_core_template:
-            if instance_prefix != "GX":
+            if instance_prefix == "GX":
+                item["instance_prefix"] = normalized_core_prefix
+            elif instance_prefix == "MSG":
+                item["instance_prefix"] = "MSG"
+            else:
                 raise ValueError(
                     f"TapDB bundled core template {_template_code(item)!r} must "
-                    "use placeholder instance_prefix 'GX'."
+                    "use placeholder instance_prefix 'GX' or reserved system "
+                    "message prefix 'MSG'."
                 )
-            item["instance_prefix"] = normalized_core_prefix
-        elif instance_prefix in {"GX", "TGX"}:
+        elif instance_prefix in {"GX", "TGX", "MSG"}:
             raise ValueError(
                 f"Client template {_template_code(item)!r} cannot persist reserved "
                 f"TapDB core instance_prefix {instance_prefix!r}."

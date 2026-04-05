@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import signal
 import subprocess
 import time
 from pathlib import Path
@@ -12,7 +11,6 @@ from urllib.parse import quote
 
 import pytest
 import yaml
-
 
 # ---------------------------------------------------------------------------
 # Global domain/app code defaults — every test session uses T / TAPD
@@ -77,6 +75,7 @@ def euid_config():
 # Ephemeral PostgreSQL fixture (session-scoped)
 # ---------------------------------------------------------------------------
 
+
 def _wait_for_pg(port: int, timeout: float = 15.0) -> bool:
     """Block until pg_isready succeeds or *timeout* seconds elapse."""
     deadline = time.monotonic() + timeout
@@ -84,7 +83,8 @@ def _wait_for_pg(port: int, timeout: float = 15.0) -> bool:
         try:
             r = subprocess.run(
                 ["pg_isready", "-h", "localhost", "-p", str(port)],
-                capture_output=True, timeout=3,
+                capture_output=True,
+                timeout=3,
             )
             if r.returncode == 0:
                 return True
@@ -125,7 +125,8 @@ def pg_instance(tmp_path_factory):
     # --- initdb ---
     subprocess.run(
         [initdb_bin, "-D", str(data_dir), "--no-locale", "-E", "UTF8", "-A", "trust"],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
 
     # --- start ---
@@ -138,7 +139,8 @@ def pg_instance(tmp_path_factory):
     )
     subprocess.run(
         [pg_ctl, "start", "-D", str(data_dir), "-l", str(log_file), "-o", options],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
 
     if not _wait_for_pg(port):
@@ -152,7 +154,8 @@ def pg_instance(tmp_path_factory):
     # --- create database ---
     subprocess.run(
         [createdb_bin, "-h", "localhost", "-p", str(port), "-U", user, database],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
 
     # --- write tapdb config ---

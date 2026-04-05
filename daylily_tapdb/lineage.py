@@ -101,7 +101,11 @@ def resolve_parent_instance(lineage):
     instance_uid = getattr(lineage, "parent_instance_uid", None)
     if instance_uid is None:
         return None
-    return session.query(generic_instance).filter(generic_instance.uid == instance_uid).first()
+    return (
+        session.query(generic_instance)
+        .filter(generic_instance.uid == instance_uid)
+        .first()
+    )
 
 
 def resolve_child_instance(lineage):
@@ -112,7 +116,11 @@ def resolve_child_instance(lineage):
     instance_uid = getattr(lineage, "child_instance_uid", None)
     if instance_uid is None:
         return None
-    return session.query(generic_instance).filter(generic_instance.uid == instance_uid).first()
+    return (
+        session.query(generic_instance)
+        .filter(generic_instance.uid == instance_uid)
+        .first()
+    )
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -198,10 +206,14 @@ def get_all_descendants(
     Returns:
         List of DescendantRow (euid, uid, json_addl) ordered newest first.
     """
-    rows = session.execute(
-        text(_DESCENDANTS_SQL),
-        {"root_euid": str(root_euid), "max_rows": max_rows},
-    ).mappings().all()
+    rows = (
+        session.execute(
+            text(_DESCENDANTS_SQL),
+            {"root_euid": str(root_euid), "max_rows": max_rows},
+        )
+        .mappings()
+        .all()
+    )
     return [
         DescendantRow(euid=r["euid"], uid=r["uid"], json_addl=r["json_addl"])
         for r in rows
@@ -259,10 +271,14 @@ def get_lineage_graph(
     Returns:
         LineageGraph with deduplicated nodes and edges.
     """
-    rows = session.execute(
-        text(_GRAPH_SQL),
-        {"start_euid": str(start_euid), "max_depth": int(max_depth)},
-    ).mappings().all()
+    rows = (
+        session.execute(
+            text(_GRAPH_SQL),
+            {"start_euid": str(start_euid), "max_depth": int(max_depth)},
+        )
+        .mappings()
+        .all()
+    )
 
     seen_euids: set[str] = set()
     nodes: list[GraphNode] = []
@@ -272,18 +288,26 @@ def get_lineage_graph(
         euid = r["euid"]
         if euid not in seen_euids:
             seen_euids.add(euid)
-            nodes.append(GraphNode(
-                euid=euid, uid=r["uid"], name=r["name"],
-                type=r["type"], category=r["category"],
-                subtype=r["subtype"], version=r["version"],
-                depth=r["depth"],
-            ))
+            nodes.append(
+                GraphNode(
+                    euid=euid,
+                    uid=r["uid"],
+                    name=r["name"],
+                    type=r["type"],
+                    category=r["category"],
+                    subtype=r["subtype"],
+                    version=r["version"],
+                    depth=r["depth"],
+                )
+            )
         if r["lineage_euid"] is not None:
-            edges.append(GraphEdge(
-                lineage_euid=r["lineage_euid"],
-                parent_euid=r["lineage_parent_euid"],
-                child_euid=r["lineage_child_euid"],
-                relationship_type=r["relationship_type"],
-            ))
+            edges.append(
+                GraphEdge(
+                    lineage_euid=r["lineage_euid"],
+                    parent_euid=r["lineage_parent_euid"],
+                    child_euid=r["lineage_child_euid"],
+                    relationship_type=r["relationship_type"],
+                )
+            )
 
     return LineageGraph(nodes=nodes, edges=edges)

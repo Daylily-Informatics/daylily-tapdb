@@ -25,9 +25,7 @@ class outbox_event(Base):
     id = Column(BIGINT, primary_key=True, nullable=False, server_default=FetchedValue())
 
     # FK to the canonical message object in generic_instance
-    message_uid = Column(
-        BIGINT, ForeignKey("generic_instance.uid"), nullable=False
-    )
+    message_uid = Column(BIGINT, ForeignKey("generic_instance.uid"), nullable=False)
 
     # Scoping — denormalized from the message for direct filtering
     tenant_id = Column(UUID(as_uuid=True), nullable=True)
@@ -47,7 +45,6 @@ class outbox_event(Base):
     created_dt = Column(
         DateTime(timezone=True), nullable=False, server_default=FetchedValue()
     )
-
 
     # Claim / lease management
     claimed_by = Column(Text, nullable=True)
@@ -100,10 +97,10 @@ class outbox_event_attempt(Base):
 
     __tablename__ = "outbox_event_attempt"
 
-    uid = Column(BIGINT, primary_key=True, nullable=False, server_default=FetchedValue())
-    outbox_event_id = Column(
-        BIGINT, ForeignKey("outbox_event.id"), nullable=False
+    uid = Column(
+        BIGINT, primary_key=True, nullable=False, server_default=FetchedValue()
     )
+    outbox_event_id = Column(BIGINT, ForeignKey("outbox_event.id"), nullable=False)
     tenant_id = Column(UUID(as_uuid=True), nullable=True)
     domain_code = Column(Text, nullable=False, server_default=FetchedValue())
     issuer_app_code = Column(Text, nullable=False, server_default=FetchedValue())
@@ -140,7 +137,9 @@ class inbox_message(Base):
 
     __tablename__ = "inbox_message"
 
-    uid = Column(BIGINT, primary_key=True, nullable=False, server_default=FetchedValue())
+    uid = Column(
+        BIGINT, primary_key=True, nullable=False, server_default=FetchedValue()
+    )
     message_machine_uuid = Column(UUID(as_uuid=True), unique=True, nullable=False)
     receipt_machine_uuid = Column(UUID(as_uuid=True), unique=True, nullable=False)
     tenant_id = Column(UUID(as_uuid=True), nullable=True)

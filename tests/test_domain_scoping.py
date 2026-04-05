@@ -9,7 +9,6 @@ Tests:
 
 from __future__ import annotations
 
-import uuid
 from unittest import mock
 
 import pytest
@@ -17,14 +16,13 @@ import pytest
 from daylily_tapdb.euid import (
     normalize_domain_code,
     resolve_runtime_domain_code,
-    resolve_runtime_validation_context,
     validate_euid,
 )
-
 
 # ---------------------------------------------------------------------------
 # §8.1 — fail-fast tests
 # ---------------------------------------------------------------------------
+
 
 class TestFailFastDomainCode:
     """domain_code must be provided; empty string raises."""
@@ -33,7 +31,7 @@ class TestFailFastDomainCode:
         with pytest.raises(ValueError, match="empty string"):
             resolve_runtime_domain_code({"MERIDIAN_DOMAIN_CODE": ""})
 
-    def test_missing_env_var_defaults_to_T(self):
+    def test_missing_env_var_defaults_to_t(self):
         assert resolve_runtime_domain_code({}) == "T"
 
     def test_explicit_valid_code(self):
@@ -69,15 +67,19 @@ class TestFailFastConnection:
 # §8.2 — domain validation & normalization
 # ---------------------------------------------------------------------------
 
+
 class TestDomainCodeValidation:
     """Crockford Base32, 1-4 chars, normalized to uppercase."""
 
-    @pytest.mark.parametrize("raw,expected", [
-        ("t", "T"),
-        ("tapd", "TAPD"),
-        ("AB", "AB"),
-        ("X", "X"),
-    ])
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("t", "T"),
+            ("tapd", "TAPD"),
+            ("AB", "AB"),
+            ("X", "X"),
+        ],
+    )
     def test_valid_codes(self, raw, expected):
         assert normalize_domain_code(raw) == expected
 
@@ -94,6 +96,7 @@ class TestDomainCodeValidation:
 # §8.3 — EUID domain environment validation
 # ---------------------------------------------------------------------------
 
+
 class TestEuidDomainEnvironment:
     """validate_euid must reject cross-environment EUIDs."""
 
@@ -101,12 +104,16 @@ class TestEuidDomainEnvironment:
         assert validate_euid("T:TX-1C") is False
 
     def test_production_rejected_in_domain_mode(self):
-        assert validate_euid("TX-1C", environment="domain", allowed_domain_codes=["T"]) is False
+        assert (
+            validate_euid("TX-1C", environment="domain", allowed_domain_codes=["T"])
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------
 # §8.4 — TemplateManager cache isolation
 # ---------------------------------------------------------------------------
+
 
 class TestTemplateCacheIsolation:
     """Cache keys must include domain:app — no cross-domain bleed."""
@@ -135,6 +142,7 @@ class TestTemplateCacheIsolation:
 # ---------------------------------------------------------------------------
 # §8.5 — Factory domain/app scoping
 # ---------------------------------------------------------------------------
+
 
 class TestFactoryDomainScoping:
     """InstanceFactory passes domain/app through to get_template."""

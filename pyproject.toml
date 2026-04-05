@@ -110,7 +110,6 @@ admin = [
 [tool.setuptools.data-files]
 "schema" = ["schema/tapdb_schema.sql", "schema/rls.sql"]
 "schema/migrations" = ["schema/migrations/*.sql"]
-"schema/migrations_legacy" = ["schema/migrations_legacy/*.sql"]
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"

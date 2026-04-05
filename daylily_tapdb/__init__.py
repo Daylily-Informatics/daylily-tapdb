@@ -39,6 +39,13 @@ from daylily_tapdb.actions import ActionDispatcher
 from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.euid import EUIDConfig
 from daylily_tapdb.factory import InstanceFactory
+from daylily_tapdb.lineage import (
+    LineageQueryProxy,
+    get_child_lineages,
+    get_parent_lineages,
+    resolve_child_instance,
+    resolve_parent_instance,
+)
 from daylily_tapdb.models.base import Base, tapdb_core
 from daylily_tapdb.models.instance import (
     action_instance,
@@ -106,13 +113,6 @@ from daylily_tapdb.templates.requirements import (
     MissingSeededTemplateError,
     require_seeded_template,
     require_seeded_templates,
-)
-from daylily_tapdb.lineage import (
-    LineageQueryProxy,
-    get_child_lineages,
-    get_parent_lineages,
-    resolve_child_instance,
-    resolve_parent_instance,
 )
 from daylily_tapdb.timezone_utils import (
     DEFAULT_DISPLAY_TIMEZONE,

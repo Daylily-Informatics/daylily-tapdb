@@ -26,10 +26,10 @@ from daylily_tapdb.cli.db import (
     _load_template_configs,
     _resolve_seed_config_dirs,
 )
+from daylily_tapdb.cli.db_config import get_config_path
 from daylily_tapdb.templates import (
     validate_template_configs as _validate_template_configs,
 )
-from daylily_tapdb.cli.db_config import get_config_path
 
 runner = CliRunner()
 
@@ -1810,7 +1810,8 @@ class TestCLIDBSeed:
         templates, issues = _validate_template_configs(config_dirs, strict=True)
         # Filter to only client-config errors (ignore pre-existing core config issues)
         client_errors = [
-            i for i in issues
+            i
+            for i in issues
             if i.level == "error" and str(tmp_path) in (i.source_file or "")
         ]
         core_dir = _find_tapdb_core_config_dir().resolve()
@@ -1845,7 +1846,8 @@ class TestCLIDBSeed:
         config_dirs = _resolve_seed_config_dirs(tmp_path)
         templates, issues = _validate_template_configs(config_dirs, strict=False)
         client_errors = [
-            i for i in issues
+            i
+            for i in issues
             if i.level == "error" and str(tmp_path) in (i.source_file or "")
         ]
         core_dir = _find_tapdb_core_config_dir().resolve()
@@ -1885,7 +1887,8 @@ class TestCLIDBSeed:
         config_dirs = _resolve_seed_config_dirs(tmp_path)
         _templates, issues = _validate_template_configs(config_dirs, strict=True)
         dup_errors = [
-            i for i in issues
+            i
+            for i in issues
             if i.level == "error" and "duplicate template key" in i.message.lower()
         ]
         assert dup_errors

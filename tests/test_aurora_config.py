@@ -16,7 +16,11 @@ from pathlib import Path
 import pytest
 
 from daylily_tapdb.aurora.config import AuroraConfig
-from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
+from daylily_tapdb.cli.context import (
+    clear_cli_context,
+    resolve_context,
+    set_cli_context,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -216,10 +220,10 @@ class TestGetDbConfigEngineType:
         set_cli_context(config_path=cfg_file)
 
         cfg = get_db_config_for_env("dev")
+        context = resolve_context(config_path=cfg_file)
+        assert context is not None
 
-        assert cfg["unix_socket_dir"] == str(
-            cfg_file.parent / "dev" / "postgres" / "run"
-        )
+        assert cfg["unix_socket_dir"] == str(context.postgres_socket_dir("dev"))
 
     def test_local_env_unix_socket_dir_env_override(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -272,8 +276,8 @@ class TestConfigPathScoping:
 
     def test_missing_config_raises(self, monkeypatch: pytest.MonkeyPatch):
         """Without a config path, get_config_paths must error — no silent fallback."""
-        from daylily_tapdb.cli.db_config import get_config_paths
         from daylily_tapdb.cli.context import set_cli_context
+        from daylily_tapdb.cli.db_config import get_config_paths
 
         # Clear any ambient config
         set_cli_context(config_path="")

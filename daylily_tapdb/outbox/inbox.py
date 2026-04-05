@@ -8,7 +8,6 @@ The receiver issues a ``receipt_machine_uuid`` on first receipt.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -40,8 +39,6 @@ def receive_message(
         InboundReceipt with the receipt_machine_uuid and status.
     """
     receipt_uuid = uuid.uuid4()
-    now = datetime.utcnow()
-
     stmt = (
         pg_insert(inbox_message)
         .values(
@@ -158,7 +155,6 @@ def mark_inbox_rejected(
         )
     )
     session.flush()
-
 
 
 def get_inbox_message_by_machine_uuid(
