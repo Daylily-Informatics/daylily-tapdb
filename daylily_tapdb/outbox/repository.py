@@ -298,11 +298,81 @@ def claim_events(
 
 
 def mark_delivered(session: Session, row_id: int) -> None:
-    """Mark an outbox row delivered."""
+    """Mark an outbox row delivered (deprecated — use mark_received)."""
     session.execute(
         update(outbox_event)
         .where(outbox_event.id == row_id)
         .values(status="delivered", delivered_dt=func.now())
+    )
+    session.flush()
+
+
+def mark_received(
+    session: Session,
+    row_id: int,
+    *,
+    receipt_machine_uuid: uuid.UUID | None = None,
+    receipt_status: str = "received",
+) -> None:
+    """Mark an outbox row received (receiver durably persisted the message)."""
+    values: dict = {
+        "status": "received",
+        "receipt_status": receipt_status,
+        "receipt_received_dt": func.now(),
+    }
+    if receipt_machine_uuid is not None:
+        values["receipt_machine_uuid"] = receipt_machine_uuid
+    session.execute(
+        update(outbox_event).where(outbox_event.id == row_id).values(**values)
+    )
+    session.flush()
+
+
+def mark_processed(
+    session: Session,
+    row_id: int,
+    *,
+    receipt_machine_uuid: uuid.UUID | None = None,
+) -> None:
+    """Mark an outbox row processed (receiver completed business processing)."""
+    values: dict = {
+        "status": "processed",
+        "receipt_status": "processed",
+        "receipt_processed_dt": func.now(),
+    }
+    if receipt_machine_uuid is not None:
+        values["receipt_machine_uuid"] = receipt_machine_uuid
+    session.execute(
+        update(outbox_event).where(outbox_event.id == row_id).values(**values)
+    )
+    session.flush()
+
+
+def mark_rejected(session: Session, row_id: int, *, error: str = "") -> None:
+    """Mark an outbox row rejected (receiver explicitly rejected)."""
+    session.execute(
+        update(outbox_event)
+        .where(outbox_event.id == row_id)
+        .values(
+            status="rejected",
+            receipt_status="rejected",
+            rejected_dt=func.now(),
+            last_error=error[:10_000] if error else None,
+        )
+    )
+    session.flush()
+
+
+def mark_dead_letter(session: Session, row_id: int, *, error: str = "") -> None:
+    """Mark an outbox row as dead-lettered (retries exhausted)."""
+    session.execute(
+        update(outbox_event)
+        .where(outbox_event.id == row_id)
+        .values(
+            status="dead_letter",
+            dead_letter_dt=func.now(),
+            last_error=error[:10_000] if error else None,
+        )
     )
     session.flush()
 
@@ -318,6 +388,60 @@ def mark_failed(
     session.execute(
         update(outbox_event)
         .where(outbox_event.id == row_id)
-        .values(status="failed", last_error=error, next_attempt_at=next_attempt_at)
+        .values(
+            status="failed",
+            last_error=error,
+            next_attempt_at=next_attempt_at,
+            last_attempt_dt=func.now(),
+        )
     )
     session.flush()
+
+
+def record_attempt(
+    session: Session,
+    *,
+    outbox_event_id: int,
+    attempt_no: int,
+    transport_status: str,
+    tenant_id: uuid.UUID | None = None,
+    domain_code: str = "",
+    issuer_app_code: str = "",
+    worker_id: str | None = None,
+    claim_token: uuid.UUID | None = None,
+    http_status: int | None = None,
+    transport_error: str | None = None,
+    response_headers: dict | None = None,
+    response_body_excerpt: str | None = None,
+    receipt_machine_uuid: uuid.UUID | None = None,
+    receipt_status: str | None = None,
+    receipt_received_dt: datetime | None = None,
+    receipt_processed_dt: datetime | None = None,
+    retry_scheduled_dt: datetime | None = None,
+) -> int:
+    """Record a delivery attempt in the append-only history table."""
+    from daylily_tapdb.models.outbox import outbox_event_attempt
+
+    attempt = outbox_event_attempt(
+        outbox_event_id=outbox_event_id,
+        attempt_no=attempt_no,
+        transport_status=transport_status,
+        tenant_id=tenant_id,
+        domain_code=domain_code,
+        issuer_app_code=issuer_app_code,
+        worker_id=worker_id,
+        claim_token=claim_token,
+        attempt_finished_dt=func.now(),
+        http_status=http_status,
+        transport_error=transport_error[:10_000] if transport_error else None,
+        response_headers=response_headers,
+        response_body_excerpt=response_body_excerpt[:10_000] if response_body_excerpt else None,
+        receipt_machine_uuid=receipt_machine_uuid,
+        receipt_status=receipt_status,
+        receipt_received_dt=receipt_received_dt,
+        receipt_processed_dt=receipt_processed_dt,
+        retry_scheduled_dt=retry_scheduled_dt,
+    )
+    session.add(attempt)
+    session.flush()
+    return int(attempt.uid)
