@@ -387,6 +387,23 @@ CREATE INDEX IF NOT EXISTS idx_outbox_event_message_uid
     ON outbox_event(message_uid);
 CREATE INDEX IF NOT EXISTS idx_outbox_event_domain
     ON outbox_event(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_status_next
+    ON outbox_event(status, next_attempt_at)
+    WHERE status IN ('pending', 'failed');
+CREATE INDEX IF NOT EXISTS idx_outbox_event_lease
+    ON outbox_event(status, lease_expires_dt)
+    WHERE status = 'delivering';
+
+-- outbox_event_attempt indexes
+CREATE INDEX IF NOT EXISTS idx_outbox_attempt_event_id
+    ON outbox_event_attempt(outbox_event_id, attempt_no);
+
+-- inbox_message indexes
+CREATE INDEX IF NOT EXISTS idx_inbox_message_domain
+    ON inbox_message(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_inbox_message_status
+    ON inbox_message(status)
+    WHERE status IN ('received', 'processing');
 
 --------------------------------------------------------------------------------
 -- FUNCTIONS
