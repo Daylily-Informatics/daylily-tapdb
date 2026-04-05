@@ -158,3 +158,16 @@ def mark_inbox_rejected(
         )
     )
     session.flush()
+
+
+
+def get_inbox_message_by_machine_uuid(
+    session: Session,
+    machine_uuid: uuid.UUID,
+) -> inbox_message | None:
+    """Look up an inbox message by its message_machine_uuid."""
+    return (
+        session.query(inbox_message)
+        .filter(inbox_message.message_machine_uuid == machine_uuid)
+        .first()
+    )

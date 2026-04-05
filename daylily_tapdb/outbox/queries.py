@@ -134,3 +134,28 @@ def inbox_status_summary(
 
     rows = {r.status: r.cnt for r in session.execute(q).all()}
     return InboxStatusSummary(**{k: rows.get(k, 0) for k in InboxStatusSummary.__dataclass_fields__})
+
+
+
+def list_events_by_destination(
+    session: Session,
+    destination: str,
+    *,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[outbox_event]:
+    """List outbox events for a given destination, optionally filtered by status."""
+    q = select(outbox_event).where(outbox_event.destination == destination)
+    if status is not None:
+        q = q.where(outbox_event.status == status)
+    q = q.order_by(outbox_event.created_dt.desc()).limit(limit)
+    return list(session.execute(q).scalars().all())
+
+
+def get_outbox_event_by_machine_uuid(
+    session: Session,
+    machine_uuid,
+) -> outbox_event | None:
+    """Look up an outbox event by its machine_uuid."""
+    q = select(outbox_event).where(outbox_event.machine_uuid == machine_uuid)
+    return session.execute(q).scalar_one_or_none()
