@@ -73,6 +73,8 @@ def query_audit_trail(
     changed_by: Optional[str] = None,
     euid: Optional[str] = None,
     since: Optional[datetime] = None,
+    domain_code: Optional[str] = None,
+    issuer_app_code: Optional[str] = None,
     limit: int = 500,
     order: Literal["asc", "desc"] = "desc",
 ) -> list[AuditEntry]:
@@ -83,6 +85,8 @@ def query_audit_trail(
         changed_by: Filter by the user who made the change.
         euid: Filter by the EUID of the changed entity.
         since: Only return entries after this datetime.
+        domain_code: Filter by domain code.
+        issuer_app_code: Filter by issuer app code.
         limit: Maximum number of rows to return (default 500).
         order: Sort order by changed_at ('asc' or 'desc').
 
@@ -101,6 +105,12 @@ def query_audit_trail(
     if since is not None:
         clauses.append("al.changed_at >= :since")
         params["since"] = since
+    if domain_code is not None:
+        clauses.append("al.domain_code = :domain_code")
+        params["domain_code"] = domain_code
+    if issuer_app_code is not None:
+        clauses.append("al.issuer_app_code = :issuer_app_code")
+        params["issuer_app_code"] = issuer_app_code
 
     sql = _AUDIT_TRAIL_SQL
     if clauses:

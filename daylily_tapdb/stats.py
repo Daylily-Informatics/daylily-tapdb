@@ -65,25 +65,35 @@ class LineageStats:
 
 
 def get_template_stats(
-    session: Session, *, include_deleted: bool = False
+    session: Session,
+    *,
+    include_deleted: bool = False,
+    domain_code: Optional[str] = None,
+    issuer_app_code: Optional[str] = None,
 ) -> TemplateStats:
     """Return aggregate statistics for the ``generic_template`` table."""
-    row = session.execute(
-        text("""
-            SELECT
-                COUNT(*) AS total,
-                COUNT(DISTINCT type) AS distinct_types,
-                COUNT(DISTINCT subtype) AS distinct_subtypes,
-                COUNT(DISTINCT category) AS distinct_categories,
-                MAX(created_dt) AS latest_created,
-                MIN(created_dt) AS earliest_created,
-                AVG(AGE(NOW(), created_dt)) AS average_age,
-                COUNT(CASE WHEN is_singleton THEN 1 END) AS singleton_count
-            FROM generic_template
-            WHERE is_deleted = :is_deleted
-        """),
-        {"is_deleted": include_deleted},
-    ).mappings().one()
+    where = ["is_deleted = :is_deleted"]
+    params: dict = {"is_deleted": include_deleted}
+    if domain_code is not None:
+        where.append("domain_code = :domain_code")
+        params["domain_code"] = domain_code
+    if issuer_app_code is not None:
+        where.append("issuer_app_code = :issuer_app_code")
+        params["issuer_app_code"] = issuer_app_code
+    sql = f"""
+        SELECT
+            COUNT(*) AS total,
+            COUNT(DISTINCT type) AS distinct_types,
+            COUNT(DISTINCT subtype) AS distinct_subtypes,
+            COUNT(DISTINCT category) AS distinct_categories,
+            MAX(created_dt) AS latest_created,
+            MIN(created_dt) AS earliest_created,
+            AVG(AGE(NOW(), created_dt)) AS average_age,
+            COUNT(CASE WHEN is_singleton THEN 1 END) AS singleton_count
+        FROM generic_template
+        WHERE {' AND '.join(where)}
+    """
+    row = session.execute(text(sql), params).mappings().one()
     return TemplateStats(
         total=row["total"],
         distinct_types=row["distinct_types"],
@@ -97,25 +107,35 @@ def get_template_stats(
 
 
 def get_instance_stats(
-    session: Session, *, include_deleted: bool = False
+    session: Session,
+    *,
+    include_deleted: bool = False,
+    domain_code: Optional[str] = None,
+    issuer_app_code: Optional[str] = None,
 ) -> InstanceStats:
     """Return aggregate statistics for the ``generic_instance`` table."""
-    row = session.execute(
-        text("""
-            SELECT
-                COUNT(*) AS total,
-                COUNT(DISTINCT type) AS distinct_types,
-                COUNT(DISTINCT polymorphic_discriminator) AS distinct_poly,
-                COUNT(DISTINCT category) AS distinct_categories,
-                COUNT(DISTINCT subtype) AS distinct_subtypes,
-                MAX(created_dt) AS latest_created,
-                MIN(created_dt) AS earliest_created,
-                AVG(AGE(NOW(), created_dt)) AS average_age
-            FROM generic_instance
-            WHERE is_deleted = :is_deleted
-        """),
-        {"is_deleted": include_deleted},
-    ).mappings().one()
+    where = ["is_deleted = :is_deleted"]
+    params: dict = {"is_deleted": include_deleted}
+    if domain_code is not None:
+        where.append("domain_code = :domain_code")
+        params["domain_code"] = domain_code
+    if issuer_app_code is not None:
+        where.append("issuer_app_code = :issuer_app_code")
+        params["issuer_app_code"] = issuer_app_code
+    sql = f"""
+        SELECT
+            COUNT(*) AS total,
+            COUNT(DISTINCT type) AS distinct_types,
+            COUNT(DISTINCT polymorphic_discriminator) AS distinct_poly,
+            COUNT(DISTINCT category) AS distinct_categories,
+            COUNT(DISTINCT subtype) AS distinct_subtypes,
+            MAX(created_dt) AS latest_created,
+            MIN(created_dt) AS earliest_created,
+            AVG(AGE(NOW(), created_dt)) AS average_age
+        FROM generic_instance
+        WHERE {' AND '.join(where)}
+    """
+    row = session.execute(text(sql), params).mappings().one()
     return InstanceStats(
         total=row["total"],
         distinct_types=row["distinct_types"],
@@ -129,25 +149,35 @@ def get_instance_stats(
 
 
 def get_lineage_stats(
-    session: Session, *, include_deleted: bool = False
+    session: Session,
+    *,
+    include_deleted: bool = False,
+    domain_code: Optional[str] = None,
+    issuer_app_code: Optional[str] = None,
 ) -> LineageStats:
     """Return aggregate statistics for the ``generic_instance_lineage`` table."""
-    row = session.execute(
-        text("""
-            SELECT
-                COUNT(*) AS total,
-                COUNT(DISTINCT parent_type) AS distinct_parent_types,
-                COUNT(DISTINCT child_type) AS distinct_child_types,
-                COUNT(DISTINCT polymorphic_discriminator) AS distinct_poly,
-                COUNT(DISTINCT category) AS distinct_categories,
-                MAX(created_dt) AS latest_created,
-                MIN(created_dt) AS earliest_created,
-                AVG(AGE(NOW(), created_dt)) AS average_age
-            FROM generic_instance_lineage
-            WHERE is_deleted = :is_deleted
-        """),
-        {"is_deleted": include_deleted},
-    ).mappings().one()
+    where = ["is_deleted = :is_deleted"]
+    params: dict = {"is_deleted": include_deleted}
+    if domain_code is not None:
+        where.append("domain_code = :domain_code")
+        params["domain_code"] = domain_code
+    if issuer_app_code is not None:
+        where.append("issuer_app_code = :issuer_app_code")
+        params["issuer_app_code"] = issuer_app_code
+    sql = f"""
+        SELECT
+            COUNT(*) AS total,
+            COUNT(DISTINCT parent_type) AS distinct_parent_types,
+            COUNT(DISTINCT child_type) AS distinct_child_types,
+            COUNT(DISTINCT polymorphic_discriminator) AS distinct_poly,
+            COUNT(DISTINCT category) AS distinct_categories,
+            MAX(created_dt) AS latest_created,
+            MIN(created_dt) AS earliest_created,
+            AVG(AGE(NOW(), created_dt)) AS average_age
+        FROM generic_instance_lineage
+        WHERE {' AND '.join(where)}
+    """
+    row = session.execute(text(sql), params).mappings().one()
     return LineageStats(
         total=row["total"],
         distinct_parent_types=row["distinct_parent_types"],
