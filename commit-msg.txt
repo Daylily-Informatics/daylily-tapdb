@@ -1,6 +1,0 @@
-feat: add domain_code + issuer_app_code filters to audit + stats queries (Step 5)
-
-- query_audit_trail() accepts optional domain_code and issuer_app_code
-- get_template_stats(), get_instance_stats(), get_lineage_stats() accept domain_code and issuer_app_code
-- Lineage traversal functions unchanged (scoping is implicit via entity data)
-- 623 tests passing

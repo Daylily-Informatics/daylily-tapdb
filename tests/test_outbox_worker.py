@@ -88,7 +88,7 @@ def test_run_dispatch_loop_marks_delivered_on_success(monkeypatch: pytest.Monkey
     delivered_events: list[int] = []
     sleep_calls: list[float] = []
 
-    def _claim_events(session, batch_size: int, lock_timeout_s: int):
+    def _claim_events(session, batch_size: int, lock_timeout_s: int, **kwargs):
         claim_calls.append((batch_size, lock_timeout_s))
         return claimed_returns.pop(0)
 
@@ -148,7 +148,7 @@ def test_run_dispatch_loop_marks_failed_and_schedules_retry(
         def now(cls, tz=None):
             return fixed_now if tz is not None else fixed_now.replace(tzinfo=None)
 
-    def _claim_events(_session, batch_size: int, lock_timeout_s: int):
+    def _claim_events(_session, batch_size: int, lock_timeout_s: int, **kwargs):
         _ = (batch_size, lock_timeout_s)
         return claimed_returns.pop(0)
 
@@ -201,7 +201,7 @@ def test_run_dispatch_loop_max_attempts_schedules_far_future_retry(
         def now(cls, tz=None):
             return fixed_now if tz is not None else fixed_now.replace(tzinfo=None)
 
-    def _claim_events(_session, batch_size: int, lock_timeout_s: int):
+    def _claim_events(_session, batch_size: int, lock_timeout_s: int, **kwargs):
         _ = (batch_size, lock_timeout_s)
         return claimed_returns.pop(0)
 

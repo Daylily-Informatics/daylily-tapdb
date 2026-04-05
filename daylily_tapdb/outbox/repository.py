@@ -33,15 +33,23 @@ def _build_enqueue_stmt(
     message_uid: int,
     destination: str,
     dedupe_key: str,
+    tenant_id: uuid.UUID | None = None,
+    domain_code: str = "",
+    issuer_app_code: str = "",
 ):
     """Build an INSERT ... ON CONFLICT DO NOTHING for the execution index."""
+    values = dict(
+        message_uid=message_uid,
+        destination=destination,
+        dedupe_key=dedupe_key,
+        domain_code=domain_code,
+        issuer_app_code=issuer_app_code,
+    )
+    if tenant_id is not None:
+        values["tenant_id"] = tenant_id
     return (
         pg_insert(outbox_event)
-        .values(
-            message_uid=message_uid,
-            destination=destination,
-            dedupe_key=dedupe_key,
-        )
+        .values(**values)
         .on_conflict_do_nothing(index_elements=["destination", "dedupe_key"])
         .returning(outbox_event.id)
     )
@@ -129,6 +137,9 @@ def enqueue_event(
     payload: dict,
     destination: str,
     dedupe_key: str,
+    *,
+    domain_code: str = "",
+    issuer_app_code: str = "",
 ) -> uuid.UUID:
     """Create a canonical message and enqueue a delivery row.
 
@@ -162,6 +173,9 @@ def enqueue_event(
                 message_uid=msg.uid,
                 destination=destination,
                 dedupe_key=dedupe_key,
+                tenant_id=tenant_id,
+                domain_code=domain_code,
+                issuer_app_code=issuer_app_code,
             )
         ).scalar_one_or_none()
 
@@ -216,15 +230,23 @@ def enqueue_fanout(
     return inserted_ids
 
 
-def _build_claim_select(*, batch_size: int) -> Select:
+def _build_claim_select(
+    *,
+    batch_size: int,
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
+) -> Select:
     """Build the claim SELECT with JOIN to generic_instance for payload."""
+    q = select(outbox_event).where(
+        outbox_event.status.in_(_OUTBOX_PENDING_STATUSES),
+        outbox_event.next_attempt_at <= func.now(),
+    )
+    if domain_code is not None:
+        q = q.where(outbox_event.domain_code == domain_code)
+    if issuer_app_code is not None:
+        q = q.where(outbox_event.issuer_app_code == issuer_app_code)
     return (
-        select(outbox_event)
-        .where(
-            outbox_event.status.in_(_OUTBOX_PENDING_STATUSES),
-            outbox_event.next_attempt_at <= func.now(),
-        )
-        .order_by(outbox_event.created_dt.asc())
+        q.order_by(outbox_event.created_dt.asc())
         .limit(batch_size)
         .with_for_update(skip_locked=True)
     )
@@ -234,6 +256,9 @@ def claim_events(
     session: Session,
     batch_size: int = 50,
     lock_timeout_s: int = 300,
+    *,
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
 ) -> list[outbox_event]:
     """Claim a batch of eligible outbox rows for delivery.
 
@@ -248,7 +273,13 @@ def claim_events(
     Does not commit; callers should commit after claiming to release locks quickly.
     """
     rows = list(
-        session.execute(_build_claim_select(batch_size=batch_size)).scalars().all()
+        session.execute(
+            _build_claim_select(
+                batch_size=batch_size,
+                domain_code=domain_code,
+                issuer_app_code=issuer_app_code,
+            )
+        ).scalars().all()
     )
     if not rows:
         return []

@@ -43,6 +43,8 @@ def run_dispatch_loop(
     poll_interval_s: float = 1.0,
     lock_timeout_s: int = 300,
     max_attempts: int = 10,
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
 ) -> None:
     """Continuously dispatch outbox events.
 
@@ -63,6 +65,8 @@ def run_dispatch_loop(
             batch_size=batch_size,
             lock_timeout_s=lock_timeout_s,
             max_attempts=max_attempts,
+            domain_code=domain_code,
+            issuer_app_code=issuer_app_code,
         )
         if dispatched == 0:
             time.sleep(max(0.0, poll_interval_s))
@@ -75,6 +79,8 @@ def dispatch_batch(
     batch_size: int = 50,
     lock_timeout_s: int = 300,
     max_attempts: int = 10,
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
 ) -> int:
     """Claim and deliver one batch of outbox events.
 
@@ -91,6 +97,8 @@ def dispatch_batch(
                     session,
                     batch_size=batch_size,
                     lock_timeout_s=lock_timeout_s,
+                    domain_code=domain_code,
+                    issuer_app_code=issuer_app_code,
                 )
                 # Prevent expire-on-commit from forcing lazy DB reads during
                 # delivery.  Expunge both the outbox row and the joined message.
