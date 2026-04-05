@@ -1,19 +1,34 @@
-# daylily-tapdb Docs
+# TAPDB Docs
+
+This directory holds the support material for the TAPDB substrate. The root [README.md](../README.md) is the canonical entry point for new readers and the quickest path to the current mental model.
 
 ## Start Here
 
-- [../README.md](../README.md): repo overview, quickstart, object model, and CLI surface
-- [tapdb_gui_inclusion.md](tapdb_gui_inclusion.md): supported admin mounting and auth-mode guidance
+- [../README.md](../README.md): overview, philosophy, quickstart, and core mental model
+- [architecture.md](architecture.md): deeper architecture, object model, and write-path explanation
+- [tapdb_gui_inclusion.md](tapdb_gui_inclusion.md): admin GUI embedding and auth-mode guidance
 
-## Current Notes
+## Current Focus
 
-- the packaged `daylily_tapdb/core_config` directory is the canonical TapDB core template pack
-- client repos should keep app-owned packs in their own repos under `config/tapdb_templates/`
-- package code and the root README are authoritative for current behavior
+- TAPDB is a reusable substrate, not a domain repo.
+- The current codebase is organized around templates, instances, lineage, audit, outbox, inbox, and explicit scoping.
+- Meridian terminology in the docs should use `domain` and `domain_code`, not older sandbox language.
+- CLI examples should reflect the current `tapdb --config ... --env ...` namespace model.
 
-## Historical And Planning Docs
+## Deep Dives
 
-- `lsmc_tapdb_execplan.md`
-- `lsmc_tapdb_breaking_changes.md`
+The refactor review and the deeper doc set live in this directory as separate support files:
 
-These files are preserved for migration context. Use them to understand history, not to override the current code or README.
+- [identity-and-scoping.md](identity-and-scoping.md)
+- [template-authoring.md](template-authoring.md)
+- [runtime-and-cli.md](runtime-and-cli.md)
+- [integration-and-embedding.md](integration-and-embedding.md)
+- [repository-review.md](repository-review.md)
+
+Those files are the right place for detailed references, policy notes, and implementation guidance that would clutter the root README.
+
+## Reading Order
+
+1. Read the root README for the framing and the top-level quickstart.
+2. Read [architecture.md](architecture.md) for the structural model and write path.
+3. Read the deeper docs when you need a focused topic such as identity, template packs, runtime, or integration boundaries.
