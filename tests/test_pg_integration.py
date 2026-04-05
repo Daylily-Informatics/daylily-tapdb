@@ -8,11 +8,6 @@ tests cannot reach.
 
 from __future__ import annotations
 
-import os
-import subprocess
-from pathlib import Path
-from unittest.mock import patch
-
 import pytest
 from sqlalchemy import create_engine, text
 from typer.testing import CliRunner

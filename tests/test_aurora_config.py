@@ -272,8 +272,8 @@ class TestConfigPathScoping:
 
     def test_missing_config_raises(self, monkeypatch: pytest.MonkeyPatch):
         """Without a config path, get_config_paths must error — no silent fallback."""
-        from daylily_tapdb.cli.db_config import get_config_paths
         from daylily_tapdb.cli.context import set_cli_context
+        from daylily_tapdb.cli.db_config import get_config_paths
 
         # Clear any ambient config
         set_cli_context(config_path="")

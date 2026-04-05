@@ -5,17 +5,14 @@ Uses the same hermetic test infrastructure as test_cli.py (set_cli_context + app
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import socket
-import subprocess
 from pathlib import Path
 from unittest import mock
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
-import yaml
 from typer.testing import CliRunner
 
 import daylily_tapdb.cli as cli_mod
@@ -231,43 +228,43 @@ class TestCliCommandsNoContext:
 
 class TestPgHelpers:
     def test_get_postgres_data_dir_dev(self):
-        from daylily_tapdb.cli.pg import _get_postgres_data_dir, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_data_dir
         result = _get_postgres_data_dir(Environment.dev)
         assert "postgres" in str(result)
         assert "data" in str(result)
 
     def test_get_postgres_data_dir_prod(self):
-        from daylily_tapdb.cli.pg import _get_postgres_data_dir, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_data_dir
         result = _get_postgres_data_dir(Environment.prod)
         assert isinstance(result, Path)
 
     def test_get_postgres_log_file_dev(self):
-        from daylily_tapdb.cli.pg import _get_postgres_log_file, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_log_file
         result = _get_postgres_log_file(Environment.dev)
         assert "postgresql.log" in str(result)
 
     def test_get_postgres_log_file_prod(self):
-        from daylily_tapdb.cli.pg import _get_postgres_log_file, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_log_file
         result = _get_postgres_log_file(Environment.prod)
         assert "postgresql.log" in str(result)
 
     def test_get_postgres_socket_dir_dev(self):
-        from daylily_tapdb.cli.pg import _get_postgres_socket_dir, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_socket_dir
         result = _get_postgres_socket_dir(Environment.dev)
         assert isinstance(result, Path)
 
     def test_get_postgres_socket_dir_prod(self):
-        from daylily_tapdb.cli.pg import _get_postgres_socket_dir, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_postgres_socket_dir
         result = _get_postgres_socket_dir(Environment.prod)
         assert str(result) == "/var/run/postgresql"
 
     def test_get_instance_lock_file_dev(self):
-        from daylily_tapdb.cli.pg import _get_instance_lock_file, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_instance_lock_file
         result = _get_instance_lock_file(Environment.dev)
         assert "instance.lock" in str(result)
 
     def test_get_instance_lock_file_prod(self):
-        from daylily_tapdb.cli.pg import _get_instance_lock_file, Environment
+        from daylily_tapdb.cli.pg import Environment, _get_instance_lock_file
         result = _get_instance_lock_file(Environment.prod)
         assert "prod" in str(result)
 
@@ -292,7 +289,7 @@ class TestPgHelpers:
             assert _is_port_available(5432) is True
 
     def test_active_env_default(self):
-        from daylily_tapdb.cli.pg import _active_env, Environment
+        from daylily_tapdb.cli.pg import Environment, _active_env
         result = _active_env()
         assert isinstance(result, Environment)
 
@@ -309,8 +306,9 @@ class TestPgHelpers:
             assert "not found" in detail
 
     def test_is_pg_running_timeout(self):
-        from daylily_tapdb.cli.pg import _is_pg_running
         import subprocess as sp
+
+        from daylily_tapdb.cli.pg import _is_pg_running
         with patch("subprocess.run", side_effect=sp.TimeoutExpired("pg_isready", 5)):
             running, detail = _is_pg_running()
             assert running is False
@@ -357,7 +355,7 @@ class TestDbHelpers:
         assert result is not None
 
     def test_get_db_config_dev(self):
-        from daylily_tapdb.cli.db import _get_db_config, Environment
+        from daylily_tapdb.cli.db import Environment, _get_db_config
         cfg = _get_db_config(Environment.dev)
         assert "host" in cfg
         assert "port" in cfg

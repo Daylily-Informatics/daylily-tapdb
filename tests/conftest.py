@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import signal
 import subprocess
 import time
 from pathlib import Path
@@ -12,7 +11,6 @@ from urllib.parse import quote
 
 import pytest
 import yaml
-
 
 # ---------------------------------------------------------------------------
 # Global domain/app code defaults — every test session uses T / TAPD

@@ -21,7 +21,6 @@ import pytest
 
 from daylily_tapdb.outbox.contracts import DeliveryResult, InboundReceipt
 
-
 # ---------------------------------------------------------------------------
 # §15 — DeliveryResult contract
 # ---------------------------------------------------------------------------
@@ -156,12 +155,12 @@ class TestSenderReceiverRoundTrip:
 
     def test_full_lifecycle_mocked(self):
         """Simulate the full lifecycle with mocked session."""
+        from daylily_tapdb.outbox.inbox import receive_message
         from daylily_tapdb.outbox.repository import (
             enqueue_event,
             mark_received,
             record_attempt,
         )
-        from daylily_tapdb.outbox.inbox import receive_message
 
         session = mock.MagicMock()
         tid = uuid.uuid4()

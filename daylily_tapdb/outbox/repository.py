@@ -11,10 +11,9 @@ destination / subscription).
 from __future__ import annotations
 
 import uuid
-
-import uuid6
 from datetime import UTC, datetime, timedelta
 
+import uuid6
 from sqlalchemy import Select, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session

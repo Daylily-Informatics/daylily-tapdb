@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 import typer
+from cli_core_yo import ccyo_out
 from rich.console import Console
 from rich.table import Table
 
@@ -25,7 +26,6 @@ from daylily_tapdb.user_store import (
     set_role,
     soft_delete,
 )
-from cli_core_yo import ccyo_out
 
 user_app = typer.Typer(help="User management commands")
 console = Console()

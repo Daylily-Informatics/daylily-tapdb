@@ -1,7 +1,7 @@
 """Unit tests for outbox contracts (DeliveryResult, InboundReceipt)."""
 
 import uuid
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 from daylily_tapdb.outbox.contracts import DeliveryResult, InboundReceipt
 

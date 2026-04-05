@@ -7,8 +7,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from daylily_tapdb.outbox.contracts import DeliveryResult
 from daylily_tapdb.outbox import worker
+from daylily_tapdb.outbox.contracts import DeliveryResult
 
 
 @dataclass

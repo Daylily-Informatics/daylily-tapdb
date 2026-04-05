@@ -74,8 +74,8 @@ def resolve_runtime_domain_code(
     normalized = normalize_domain_code(raw_code)
     if normalized is None:
         raise ValueError(
-            f"MERIDIAN_DOMAIN_CODE is set to empty string. "
-            f"A valid 1-4 char Crockford Base32 domain code is required."
+            "MERIDIAN_DOMAIN_CODE is set to empty string. "
+            "A valid 1-4 char Crockford Base32 domain code is required."
         )
     return normalized
 

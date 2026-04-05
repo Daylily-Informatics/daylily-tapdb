@@ -9,7 +9,6 @@ Tests:
 
 from __future__ import annotations
 
-import uuid
 from unittest import mock
 
 import pytest
@@ -17,10 +16,8 @@ import pytest
 from daylily_tapdb.euid import (
     normalize_domain_code,
     resolve_runtime_domain_code,
-    resolve_runtime_validation_context,
     validate_euid,
 )
-
 
 # ---------------------------------------------------------------------------
 # §8.1 — fail-fast tests
@@ -33,7 +30,7 @@ class TestFailFastDomainCode:
         with pytest.raises(ValueError, match="empty string"):
             resolve_runtime_domain_code({"MERIDIAN_DOMAIN_CODE": ""})
 
-    def test_missing_env_var_defaults_to_T(self):
+    def test_missing_env_var_defaults_to_t(self):
         assert resolve_runtime_domain_code({}) == "T"
 
     def test_explicit_valid_code(self):

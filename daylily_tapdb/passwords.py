@@ -9,8 +9,6 @@ Implementation:
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 from typing import Any
 
 _PWD_CONTEXT_ERROR: Exception | None = None

@@ -7,13 +7,15 @@ result objects. No mutations are performed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from daylily_tapdb.models.outbox import inbox_message, outbox_event, outbox_event_attempt
+from daylily_tapdb.models.outbox import (
+    inbox_message,
+    outbox_event,
+    outbox_event_attempt,
+)
 
 
 @dataclass(frozen=True, slots=True)

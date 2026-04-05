@@ -9,13 +9,8 @@ cli/db_config.py, cli/aurora.py, templates/loader.py
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
 import uuid
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -328,7 +323,7 @@ class TestConnection:
         mock_session.begin.return_value = mock_trans
         conn._Session = mock.MagicMock(return_value=mock_session)
         with pytest.raises(ValueError):
-            with conn.session_scope(commit=True) as session:
+            with conn.session_scope(commit=True):
                 raise ValueError("boom")
         mock_trans.rollback.assert_called()
 
@@ -341,7 +336,7 @@ class TestConnection:
         mock_trans = mock.MagicMock()
         mock_session.begin.return_value = mock_trans
         conn._Session = mock.MagicMock(return_value=mock_session)
-        with conn.session_scope(commit=False) as session:
+        with conn.session_scope(commit=False):
             pass
         mock_trans.commit.assert_not_called()
         mock_trans.rollback.assert_called()

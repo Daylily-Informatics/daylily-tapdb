@@ -26,10 +26,10 @@ from daylily_tapdb.cli.db import (
     _load_template_configs,
     _resolve_seed_config_dirs,
 )
+from daylily_tapdb.cli.db_config import get_config_path
 from daylily_tapdb.templates import (
     validate_template_configs as _validate_template_configs,
 )
-from daylily_tapdb.cli.db_config import get_config_path
 
 runner = CliRunner()
 
