@@ -1,0 +1,73 @@
+name: "Weekly Package Vulnerability Scan"
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"   # Every Monday at 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  trivy-scan:
+    name: Trivy Package Scan (main)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build requirements.txt from pyproject.toml
+        run: |
+          pip install -e "." 2>/dev/null && pip freeze > requirements.txt || true
+          echo "=== Frozen requirements ==="
+          head -50 requirements.txt
+
+      - name: Run Trivy
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/src" \
+            aquasec/trivy:latest fs \
+              --scanners vuln \
+              --severity HIGH,CRITICAL \
+              --format json \
+              --output /src/trivy-weekly.json \
+              /src/requirements.txt || true
+
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "## 📦 Weekly TapDB Package Vulnerability Scan" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch**: main" >> $GITHUB_STEP_SUMMARY
+          echo "**Date**: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f "trivy-weekly.json" ]; then
+            HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-weekly.json 2>/dev/null || echo 0)
+            CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-weekly.json 2>/dev/null || echo 0)
+            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| CRITICAL | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| HIGH | $HIGH |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Trivy scan produced no output." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Trivy results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-weekly-results
+          path: trivy-weekly.json
+          retention-days: 30

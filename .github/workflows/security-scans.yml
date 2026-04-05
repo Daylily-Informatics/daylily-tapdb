@@ -1,0 +1,120 @@
+name: "Security Scans (SAST & Secrets)"
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  scan-and-report:
+    name: Combined Security Scans
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # 1. CodeQL SAST (standard python-security-extended suite)
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Run CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"
+          output: codeql-results
+          upload: false
+
+      # Re-run without diff-range filter (full codebase scan)
+      - name: Re-run queries without diff-range filter
+        run: |
+          CODEQL_DIR=$(dirname "$(find /opt/hostedtoolcache/CodeQL -maxdepth 4 -name codeql -type f ! -name '*.sh' 2>/dev/null | head -1)")
+          export PATH="$CODEQL_DIR:$PATH"
+          DB_PATH="/home/runner/work/_temp/codeql_databases/python"
+
+          rm -rf "$DB_PATH/results"
+
+          echo "=== Re-running queries (full codebase, no diff-range filter) ==="
+          codeql database run-queries --threads=2 --ram=6914 \
+            "$DB_PATH" \
+            codeql/python-queries:codeql-suites/python-security-extended.qls 2>&1
+
+          echo "=== Generating full SARIF ==="
+          codeql database interpret-results \
+            --format=sarifv2.1.0 \
+            --output=codeql-results/python.sarif \
+            "$DB_PATH" \
+            codeql/python-queries:codeql-suites/python-security-extended.qls 2>&1
+
+          RESULT_COUNT=$(jq '[.runs[]?.results[]?] | length' codeql-results/python.sarif)
+          echo "SARIF generated with $RESULT_COUNT total findings"
+
+      # 2. Gitleaks (Secrets)
+      - name: Run Gitleaks (Secrets)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/path" zricethezav/gitleaks:latest detect --no-git --source="/path" -v --redact --report-path="/path/gitleaks.json" || true
+
+      # 3. Trivy (Vulnerable Packages)
+      - name: Run Trivy (Vulnerable Packages)
+        run: |
+          # Extract dependencies from pyproject.toml via pip
+          pip install -e "." --dry-run --report /dev/null 2>/dev/null || true
+          pip install pipdeptree 2>/dev/null || true
+          pip install -e "." 2>/dev/null && pip freeze > requirements.txt || true
+          if [ -f "requirements.txt" ]; then
+            docker run --rm -v "${{ github.workspace }}:/src" aquasec/trivy:latest fs --scanners vuln --format json --output /src/trivy.json /src/requirements.txt || true
+          fi
+
+
+      # 4. Upload SARIF to GitHub Security tab
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: codeql-results/python.sarif
+          category: python-security-extended
+
+      # 5. Generate Summary
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "## 🔒 TapDB Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # CodeQL
+          if [ -f "codeql-results/python.sarif" ]; then
+            CODEQL_COUNT=$(jq '[.runs[]?.results[]?] | length' codeql-results/python.sarif)
+            echo "### CodeQL SAST" >> $GITHUB_STEP_SUMMARY
+            echo "- **$CODEQL_COUNT** finding(s)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### CodeQL SAST — ⚠️ No results" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Gitleaks
+          if [ -f "gitleaks.json" ]; then
+            SECRETS_COUNT=$(jq 'length' gitleaks.json 2>/dev/null || echo 0)
+            echo "### Gitleaks Secrets" >> $GITHUB_STEP_SUMMARY
+            echo "- **$SECRETS_COUNT** secret(s) detected" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Gitleaks — ✅ Clean" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Trivy
+          if [ -f "trivy.json" ]; then
+            TRIVY_COUNT=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy.json 2>/dev/null || echo 0)
+            echo "### Trivy Package Vulnerabilities" >> $GITHUB_STEP_SUMMARY
+            echo "- **$TRIVY_COUNT** vulnerability(ies)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Trivy — ⚠️ No results" >> $GITHUB_STEP_SUMMARY
+          fi
