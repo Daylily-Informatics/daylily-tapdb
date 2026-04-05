@@ -18,10 +18,14 @@ CREATE SEQUENCE IF NOT EXISTS msg_instance_seq;  -- MSG (system messages)
 --------------------------------------------------------------------------------
 
 -- Prefix configuration for identity tables whose EUID prefixes are env-configured
+-- Scoped by domain_code + issuer_app_code for shared-DB safety
 CREATE TABLE IF NOT EXISTS tapdb_identity_prefix_config (
-    entity TEXT PRIMARY KEY,
+    entity TEXT NOT NULL,
+    domain_code TEXT NOT NULL DEFAULT '',
+    issuer_app_code TEXT NOT NULL DEFAULT '',
     prefix TEXT NOT NULL,
-    updated_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (entity, domain_code, issuer_app_code)
 );
 
 -- generic_template: Blueprint definitions
@@ -65,7 +69,7 @@ CREATE TABLE IF NOT EXISTS generic_template (
     created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT unique_generic_template_prefix_seq UNIQUE (euid_prefix, euid_seq)
+    CONSTRAINT unique_generic_template_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq)
 );
 
 -- generic_instance: Concrete objects created from templates
@@ -108,7 +112,7 @@ CREATE TABLE IF NOT EXISTS generic_instance (
     created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT unique_generic_instance_prefix_seq UNIQUE (euid_prefix, euid_seq)
+    CONSTRAINT unique_generic_instance_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq)
 );
 
 -- generic_instance_lineage: Directed edges between instances
@@ -152,7 +156,7 @@ CREATE TABLE IF NOT EXISTS generic_instance_lineage (
     created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT unique_generic_instance_lineage_prefix_seq UNIQUE (euid_prefix, euid_seq)
+    CONSTRAINT unique_generic_instance_lineage_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq)
 );
 
 -- audit_log: Change tracking
@@ -667,20 +671,38 @@ BEGIN
 END;
 $$;
 
--- Resolve configured EUID prefix for identity table
+-- Resolve configured EUID prefix for identity table.
+-- Scoped by session domain_code + issuer_app_code, falling back to global ('','') if not found.
 CREATE OR REPLACE FUNCTION tapdb_get_identity_prefix(entity_name TEXT)
 RETURNS TEXT LANGUAGE plpgsql STABLE STRICT AS $$
 DECLARE
     prefix TEXT;
+    dc TEXT;
+    ac TEXT;
 BEGIN
+    dc := coalesce(tapdb_current_domain_code(), '');
+    ac := coalesce(tapdb_current_app_code(), '');
+
+    -- Try domain/app-scoped lookup first
     SELECT p.prefix INTO prefix
     FROM tapdb_identity_prefix_config p
-    WHERE p.entity = entity_name;
+    WHERE p.entity = entity_name
+      AND p.domain_code = dc
+      AND p.issuer_app_code = ac;
+
+    -- Fallback to global (empty domain/app) if not found
+    IF prefix IS NULL AND (dc <> '' OR ac <> '') THEN
+        SELECT p.prefix INTO prefix
+        FROM tapdb_identity_prefix_config p
+        WHERE p.entity = entity_name
+          AND p.domain_code = ''
+          AND p.issuer_app_code = '';
+    END IF;
 
     IF prefix IS NULL THEN
         RAISE EXCEPTION
-            'Missing EUID prefix configuration for entity "%" in tapdb_identity_prefix_config',
-            entity_name;
+            'Missing EUID prefix configuration for entity "%" (domain=%, app=%) in tapdb_identity_prefix_config',
+            entity_name, dc, ac;
     END IF;
 
     prefix := tapdb_validate_meridian_prefix(prefix);
