@@ -104,6 +104,14 @@ class TAPDBConnection:
         self.app_username = app_username or os.environ.get("USER", "tapdb_orm")
         self.domain_code = domain_code or resolve_runtime_domain_code()
         self.issuer_app_code = issuer_app_code or os.environ.get("TAPDB_APP_CODE")
+        if not self.domain_code:
+            raise ValueError(
+                "domain_code is required. Set MERIDIAN_DOMAIN_CODE env var or pass domain_code= param."
+            )
+        if not self.issuer_app_code:
+            raise ValueError(
+                "issuer_app_code is required. Set TAPDB_APP_CODE env var or pass issuer_app_code= param."
+            )
 
         if echo_sql is None:
             echo_env = os.environ.get("ECHO_SQL", "").lower()

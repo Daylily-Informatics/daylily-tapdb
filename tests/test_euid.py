@@ -196,8 +196,10 @@ class TestRuntimeDomainCode:
     def test_missing_code_defaults_to_t(self):
         assert resolve_runtime_domain_code({}) == DEFAULT_DOMAIN_CODE
 
-    def test_explicit_empty_disables(self):
-        assert resolve_runtime_domain_code({"MERIDIAN_DOMAIN_CODE": ""}) is None
+    def test_explicit_empty_raises(self):
+        import pytest
+        with pytest.raises(ValueError, match="empty string"):
+            resolve_runtime_domain_code({"MERIDIAN_DOMAIN_CODE": ""})
 
     def test_explicit_code_is_normalized(self):
         assert resolve_runtime_domain_code({"MERIDIAN_DOMAIN_CODE": "s"}) == "S"
@@ -209,12 +211,19 @@ class TestRuntimeDomainCode:
         }
 
     def test_runtime_validation_respects_production_env(self):
+        # Production mode: MERIDIAN_DOMAIN_CODE not set (absent, not empty)
         assert resolve_runtime_validation_context(
             {
                 "MERIDIAN_ENVIRONMENT": "production",
-                "MERIDIAN_DOMAIN_CODE": "",
             }
         ) == {"environment": "production"}
+
+    def test_runtime_validation_empty_domain_code_raises(self):
+        import pytest
+        with pytest.raises(ValueError, match="empty string"):
+            resolve_runtime_validation_context(
+                {"MERIDIAN_DOMAIN_CODE": ""}
+            )
 
 
 # ---------------------------------------------------------------------------

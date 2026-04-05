@@ -13,6 +13,13 @@ from urllib.parse import quote
 import pytest
 import yaml
 
+
+# ---------------------------------------------------------------------------
+# Global domain/app code defaults — every test session uses T / TAPD
+# ---------------------------------------------------------------------------
+os.environ.setdefault("MERIDIAN_DOMAIN_CODE", "T")
+os.environ.setdefault("TAPDB_APP_CODE", "TAPD")
+
 # ---------------------------------------------------------------------------
 # Port used by the ephemeral PostgreSQL test instance
 # ---------------------------------------------------------------------------

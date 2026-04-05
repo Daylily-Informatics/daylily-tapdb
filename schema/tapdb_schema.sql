@@ -515,7 +515,9 @@ BEGIN
 
     raw_code := trim(raw_code);
     IF raw_code = '' THEN
-        RETURN NULL;
+        RAISE EXCEPTION
+            'session.current_domain_code is set to empty string. '
+            'A valid 1-4 char Crockford Base32 domain code is required.';
     END IF;
 
     RETURN tapdb_validate_domain_code(raw_code);
@@ -536,7 +538,9 @@ BEGIN
 
     raw_code := trim(raw_code);
     IF raw_code = '' THEN
-        RETURN 'TAPD';
+        RAISE EXCEPTION
+            'session.current_app_code is set to empty string. '
+            'A valid 1-4 char Crockford Base32 app code is required.';
     END IF;
 
     RETURN tapdb_validate_app_code(raw_code);

@@ -59,19 +59,25 @@ def normalize_domain_code(code: str | None) -> str | None:
 
 def resolve_runtime_domain_code(
     environ: Mapping[str, str] | None = None,
-) -> str | None:
+) -> str:
     """Resolve the runtime domain code.
 
     Rules:
     - missing env var => default ``T``
-    - explicit empty string => disable domain code prefixing
+    - explicit empty string => raises ValueError (fail-fast)
     - explicit non-empty value => validated 1-4 letter domain code
     """
     env = environ or os.environ
     raw_code = env.get(MERIDIAN_DOMAIN_CODE_ENV)
     if raw_code is None:
         return DEFAULT_DOMAIN_CODE
-    return normalize_domain_code(raw_code)
+    normalized = normalize_domain_code(raw_code)
+    if normalized is None:
+        raise ValueError(
+            f"MERIDIAN_DOMAIN_CODE is set to empty string. "
+            f"A valid 1-4 char Crockford Base32 domain code is required."
+        )
+    return normalized
 
 
 def resolve_runtime_validation_context(
