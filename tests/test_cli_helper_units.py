@@ -68,10 +68,11 @@ def test_sync_identity_prefix_config_runs_expected_sql(monkeypatch):
 
     sql = captured["sql"]
     assert "tapdb_identity_prefix_config" in sql
-    assert "('generic_template', 'BCD')" in sql
-    assert "('generic_instance', 'BCD')" in sql
-    assert "('generic_instance_lineage', 'BCD')" in sql
-    assert "('audit_log', 'BCD')" in sql
+    assert "('generic_template', '', '', 'BCD')" in sql
+    assert "('generic_instance', '', '', 'BCD')" in sql
+    assert "('generic_instance_lineage', '', '', 'BCD')" in sql
+    assert "('audit_log', '', '', 'BCD')" in sql
+    assert "ON CONFLICT (entity, domain_code, issuer_app_code)" in sql
     assert 'CREATE SEQUENCE IF NOT EXISTS "bcd_instance_seq"' in sql
 
 

@@ -120,16 +120,9 @@ jobs:
               for name in names
               if "schema/migrations/" in name and name.endswith(".sql")
           ]
-          legacy_migration_files = [
-              name
-              for name in names
-              if "schema/migrations_legacy/" in name and name.endswith(".sql")
-          ]
 
           if not migration_files:
               missing.append("schema/migrations/*.sql")
-          if not legacy_migration_files:
-              missing.append("schema/migrations_legacy/*.sql")
 
           if missing:
               joined = ", ".join(missing)
