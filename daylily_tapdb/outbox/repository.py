@@ -286,12 +286,16 @@ def claim_events(
 
     now = datetime.now(UTC)
     lease_expires = now + timedelta(seconds=int(lock_timeout_s))
+    token = uuid.uuid4()
 
     for row in rows:
         row.status = "delivering"
         row.attempt_count = int(row.attempt_count or 0) + 1
         row.next_attempt_at = lease_expires
         row.last_error = None
+        row.claim_token = token
+        row.claimed_dt = now
+        row.lease_expires_dt = lease_expires
 
     session.flush()
     return rows
