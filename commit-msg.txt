@@ -1,10 +1,7 @@
-feat: update SQL trigger functions for domain_code + issuer_app_code (Step 3)
+feat: TemplateManager scoping by domain_code + issuer_app_code (Step 4)
 
-- tapdb_validate_sandbox_prefix() -> tapdb_validate_domain_code() (1-4 chars)
-- tapdb_current_sandbox_prefix() -> tapdb_current_domain_code() + tapdb_current_app_code()
-- meridian_euid_sandbox_prefix() -> meridian_euid_domain_code() (1-4 chars)
-- meridian_generate_euid() sandbox_prefix param -> domain_code
-- All 4 EUID triggers now populate NEW.domain_code and NEW.issuer_app_code from session
-- Audit triggers propagate domain_code + issuer_app_code to audit_log
-- CLI DROP FUNCTION list updated for new + old function names
+- get_template() accepts optional domain_code and issuer_app_code filter params
+- list_templates() accepts optional domain_code and issuer_app_code filter params
+- Cache keys include domain_code:issuer_app_code prefix for correct scoping
+- Updated template manager tests for new cache key format
 - 623 tests passing
