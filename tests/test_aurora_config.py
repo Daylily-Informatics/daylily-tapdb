@@ -261,22 +261,7 @@ class TestGetDbConfigEngineType:
 
 
 class TestConfigPathScoping:
-    def test_database_name_scoped_paths(self, monkeypatch: pytest.MonkeyPatch):
-        from daylily_tapdb.cli.db_config import get_config_paths
-
-        set_cli_context(client_id="clientx", database_name="atlas")
-
-        paths = get_config_paths(allow_namespace_fallback=True)
-        assert paths == [
-            Path.home()
-            / ".config"
-            / "tapdb"
-            / "clientx"
-            / "atlas"
-            / "tapdb-config.yaml"
-        ]
-
-    def test_explicit_config_override_beats_scoping(
+    def test_explicit_config_path_used_directly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         from daylily_tapdb.cli.db_config import get_config_paths
@@ -284,3 +269,14 @@ class TestConfigPathScoping:
         override = tmp_path / "custom.yaml"
         paths = get_config_paths(config_path=override)
         assert paths == [override]
+
+    def test_missing_config_raises(self, monkeypatch: pytest.MonkeyPatch):
+        """Without a config path, get_config_paths must error — no silent fallback."""
+        from daylily_tapdb.cli.db_config import get_config_paths
+        from daylily_tapdb.cli.context import set_cli_context
+
+        # Clear any ambient config
+        set_cli_context(config_path="")
+
+        with pytest.raises(RuntimeError, match="config path is required"):
+            get_config_paths()

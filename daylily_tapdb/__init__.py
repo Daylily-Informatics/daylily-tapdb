@@ -107,6 +107,13 @@ from daylily_tapdb.templates.requirements import (
     require_seeded_template,
     require_seeded_templates,
 )
+from daylily_tapdb.lineage import (
+    LineageQueryProxy,
+    get_child_lineages,
+    get_parent_lineages,
+    resolve_child_instance,
+    resolve_parent_instance,
+)
 from daylily_tapdb.timezone_utils import (
     DEFAULT_DISPLAY_TIMEZONE,
     is_valid_display_timezone,
@@ -184,6 +191,12 @@ __all__ = [
     "health_event_instance_lineage",
     "file_instance_lineage",
     "subject_instance_lineage",
+    # Lineage traversal
+    "LineageQueryProxy",
+    "get_parent_lineages",
+    "get_child_lineages",
+    "resolve_parent_instance",
+    "resolve_child_instance",
     # Timezone helpers
     "DEFAULT_DISPLAY_TIMEZONE",
     "normalize_display_timezone",

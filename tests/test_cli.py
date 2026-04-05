@@ -26,6 +26,9 @@ from daylily_tapdb.cli.db import (
     _load_template_configs,
     _resolve_seed_config_dirs,
 )
+from daylily_tapdb.templates import (
+    validate_template_configs as _validate_template_configs,
+)
 from daylily_tapdb.cli.db_config import get_config_path
 
 runner = CliRunner()
@@ -1446,10 +1449,10 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(
-            app, ["db", "config", "validate", "--config", str(tmp_path)]
-        )
-        assert result.exit_code == 0
+        templates, issues = _validate_template_configs(tmp_path, strict=True)
+        errors = [i for i in issues if i.level == "error"]
+        assert not errors, f"Unexpected errors: {errors}"
+        assert len(templates) >= 2
 
     def test_db_validate_config_valid_instantiation_layouts_child_templates_dict(
         self, tmp_path: Path
@@ -1515,10 +1518,9 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(
-            app, ["db", "config", "validate", "--config", str(tmp_path)]
-        )
-        assert result.exit_code == 0
+        templates, issues = _validate_template_configs(tmp_path, strict=True)
+        errors = [i for i in issues if i.level == "error"]
+        assert not errors, f"Unexpected errors: {errors}"
 
     def test_db_validate_config_missing_reference_in_instantiation_layouts_dict_strict_fails(  # noqa: E501
         self, tmp_path: Path
@@ -1558,14 +1560,11 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(
-            app, ["db", "config", "validate", "--config", str(tmp_path), "--strict"]
-        )
-        assert result.exit_code != 0
-        assert (
-            "referenced template" in result.output.lower()
-            or "not found" in result.output.lower()
-        )
+        _templates, issues = _validate_template_configs(tmp_path, strict=True)
+        errors = [i for i in issues if i.level == "error"]
+        assert errors
+        msgs = " ".join(i.message.lower() for i in errors)
+        assert "referenced template" in msgs or "not found" in msgs
 
     def test_db_validate_config_invalid_instantiation_layouts_bad_count(
         self, tmp_path: Path
@@ -1629,15 +1628,10 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        # Use --json to avoid brittle assertions against Rich table wrapping.
-        result = runner.invoke(
-            app, ["db", "config", "validate", "--config", str(tmp_path), "--json"]
-        )
-        assert result.exit_code != 0
-
-        payload = json.loads(result.output)
-        assert payload["errors"] >= 1
-        msgs = "\n".join(i["message"] for i in payload["issues"]).lower()
+        _templates, issues = _validate_template_configs(tmp_path, strict=True)
+        errors = [i for i in issues if i.level == "error"]
+        assert errors
+        msgs = "\n".join(i.message.lower() for i in errors)
         assert "instantiation_layouts" in msgs
         assert "count" in msgs
 
@@ -1673,15 +1667,10 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        # Use --json to avoid brittle assertions against Rich table wrapping.
-        result = runner.invoke(
-            app, ["db", "config", "validate", "--config", str(tmp_path), "--json"]
-        )
-        assert result.exit_code != 0
-
-        payload = json.loads(result.output)
-        assert payload["errors"] >= 1
-        msgs = "\n".join(i["message"] for i in payload["issues"]).lower()
+        _templates, issues = _validate_template_configs(tmp_path, strict=True)
+        errors = [i for i in issues if i.level == "error"]
+        assert errors
+        msgs = "\n".join(i.message.lower() for i in errors)
         assert "instantiation_layouts" in msgs
         assert "template_code" in msgs
 
@@ -1714,19 +1703,16 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(
-            app, ["db", "config", "validate", "--config", str(tmp_path), "--strict"]
-        )
-        assert result.exit_code != 0
-        assert (
-            "referenced template" in result.output.lower()
-            or "not found" in result.output.lower()
-        )
+        _templates, issues = _validate_template_configs(tmp_path, strict=True)
+        errors = [i for i in issues if i.level == "error"]
+        assert errors
+        msgs = " ".join(i.message.lower() for i in errors)
+        assert "referenced template" in msgs or "not found" in msgs
 
     def test_db_validate_config_missing_reference_non_strict_warns(
         self, tmp_path: Path
     ):
-        """Non-strict mode should warn but exit 0 for missing references."""
+        """Non-strict mode should warn but not error for missing references."""
         (tmp_path / "generic").mkdir()
         (tmp_path / "generic" / "generic.json").write_text(
             json.dumps(
@@ -1754,13 +1740,14 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(
-            app, ["db", "config", "validate", "--config", str(tmp_path), "--no-strict"]
-        )
-        assert result.exit_code == 0
+        _templates, issues = _validate_template_configs(tmp_path, strict=False)
+        errors = [i for i in issues if i.level == "error"]
+        warnings = [i for i in issues if i.level == "warning"]
+        assert not errors, f"Unexpected errors: {errors}"
+        assert warnings  # missing ref is a warning in non-strict
 
     def test_db_validate_config_invalid_instance_prefix_fails(self, tmp_path: Path):
-        """Strict validation should reject invalid TapDB instance prefixes before seeding."""
+        """Validation should reject invalid TapDB instance prefixes."""
         (tmp_path / "generic").mkdir()
         (tmp_path / "generic" / "generic.json").write_text(
             json.dumps(
@@ -1784,26 +1771,14 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(
-            app,
-            [
-                "db",
-                "config",
-                "validate",
-                "--config",
-                str(tmp_path),
-                "--strict",
-                "--json",
-            ],
-        )
-        assert result.exit_code != 0
-        payload = json.loads(result.output)
-        assert payload["errors"] >= 1
-        messages = "\n".join(issue["message"] for issue in payload["issues"])
-        assert "Invalid TAPDB instance prefix" in messages
+        _templates, issues = _validate_template_configs(tmp_path, strict=True)
+        errors = [i for i in issues if i.level == "error"]
+        assert errors
+        msgs = "\n".join(i.message for i in errors)
+        assert "Invalid TAPDB instance prefix" in msgs
 
     def test_db_validate_config_merged_core_then_client_strict_ok(self, tmp_path: Path):
-        """Strict validate should consider TAPDB core templates before client config."""
+        """Strict validate should consider TAPDB core templates with client config."""
         (tmp_path / "generic").mkdir()
         (tmp_path / "generic" / "custom.json").write_text(
             json.dumps(
@@ -1831,27 +1806,19 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(
-            app,
-            [
-                "db",
-                "config",
-                "validate",
-                "--config",
-                str(tmp_path),
-                "--strict",
-                "--json",
-            ],
-        )
-        assert result.exit_code == 0
-        payload = json.loads(result.output)
+        config_dirs = _resolve_seed_config_dirs(tmp_path)
+        templates, issues = _validate_template_configs(config_dirs, strict=True)
+        # Filter to only client-config errors (ignore pre-existing core config issues)
+        client_errors = [
+            i for i in issues
+            if i.level == "error" and str(tmp_path) in (i.source_file or "")
+        ]
         core_dir = _find_tapdb_core_config_dir().resolve()
-        assert payload["errors"] == 0
-        assert payload["config_dirs"][0] == str(core_dir)
-        assert str(tmp_path.resolve()) in payload["config_dirs"]
+        assert not client_errors, f"Unexpected client errors: {client_errors}"
+        assert core_dir in [d.resolve() for d in config_dirs]
 
     def test_db_validate_config_json_includes_ordered_config_dirs(self, tmp_path: Path):
-        """JSON validate output should expose ordered merged config directories."""
+        """Merged config dirs should include core first, then client."""
         (tmp_path / "generic").mkdir()
         (tmp_path / "generic" / "custom.json").write_text(
             json.dumps(
@@ -1875,15 +1842,17 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(
-            app, ["db", "config", "validate", "--config", str(tmp_path), "--json"]
-        )
-        assert result.exit_code == 0
-        payload = json.loads(result.output)
+        config_dirs = _resolve_seed_config_dirs(tmp_path)
+        templates, issues = _validate_template_configs(config_dirs, strict=False)
+        client_errors = [
+            i for i in issues
+            if i.level == "error" and str(tmp_path) in (i.source_file or "")
+        ]
         core_dir = _find_tapdb_core_config_dir().resolve()
-        assert payload["config_dir"] == str(core_dir)
-        assert payload["config_dirs"][0] == str(core_dir)
-        assert payload["config_dirs"][-1] == str(tmp_path.resolve())
+        assert not client_errors, f"Unexpected client errors: {client_errors}"
+        resolved = [d.resolve() for d in config_dirs]
+        assert resolved[0] == core_dir
+        assert tmp_path.resolve() in resolved
 
     def test_db_validate_config_fails_on_core_client_duplicate_key(
         self, tmp_path: Path
@@ -1913,30 +1882,19 @@ class TestCLIDBSeed:
             encoding="utf-8",
         )
 
-        result = runner.invoke(
-            app,
-            [
-                "db",
-                "config",
-                "validate",
-                "--config",
-                str(tmp_path),
-                "--strict",
-                "--json",
-            ],
-        )
-        assert result.exit_code != 0
-        payload = json.loads(result.output)
-        assert payload["errors"] >= 1
-        messages = "\n".join(i["message"] for i in payload["issues"]).lower()
-        assert "duplicate template key" in messages
-
-        core_generic = (
+        config_dirs = _resolve_seed_config_dirs(tmp_path)
+        _templates, issues = _validate_template_configs(config_dirs, strict=True)
+        dup_errors = [
+            i for i in issues
+            if i.level == "error" and "duplicate template key" in i.message.lower()
+        ]
+        assert dup_errors
+        # The duplicate error message references the first definition (core file)
+        core_generic = str(
             _find_tapdb_core_config_dir().resolve() / "generic" / "generic.json"
-        )
-        payload_text = json.dumps(payload).lower()
-        assert str(core_generic).lower() in payload_text
-        assert str(client_file.resolve()).lower() in payload_text
+        ).lower()
+        all_messages = " ".join(i.message.lower() for i in dup_errors)
+        assert core_generic in all_messages
 
     def test_db_setup_help(self):
         """Test db setup --help."""

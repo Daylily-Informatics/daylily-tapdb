@@ -10,10 +10,26 @@ from daylily_tapdb.outbox import worker
 
 
 @dataclass
+class _FakeMessage:
+    """Simulates the generic_instance message object."""
+    machine_uuid: str = "fake-uuid"
+    json_addl: dict = None
+
+    def __post_init__(self):
+        if self.json_addl is None:
+            self.json_addl = {"event_type": "test", "payload": {}}
+
+
+@dataclass
 class _FakeEvent:
     id: int
     destination: str
     attempt_count: int
+    message: _FakeMessage = None
+
+    def __post_init__(self):
+        if self.message is None:
+            self.message = _FakeMessage()
 
 
 class _FakeSession:
@@ -110,7 +126,11 @@ def test_run_dispatch_loop_marks_delivered_on_success(monkeypatch: pytest.Monkey
     assert delivered_ids == [7]
     assert failed_calls == []
     assert sleep_calls == [0.25]
-    assert any(session.expunge_calls == [event] for session in session_factory.sessions)
+    # Worker must expunge both the message and the event itself
+    assert any(
+        event.message in session.expunge_calls and event in session.expunge_calls
+        for session in session_factory.sessions
+    )
 
 
 def test_run_dispatch_loop_marks_failed_and_schedules_retry(

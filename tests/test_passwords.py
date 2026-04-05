@@ -57,18 +57,6 @@ def test_verify_password_empty_hash_is_false():
     assert passwords.verify_password("pw", "") is False
 
 
-def test_verify_password_legacy_sha256_ok_and_bad():
-    from daylily_tapdb import passwords
-
-    salt = "abc"
-    password = "pw"
-    digest = hashlib.sha256((salt + password).encode()).hexdigest()
-    stored = f"{salt}:{digest}"
-
-    assert passwords.verify_password(password, stored) is True
-    assert passwords.verify_password("wrong", stored) is False
-
-
 def test_verify_password_bcrypt_requires_passlib(monkeypatch):
     from daylily_tapdb import passwords
 

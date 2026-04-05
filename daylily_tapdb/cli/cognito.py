@@ -24,6 +24,7 @@ from daylily_tapdb.cli.context import resolve_context
 from daylily_tapdb.cli.db import Environment
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
 from daylily_tapdb.user_store import create_or_get
+from cli_core_yo import ccyo_out
 
 console = Console()
 cognito_app = typer.Typer(help="Cognito auth integration commands (via daycog)")
@@ -37,7 +38,6 @@ def _ui_pid_file_for_env(env: Environment) -> Path:
     ctx = resolve_context(
         require_keys=True,
         env_name=env.value,
-        allow_namespace_fallback=True,
     )
     return ctx.ui_dir(env.value) / "ui.pid"
 
@@ -382,7 +382,7 @@ def _run_daycog(args: list[str], env: Optional[dict[str, str]] = None) -> str:
 def _run_daycog_printing(args: list[str], env: Optional[dict[str, str]] = None) -> None:
     out = _run_daycog(args, env=env)
     if out:
-        console.print(out)
+        ccyo_out.print_text(out)
 
 
 def _build_daycog_setup_args(
@@ -489,7 +489,7 @@ def _finalize_setup_binding(
             client_name=selected_client_name,
         )
     except RuntimeError as e:
-        console.print(f"[red]✗[/red] {e}")
+        ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
     # Ensure the selected daycog context is bound to the required TAPDB app client.
@@ -504,15 +504,13 @@ def _finalize_setup_binding(
             context_label="daycog bound context",
         )
     except RuntimeError as e:
-        console.print(f"[red]✗[/red] {e}")
+        ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
     cfg_path = _write_pool_id_to_tapdb_config(env, pool_id)
-    console.print(f"[green]✓[/green] Bound pool ID to tapdb config: {pool_id}")
-    console.print(f"  TAPDB config: [dim]{cfg_path}[/dim]")
-    console.print(
-        f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]"
-    )
+    ccyo_out.success(f"Bound pool ID to tapdb config: {pool_id}")
+    ccyo_out.print_text(f"  TAPDB config: [dim]{cfg_path}[/dim]")
+    ccyo_out.print_text(f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]")
 
 
 def _resolve_bound_daycog_context(
@@ -706,10 +704,8 @@ def cognito_setup(
     if port is None:
         selected_port = configured_port
     elif port != configured_port:
-        console.print(
-            "[red]✗[/red] --port does not match configured TAPDB UI port for env "
-            f"{env.value}: {configured_port}"
-        )
+        ccyo_out.error("--port does not match configured TAPDB UI port for env "
+            f"{env.value}: {configured_port}")
         raise typer.Exit(1)
     else:
         selected_port = port
@@ -717,15 +713,11 @@ def cognito_setup(
     selected_pool_name = pool_name or _default_pool_name(env)
     selected_client_name = client_name or REQUIRED_COGNITO_CLIENT_NAME
     if selected_client_name != REQUIRED_COGNITO_CLIENT_NAME:
-        console.print(
-            "[red]✗[/red] TAPDB requires Cognito app client name "
-            f"'{REQUIRED_COGNITO_CLIENT_NAME}'."
-        )
+        ccyo_out.error("TAPDB requires Cognito app client name "
+            f"'{REQUIRED_COGNITO_CLIENT_NAME}'.")
         raise typer.Exit(1)
-    console.print(
-        f"[cyan]Setting up Cognito pool[/cyan] [bold]{selected_pool_name}[/bold] "
-        f"for env [bold]{env.value}[/bold]"
-    )
+    ccyo_out.print_text(f"[cyan]Setting up Cognito pool[/cyan] [bold]{selected_pool_name}[/bold] "
+        f"for env [bold]{env.value}[/bold]")
 
     args = _build_daycog_setup_args(
         command="setup",
@@ -869,10 +861,8 @@ def cognito_setup_with_google(
     if port is None:
         selected_port = configured_port
     elif port != configured_port:
-        console.print(
-            "[red]✗[/red] --port does not match configured TAPDB UI port for env "
-            f"{env.value}: {configured_port}"
-        )
+        ccyo_out.error("--port does not match configured TAPDB UI port for env "
+            f"{env.value}: {configured_port}")
         raise typer.Exit(1)
     else:
         selected_port = port
@@ -880,15 +870,11 @@ def cognito_setup_with_google(
     selected_pool_name = pool_name or _default_pool_name(env)
     selected_client_name = client_name or REQUIRED_COGNITO_CLIENT_NAME
     if selected_client_name != REQUIRED_COGNITO_CLIENT_NAME:
-        console.print(
-            "[red]✗[/red] TAPDB requires Cognito app client name "
-            f"'{REQUIRED_COGNITO_CLIENT_NAME}'."
-        )
+        ccyo_out.error("TAPDB requires Cognito app client name "
+            f"'{REQUIRED_COGNITO_CLIENT_NAME}'.")
         raise typer.Exit(1)
-    console.print(
-        f"[cyan]Setting up Cognito (Google)[/cyan] [bold]{selected_pool_name}[/bold] "
-        f"for env [bold]{env.value}[/bold]"
-    )
+    ccyo_out.print_text(f"[cyan]Setting up Cognito (Google)[/cyan] [bold]{selected_pool_name}[/bold] "
+        f"for env [bold]{env.value}[/bold]")
 
     args = _build_daycog_setup_args(
         command="setup-with-google",
@@ -940,8 +926,8 @@ def cognito_bind(
 ) -> None:
     """Bind an existing Cognito pool ID into tapdb config."""
     cfg_path = _write_pool_id_to_tapdb_config(env, pool_id.strip())
-    console.print(f"[green]✓[/green] Bound {pool_id.strip()} to env '{env.value}'")
-    console.print(f"  TAPDB config: [dim]{cfg_path}[/dim]")
+    ccyo_out.success(f"Bound {pool_id.strip()} to env '{env.value}'")
+    ccyo_out.print_text(f"  TAPDB config: [dim]{cfg_path}[/dim]")
 
 
 @cognito_app.command("status")
@@ -952,9 +938,7 @@ def cognito_status(
     cfg = get_db_config_for_env(env.value)
     pool_id = (cfg.get("cognito_user_pool_id") or "").strip()
     if not pool_id:
-        console.print(
-            f"[yellow]⚠[/yellow] No cognito_user_pool_id set for env {env.value}"
-        )
+        ccyo_out.warning(f"No cognito_user_pool_id set for env {env.value}")
         raise typer.Exit(1)
 
     context_name, values = _find_pool_context_by_id(
@@ -964,7 +948,7 @@ def cognito_status(
     try:
         _validate_required_client_name(values, context_label=f"env {env.value}")
     except RuntimeError as e:
-        console.print(f"[red]✗[/red] {e}")
+        ccyo_out.error(f"{e}")
         raise typer.Exit(1)
     region = values.get("COGNITO_REGION") or values.get("AWS_REGION") or "(missing)"
     client_id = values.get("COGNITO_APP_CLIENT_ID") or "(missing)"
@@ -974,36 +958,32 @@ def cognito_status(
     logout_url = values.get("COGNITO_LOGOUT_URL") or "(not set)"
     profile = values.get("AWS_PROFILE") or "(missing)"
     ui_pid_file = _ui_pid_file_for_env(env)
-    console.print(f"[green]✓[/green] Env:        {env.value}")
-    console.print(f"[green]✓[/green] Pool ID:    {pool_id}")
-    console.print(
-        f"[green]✓[/green] Daycog context: {_daycog_config_path()} :: {context_name}"
-    )
-    console.print(f"[green]✓[/green] Region:     {region}")
-    console.print(f"[green]✓[/green] Client ID:  {client_id}")
-    console.print(f"[green]✓[/green] Client:     {client_name}")
-    console.print(f"[green]✓[/green] Domain:     {domain}")
-    console.print(f"[green]✓[/green] Callback:   {callback_url}")
-    console.print(f"[green]✓[/green] Logout:     {logout_url}")
-    console.print(f"[green]✓[/green] Profile:    {profile}")
-    console.print(f"[green]✓[/green] UI PID:     {ui_pid_file}")
+    ccyo_out.success(f"Env:        {env.value}")
+    ccyo_out.success(f"Pool ID:    {pool_id}")
+    ccyo_out.success(f"Daycog context: {_daycog_config_path()} :: {context_name}")
+    ccyo_out.success(f"Region:     {region}")
+    ccyo_out.success(f"Client ID:  {client_id}")
+    ccyo_out.success(f"Client:     {client_name}")
+    ccyo_out.success(f"Domain:     {domain}")
+    ccyo_out.success(f"Callback:   {callback_url}")
+    ccyo_out.success(f"Logout:     {logout_url}")
+    ccyo_out.success(f"Profile:    {profile}")
+    ccyo_out.success(f"UI PID:     {ui_pid_file}")
 
     expected_port, port_source, errors, notices = _validate_bound_cognito_uris(
         env,
         values,
     )
-    console.print(
-        "[green]✓[/green] TAPDB UI port expectation: "
-        f"{expected_port} [dim]({port_source})[/dim]"
-    )
+    ccyo_out.success("TAPDB UI port expectation: "
+        f"{expected_port} ({port_source})")
     if notices:
-        console.print(f"[green]✓[/green] URI checks inspected: {len(notices)}")
+        ccyo_out.success(f"URI checks inspected: {len(notices)}")
     if errors:
-        console.print("[red]✗[/red] Cognito URI validation failed:")
+        ccyo_out.error("Cognito URI validation failed:")
         for msg in errors:
-            console.print(f"  - {msg}")
+            ccyo_out.print_text(f"  - {msg}")
         raise typer.Exit(1)
-    console.print("[green]✓[/green] Cognito URI validation passed")
+    ccyo_out.success("Cognito URI validation passed")
 
 
 @cognito_app.command("list-pools")
@@ -1164,7 +1144,7 @@ def cognito_edit_app(
 ) -> None:
     """Edit an existing app client in the pool via daycog."""
     if not app_name and not client_id:
-        console.print("[red]✗[/red] Provide one of --app-name or --client-id")
+        ccyo_out.error("Provide one of --app-name or --client-id")
         raise typer.Exit(1)
 
     selected_pool, proc_env, selected_region, selected_profile = (
@@ -1222,7 +1202,7 @@ def cognito_remove_app(
 ) -> None:
     """Remove an app client from the pool via daycog."""
     if not app_name and not client_id:
-        console.print("[red]✗[/red] Provide one of --app-name or --client-id")
+        ccyo_out.error("Provide one of --app-name or --client-id")
         raise typer.Exit(1)
 
     selected_pool, proc_env, selected_region, selected_profile = (
@@ -1276,7 +1256,7 @@ def cognito_add_google_idp(
 ) -> None:
     """Configure Google IdP for a pool/app via daycog."""
     if not app_name and not client_id:
-        console.print("[red]✗[/red] Provide one of --app-name or --client-id")
+        ccyo_out.error("Provide one of --app-name or --client-id")
         raise typer.Exit(1)
 
     selected_pool, proc_env, selected_region, selected_profile = (
@@ -1319,7 +1299,7 @@ def cognito_fix_auth_flows(
     try:
         _, _, _, proc_env = _resolve_bound_daycog_context(env)
     except RuntimeError as e:
-        console.print(f"[red]✗[/red] {e}")
+        ccyo_out.error(f"{e}")
         raise typer.Exit(1)
     _run_daycog_printing(["fix-auth-flows"], env=proc_env)
 
@@ -1442,13 +1422,13 @@ def cognito_add_user(
 ) -> None:
     """Create a Cognito user in the TAPDB-bound pool via daycog."""
     if role not in ("admin", "user"):
-        console.print(f"[red]✗[/red] Invalid role: {role}. Must be admin or user")
+        ccyo_out.error(f"Invalid role: {role}. Must be admin or user")
         raise typer.Exit(1)
 
     try:
         pool_id, context_name, _, proc_env = _resolve_bound_daycog_context(env)
     except RuntimeError as e:
-        console.print(f"[red]✗[/red] {e}")
+        ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
     args = ["add-user", email, "--password", password]
@@ -1464,15 +1444,11 @@ def cognito_add_user(
             display_name=display_name,
         )
     except Exception as e:
-        console.print(
-            "[red]✗[/red] Cognito user created, but failed to provision "
-            f"TAPDB actor user: {e}"
-        )
+        ccyo_out.error("Cognito user created, but failed to provision "
+            f"TAPDB actor user: {e}")
         raise typer.Exit(1)
 
-    console.print(f"[green]✓[/green] Created Cognito user: {email}")
-    console.print(f"  Pool: [dim]{pool_id}[/dim]")
-    console.print(
-        f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]"
-    )
-    console.print(f"  tapdb role: [dim]{role}[/dim]")
+    ccyo_out.success(f"Created Cognito user: {email}")
+    ccyo_out.print_text(f"  Pool: [dim]{pool_id}[/dim]")
+    ccyo_out.print_text(f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]")
+    ccyo_out.print_text(f"  tapdb role: [dim]{role}[/dim]")

@@ -5,9 +5,9 @@ spec = CliSpec(
     app_display_name="TapDB CLI",
     dist_name="daylily-tapdb",
     root_help="TapDB management commands",
-    xdg=XdgSpec(app_dir_name="tapdb", legacy_macos_config_dir=".tapdb"),
+    xdg=XdgSpec(app_dir_name="tapdb"),
     config=ConfigSpec(
-        primary_filename="config.yaml",
+        xdg_relative_path="config.yaml",
         template_bytes=b"environments: {}\n",
     ),
     plugins=PluginSpec(

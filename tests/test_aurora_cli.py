@@ -18,15 +18,25 @@ def _strip(s: str) -> str:
     return _ANSI_RE.sub("", s)
 
 
+_TEST_CONFIG_PATH: str = ""
+
+
 def _namespaced(args: list[str]) -> list[str]:
-    return ["--client-id", "testclient", "--database-name", "testdb", *args]
+    return ["--config", _TEST_CONFIG_PATH, *args]
 
 
 @pytest.fixture(autouse=True)
 def _namespace_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("TAPDB_CLIENT_ID", "testclient")
-    monkeypatch.setenv("TAPDB_DATABASE_NAME", "testdb")
-    monkeypatch.setenv("TAPDB_STRICT_NAMESPACE", "0")
+    global _TEST_CONFIG_PATH
+    # Create a minimal config file with metadata so resolve_context succeeds
+    config_dir = tmp_path / ".config" / "tapdb" / "testclient" / "testdb"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "tapdb-config.yaml"
+    config_file.write_text(
+        "metadata:\n  client_id: testclient\n  database_name: testdb\n"
+        "environments:\n  dev:\n    host: localhost\n    port: 5432\n"
+    )
+    _TEST_CONFIG_PATH = str(config_file)
     monkeypatch.setenv("HOME", str(tmp_path))
 
 

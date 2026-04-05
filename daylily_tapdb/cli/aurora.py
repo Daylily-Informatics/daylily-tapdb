@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.table import Table
 
 from daylily_tapdb.cli.context import resolve_context
+from cli_core_yo import ccyo_out
 
 console = Console()
 
@@ -29,10 +30,8 @@ def _ensure_boto3():
 
         return boto3
     except ImportError:
-        console.print(
-            "[red]✗[/red] boto3 is required for Aurora commands.\n"
-            "  Install with: [cyan]pip install 'daylily-tapdb[aurora]'[/cyan]"
-        )
+        ccyo_out.error("boto3 is required for Aurora commands.\n"
+            "  Install with: pip install 'daylily-tapdb'")
         raise typer.Exit(1)
 
 
@@ -54,7 +53,7 @@ def _update_config_file(
     """
     from daylily_tapdb.cli.db_config import get_config_paths
 
-    config_path = get_config_paths(allow_namespace_fallback=True)[0]
+    config_path = get_config_paths()[0]
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing: dict = {}
@@ -109,7 +108,7 @@ def _update_config_file(
         config_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
 
     os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
-    console.print(f"  Config updated: [dim]{config_path}[/dim]")
+    ccyo_out.print_text(f"  Config updated: [dim]{config_path}[/dim]")
 
 
 @aurora_app.command("create")
@@ -151,11 +150,9 @@ def aurora_create(
 ):
     """Create an Aurora PostgreSQL cluster via CloudFormation."""
     if cidr == "0.0.0.0/0" and publicly_accessible:
-        console.print(
-            "[yellow]⚠️  WARNING: Creating publicly accessible cluster open to "
-            "all IPs (0.0.0.0/0). Consider restricting --cidr to your IP.[/yellow]",
-            err=True,
-        )
+        ccyo_out.warning("⚠️  WARNING: Creating publicly accessible cluster open to "
+            "all IPs (0.0.0.0/0). Consider restricting --cidr to your IP.",
+            err=True,)
 
     _ensure_boto3()
 
@@ -178,14 +175,14 @@ def aurora_create(
     )
 
     stack_name = _stack_name_for_env(env)
-    console.print(f"\n[bold cyan]━━━ Aurora Create ({env}) ━━━[/bold cyan]")
-    console.print(f"  Stack:    {stack_name}")
-    console.print(f"  Region:   {region}")
-    console.print(f"  Instance: {instance_class}")
-    console.print(f"  Engine:   PostgreSQL {engine_version}")
-    console.print(f"  IAM Auth: {config.iam_auth}")
-    console.print(f"  VPC:      {vpc_id or '(auto-discover default)'}")
-    console.print()
+    ccyo_out.print_text(f"\n[bold cyan]━━━ Aurora Create ({env}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"  Stack:    {stack_name}")
+    ccyo_out.print_text(f"  Region:   {region}")
+    ccyo_out.print_text(f"  Instance: {instance_class}")
+    ccyo_out.print_text(f"  Engine:   PostgreSQL {engine_version}")
+    ccyo_out.print_text(f"  IAM Auth: {config.iam_auth}")
+    ccyo_out.print_text(f"  VPC:      {vpc_id or '(auto-discover default)'}")
+    ccyo_out.print_text("")
 
     try:
         mgr = AuroraStackManager(region=region)
@@ -193,12 +190,10 @@ def aurora_create(
         if background:
             # Fire-and-forget: start creation, don't wait
             initiated = mgr.initiate_create_stack(config)
-            console.print(
-                f"[green]✓[/green] Stack creation initiated "
-                f"(stack: [bold]{initiated['stack_name']}[/bold])."
-            )
-            console.print(
-                f"  Check progress with: [cyan]tapdb aurora status {env}[/cyan]"
+            ccyo_out.success(f"Stack creation initiated "
+                f"(stack: {initiated['stack_name']}).")
+            ccyo_out.detail(
+                f"Check progress with: [cyan]tapdb aurora status {env}[/cyan]"
             )
             return
         else:
@@ -218,21 +213,21 @@ def aurora_create(
             finally:
                 status_display.stop()
     except RuntimeError as exc:
-        console.print(f"[red]✗[/red] Stack creation failed: {exc}")
+        ccyo_out.error(f"Stack creation failed: {exc}")
         raise typer.Exit(1)
 
     outputs = result.get("outputs", {})
     endpoint = outputs.get("ClusterEndpoint", "")
     port = outputs.get("ClusterPort", "5432")
 
-    console.print(f"\n[green]✓[/green] Stack [bold]{stack_name}[/bold] created.")
+    ccyo_out.success(f"\nStack {stack_name} created.")
     if endpoint:
-        console.print(f"  Endpoint: [cyan]{endpoint}[/cyan]")
-        console.print(f"  Port:     {port}")
+        ccyo_out.print_text(f"  Endpoint: [cyan]{endpoint}[/cyan]")
+        ccyo_out.print_text(f"  Port:     {port}")
         _update_config_file(env, endpoint, port, region)
 
     if outputs.get("SecretArn"):
-        console.print(f"  Secret:   {outputs['SecretArn']}")
+        ccyo_out.print_text(f"  Secret:   {outputs['SecretArn']}")
 
 
 @aurora_app.command("delete")
@@ -256,25 +251,21 @@ def aurora_delete(
     if not force:
         from rich.prompt import Confirm
 
-        console.print(
-            f"\n[yellow]⚠[/yellow]  This will delete stack [bold]{stack_name}[/bold] "
-            f"in [bold]{region}[/bold]."
-        )
+        ccyo_out.warning(f"\nThis will delete stack {stack_name} "
+            f"in {region}.")
         if retain_networking:
-            console.print("  Networking resources (SG, subnet group) will be retained.")
+            ccyo_out.print_text("  Networking resources (SG, subnet group) will be retained.")
         else:
-            console.print(
-                "  [red]All resources[/red] including networking will be deleted."
-            )
+            ccyo_out.error("  All resources including networking will be deleted.")
         if not Confirm.ask("Proceed?", default=False):
-            console.print("[dim]Cancelled.[/dim]")
+            ccyo_out.print_text("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
-    console.print(f"\n[bold cyan]━━━ Aurora Delete ({env}) ━━━[/bold cyan]")
-    console.print(f"  Stack:  {stack_name}")
-    console.print(f"  Region: {region}")
-    console.print(f"  Retain networking: {retain_networking}")
-    console.print()
+    ccyo_out.print_text(f"\n[bold cyan]━━━ Aurora Delete ({env}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"  Stack:  {stack_name}")
+    ccyo_out.print_text(f"  Region: {region}")
+    ccyo_out.print_text(f"  Retain networking: {retain_networking}")
+    ccyo_out.print_text("")
 
     try:
         import boto3
@@ -290,21 +281,17 @@ def aurora_delete(
                 DeletionProtection=False,
                 ApplyImmediately=True,
             )
-            console.print(
-                f"  [dim]Disabled deletion protection on cluster {cluster_id}[/dim]"
-            )
+            ccyo_out.print_text(f"  [dim]Disabled deletion protection on cluster {cluster_id}[/dim]")
         except Exception as exc:
-            console.print(f"  [dim]Could not disable deletion protection: {exc}[/dim]")
+            ccyo_out.print_text(f"  [dim]Could not disable deletion protection: {exc}[/dim]")
 
         result = mgr.delete_stack(stack_name, retain_networking=retain_networking)
     except RuntimeError as exc:
-        console.print(f"[red]✗[/red] Stack deletion failed: {exc}")
+        ccyo_out.error(f"Stack deletion failed: {exc}")
         raise typer.Exit(1)
 
-    console.print(
-        f"[green]✓[/green] Stack [bold]{stack_name}[/bold] deleted "
-        f"(status: {result['status']})."
-    )
+    ccyo_out.success(f"Stack {stack_name} deleted "
+        f"(status: {result['status']}).")
 
 
 @aurora_app.command("status")
@@ -324,11 +311,11 @@ def aurora_status(
         mgr = AuroraStackManager(region=region)
         info = mgr.get_stack_status(stack_name)
     except RuntimeError as exc:
-        console.print(f"[red]✗[/red] {exc}")
+        ccyo_out.error(f"{exc}")
         raise typer.Exit(1)
 
     if as_json:
-        console.print_json(json.dumps(info))
+        ccyo_out.emit_json(info)
         return
 
     status = info["status"]
@@ -336,16 +323,16 @@ def aurora_status(
     if "FAILED" in status:
         color = "red"
 
-    console.print(f"\n[bold cyan]━━━ Aurora Status ({env}) ━━━[/bold cyan]")
-    console.print(f"  Stack:  {stack_name}")
-    console.print(f"  Region: {region}")
-    console.print(f"  Status: [{color}]{status}[/{color}]")
+    ccyo_out.print_text(f"\n[bold cyan]━━━ Aurora Status ({env}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"  Stack:  {stack_name}")
+    ccyo_out.print_text(f"  Region: {region}")
+    ccyo_out.print_text(f"  Status: [{color}]{status}[/{color}]")
 
     outputs = info.get("outputs", {})
     if outputs:
-        console.print("\n  [bold]Outputs:[/bold]")
+        ccyo_out.print_text("\n  [bold]Outputs:[/bold]")
         for key, val in outputs.items():
-            console.print(f"    {key}: [cyan]{val}[/cyan]")
+            ccyo_out.print_text(f"    {key}: [cyan]{val}[/cyan]")
 
 
 @aurora_app.command("connect")
@@ -375,7 +362,7 @@ def aurora_connect(
         mgr = AuroraStackManager(region=region)
         info = mgr.get_stack_status(stack_name)
     except RuntimeError as exc:
-        console.print(f"[red]✗[/red] {exc}")
+        ccyo_out.error(f"{exc}")
         raise typer.Exit(1)
 
     outputs = info.get("outputs", {})
@@ -383,30 +370,26 @@ def aurora_connect(
     port = int(outputs.get("ClusterPort", "5432"))
 
     if not endpoint:
-        console.print(
-            f"[red]✗[/red] No endpoint found for stack {stack_name}. "
-            "Is the cluster fully created?"
-        )
+        ccyo_out.error(f"No endpoint found for stack {stack_name}. "
+            "Is the cluster fully created?")
         raise typer.Exit(1)
 
     if export:
-        console.print(f"export PGHOST={endpoint}")
-        console.print(f"export PGPORT={port}")
-        console.print(f"export PGDATABASE={db_name}")
-        console.print(f"export PGUSER={user}")
-        console.print("export PGSSLMODE=verify-full")
+        ccyo_out.print_text(f"export PGHOST={endpoint}")
+        ccyo_out.print_text(f"export PGPORT={port}")
+        ccyo_out.print_text(f"export PGDATABASE={db_name}")
+        ccyo_out.print_text(f"export PGUSER={user}")
+        ccyo_out.print_text("export PGSSLMODE=verify-full")
     else:
-        console.print(f"\n[bold cyan]━━━ Aurora Connect ({env}) ━━━[/bold cyan]")
-        console.print(f"  Endpoint: [cyan]{endpoint}[/cyan]")
-        console.print(f"  Port:     {port}")
-        console.print(f"  Database: {db_name}")
-        console.print(f"  User:     {user}")
-        console.print("  SSL:      verify-full")
-        console.print(
-            f"\n  Connection URL (IAM auth):\n"
+        ccyo_out.print_text(f"\n[bold cyan]━━━ Aurora Connect ({env}) ━━━[/bold cyan]")
+        ccyo_out.print_text(f"  Endpoint: [cyan]{endpoint}[/cyan]")
+        ccyo_out.print_text(f"  Port:     {port}")
+        ccyo_out.print_text(f"  Database: {db_name}")
+        ccyo_out.print_text(f"  User:     {user}")
+        ccyo_out.print_text("  SSL:      verify-full")
+        ccyo_out.print_text(f"\n  Connection URL (IAM auth):\n"
             f"  [dim]postgresql+psycopg2://{user}:<iam-token>@{endpoint}:{port}/{db_name}"
-            f"?sslmode=verify-full[/dim]"
-        )
+            f"?sslmode=verify-full[/dim]")
 
 
 @aurora_app.command("list")
@@ -425,15 +408,15 @@ def aurora_list(
         mgr = AuroraStackManager(region=region)
         stacks = mgr.detect_existing_resources(region=region)
     except RuntimeError as exc:
-        console.print(f"[red]✗[/red] {exc}")
+        ccyo_out.error(f"{exc}")
         raise typer.Exit(1)
 
     if as_json:
-        console.print_json(json.dumps(stacks, default=str))
+        ccyo_out.emit_json(stacks)
         return
 
     if not stacks:
-        console.print(f"[dim]No tapdb Aurora stacks found in {region}.[/dim]")
+        ccyo_out.print_text(f"[dim]No tapdb Aurora stacks found in {region}.[/dim]")
         return
 
     table = Table(title=f"TAPDB Aurora Stacks ({region})")
@@ -452,4 +435,4 @@ def aurora_list(
         cost = info.get("tags", {}).get("lsmc-cost-center", "-")
         table.add_row(name, f"[{color}]{status}[/{color}]", endpoint, cost)
 
-    console.print(table)
+    ccyo_out.print_text(table)

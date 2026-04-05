@@ -16,6 +16,7 @@ from rich.console import Console
 from daylily_tapdb.cli.context import active_env_name, resolve_context
 from daylily_tapdb.cli.db import Environment
 from daylily_tapdb.cli.db_config import get_db_config_for_env
+from cli_core_yo import ccyo_out
 
 console = Console()
 
@@ -34,7 +35,6 @@ def _get_postgres_data_dir(env: "Environment") -> Path:
     ctx = resolve_context(
         require_keys=True,
         env_name=env.value,
-        allow_namespace_fallback=True,
     )
     return ctx.postgres_dir(env.value) / "data"
 
@@ -45,7 +45,6 @@ def _get_postgres_log_file(env: "Environment") -> Path:
     ctx = resolve_context(
         require_keys=True,
         env_name=env.value,
-        allow_namespace_fallback=True,
     )
     return ctx.postgres_dir(env.value) / "postgresql.log"
 
@@ -60,7 +59,6 @@ def _get_postgres_socket_dir(env: "Environment") -> Path:
     ctx = resolve_context(
         require_keys=True,
         env_name=env.value,
-        allow_namespace_fallback=True,
     )
     return ctx.postgres_socket_dir(env.value)
 
@@ -71,7 +69,6 @@ def _get_instance_lock_file(env: "Environment") -> Path:
     ctx = resolve_context(
         require_keys=True,
         env_name=env.value,
-        allow_namespace_fallback=True,
     )
     return ctx.lock_dir(env.value) / "instance.lock"
 
@@ -204,31 +201,25 @@ def pg_start():
     """
     running, details = _is_pg_running()
     if running:
-        console.print("[green]●[/green] PostgreSQL is already running")
-        console.print(f"  {details}")
+        ccyo_out.success("PostgreSQL is already running")
+        ccyo_out.print_text(f"  {details}")
         return
 
     method, start_cmd, _, _ = _get_pg_service_cmd()
 
     if method == "unknown":
-        console.print("[red]✗[/red] No system PostgreSQL service found")
-        console.print("")
-        console.print("[bold]Recommended: Use TAPDB local dev/test commands[/bold]")
-        console.print(
-            "  [cyan]tapdb pg init dev[/cyan]         # Initialize data directory"
-        )
-        console.print(
-            "  [cyan]tapdb --config <path> --env dev pg start-local dev[/cyan]  # Start local instance"
-        )
-        console.print("")
-        console.print(
-            "[dim]Install PostgreSQL so initdb/pg_ctl"
-            " are on PATH (conda recommended):[/dim]"
-        )
-        console.print("  [dim]conda install -c conda-forge postgresql[/dim]")
+        ccyo_out.error("No system PostgreSQL service found")
+        ccyo_out.print_text("")
+        ccyo_out.print_text("[bold]Recommended: Use TAPDB local dev/test commands[/bold]")
+        ccyo_out.print_text("  [cyan]tapdb pg init dev[/cyan]         # Initialize data directory")
+        ccyo_out.print_text("  [cyan]tapdb --config <path> --env dev pg start-local dev[/cyan]  # Start local instance")
+        ccyo_out.print_text("")
+        ccyo_out.print_text("[dim]Install PostgreSQL so initdb/pg_ctl"
+            " are on PATH (conda recommended):[/dim]")
+        ccyo_out.print_text("  [dim]conda install -c conda-forge postgresql[/dim]")
         raise typer.Exit(1)
 
-    console.print(f"[yellow]►[/yellow] Starting PostgreSQL ({method})...")
+    ccyo_out.warning(f"► Starting PostgreSQL ({method})...")
 
     try:
         result = subprocess.run(start_cmd, capture_output=True, text=True, timeout=30)
@@ -241,23 +232,21 @@ def pg_start():
                 time.sleep(1)
                 running, details = _is_pg_running()
                 if running:
-                    console.print("[green]✓[/green] PostgreSQL started")
-                    console.print(f"  {details}")
+                    ccyo_out.success("PostgreSQL started")
+                    ccyo_out.print_text(f"  {details}")
                     return
 
-            console.print(
-                "[yellow]⚠[/yellow] Start command succeeded"
-                " but PostgreSQL not responding"
-            )
-            console.print("  Check logs: [cyan]tapdb pg logs[/cyan]")
+            ccyo_out.warning("Start command succeeded"
+                " but PostgreSQL not responding")
+            ccyo_out.print_text("  Check logs: [cyan]tapdb pg logs[/cyan]")
         else:
-            console.print("[red]✗[/red] Failed to start PostgreSQL")
-            console.print(f"  {result.stderr}")
+            ccyo_out.error("Failed to start PostgreSQL")
+            ccyo_out.print_text(f"  {result.stderr}")
             raise typer.Exit(1)
     except subprocess.TimeoutExpired:
-        console.print("[yellow]⚠[/yellow] Start command timed out")
+        ccyo_out.warning("Start command timed out")
     except Exception as e:
-        console.print(f"[red]✗[/red] Error: {e}")
+        ccyo_out.error(f"Error: {e}")
         raise typer.Exit(1)
 
 
@@ -269,19 +258,17 @@ def pg_stop():
     """
     running, _ = _is_pg_running()
     if not running:
-        console.print("[dim]○[/dim] PostgreSQL is not running")
+        ccyo_out.print_text("PostgreSQL is not running")
         return
 
     method, _, stop_cmd, _ = _get_pg_service_cmd()
 
     if method == "unknown":
-        console.print("[red]✗[/red] No system PostgreSQL service found")
-        console.print(
-            "  For local instances, use: [cyan]tapdb pg stop-local <env>[/cyan]"
-        )
+        ccyo_out.error("No system PostgreSQL service found")
+        ccyo_out.print_text("  For local instances, use: [cyan]tapdb pg stop-local <env>[/cyan]")
         raise typer.Exit(1)
 
-    console.print(f"[yellow]►[/yellow] Stopping PostgreSQL ({method})...")
+    ccyo_out.warning(f"► Stopping PostgreSQL ({method})...")
 
     try:
         result = subprocess.run(stop_cmd, capture_output=True, text=True, timeout=30)
@@ -294,37 +281,35 @@ def pg_stop():
                 time.sleep(1)
                 running, _ = _is_pg_running()
                 if not running:
-                    console.print("[green]✓[/green] PostgreSQL stopped")
+                    ccyo_out.success("PostgreSQL stopped")
                     return
 
-            console.print(
-                "[yellow]⚠[/yellow] Stop command succeeded but PostgreSQL still running"
-            )
+            ccyo_out.warning("Stop command succeeded but PostgreSQL still running")
         else:
-            console.print("[red]✗[/red] Failed to stop PostgreSQL")
-            console.print(f"  {result.stderr}")
+            ccyo_out.error("Failed to stop PostgreSQL")
+            ccyo_out.print_text(f"  {result.stderr}")
             raise typer.Exit(1)
     except Exception as e:
-        console.print(f"[red]✗[/red] Error: {e}")
+        ccyo_out.error(f"Error: {e}")
         raise typer.Exit(1)
 
 
 @pg_app.command("status")
 def pg_status():
     """Check if PostgreSQL is running and show connection info."""
-    console.print("\n[bold cyan]━━━ PostgreSQL Status ━━━[/bold cyan]")
+    ccyo_out.print_text("\n[bold cyan]━━━ PostgreSQL Status ━━━[/bold cyan]")
 
     env = _active_env()
     if env == Environment.prod:
         running, details = _is_pg_running()
         if running:
-            console.print("[green]●[/green] PostgreSQL is [green]running[/green]")
-            console.print(f"  Version: {details}")
+            ccyo_out.success("PostgreSQL is running")
+            ccyo_out.print_text(f"  Version: {details}")
         else:
-            console.print("[red]○[/red] PostgreSQL is [red]not running[/red]")
+            ccyo_out.error("○ PostgreSQL is not running")
             if details and details not in ("", "timeout"):
-                console.print(f"  Error: {details}")
-            console.print("\n  Start with: [cyan]tapdb pg start[/cyan]")
+                ccyo_out.print_text(f"  Error: {details}")
+            ccyo_out.print_text("\n  Start with: [cyan]tapdb pg start[/cyan]")
         return
 
     cfg = get_db_config_for_env(env.value)
@@ -342,28 +327,25 @@ def pg_status():
         timeout=5,
     )
     if ready.returncode == 0:
-        console.print("[green]●[/green] Local PostgreSQL is [green]running[/green]")
+        ccyo_out.success("Local PostgreSQL is running")
     else:
-        console.print("[red]○[/red] Local PostgreSQL is [red]not running[/red]")
-        console.print(
-            f"  Start with: [cyan]tapdb --config <path> --env {env.value} "
-            f"pg start-local {env.value}[/cyan]"
-        )
+        ccyo_out.error("○ Local PostgreSQL is not running")
+        ccyo_out.print_text(f"  Start with: [cyan]tapdb --config <path> --env {env.value} "
+            f"pg start-local {env.value}[/cyan]")
 
-    console.print("\n[bold]Local Runtime:[/bold]")
+    ccyo_out.print_text("\n[bold]Local Runtime:[/bold]")
     ctx = resolve_context(
         require_keys=True,
         env_name=env.value,
-        allow_namespace_fallback=True,
     )
-    console.print(f"  Namespace: {ctx.namespace_slug()}")
-    console.print(f"  Host:      {host}")
-    console.print(f"  Port:      {port}")
-    console.print(f"  User:      {user}")
-    console.print(f"  Data dir:  {data_dir}")
-    console.print(f"  Log file:  {log_file}")
-    console.print(f"  Socket dir: {socket_dir}")
-    console.print(f"  Lock file: {lock_file}")
+    ccyo_out.print_text(f"  Namespace: {ctx.namespace_slug()}")
+    ccyo_out.print_text(f"  Host:      {host}")
+    ccyo_out.print_text(f"  Port:      {port}")
+    ccyo_out.print_text(f"  User:      {user}")
+    ccyo_out.print_text(f"  Data dir:  {data_dir}")
+    ccyo_out.print_text(f"  Log file:  {log_file}")
+    ccyo_out.print_text(f"  Socket dir: {socket_dir}")
+    ccyo_out.print_text(f"  Lock file: {lock_file}")
 
 
 @pg_app.command("logs")
@@ -398,44 +380,44 @@ def pg_logs(
             break
 
     if not log_file:
-        console.print("[yellow]⚠[/yellow] PostgreSQL log file not found")
+        ccyo_out.warning("PostgreSQL log file not found")
         if local_logs:
             for path in local_logs:
-                console.print(f"  Checked local: {path}")
+                ccyo_out.print_text(f"  Checked local: {path}")
 
         # Try journalctl on Linux
         if platform.system() == "Linux":
-            console.print("\n[dim]Trying journalctl...[/dim]")
+            ccyo_out.print_text("\n[dim]Trying journalctl...[/dim]")
             cmd = ["sudo", "journalctl", "-u", "postgresql", "-n", str(lines)]
             if follow:
                 cmd.append("-f")
             try:
                 subprocess.run(cmd)
             except KeyboardInterrupt:
-                console.print("\n[dim]Stopped.[/dim]")
+                ccyo_out.print_text("\n[dim]Stopped.[/dim]")
             except Exception as e:
-                console.print(f"[red]✗[/red] {e}")
+                ccyo_out.error(f"{e}")
         return
 
-    console.print(f"[dim]Log file: {log_file}[/dim]\n")
+    ccyo_out.print_text(f"[dim]Log file: {log_file}[/dim]\n")
 
     if follow:
         try:
             subprocess.run(["tail", "-f", "-n", str(lines), str(log_file)])
         except KeyboardInterrupt:
-            console.print("\n[dim]Stopped.[/dim]")
+            ccyo_out.print_text("\n[dim]Stopped.[/dim]")
     else:
         # --no-follow / -F
         try:
             with open(log_file, "r") as f:
                 all_lines = f.readlines()
                 for line in all_lines[-lines:]:
-                    console.print(line.rstrip())
+                    ccyo_out.print_text(line.rstrip())
         except PermissionError:
-            console.print(f"[red]✗[/red] Permission denied reading {log_file}")
-            console.print(f"  Try: [cyan]sudo tail -n {lines} {log_file}[/cyan]")
+            ccyo_out.error(f"Permission denied reading {log_file}")
+            ccyo_out.print_text(f"  Try: [cyan]sudo tail -n {lines} {log_file}[/cyan]")
         except Exception as e:
-            console.print(f"[red]✗[/red] Error reading logs: {e}")
+            ccyo_out.error(f"Error reading logs: {e}")
 
 
 @pg_app.command("restart")
@@ -465,39 +447,37 @@ def pg_init(
     tapdb --config <path> --env <name> pg start-local <env>
     """
     if env == Environment.prod:
-        console.print("[red]✗[/red] Cannot init prod environment locally")
-        console.print("  Production should use system PostgreSQL installation")
+        ccyo_out.error("Cannot init prod environment locally")
+        ccyo_out.print_text("  Production should use system PostgreSQL installation")
         raise typer.Exit(1)
 
     data_dir = _get_postgres_data_dir(env)
 
-    console.print(
-        f"\n[bold cyan]━━━ Initialize PostgreSQL ({env.value}) ━━━[/bold cyan]"
-    )
-    console.print(f"  Data directory: {data_dir}")
+    ccyo_out.print_text(f"\n[bold cyan]━━━ Initialize PostgreSQL ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"  Data directory: {data_dir}")
 
     # Check if initdb is available (must be in PATH)
     initdb_path = shutil.which("initdb")
     if not initdb_path:
-        console.print("[red]✗[/red] initdb not found")
-        console.print("  Install PostgreSQL and ensure 'initdb' is on PATH")
-        console.print("  [cyan]conda install -c conda-forge postgresql[/cyan]")
+        ccyo_out.error("initdb not found")
+        ccyo_out.print_text("  Install PostgreSQL and ensure 'initdb' is on PATH")
+        ccyo_out.print_text("  [cyan]conda install -c conda-forge postgresql[/cyan]")
         raise typer.Exit(1)
 
     # Check if already initialized
     if data_dir.exists() and (data_dir / "PG_VERSION").exists():
         if not force:
-            console.print("[yellow]⚠[/yellow] Data directory already initialized")
-            console.print("  Use --force to reinitialize (will delete existing data)")
+            ccyo_out.warning("Data directory already initialized")
+            ccyo_out.print_text("  Use --force to reinitialize (will delete existing data)")
             return
         else:
-            console.print("[yellow]►[/yellow] Removing existing data directory...")
+            ccyo_out.warning("► Removing existing data directory...")
             shutil.rmtree(data_dir)
 
     # Create parent directory
     data_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    console.print("[yellow]►[/yellow] Running initdb...")
+    ccyo_out.warning("► Running initdb...")
     cfg = get_db_config_for_env(env.value)
     initdb_superuser = str(cfg.get("user") or "postgres").strip() or "postgres"
 
@@ -520,26 +500,22 @@ def pg_init(
         )
 
         if result.returncode == 0:
-            console.print("[green]✓[/green] PostgreSQL data directory initialized")
-            console.print("\n[bold]Next steps:[/bold]")
-            console.print(
-                f"  [cyan]tapdb --config <path> --env {env.value} "
-                f"pg start-local {env.value}[/cyan]  # Start PostgreSQL"
-            )
-            console.print(
-                f"  [cyan]tapdb --config <path> --env {env.value} "
+            ccyo_out.success("PostgreSQL data directory initialized")
+            ccyo_out.print_text("\n[bold]Next steps:[/bold]")
+            ccyo_out.print_text(f"  [cyan]tapdb --config <path> --env {env.value} "
+                f"pg start-local {env.value}[/cyan]  # Start PostgreSQL")
+            ccyo_out.print_text(f"  [cyan]tapdb --config <path> --env {env.value} "
                 f"db setup {env.value}[/cyan]"
-                "        # Create DB + schema + seed"
-            )
+                "        # Create DB + schema + seed")
         else:
-            console.print("[red]✗[/red] initdb failed")
-            console.print(f"  {result.stderr}")
+            ccyo_out.error("initdb failed")
+            ccyo_out.print_text(f"  {result.stderr}")
             raise typer.Exit(1)
     except subprocess.TimeoutExpired:
-        console.print("[red]✗[/red] initdb timed out")
+        ccyo_out.error("initdb timed out")
         raise typer.Exit(1)
     except Exception as e:
-        console.print(f"[red]✗[/red] Error: {e}")
+        ccyo_out.error(f"Error: {e}")
         raise typer.Exit(1)
 
 
@@ -558,27 +534,21 @@ def pg_start_local(
     Uses the data directory created by 'tapdb pg init'.
     """
     if env == Environment.prod:
-        console.print("[red]✗[/red] Use 'tapdb pg start' for production")
+        ccyo_out.error("Use 'tapdb pg start' for production")
         raise typer.Exit(1)
 
     cfg = get_db_config_for_env(env.value)
     configured_port = int(str(cfg.get("port") or "0"))
     if configured_port < 1:
-        console.print(
-            f"[red]✗[/red] Missing/invalid configured port for env {env.value}."
-        )
-        console.print(
-            f"  Set environments.{env.value}.port in the namespaced TAPDB config."
-        )
+        ccyo_out.error(f"Missing/invalid configured port for env {env.value}.")
+        ccyo_out.print_text(f"  Set environments.{env.value}.port in the namespaced TAPDB config.")
         raise typer.Exit(1)
 
     if port is None:
         port = configured_port
     elif port != configured_port:
-        console.print(
-            "[red]✗[/red] --port override does not match configured TAPDB env port."
-        )
-        console.print(f"  Configured environments.{env.value}.port = {configured_port}")
+        ccyo_out.error("--port override does not match configured TAPDB env port.")
+        ccyo_out.print_text(f"  Configured environments.{env.value}.port = {configured_port}")
         raise typer.Exit(1)
 
     data_dir = _get_postgres_data_dir(env)
@@ -588,38 +558,32 @@ def pg_start_local(
     socket_dir.mkdir(parents=True, exist_ok=True)
 
     if not data_dir.exists() or not (data_dir / "PG_VERSION").exists():
-        console.print("[red]✗[/red] Data directory not initialized")
-        console.print(f"  Run: [cyan]tapdb pg init {env.value}[/cyan]")
+        ccyo_out.error("Data directory not initialized")
+        ccyo_out.print_text(f"  Run: [cyan]tapdb pg init {env.value}[/cyan]")
         raise typer.Exit(1)
 
     # Find pg_ctl (must be in PATH)
     pg_ctl_path = shutil.which("pg_ctl")
     if not pg_ctl_path:
-        console.print("[red]✗[/red] pg_ctl not found")
-        console.print("  Install PostgreSQL and ensure 'pg_ctl' is on PATH")
-        console.print("  [cyan]conda install -c conda-forge postgresql[/cyan]")
+        ccyo_out.error("pg_ctl not found")
+        ccyo_out.print_text("  Install PostgreSQL and ensure 'pg_ctl' is on PATH")
+        ccyo_out.print_text("  [cyan]conda install -c conda-forge postgresql[/cyan]")
         raise typer.Exit(1)
 
     # Check if already running
     pid_file = data_dir / "postmaster.pid"
     if pid_file.exists():
-        console.print(
-            f"[yellow]⚠[/yellow] PostgreSQL may already be running for {env.value}"
-        )
-        console.print(f"  PID file exists: {pid_file}")
+        ccyo_out.warning(f"PostgreSQL may already be running for {env.value}")
+        ccyo_out.print_text(f"  PID file exists: {pid_file}")
         return
 
     if not _is_port_available(port):
-        console.print(f"[red]✗[/red] {_port_conflict_details(port)}")
-        console.print(
-            "  Update environments."
-            f"{env.value}.port in the namespaced TAPDB config to a free port."
-        )
+        ccyo_out.error(f"{_port_conflict_details(port)}")
+        ccyo_out.print_text("  Update environments."
+            f"{env.value}.port in the namespaced TAPDB config to a free port.")
         raise typer.Exit(1)
 
-    console.print(
-        f"[yellow]►[/yellow] Starting PostgreSQL ({env.value}) on port {port}..."
-    )
+    ccyo_out.warning(f"► Starting PostgreSQL ({env.value}) on port {port}...")
 
     log_file = _get_postgres_log_file(env)
     log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -643,11 +607,11 @@ def pg_start_local(
         )
 
         if result.returncode == 0:
-            console.print("[green]✓[/green] PostgreSQL started")
-            console.print(f"  Port: {port}")
-            console.print(f"  Data: {data_dir}")
-            console.print(f"  Log:  {log_file}")
-            console.print(f"  Socket dir: {socket_dir}")
+            ccyo_out.success("PostgreSQL started")
+            ccyo_out.print_text(f"  Port: {port}")
+            ccyo_out.print_text(f"  Data: {data_dir}")
+            ccyo_out.print_text(f"  Log:  {log_file}")
+            ccyo_out.print_text(f"  Socket dir: {socket_dir}")
             lock_payload = {
                 "env": env.value,
                 "port": port,
@@ -659,18 +623,16 @@ def pg_start_local(
                 json.dumps(lock_payload, indent=2) + "\n",
                 encoding="utf-8",
             )
-            console.print(f"  Lock: {lock_file}")
-            console.print("\n[bold]Next step:[/bold]")
-            console.print(
-                f"  [cyan]tapdb --env {env.value} db setup {env.value}[/cyan]"
-            )
+            ccyo_out.print_text(f"  Lock: {lock_file}")
+            ccyo_out.print_text("\n[bold]Next step:[/bold]")
+            ccyo_out.print_text(f"  [cyan]tapdb --env {env.value} db setup {env.value}[/cyan]")
         else:
-            console.print("[red]✗[/red] Failed to start PostgreSQL")
-            console.print(f"  {result.stderr}")
-            console.print(f"  Check log: {log_file}")
+            ccyo_out.error("Failed to start PostgreSQL")
+            ccyo_out.print_text(f"  {result.stderr}")
+            ccyo_out.print_text(f"  Check log: {log_file}")
             raise typer.Exit(1)
     except Exception as e:
-        console.print(f"[red]✗[/red] Error: {e}")
+        ccyo_out.error(f"Error: {e}")
         raise typer.Exit(1)
 
 
@@ -680,25 +642,25 @@ def pg_stop_local(
 ):
     """Stop a local PostgreSQL instance for dev/test."""
     if env == Environment.prod:
-        console.print("[red]✗[/red] Use 'tapdb pg stop' for production")
+        ccyo_out.error("Use 'tapdb pg stop' for production")
         raise typer.Exit(1)
 
     data_dir = _get_postgres_data_dir(env)
     lock_file = _get_instance_lock_file(env)
 
     if not data_dir.exists():
-        console.print(f"[yellow]⚠[/yellow] Data directory doesn't exist: {data_dir}")
+        ccyo_out.warning(f"Data directory doesn't exist: {data_dir}")
         return
 
     # Find pg_ctl (must be in PATH)
     pg_ctl_path = shutil.which("pg_ctl")
     if not pg_ctl_path:
-        console.print("[red]✗[/red] pg_ctl not found")
-        console.print("  Install PostgreSQL and ensure 'pg_ctl' is on PATH")
-        console.print("  [cyan]conda install -c conda-forge postgresql[/cyan]")
+        ccyo_out.error("pg_ctl not found")
+        ccyo_out.print_text("  Install PostgreSQL and ensure 'pg_ctl' is on PATH")
+        ccyo_out.print_text("  [cyan]conda install -c conda-forge postgresql[/cyan]")
         raise typer.Exit(1)
 
-    console.print(f"[yellow]►[/yellow] Stopping PostgreSQL ({env.value})...")
+    ccyo_out.warning(f"► Stopping PostgreSQL ({env.value})...")
 
     try:
         result = subprocess.run(
@@ -709,11 +671,11 @@ def pg_stop_local(
         )
 
         if result.returncode == 0:
-            console.print("[green]✓[/green] PostgreSQL stopped")
+            ccyo_out.success("PostgreSQL stopped")
             lock_file.unlink(missing_ok=True)
         else:
             err = result.stderr.strip() or ("PostgreSQL may not be running")
-            console.print(f"[yellow]⚠[/yellow] {err}")
+            ccyo_out.warning(f"{err}")
     except Exception as e:
-        console.print(f"[red]✗[/red] Error: {e}")
+        ccyo_out.error(f"Error: {e}")
         raise typer.Exit(1)
