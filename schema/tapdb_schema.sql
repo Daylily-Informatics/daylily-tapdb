@@ -246,6 +246,7 @@ ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS tenant_id UUID;
 --------------------------------------------------------------------------------
 
 -- generic_template indexes
+CREATE INDEX IF NOT EXISTS idx_generic_template_domain ON generic_template(domain_code, issuer_app_code);
 CREATE INDEX IF NOT EXISTS idx_generic_template_polymorphic_discriminator ON generic_template(polymorphic_discriminator);
 CREATE INDEX IF NOT EXISTS idx_generic_template_type ON generic_template(type);
 CREATE INDEX IF NOT EXISTS idx_generic_template_is_deleted ON generic_template(is_deleted);
@@ -254,6 +255,7 @@ CREATE INDEX IF NOT EXISTS idx_generic_template_is_deleted ON generic_template(i
 CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_unique_singleton_key
     ON generic_instance (category, type, subtype, version)
     WHERE is_singleton = TRUE;
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain ON generic_instance(domain_code, issuer_app_code);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_polymorphic_discriminator ON generic_instance(polymorphic_discriminator);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_type ON generic_instance(type);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_euid ON generic_instance(euid);
@@ -279,11 +281,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_system_user_login_identif
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lineage_unique_edge
     ON generic_instance_lineage (parent_instance_uid, child_instance_uid, relationship_type)
     WHERE is_deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_domain ON generic_instance_lineage(domain_code, issuer_app_code);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_parent ON generic_instance_lineage(parent_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_child ON generic_instance_lineage(child_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_is_deleted ON generic_instance_lineage(is_deleted);
 
 -- audit_log indexes
+CREATE INDEX IF NOT EXISTS idx_audit_log_domain ON audit_log(domain_code, issuer_app_code);
 CREATE INDEX IF NOT EXISTS idx_audit_log_rel_table_name ON audit_log(rel_table_name);
 CREATE INDEX IF NOT EXISTS idx_audit_log_rel_table_uid_fk ON audit_log(rel_table_uid_fk);
 CREATE INDEX IF NOT EXISTS idx_audit_log_rel_table_euid_fk ON audit_log(rel_table_euid_fk);
@@ -302,6 +306,8 @@ CREATE INDEX IF NOT EXISTS idx_outbox_event_status_next_attempt_at
     ON outbox_event(status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS idx_outbox_event_message_uid
     ON outbox_event(message_uid);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_domain
+    ON outbox_event(domain_code, issuer_app_code);
 
 --------------------------------------------------------------------------------
 -- FUNCTIONS
