@@ -25,6 +25,7 @@ from daylily_tapdb.user_store import (
     set_role,
     soft_delete,
 )
+from cli_core_yo import ccyo_out
 
 user_app = typer.Typer(help="User management commands")
 console = Console()
@@ -81,11 +82,11 @@ def user_list(
             with conn.session_scope() as session:
                 users = list_users(session, include_inactive=show_inactive)
     except Exception as e:
-        console.print(f"[red]✗[/red] Failed to list users: {e}")
+        ccyo_out.error(f"Failed to list users: {e}")
         raise typer.Exit(1)
 
     if not users:
-        console.print("[dim]No users found[/dim]")
+        ccyo_out.print_text("[dim]No users found[/dim]")
         return
 
     table = Table(title=f"TAPDB Users ({env.value})")
@@ -110,7 +111,7 @@ def user_list(
             _format_date(user.last_login_dt, include_time=True),
         )
 
-    console.print(table)
+    ccyo_out.print_text(table)
 
 
 @user_app.command("add")
@@ -128,7 +129,7 @@ def user_add(
 ):
     """Add a new user."""
     if role not in ("admin", "user"):
-        console.print(f"[red]✗[/red] Invalid role: {role}. Must be 'admin' or 'user'")
+        ccyo_out.error(f"Invalid role: {role}. Must be 'admin' or 'user'")
         raise typer.Exit(1)
 
     pw_hash = None
@@ -136,8 +137,8 @@ def user_add(
         try:
             pw_hash = _hash_password(password)
         except RuntimeError as e:
-            console.print(f"[red]✗[/red] {e}")
-            console.print("  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]")
+            ccyo_out.error(f"{e}")
+            ccyo_out.print_text("  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]")
             raise typer.Exit(1)
 
     try:
@@ -155,18 +156,16 @@ def user_add(
                     cognito_username=email or username,
                 )
     except Exception as e:
-        console.print(f"[red]✗[/red] Failed to create user: {e}")
+        ccyo_out.error(f"Failed to create user: {e}")
         raise typer.Exit(1)
 
     if not created:
-        console.print(f"[red]✗[/red] User '{username}' already exists")
+        ccyo_out.error(f"User '{username}' already exists")
         raise typer.Exit(1)
 
-    console.print(
-        f"[green]✓[/green] Created user"
-        f" [cyan]{username}[/cyan]"
-        f" with role [bold]{role}[/bold]"
-    )
+    ccyo_out.success(f"Created user"
+        f" {username}"
+        f" with role {role}")
 
 
 @user_app.command("set-role")
@@ -177,23 +176,21 @@ def user_set_role(
 ):
     """Set user role (admin or user)."""
     if role not in ("admin", "user"):
-        console.print(f"[red]✗[/red] Invalid role: {role}. Must be 'admin' or 'user'")
+        ccyo_out.error(f"Invalid role: {role}. Must be 'admin' or 'user'")
         raise typer.Exit(1)
     try:
         with _open_connection(env, app_username=username) as conn:
             with conn.session_scope(commit=True) as session:
                 updated = set_role(session, username, role)
     except Exception as e:
-        console.print(f"[red]✗[/red] Failed to set role: {e}")
+        ccyo_out.error(f"Failed to set role: {e}")
         raise typer.Exit(1)
 
     if not updated:
-        console.print(f"[red]✗[/red] User '{username}' not found")
+        ccyo_out.error(f"User '{username}' not found")
         raise typer.Exit(1)
 
-    console.print(
-        f"[green]✓[/green] Set [cyan]{username}[/cyan] role to [bold]{role}[/bold]"
-    )
+    ccyo_out.success(f"Set {username} role to {role}")
 
 
 @user_app.command("deactivate")
@@ -207,12 +204,12 @@ def user_deactivate(
             with conn.session_scope(commit=True) as session:
                 updated = set_active(session, username, False)
     except Exception as e:
-        console.print(f"[red]✗[/red] Failed to deactivate user: {e}")
+        ccyo_out.error(f"Failed to deactivate user: {e}")
         raise typer.Exit(1)
     if not updated:
-        console.print(f"[red]✗[/red] User '{username}' not found")
+        ccyo_out.error(f"User '{username}' not found")
         raise typer.Exit(1)
-    console.print(f"[green]✓[/green] Deactivated user [cyan]{username}[/cyan]")
+    ccyo_out.success(f"Deactivated user {username}")
 
 
 @user_app.command("activate")
@@ -226,12 +223,12 @@ def user_activate(
             with conn.session_scope(commit=True) as session:
                 updated = set_active(session, username, True)
     except Exception as e:
-        console.print(f"[red]✗[/red] Failed to activate user: {e}")
+        ccyo_out.error(f"Failed to activate user: {e}")
         raise typer.Exit(1)
     if not updated:
-        console.print(f"[red]✗[/red] User '{username}' not found")
+        ccyo_out.error(f"User '{username}' not found")
         raise typer.Exit(1)
-    console.print(f"[green]✓[/green] Activated user [cyan]{username}[/cyan]")
+    ccyo_out.success(f"Activated user {username}")
 
 
 @user_app.command("set-password")
@@ -252,8 +249,8 @@ def user_set_password(
     try:
         pw_hash = _hash_password(password)
     except RuntimeError as e:
-        console.print(f"[red]✗[/red] {e}")
-        console.print("  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]")
+        ccyo_out.error(f"{e}")
+        ccyo_out.print_text("  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]")
         raise typer.Exit(1)
 
     try:
@@ -266,14 +263,14 @@ def user_set_password(
                     require_password_change=None,
                 )
     except Exception as e:
-        console.print(f"[red]✗[/red] Failed to set password: {e}")
+        ccyo_out.error(f"Failed to set password: {e}")
         raise typer.Exit(1)
 
     if not updated:
-        console.print(f"[red]✗[/red] User '{username}' not found")
+        ccyo_out.error(f"User '{username}' not found")
         raise typer.Exit(1)
 
-    console.print(f"[green]✓[/green] Password updated for [cyan]{username}[/cyan]")
+    ccyo_out.success(f"Password updated for {username}")
 
 
 @user_app.command("delete")
@@ -286,7 +283,7 @@ def user_delete(
     if not force:
         confirm = typer.confirm(f"Permanently delete user '{username}'?")
         if not confirm:
-            console.print("[dim]Cancelled[/dim]")
+            ccyo_out.print_text("[dim]Cancelled[/dim]")
             raise typer.Exit(0)
 
     try:
@@ -294,11 +291,11 @@ def user_delete(
             with conn.session_scope(commit=True) as session:
                 deleted = soft_delete(session, username)
     except Exception as e:
-        console.print(f"[red]✗[/red] Failed to delete user: {e}")
+        ccyo_out.error(f"Failed to delete user: {e}")
         raise typer.Exit(1)
 
     if not deleted:
-        console.print(f"[red]✗[/red] User '{username}' not found")
+        ccyo_out.error(f"User '{username}' not found")
         raise typer.Exit(1)
 
-    console.print(f"[green]✓[/green] Deleted user [cyan]{username}[/cyan]")
+    ccyo_out.success(f"Deleted user {username}")

@@ -41,11 +41,6 @@ def _get_pwd_context() -> Any:
 _PWD_CONTEXT = _get_pwd_context()
 
 
-def _is_legacy_sha256_hash(stored_hash: str) -> bool:
-    # Historical format used by TAPDB: "salt:hexsha256(salt+password)"
-    return ":" in (stored_hash or "") and not stored_hash.lstrip().startswith("$")
-
-
 def hash_password(password: str) -> str:
     """Hash a password for storage (bcrypt via passlib).
 
@@ -72,20 +67,9 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
-    """Verify a password against a stored hash.
-
-    Supports legacy salted SHA-256 hashes for backward compatibility.
-    """
+    """Verify a password against a stored hash."""
     if not stored_hash:
         return False
-
-    if _is_legacy_sha256_hash(stored_hash):
-        try:
-            salt, hash_val = stored_hash.split(":", 1)
-        except ValueError:
-            return False
-        digest = hashlib.sha256((salt + password).encode()).hexdigest()
-        return hmac.compare_digest(digest, hash_val)
 
     if _PWD_CONTEXT is None:
         detail = ""

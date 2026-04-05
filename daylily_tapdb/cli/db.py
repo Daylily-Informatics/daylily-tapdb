@@ -52,6 +52,7 @@ from daylily_tapdb.templates import (
     validate_template_configs as _loader_validate_template_configs,
 )
 from daylily_tapdb.timezone_utils import utc_now
+from cli_core_yo import ccyo_out
 
 console = Console()
 
@@ -139,9 +140,9 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
 
     {sequences_sql}
     """
-    success, output = _run_psql(env, sql=sql)
+    success, psql_out = _run_psql(env, sql=sql)
     if not success:
-        raise RuntimeError(f"Failed to sync identity prefix config: {output[:200]}")
+        raise RuntimeError(f"Failed to sync identity prefix config: {psql_out[:200]}")
 
 
 def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
@@ -202,10 +203,10 @@ def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
     );
     """
 
-    success, output = _run_psql(env, sql=sql)
+    success, psql_out = _run_psql(env, sql=sql)
     if not success:
         raise RuntimeError(
-            f"Failed to ensure sequence for prefix {prefix}: {output[:200]}"
+            f"Failed to ensure sequence for prefix {prefix}: {psql_out[:200]}"
         )
 
 
@@ -519,12 +520,12 @@ def _ensure_local_role(env: Environment, role_name: str) -> None:
 def _check_db_exists(env: Environment, database: str) -> bool:
     """Check if database exists."""
     _get_db_config(env)
-    success, output = _run_psql(
+    success, psql_out = _run_psql(
         env,
         sql=f"SELECT 1 FROM pg_database WHERE datname = '{database}'",
         database="postgres",
     )
-    return success and output.strip() == "1"
+    return success and psql_out.strip() == "1"
 
 
 def _parse_single_int(output: str) -> int:
@@ -551,10 +552,10 @@ def _get_table_counts(env: Environment) -> dict:
     ]
     counts = {}
     for table in tables:
-        success, output = _run_psql(env, sql=f"SELECT COUNT(*) FROM {table}")
+        success, psql_out = _run_psql(env, sql=f"SELECT COUNT(*) FROM {table}")
         if success:
             try:
-                counts[table] = _parse_single_int(output)
+                counts[table] = _parse_single_int(psql_out)
             except ValueError:
                 counts[table] = "?"
         else:
@@ -564,7 +565,7 @@ def _get_table_counts(env: Environment) -> dict:
 
 def _schema_exists(env: Environment) -> bool:
     """Check if TAPDB schema exists in database."""
-    success, output = _run_psql(
+    success, psql_out = _run_psql(
         env,
         sql=(
             "SELECT COUNT(*) FROM information_schema.tables"
@@ -574,7 +575,7 @@ def _schema_exists(env: Environment) -> bool:
     if not success:
         return False
     try:
-        return _parse_single_int(output) > 0
+        return _parse_single_int(psql_out) > 0
     except ValueError:
         return False
 
@@ -650,11 +651,9 @@ def _db_callback(ctx: typer.Context) -> None:
     try:
         _require_context()
     except RuntimeError as exc:
-        console.print(f"[red]✗[/red] {exc}")
-        console.print(
-            "  Example: [cyan]tapdb --client-id atlas --database-name app "
-            "db create dev[/cyan]"
-        )
+        ccyo_out.error(f"{exc}")
+        ccyo_out.print_text("  Example: [cyan]tapdb --client-id atlas --database-name app "
+            "db create dev[/cyan]")
         raise typer.Exit(1) from exc
 
 
@@ -670,39 +669,37 @@ def db_create(
     db_name = cfg["database"]
     db_owner = owner or cfg["user"]
 
-    console.print(
-        f"\n[bold cyan]━━━ Create TAPDB Database ({env.value}) ━━━[/bold cyan]"
-    )
-    console.print(f"  Host:     {cfg['host']}:{cfg['port']}")
-    console.print(f"  Database: {db_name}")
-    console.print(f"  Owner:    {db_owner}")
+    ccyo_out.print_text(f"\n[bold cyan]━━━ Create TAPDB Database ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"  Host:     {cfg['host']}:{cfg['port']}")
+    ccyo_out.print_text(f"  Database: {db_name}")
+    ccyo_out.print_text(f"  Owner:    {db_owner}")
 
     try:
         _ensure_local_role(env, cfg["user"])
     except RuntimeError as exc:
-        console.print(f"[red]✗[/red] {exc}")
+        ccyo_out.error(f"{exc}")
         raise typer.Exit(1) from exc
 
     ok, out = _run_psql(env, sql="SELECT 1", database="postgres")
     if not ok:
-        console.print("[red]✗[/red] Cannot connect to PostgreSQL for this environment")
-        console.print(f"  {out}")
+        ccyo_out.error("Cannot connect to PostgreSQL for this environment")
+        ccyo_out.print_text(f"  {out}")
         raise typer.Exit(1)
 
     if _check_db_exists(env, db_name):
-        console.print(f"[yellow]⚠[/yellow] Database '{db_name}' already exists")
+        ccyo_out.warning(f"Database '{db_name}' already exists")
         return
 
-    console.print(f"[yellow]►[/yellow] Creating database '{db_name}'...")
+    ccyo_out.warning(f"► Creating database '{db_name}'...")
     sql = f'CREATE DATABASE "{db_name}" OWNER "{db_owner}"'
-    success, output = _run_psql(env, sql=sql, database="postgres")
+    success, psql_out = _run_psql(env, sql=sql, database="postgres")
     if not success:
-        console.print("[red]✗[/red] Failed to create database")
-        console.print(f"  {output}")
+        ccyo_out.error("Failed to create database")
+        ccyo_out.print_text(f"  {psql_out}")
         raise typer.Exit(1)
 
-    console.print(f"[green]✓[/green] Database '{db_name}' created")
-    console.print(f"  Next: [cyan]tapdb db schema apply {env.value}[/cyan]")
+    ccyo_out.success(f"Database '{db_name}' created")
+    ccyo_out.print_text(f"  Next: [cyan]tapdb db schema apply {env.value}[/cyan]")
 
 
 @db_app.command("delete")
@@ -716,33 +713,33 @@ def db_delete(
 
     ok, out = _run_psql(env, sql="SELECT 1", database="postgres")
     if not ok:
-        console.print("[red]✗[/red] Cannot connect to PostgreSQL for this environment")
-        console.print(f"  {out}")
+        ccyo_out.error("Cannot connect to PostgreSQL for this environment")
+        ccyo_out.print_text(f"  {out}")
         raise typer.Exit(1)
 
     if not _check_db_exists(env, db_name):
-        console.print(f"[yellow]⚠[/yellow] Database '{db_name}' does not exist")
+        ccyo_out.warning(f"Database '{db_name}' does not exist")
         return
 
     if not force:
-        console.print("\n[bold red]⚠️  WARNING: DESTRUCTIVE OPERATION[/bold red]")
-        console.print(f"This will permanently delete database: [bold]{db_name}[/bold]")
-        console.print("All data will be lost!\n")
+        ccyo_out.error("\n⚠️  WARNING: DESTRUCTIVE OPERATION")
+        ccyo_out.print_text(f"This will permanently delete database: [bold]{db_name}[/bold]")
+        ccyo_out.print_text("All data will be lost!\n")
 
         if env == Environment.prod:
-            console.print("[bold red]🚨 THIS IS A PRODUCTION DATABASE! 🚨[/bold red]\n")
+            ccyo_out.error("🚨 THIS IS A PRODUCTION DATABASE! 🚨\n")
 
         if not Confirm.ask(f"Delete database '{db_name}'?", default=False):
-            console.print("[dim]Aborted.[/dim]")
+            ccyo_out.print_text("[dim]Aborted.[/dim]")
             raise typer.Exit(0)
 
         if env == Environment.prod:
             typed = typer.prompt("Type the database name to confirm")
             if typed != db_name:
-                console.print("[red]✗[/red] Name mismatch. Aborted.")
+                ccyo_out.error("Name mismatch. Aborted.")
                 raise typer.Exit(1)
 
-    console.print(f"[yellow]►[/yellow] Deleting database '{db_name}'...")
+    ccyo_out.warning(f"► Deleting database '{db_name}'...")
     term_sql = f"""
     SELECT pg_terminate_backend(pid)
     FROM pg_stat_activity
@@ -750,15 +747,15 @@ def db_delete(
     """
     _run_psql(env, sql=term_sql, database="postgres")
 
-    success, output = _run_psql(
+    success, psql_out = _run_psql(
         env, sql=f'DROP DATABASE "{db_name}"', database="postgres"
     )
     if not success:
-        console.print("[red]✗[/red] Failed to delete database")
-        console.print(f"  {output}")
+        ccyo_out.error("Failed to delete database")
+        ccyo_out.print_text(f"  {psql_out}")
         raise typer.Exit(1)
 
-    console.print(f"[green]✓[/green] Database '{db_name}' deleted")
+    ccyo_out.success(f"Database '{db_name}' deleted")
 
 
 @schema_app.command("apply")
@@ -772,61 +769,59 @@ def db_schema_apply(
     _ensure_dirs()
     cfg = _get_db_config(env)
 
-    console.print(f"\n[bold cyan]━━━ Apply TAPDB Schema ({env.value}) ━━━[/bold cyan]")
-    console.print(f"  Host:     {cfg['host']}:{cfg['port']}")
-    console.print(f"  Database: {cfg['database']}")
-    console.print(f"  User:     {cfg['user']}")
-    console.print()
+    ccyo_out.print_text(f"\n[bold cyan]━━━ Apply TAPDB Schema ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"  Host:     {cfg['host']}:{cfg['port']}")
+    ccyo_out.print_text(f"  Database: {cfg['database']}")
+    ccyo_out.print_text(f"  User:     {cfg['user']}")
+    ccyo_out.print_text("")
 
     if not _check_db_exists(env, cfg["database"]):
-        console.print(f"[red]✗[/red] Database '{cfg['database']}' does not exist")
-        console.print(f"  Create with: [cyan]tapdb db create {env.value}[/cyan]")
+        ccyo_out.error(f"Database '{cfg['database']}' does not exist")
+        ccyo_out.print_text(f"  Create with: [cyan]tapdb db create {env.value}[/cyan]")
         raise typer.Exit(1)
 
     try:
         schema_file = _find_schema_file()
-        console.print(f"[green]✓[/green] Schema file: {schema_file}")
+        ccyo_out.success(f"Schema file: {schema_file}")
     except FileNotFoundError as e:
-        console.print(f"[red]✗[/red] {e}")
+        ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
     if _schema_exists(env) and not reinitialize:
-        console.print(
-            f"[dim]○[/dim] Schema already exists in {cfg['database']} (skipping apply)"
-        )
-        console.print("[yellow]►[/yellow] Syncing required identity prefixes...")
+        ccyo_out.print_text(f"Schema already exists in {cfg['database']} (skipping apply)")
+        ccyo_out.warning("► Syncing required identity prefixes...")
         try:
             _sync_identity_prefix_config(env)
-            console.print("[green]✓[/green] Identity prefixes synced")
+            ccyo_out.success("Identity prefixes synced")
         except (ValueError, RuntimeError) as e:
-            console.print(f"[red]✗[/red] {e}")
+            ccyo_out.error(f"{e}")
             raise typer.Exit(1)
         return
 
-    console.print("[yellow]►[/yellow] Applying schema...")
-    success, output = _run_psql(env, file=schema_file)
+    ccyo_out.warning("► Applying schema...")
+    success, psql_out = _run_psql(env, file=schema_file)
     if not success:
-        console.print(f"[red]✗[/red] Schema apply failed:\n{output}")
-        _log_operation(env.value, "SCHEMA_APPLY_FAILED", output[:200])
+        ccyo_out.error(f"Schema apply failed:\n{psql_out}")
+        _log_operation(env.value, "SCHEMA_APPLY_FAILED", psql_out[:200])
         raise typer.Exit(1)
 
     _log_operation(env.value, "SCHEMA_APPLY", f"Schema applied from {schema_file}")
-    console.print("[green]✓[/green] Schema applied successfully")
-    console.print("[yellow]►[/yellow] Syncing required identity prefixes...")
+    ccyo_out.success("Schema applied successfully")
+    ccyo_out.warning("► Syncing required identity prefixes...")
     try:
         _sync_identity_prefix_config(env)
-        console.print("[green]✓[/green] Identity prefixes synced")
+        ccyo_out.success("Identity prefixes synced")
     except (ValueError, RuntimeError) as e:
-        console.print(f"[red]✗[/red] {e}")
+        ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
     try:
         _write_migration_baseline(env)
     except Exception as e:
-        console.print(f"[red]✗[/red] Failed to write migration baseline: {e}")
+        ccyo_out.error(f"Failed to write migration baseline: {e}")
         raise typer.Exit(1)
 
-    console.print("\n[bold]Tables available:[/bold]")
+    ccyo_out.heading("Tables available:")
     for table in [
         "generic_template",
         "generic_instance",
@@ -834,7 +829,7 @@ def db_schema_apply(
         "audit_log",
         "tapdb_identity_prefix_config",
     ]:
-        console.print(f"  [green]✓[/green] {table}")
+        ccyo_out.success(f"  {table}")
 
 
 @schema_app.command("status")
@@ -844,25 +839,23 @@ def db_status(
     """Check TAPDB schema status in the specified environment."""
     cfg = _get_db_config(env)
 
-    console.print(f"\n[bold cyan]━━━ TAPDB Status ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"\n[bold cyan]━━━ TAPDB Status ({env.value}) ━━━[/bold cyan]")
 
     # Check database exists
     if not _check_db_exists(env, cfg["database"]):
-        console.print(f"[red]✗[/red] Database '{cfg['database']}' does not exist")
-        console.print(f"\n  Create with: [cyan]tapdb db create {env.value}[/cyan]")
+        ccyo_out.error(f"Database '{cfg['database']}' does not exist")
+        ccyo_out.print_text(f"\n  Create with: [cyan]tapdb db create {env.value}[/cyan]")
         raise typer.Exit(1)
 
-    console.print(f"[green]✓[/green] Database: {cfg['database']}")
+    ccyo_out.success(f"Database: {cfg['database']}")
 
     # Check schema
     if not _schema_exists(env):
-        console.print("[red]✗[/red] TAPDB schema not found")
-        console.print(
-            f"\n  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]"
-        )
+        ccyo_out.error("TAPDB schema not found")
+        ccyo_out.print_text(f"\n  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]")
         raise typer.Exit(1)
 
-    console.print("[green]✓[/green] Schema: installed")
+    ccyo_out.success("Schema: installed")
 
     # Get table counts
     counts = _get_table_counts(env)
@@ -877,20 +870,20 @@ def db_status(
         else:
             table.add_row(tbl, str(count))
 
-    console.print()
-    console.print(table)
+    ccyo_out.print_text("")
+    ccyo_out.print_text(table)
 
     # Connection info
-    console.print("\n[bold]Connection:[/bold]")
-    console.print(f"  Host: {cfg['host']}:{cfg['port']}")
-    console.print(f"  User: {cfg['user']}")
+    ccyo_out.print_text("\n[bold]Connection:[/bold]")
+    ccyo_out.print_text(f"  Host: {cfg['host']}:{cfg['port']}")
+    ccyo_out.print_text(f"  User: {cfg['user']}")
     if cfg.get("engine_type") == "aurora":
-        console.print("  Engine: [bold yellow]Aurora PostgreSQL[/bold yellow]")
-        console.print(f"  Region: {cfg.get('region', 'us-west-2')}")
-        console.print("  SSL:    verify-full (enforced)")
+        ccyo_out.warning("  Engine: Aurora PostgreSQL")
+        ccyo_out.print_text(f"  Region: {cfg.get('region', 'us-west-2')}")
+        ccyo_out.print_text("  SSL:    verify-full (enforced)")
         iam = cfg.get("iam_auth", "true").lower() in ("true", "1", "yes")
-        console.print(f"  Auth:   {'IAM' if iam else 'password'}")
-    console.print(f"  URL:  [dim]{_get_connection_string(env)}[/dim]")
+        ccyo_out.print_text(f"  Auth:   {'IAM' if iam else 'password'}")
+    ccyo_out.print_text(f"  URL:  [dim]{_get_connection_string(env)}[/dim]")
 
 
 @schema_app.command("drift-check")
@@ -913,8 +906,7 @@ def db_schema_drift_check(
     if not _check_db_exists(env, cfg["database"]):
         message = f"Database '{cfg['database']}' does not exist"
         if json_output:
-            typer.echo(
-                json.dumps(
+            ccyo_out.print_text(json.dumps(
                     {
                         "status": "error",
                         "env": env.value,
@@ -925,10 +917,9 @@ def db_schema_drift_check(
                     },
                     indent=2,
                     sort_keys=True,
-                )
-            )
+                ))
         else:
-            console.print(f"[red]✗[/red] {message}")
+            ccyo_out.error(f"{message}")
         raise typer.Exit(2)
 
     try:
@@ -936,8 +927,7 @@ def db_schema_drift_check(
     except Exception as exc:
         message = str(exc)
         if json_output:
-            typer.echo(
-                json.dumps(
+            ccyo_out.print_text(json.dumps(
                     {
                         "status": "error",
                         "env": env.value,
@@ -948,42 +938,39 @@ def db_schema_drift_check(
                     },
                     indent=2,
                     sort_keys=True,
-                )
-            )
+                ))
         else:
-            console.print(f"[red]✗[/red] Drift check failed for {env.value}: {message}")
+            ccyo_out.error(f"Drift check failed for {env.value}: {message}")
         raise typer.Exit(2) from exc
 
     if json_output:
-        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        ccyo_out.print_text(json.dumps(payload, indent=2, sort_keys=True))
         raise typer.Exit(1 if has_drift else 0)
 
     schema_name = payload.get("schema_name") or "(not found)"
-    console.print(
-        f"\n[bold cyan]━━━ TAPDB Schema Drift Check ({env.value}) ━━━[/bold cyan]"
-    )
-    console.print(f"  Database: {payload['database']}")
-    console.print(f"  Schema:   {schema_name}")
-    console.print(f"  Strict:   {'yes' if payload['strict'] else 'no'}")
+    ccyo_out.print_text(f"\n[bold cyan]━━━ TAPDB Schema Drift Check ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"  Database: {payload['database']}")
+    ccyo_out.print_text(f"  Schema:   {schema_name}")
+    ccyo_out.print_text(f"  Strict:   {'yes' if payload['strict'] else 'no'}")
     counts = payload["counts"]
-    console.print(f"  Counts:   expected={counts['expected']} live={counts['live']}")
+    ccyo_out.print_text(f"  Counts:   expected={counts['expected']} live={counts['live']}")
 
     if has_drift:
-        console.print("\n[red]✗[/red] Drift detected")
+        ccyo_out.error("\nDrift detected")
         for section_name in ("missing", "unexpected"):
             entries = payload[section_name]
             if not any(entries.values()):
                 continue
-            console.print(f"\n[bold]{section_name.title()}[/bold]")
+            ccyo_out.print_text(f"\n[bold]{section_name.title()}[/bold]")
             for category, values in entries.items():
                 if not values:
                     continue
-                console.print(f"  {category} ({len(values)}):")
+                ccyo_out.print_text(f"  {category} ({len(values)}):")
                 for value in values:
-                    console.print(f"    - {value}")
+                    ccyo_out.print_text(f"    - {value}")
         raise typer.Exit(1)
 
-    console.print("\n[green]✓[/green] No TAPDB schema drift detected")
+    ccyo_out.success("\nNo TAPDB schema drift detected")
 
 
 @schema_app.command("reset")
@@ -1004,9 +991,7 @@ def db_nuke(
     # Get what will be deleted
     if not _check_db_exists(env, cfg["database"]):
         db_name = cfg["database"]
-        console.print(
-            f"[yellow]⚠[/yellow] Database '{db_name}' does not exist. Nothing to nuke."
-        )
+        ccyo_out.warning(f"Database '{db_name}' does not exist. Nothing to nuke.")
         return
 
     counts = _get_table_counts(env)
@@ -1021,7 +1006,7 @@ def db_nuke(
         )
 
     # Show what will be deleted
-    console.print(
+    ccyo_out.print_text(
         Panel(
             f"[bold red]⚠️  DESTRUCTIVE OPERATION[/bold red]\n\n"
             f"Environment: [bold]{env.value.upper()}[/bold]\n"
@@ -1049,41 +1034,31 @@ def db_nuke(
     if not force:
         # Confirmation 1: Environment
         env_upper = env.value.upper()
-        console.print(
-            f"\n[bold]Confirmation 1/3:[/bold] You are about"
-            f" to nuke the [bold red]{env_upper}[/bold red]"
-            " database."
-        )
+        ccyo_out.error(f"\nConfirmation 1/3: You are about"
+            f" to nuke the {env_upper}"
+            " database.")
         if not Confirm.ask("  Proceed?", default=False):
-            console.print("[dim]Aborted.[/dim]")
+            ccyo_out.print_text("[dim]Aborted.[/dim]")
             return
 
         # Confirmation 2: Type environment name
-        console.print(
-            "\n[bold]Confirmation 2/3:[/bold] Type the environment name to confirm:"
-        )
+        ccyo_out.print_text("\n[bold]Confirmation 2/3:[/bold] Type the environment name to confirm:")
         typed_env = Prompt.ask("  Environment name")
         if typed_env.lower() != env.value.lower():
-            console.print(
-                f"[red]✗[/red] Input '{typed_env}' does not"
-                f" match '{env.value}'. Aborted."
-            )
+            ccyo_out.error(f"Input '{typed_env}' does not"
+                f" match '{env.value}'. Aborted.")
             return
 
         # Confirmation 3: Type DELETE EVERYTHING
-        console.print(
-            "\n[bold]Confirmation 3/3:[/bold] Type"
-            " [bold red]DELETE EVERYTHING[/bold red]"
-            " to proceed:"
-        )
+        ccyo_out.error("\nConfirmation 3/3: Type"
+            " DELETE EVERYTHING"
+            " to proceed:")
         typed_confirm = Prompt.ask("  Confirm")
         if typed_confirm != "DELETE EVERYTHING":
-            console.print(
-                "[red]✗[/red] Input does not match 'DELETE EVERYTHING'. Aborted."
-            )
+            ccyo_out.error("Input does not match 'DELETE EVERYTHING'. Aborted.")
             return
 
-    console.print("\n[yellow]►[/yellow] Nuking TAPDB schema...")
+    ccyo_out.warning("\n► Nuking TAPDB schema...")
 
     # Drop order matters for foreign keys
     drop_sql = """  -- noqa: E501
@@ -1147,10 +1122,15 @@ def db_nuke(
     DROP FUNCTION IF EXISTS set_audit_log_euid();
     DROP FUNCTION IF EXISTS tapdb_get_identity_prefix(TEXT);
     DROP FUNCTION IF EXISTS tapdb_validate_meridian_prefix(TEXT);
+    DROP FUNCTION IF EXISTS tapdb_validate_domain_code(TEXT);
+    DROP FUNCTION IF EXISTS tapdb_validate_app_code(TEXT);
+    DROP FUNCTION IF EXISTS tapdb_current_domain_code();
+    DROP FUNCTION IF EXISTS tapdb_current_app_code();
     DROP FUNCTION IF EXISTS tapdb_validate_sandbox_prefix(TEXT);
     DROP FUNCTION IF EXISTS tapdb_current_sandbox_prefix();
     DROP FUNCTION IF EXISTS meridian_generate_euid(TEXT, BIGINT, TEXT);
     DROP FUNCTION IF EXISTS meridian_generate_euid(TEXT, BIGINT);
+    DROP FUNCTION IF EXISTS meridian_euid_domain_code(TEXT);
     DROP FUNCTION IF EXISTS meridian_euid_sandbox_prefix(TEXT);
     DROP FUNCTION IF EXISTS meridian_euid_prefix(TEXT);
     DROP FUNCTION IF EXISTS meridian_euid_seq_from_euid(TEXT);
@@ -1161,17 +1141,15 @@ def db_nuke(
     DROP FUNCTION IF EXISTS update_modified_dt();
     """
 
-    success, output = _run_psql(env, sql=drop_sql)
+    success, psql_out = _run_psql(env, sql=drop_sql)
 
     if success:
         _log_operation(env.value, "NUKE", f"Deleted {total_rows} rows from all tables")
-        console.print("[green]✓[/green] TAPDB schema nuked successfully")
-        console.print(
-            f"\n  Recreate with: [cyan]tapdb db schema apply {env.value}[/cyan]"
-        )
+        ccyo_out.success("TAPDB schema nuked successfully")
+        ccyo_out.print_text(f"\n  Recreate with: [cyan]tapdb db schema apply {env.value}[/cyan]")
     else:
-        console.print(f"[red]✗[/red] Nuke failed:\n{output}")
-        _log_operation(env.value, "NUKE_FAILED", output[:200])
+        ccyo_out.error(f"Nuke failed:\n{psql_out}")
+        _log_operation(env.value, "NUKE_FAILED", psql_out[:200])
         raise typer.Exit(1)
 
 
@@ -1185,19 +1163,15 @@ def db_migrate(
     """Apply schema migrations/updates to the specified environment."""
     cfg = _get_db_config(env)
 
-    console.print(
-        f"\n[bold cyan]━━━ Migrate TAPDB Schema ({env.value}) ━━━[/bold cyan]"
-    )
+    ccyo_out.print_text(f"\n[bold cyan]━━━ Migrate TAPDB Schema ({env.value}) ━━━[/bold cyan]")
 
     # Check database and schema exist
     if not _check_db_exists(env, cfg["database"]):
-        console.print(f"[red]✗[/red] Database '{cfg['database']}' does not exist")
+        ccyo_out.error(f"Database '{cfg['database']}' does not exist")
         raise typer.Exit(1)
 
     if not _schema_exists(env):
-        console.print(
-            "[red]✗[/red] TAPDB schema not found. Use 'tapdb db schema apply' first."
-        )
+        ccyo_out.error("TAPDB schema not found. Use 'tapdb db schema apply' first.")
         raise typer.Exit(1)
 
     # Find migration files
@@ -1205,16 +1179,14 @@ def db_migrate(
     try:
         schema_root = _find_schema_root(required_subpath=Path("migrations"))
     except FileNotFoundError:
-        console.print(
-            f"[yellow]⚠[/yellow] No migrations directory found at {default_migrations_dir}"
-        )
-        console.print("[dim]Schema is up to date (no migrations to apply).[/dim]")
+        ccyo_out.warning(f"No migrations directory found at {default_migrations_dir}")
+        ccyo_out.print_text("[dim]Schema is up to date (no migrations to apply).[/dim]")
         return
     migrations_dir = schema_root / "migrations"
 
     migration_files = sorted(migrations_dir.glob("*.sql"))
     if not migration_files:
-        console.print("[dim]No migration files found. Schema is up to date.[/dim]")
+        ccyo_out.print_text("[dim]No migration files found. Schema is up to date.[/dim]")
         return
 
     # Track applied migrations
@@ -1228,13 +1200,13 @@ def db_migrate(
         """,
     )
     if not ok:
-        console.print(f"[red]✗[/red] Failed to ensure migrations table:\n{out}")
+        ccyo_out.error(f"Failed to ensure migrations table:\n{out}")
         raise typer.Exit(1)
 
     # Get already applied migrations (parse conservatively from default psql output)
-    success, output = _run_psql(env, sql="SELECT filename FROM _tapdb_migrations")
+    success, psql_out = _run_psql(env, sql="SELECT filename FROM _tapdb_migrations")
     applied = (
-        {ln.strip() for ln in output.splitlines() if ln.strip().endswith(".sql")}
+        {ln.strip() for ln in psql_out.splitlines() if ln.strip().endswith(".sql")}
         if success
         else set()
     )
@@ -1242,20 +1214,20 @@ def db_migrate(
     pending = [f for f in migration_files if f.name not in applied]
 
     if not pending:
-        console.print("[green]✓[/green] All migrations already applied")
+        ccyo_out.success("All migrations already applied")
         return
 
-    console.print(f"[yellow]►[/yellow] {len(pending)} migration(s) pending:")
+    ccyo_out.warning(f"► {len(pending)} migration(s) pending:")
     for mf in pending:
-        console.print(f"  • {mf.name}")
+        ccyo_out.print_text(f"  • {mf.name}")
 
     if dry_run:
-        console.print("\n[dim]Dry run - no changes made.[/dim]")
+        ccyo_out.print_text("\n[dim]Dry run - no changes made.[/dim]")
         return
 
     for mf in pending:
-        console.print(f"\n[yellow]►[/yellow] Applying {mf.name}...")
-        success, output = _run_psql(env, file=mf)
+        ccyo_out.warning(f"\n► Applying {mf.name}...")
+        success, psql_out = _run_psql(env, file=mf)
 
         if success:
             # Record migration
@@ -1267,20 +1239,20 @@ def db_migrate(
                     f"VALUES ('{filename}') ON CONFLICT (filename) DO NOTHING"
                 ),
             )
-            console.print(f"[green]✓[/green] {mf.name} applied")
+            ccyo_out.success(f"{mf.name} applied")
             _log_operation(env.value, "MIGRATE", mf.name)
         else:
-            console.print(f"[red]✗[/red] Migration failed:\n{output}")
-            _log_operation(env.value, "MIGRATE_FAILED", f"{mf.name}: {output[:100]}")
+            ccyo_out.error(f"Migration failed:\n{psql_out}")
+            _log_operation(env.value, "MIGRATE_FAILED", f"{mf.name}: {psql_out[:100]}")
             raise typer.Exit(1)
 
-    console.print("\n[green]✓[/green] All migrations applied successfully")
+    ccyo_out.success("\nAll migrations applied successfully")
 
 
 @data_app.command("backup")
 def db_backup(
     env: Environment = typer.Argument(..., help="Target environment"),
-    output: Optional[Path] = typer.Option(
+    backup_path: Optional[Path] = typer.Option(
         None, "--output", "-o", help="Output file path"
     ),
     data_only: bool = typer.Option(
@@ -1290,16 +1262,16 @@ def db_backup(
     """Backup TAPDB data from the specified environment."""
     cfg = _get_db_config(env)
 
-    console.print(f"\n[bold cyan]━━━ Backup TAPDB ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"\n[bold cyan]━━━ Backup TAPDB ({env.value}) ━━━[/bold cyan]")
 
     if not _check_db_exists(env, cfg["database"]):
-        console.print(f"[red]✗[/red] Database '{cfg['database']}' does not exist")
+        ccyo_out.error(f"Database '{cfg['database']}' does not exist")
         raise typer.Exit(1)
 
     # Generate output filename
-    if output is None:
+    if backup_path is None:
         timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-        output = Path(f"tapdb_{env.value}_{timestamp}.sql")
+        backup_path = Path(f"tapdb_{env.value}_{timestamp}.sql")
 
     # Build pg_dump command
     cmd = [
@@ -1313,7 +1285,7 @@ def db_backup(
         "-d",
         cfg["database"],
         "-f",
-        str(output),
+        str(backup_path),
         "--no-owner",
         "--no-privileges",
     ]
@@ -1336,28 +1308,26 @@ def db_backup(
     if cfg["password"]:
         env_vars["PGPASSWORD"] = cfg["password"]
 
-    console.print("[yellow]►[/yellow] Creating backup...")
+    ccyo_out.warning("► Creating backup...")
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, env=env_vars)
 
         if result.returncode == 0:
-            file_size = output.stat().st_size
+            file_size = backup_path.stat().st_size
             size_str = (
                 f"{file_size / 1024:.1f} KB"
                 if file_size > 1024
                 else f"{file_size} bytes"
             )
 
-            _log_operation(env.value, "BACKUP", str(output))
-            console.print(f"[green]✓[/green] Backup created: {output} ({size_str})")
+            _log_operation(env.value, "BACKUP", str(backup_path))
+            ccyo_out.success(f"Backup created: {backup_path} ({size_str})")
         else:
-            console.print(f"[red]✗[/red] Backup failed:\n{result.stderr}")
+            ccyo_out.error(f"Backup failed:\n{result.stderr}")
             raise typer.Exit(1)
     except FileNotFoundError:
-        console.print(
-            "[red]✗[/red] pg_dump not found. Please install PostgreSQL client."
-        )
+        ccyo_out.error("pg_dump not found. Please install PostgreSQL client.")
         raise typer.Exit(1)
 
 
@@ -1370,10 +1340,10 @@ def db_restore(
     """Restore TAPDB data from a backup file."""
     cfg = _get_db_config(env)
 
-    console.print(f"\n[bold cyan]━━━ Restore TAPDB ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"\n[bold cyan]━━━ Restore TAPDB ({env.value}) ━━━[/bold cyan]")
 
     if not input_file.exists():
-        console.print(f"[red]✗[/red] Backup file not found: {input_file}")
+        ccyo_out.error(f"Backup file not found: {input_file}")
         raise typer.Exit(1)
 
     file_size = input_file.stat().st_size
@@ -1381,40 +1351,38 @@ def db_restore(
         f"{file_size / 1024:.1f} KB" if file_size > 1024 else f"{file_size} bytes"
     )
 
-    console.print(f"  File:     {input_file} ({size_str})")
-    console.print(f"  Target:   {cfg['database']} ({env.value})")
+    ccyo_out.print_text(f"  File:     {input_file} ({size_str})")
+    ccyo_out.print_text(f"  Target:   {cfg['database']} ({env.value})")
 
     if not force:
-        console.print(
-            "\n[yellow]⚠[/yellow] This will overwrite"
-            f" existing data in {cfg['database']}"
-        )
+        ccyo_out.warning("\nThis will overwrite"
+            f" existing data in {cfg['database']}")
         if not Confirm.ask("  Proceed?", default=False):
-            console.print("[dim]Aborted.[/dim]")
+            ccyo_out.print_text("[dim]Aborted.[/dim]")
             return
 
     # Ensure database exists
     if not _check_db_exists(env, cfg["database"]):
-        console.print(f"[red]✗[/red] Database '{cfg['database']}' does not exist")
-        console.print(f"  Create with: [cyan]tapdb db create {env.value}[/cyan]")
+        ccyo_out.error(f"Database '{cfg['database']}' does not exist")
+        ccyo_out.print_text(f"  Create with: [cyan]tapdb db create {env.value}[/cyan]")
         raise typer.Exit(1)
 
-    console.print("[yellow]►[/yellow] Restoring from backup...")
+    ccyo_out.warning("► Restoring from backup...")
 
-    success, output = _run_psql(env, file=input_file)
+    success, psql_out = _run_psql(env, file=input_file)
 
     if success:
         _log_operation(env.value, "RESTORE", str(input_file))
-        console.print("[green]✓[/green] Restore completed")
+        ccyo_out.success("Restore completed")
 
         # Show counts
         counts = _get_table_counts(env)
-        console.print("\n[bold]Restored data:[/bold]")
+        ccyo_out.print_text("\n[bold]Restored data:[/bold]")
         for table, count in counts.items():
-            console.print(f"  {table}: {count} rows")
+            ccyo_out.print_text(f"  {table}: {count} rows")
     else:
-        console.print(f"[red]✗[/red] Restore failed:\n{output}")
-        _log_operation(env.value, "RESTORE_FAILED", output[:200])
+        ccyo_out.error(f"Restore failed:\n{psql_out}")
+        _log_operation(env.value, "RESTORE_FAILED", psql_out[:200])
         raise typer.Exit(1)
 
 
@@ -1470,7 +1438,7 @@ def db_validate_config(
     try:
         config_dirs = _resolve_seed_config_dirs(config_path)
     except FileNotFoundError as e:
-        console.print(f"[red]✗[/red] {e}")
+        ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
     templates, issues = _validate_template_configs(config_dirs, strict=strict)
@@ -1495,15 +1463,15 @@ def db_validate_config(
                 for i in issues
             ],
         }
-        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        ccyo_out.print_text(json.dumps(payload, indent=2, sort_keys=True))
         raise typer.Exit(1 if errors else 0)
 
     mode = "strict" if strict else "non-strict"
-    console.print(f"\n[bold cyan]━━━ Validate Template Config ({mode}) ━━━[/bold cyan]")
-    console.print("  Config directories:")
+    ccyo_out.print_text(f"\n[bold cyan]━━━ Validate Template Config ({mode}) ━━━[/bold cyan]")
+    ccyo_out.print_text("  Config directories:")
     for directory in config_dirs:
-        console.print(f"    - [dim]{directory}[/dim]")
-    console.print(f"  Templates loaded: {len(templates)}")
+        ccyo_out.print_text(f"    - [dim]{directory}[/dim]")
+    ccyo_out.print_text(f"  Templates loaded: {len(templates)}")
 
     if issues:
         # Use folding for long messages so validation details are not truncated
@@ -1521,16 +1489,14 @@ def db_validate_config(
                 i.template_code or "",
                 i.message,
             )
-        console.print(table)
+        ccyo_out.print_text(table)
 
     if errors:
-        console.print(
-            f"\n[red]✗[/red] Validation failed:"
+        ccyo_out.error(f"\nValidation failed:"
             f" {len(errors)} error(s),"
-            f" {len(warnings)} warning(s)"
-        )
+            f" {len(warnings)} warning(s)")
         raise typer.Exit(1)
-    console.print(f"\n[green]✓[/green] Validation OK: {len(warnings)} warning(s)")
+    ccyo_out.success(f"\nValidation OK: {len(warnings)} warning(s)")
 
 
 def _template_code(template: dict) -> str:
@@ -1580,13 +1546,11 @@ def _tapdb_connection_for_env(
 def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool:
     """Create default actor-backed tapdb_admin user for development flows."""
     if not insecure_dev_defaults:
-        console.print(
-            "  [dim]○[/dim] Skipping default admin"
-            " creation (use --insecure-dev-defaults)"
-        )
+        ccyo_out.print_text("  Skipping default admin"
+            " creation (use --insecure-dev-defaults)")
         return False
     if env == Environment.prod:
-        console.print("  [red]✗[/red] Refusing to create default admin in prod")
+        ccyo_out.error("  Refusing to create default admin in prod")
         return False
 
     from daylily_tapdb.cli.user import _hash_password
@@ -1627,12 +1591,12 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
                     cognito_username="tapdb_admin",
                 )
         if created:
-            console.print("  [green]✓[/green] Created admin user: tapdb_admin")
+            ccyo_out.success("  Created admin user: tapdb_admin")
             return True
-        console.print(f"  [green]✓[/green] Admin user already exists ({user.username})")
+        ccyo_out.success(f"  Admin user already exists ({user.username})")
         return False
     except Exception as e:
-        console.print(f"  [red]✗[/red] Failed to create admin user: {e}")
+        ccyo_out.error(f"  Failed to create admin user: {e}")
         return False
 
 
@@ -1668,80 +1632,68 @@ def db_seed(
     cfg = _get_db_config(env)
 
     mode = "core + optional packs" if include_workflow else "core only"
-    console.print(
-        f"\n[bold cyan]━━━ Seed TAPDB Templates ({env.value}) ━━━[/bold cyan]"
-    )
-    console.print(f"  Mode: {mode}")
-    console.print(f"  Core categories: {', '.join(sorted(CORE_CATEGORIES))}")
+    ccyo_out.print_text(f"\n[bold cyan]━━━ Seed TAPDB Templates ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"  Mode: {mode}")
+    ccyo_out.print_text(f"  Core categories: {', '.join(sorted(CORE_CATEGORIES))}")
     if include_workflow and OPTIONAL_CATEGORIES:
-        console.print(
-            f"  Optional categories: {', '.join(sorted(OPTIONAL_CATEGORIES))}"
-        )
+        ccyo_out.print_text(f"  Optional categories: {', '.join(sorted(OPTIONAL_CATEGORIES))}")
 
     # Resolve config directories (always include TAPDB core config first)
     try:
         seed_config_dirs = _resolve_seed_config_dirs(config_path)
     except FileNotFoundError as e:
-        console.print(f"[red]✗[/red] {e}")
+        ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
-    console.print("[green]✓[/green] Seed config directories:")
+    ccyo_out.success("Seed config directories:")
     for directory in seed_config_dirs:
-        console.print(f"  - {directory}")
+        ccyo_out.print_text(f"  - {directory}")
 
     # Check database and schema exist
     if not _check_db_exists(env, cfg["database"]):
-        console.print(f"[red]✗[/red] Database '{cfg['database']}' does not exist")
-        console.print(f"  Create with: [cyan]tapdb db create {env.value}[/cyan]")
+        ccyo_out.error(f"Database '{cfg['database']}' does not exist")
+        ccyo_out.print_text(f"  Create with: [cyan]tapdb db create {env.value}[/cyan]")
         raise typer.Exit(1)
 
     if not _schema_exists(env):
-        console.print("[red]✗[/red] TAPDB schema not found")
-        console.print(
-            f"  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]"
-        )
+        ccyo_out.error("TAPDB schema not found")
+        ccyo_out.print_text(f"  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]")
         raise typer.Exit(1)
 
-    console.print("[yellow]►[/yellow] Loading template configurations...")
+    ccyo_out.warning("► Loading template configurations...")
     templates, issues = _validate_template_configs(seed_config_dirs, strict=True)
     errors = [issue for issue in issues if issue.level == "error"]
     warnings = [issue for issue in issues if issue.level == "warning"]
     if warnings:
         for issue in warnings:
-            console.print(
-                f"  [yellow]⚠[/yellow] {issue.message}"
-                + (f" [dim]({issue.source_file})[/dim]" if issue.source_file else "")
-            )
+            ccyo_out.warning(f"  {issue.message}"
+                + (f" ({issue.source_file})" if issue.source_file else ""))
     if errors:
-        console.print("[red]✗[/red] Template config validation failed:")
+        ccyo_out.error("Template config validation failed:")
         for issue in errors:
             detail = issue.message
             if issue.source_file:
                 detail += f" ({issue.source_file})"
             if issue.template_code:
                 detail += f" [{issue.template_code}]"
-            console.print(f"  • {detail}")
+            ccyo_out.print_text(f"  • {detail}")
         raise typer.Exit(1)
 
     if not templates:
-        console.print(
-            "[yellow]⚠[/yellow] No templates found in configured seed directories"
-        )
+        ccyo_out.warning("No templates found in configured seed directories")
         return
 
     duplicates = _find_duplicate_template_keys(templates)
     if duplicates:
-        console.print(
-            "[red]✗[/red] Duplicate template keys detected across seed configs. "
-            "Aborting to prevent clashing templates:"
-        )
+        ccyo_out.error("Duplicate template keys detected across seed configs. "
+            "Aborting to prevent clashing templates:")
         for key, sources in sorted(duplicates.items()):
-            console.print(f"  • {key}")
+            ccyo_out.print_text(f"  • {key}")
             for source in sources:
-                console.print(f"      - {source}")
+                ccyo_out.print_text(f"      - {source}")
         raise typer.Exit(1)
 
-    console.print(f"[green]✓[/green] Found {len(templates)} template(s)")
+    ccyo_out.success(f"Found {len(templates)} template(s)")
 
     # Group by category for display
     by_type = {}
@@ -1749,18 +1701,18 @@ def db_seed(
         st = t.get("category", "unknown")
         by_type.setdefault(st, []).append(t)
 
-    console.print("\n[bold]Templates by category:[/bold]")
+    ccyo_out.print_text("\n[bold]Templates by category:[/bold]")
     for st, tlist in sorted(by_type.items()):
-        console.print(f"  {st}: {len(tlist)}")
+        ccyo_out.print_text(f"  {st}: {len(tlist)}")
 
     if dry_run:
-        console.print("\n[bold]Templates to seed:[/bold]")
+        ccyo_out.print_text("\n[bold]Templates to seed:[/bold]")
         for t in templates:
-            console.print(f"  • {_template_code(t)} ({t.get('name', '')})")
-        console.print("\n[dim]Dry run - no changes made.[/dim]")
+            ccyo_out.print_text(f"  • {_template_code(t)} ({t.get('name', '')})")
+        ccyo_out.print_text("\n[dim]Dry run - no changes made.[/dim]")
         return
 
-    console.print("\n[yellow]►[/yellow] Seeding templates...")
+    ccyo_out.warning("\n► Seeding templates...")
     overwrite = not skip_existing
     failed = 0
     try:
@@ -1777,16 +1729,16 @@ def db_seed(
                     core_instance_prefix=str(_get_db_config(env)["core_euid_prefix"]),
                 )
     except Exception as exc:
-        console.print(f"[red]✗[/red] Template seed failed: {exc}")
+        ccyo_out.error(f"Template seed failed: {exc}")
         raise typer.Exit(1) from exc
 
     # Summary
-    console.print("\n[bold]Seed Summary:[/bold]")
-    console.print(f"  [green]Inserted:[/green] {summary.inserted}")
+    ccyo_out.print_text("\n[bold]Seed Summary:[/bold]")
+    ccyo_out.print_text(f"  [green]Inserted:[/green] {summary.inserted}")
     if summary.updated:
-        console.print(f"  [yellow]Updated:[/yellow]  {summary.updated}")
-    console.print(f"  [dim]Skipped:[/dim]  {summary.skipped}")
-    console.print(f"  [dim]Prefixes ensured:[/dim] {summary.prefixes_ensured}")
+        ccyo_out.warning(f"  Updated:  {summary.updated}")
+    ccyo_out.print_text(f"  [dim]Skipped:[/dim]  {summary.skipped}")
+    ccyo_out.print_text(f"  [dim]Prefixes ensured:[/dim] {summary.prefixes_ensured}")
 
     _log_operation(
         env.value,
@@ -1833,32 +1785,32 @@ def db_setup(
     is_aurora = cfg.get("engine_type") == "aurora"
 
     mode = "core + optional packs" if include_workflow else "core only"
-    console.print(f"\n[bold cyan]━━━ TAPDB Full Setup ({env.value}) ━━━[/bold cyan]")
-    console.print(f"  Database: {cfg['database']}")
-    console.print(f"  Host:     {cfg['host']}:{cfg['port']}")
+    ccyo_out.print_text(f"\n[bold cyan]━━━ TAPDB Full Setup ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(f"  Database: {cfg['database']}")
+    ccyo_out.print_text(f"  Host:     {cfg['host']}:{cfg['port']}")
     if is_aurora:
-        console.print("  Engine:   [bold yellow]Aurora PostgreSQL[/bold yellow]")
-        console.print(f"  Region:   {cfg.get('region', 'us-west-2')}")
-        console.print("  SSL:      verify-full (enforced)")
-    console.print(f"  Seed mode: {mode}")
+        ccyo_out.warning("  Engine:   Aurora PostgreSQL")
+        ccyo_out.print_text(f"  Region:   {cfg.get('region', 'us-west-2')}")
+        ccyo_out.print_text("  SSL:      verify-full (enforced)")
+    ccyo_out.print_text(f"  Seed mode: {mode}")
 
     # Step 1: Ensure database exists
-    console.print("\n[bold]Step 1/5: Ensure Database[/bold]")
+    ccyo_out.print_text("\n[bold]Step 1/5: Ensure Database[/bold]")
     if force and not is_aurora and _check_db_exists(env, cfg["database"]):
-        console.print("  [yellow]►[/yellow] --force requested; recreating database")
+        ccyo_out.warning("  ► --force requested; recreating database")
         db_delete(env, force=True)
     db_create(env, owner=None)
 
     # Step 2: Apply schema
-    console.print("\n[bold]Step 2/5: Apply Schema[/bold]")
+    ccyo_out.print_text("\n[bold]Step 2/5: Apply Schema[/bold]")
     db_schema_apply(env, reinitialize=force)
 
     # Step 3: Apply migrations
-    console.print("\n[bold]Step 3/5: Apply Migrations[/bold]")
+    ccyo_out.print_text("\n[bold]Step 3/5: Apply Migrations[/bold]")
     db_migrate(env, dry_run=False)
 
     # Step 4: Seed templates
-    console.print("\n[bold]Step 4/5: Seed Templates[/bold]")
+    ccyo_out.print_text("\n[bold]Step 4/5: Seed Templates[/bold]")
     db_seed(
         env,
         config_path=None,
@@ -1868,20 +1820,20 @@ def db_setup(
     )
 
     # Step 5: Create default admin user
-    console.print("\n[bold]Step 5/5: Create Admin User[/bold]")
+    ccyo_out.print_text("\n[bold]Step 5/5: Create Admin User[/bold]")
     created_admin = _create_default_admin(
         env, insecure_dev_defaults=insecure_dev_defaults
     )
 
     # Summary
-    console.print("\n[bold green]✓ TAPDB setup complete![/bold green]")
-    console.print("\n[bold]Connection string:[/bold]")
-    console.print(f"  {_get_connection_string(env)}")
+    ccyo_out.success("\n✓ TAPDB setup complete!")
+    ccyo_out.print_text("\n[bold]Connection string:[/bold]")
+    ccyo_out.print_text(f"  {_get_connection_string(env)}")
     if created_admin:
-        console.print("\n[bold yellow]⚠ Default admin credentials:[/bold yellow]")
-        console.print("  Username: [cyan]tapdb_admin[/cyan]")
-        console.print("  Password: [cyan]passw0rd[/cyan]")
-        console.print("  [dim](Password change required on first login)[/dim]")
+        ccyo_out.warning("\n⚠ Default admin credentials:")
+        ccyo_out.print_text("  Username: [cyan]tapdb_admin[/cyan]")
+        ccyo_out.print_text("  Password: [cyan]passw0rd[/cyan]")
+        ccyo_out.print_text("  [dim](Password change required on first login)[/dim]")
 
     _log_operation(env.value, "SETUP", "Full setup completed")
 

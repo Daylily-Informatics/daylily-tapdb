@@ -51,8 +51,12 @@ class tapdb_core(Base):
     euid_prefix = Column(Text, nullable=False, server_default=FetchedValue())
     euid_seq = Column(BIGINT, nullable=False, server_default=FetchedValue())
 
-    # Tenant scoping (nullable for transition; enforced via RLS/policies later)
+    # Tenant scoping (nullable — some operations may not have a tenanted user)
     tenant_id = Column(UUID(as_uuid=True), nullable=True)
+
+    # Domain/app scoping (populated from session context on INSERT via trigger)
+    domain_code = Column(Text, nullable=False, server_default=FetchedValue())
+    issuer_app_code = Column(Text, nullable=False, server_default=FetchedValue())
 
     # Application-managed display name
     name = Column(Text, nullable=False)

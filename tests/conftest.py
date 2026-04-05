@@ -1,8 +1,22 @@
 """Pytest configuration for daylily-tapdb tests."""
 
+from __future__ import annotations
+
+import os
+import shutil
+import signal
+import subprocess
+import time
+from pathlib import Path
 from urllib.parse import quote
 
 import pytest
+import yaml
+
+# ---------------------------------------------------------------------------
+# Port used by the ephemeral PostgreSQL test instance
+# ---------------------------------------------------------------------------
+TAPDB_TEST_PG_PORT = 15438
 
 
 def pytest_addoption(parser):
@@ -50,3 +64,143 @@ def euid_config():
     from daylily_tapdb.euid import EUIDConfig
 
     return EUIDConfig()
+
+
+# ---------------------------------------------------------------------------
+# Ephemeral PostgreSQL fixture (session-scoped)
+# ---------------------------------------------------------------------------
+
+def _wait_for_pg(port: int, timeout: float = 15.0) -> bool:
+    """Block until pg_isready succeeds or *timeout* seconds elapse."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            r = subprocess.run(
+                ["pg_isready", "-h", "localhost", "-p", str(port)],
+                capture_output=True, timeout=3,
+            )
+            if r.returncode == 0:
+                return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        time.sleep(0.3)
+    return False
+
+
+@pytest.fixture(scope="session")
+def pg_instance(tmp_path_factory):
+    """Spin up an ephemeral PostgreSQL cluster on port TAPDB_TEST_PG_PORT.
+
+    Yields a dict:
+        port       – int
+        data_dir   – Path
+        config_path – Path  (valid tapdb config YAML)
+        user       – str
+        database   – str
+        dsn        – str  (SQLAlchemy URL)
+
+    Cleanup: pg_ctl stop + rm data dir.
+    """
+    pg_ctl = shutil.which("pg_ctl")
+    initdb_bin = shutil.which("initdb")
+    createdb_bin = shutil.which("createdb")
+    if not all([pg_ctl, initdb_bin, createdb_bin]):
+        pytest.skip("PostgreSQL binaries (pg_ctl, initdb, createdb) not on PATH")
+
+    port = TAPDB_TEST_PG_PORT
+    base = tmp_path_factory.mktemp("tapdb_pg")
+    data_dir = base / "data"
+    # macOS limits Unix socket paths to 104 chars — use /tmp for short path
+    socket_dir = Path(f"/tmp/tapdb_test_pg_{os.getpid()}")
+    socket_dir.mkdir(exist_ok=True)
+    log_file = base / "postgresql.log"
+
+    # --- initdb ---
+    subprocess.run(
+        [initdb_bin, "-D", str(data_dir), "--no-locale", "-E", "UTF8", "-A", "trust"],
+        check=True, capture_output=True,
+    )
+
+    # --- start ---
+    options = (
+        f"-p {port} "
+        f"-k {socket_dir} "
+        f"-c listen_addresses=localhost "
+        f"-c unix_socket_directories='{socket_dir}' "
+        f"-c logging_collector=off"
+    )
+    subprocess.run(
+        [pg_ctl, "start", "-D", str(data_dir), "-l", str(log_file), "-o", options],
+        check=True, capture_output=True,
+    )
+
+    if not _wait_for_pg(port):
+        # dump the log for debugging
+        print(log_file.read_text())
+        raise RuntimeError(f"PostgreSQL did not start on port {port}")
+
+    user = os.environ.get("USER", "postgres")
+    database = "tapdb_test_integ"
+
+    # --- create database ---
+    subprocess.run(
+        [createdb_bin, "-h", "localhost", "-p", str(port), "-U", user, database],
+        check=True, capture_output=True,
+    )
+
+    # --- write tapdb config ---
+    cfg_dir = base / ".config" / "tapdb" / "testclient" / "testdb"
+    cfg_dir.mkdir(parents=True)
+    cfg_path = cfg_dir / "tapdb-config.yaml"
+    cfg_data = {
+        "meta": {
+            "config_version": 3,
+            "client_id": "testclient",
+            "database_name": "testdb",
+            "euid_client_code": "C",
+        },
+        "environments": {
+            "dev": {
+                "engine_type": "local",
+                "host": "localhost",
+                "port": port,
+                "ui_port": 18911,
+                "user": user,
+                "password": "",
+                "database": database,
+                "audit_log_euid_prefix": "CGX",
+            },
+        },
+    }
+    cfg_path.write_text(yaml.safe_dump(cfg_data), encoding="utf-8")
+    os.chmod(cfg_path, 0o600)
+
+    # Construct a postgres_dir layout that matches what pg.py expects
+    pg_runtime = cfg_dir / "dev" / "postgres"
+    pg_runtime.mkdir(parents=True, exist_ok=True)
+    # Symlink data and run dirs so CLI pg commands find them
+    (pg_runtime / "data").symlink_to(data_dir)
+    run_link = pg_runtime / "run"
+    run_link.symlink_to(socket_dir)
+
+    dsn = f"postgresql://{user}:@localhost:{port}/{database}"
+
+    yield {
+        "port": port,
+        "data_dir": data_dir,
+        "socket_dir": socket_dir,
+        "config_path": cfg_path,
+        "config_dir": cfg_dir,
+        "user": user,
+        "database": database,
+        "dsn": dsn,
+        "base": base,
+    }
+
+    # --- teardown ---
+    subprocess.run(
+        [pg_ctl, "stop", "-D", str(data_dir), "-m", "immediate"],
+        capture_output=True,
+    )
+    # Clean up short-path socket dir
+    shutil.rmtree(socket_dir, ignore_errors=True)

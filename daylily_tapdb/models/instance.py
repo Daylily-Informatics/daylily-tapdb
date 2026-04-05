@@ -8,6 +8,7 @@ Instances are concrete objects created from templates.
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import BIGINT, Column, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import backref, relationship
 
 from daylily_tapdb.models.base import tapdb_core
@@ -19,6 +20,7 @@ class generic_instance(tapdb_core):
 
     Instances have:
     - template_uid: Reference to the template this instance was created from
+    - machine_uuid: UUIDv7 for external API idempotency (UNIQUE on this table only)
     - Lineage relationships: parent_of_lineages and child_of_lineages
 
     Polymorphic inheritance allows typed subclasses (workflow_instance, etc.)
@@ -33,6 +35,9 @@ class generic_instance(tapdb_core):
         # a matched rowcount.
         "confirm_deleted_rows": False,
     }
+
+    # Override base class column to add UNIQUE constraint on this table only
+    machine_uuid = Column(UUID(as_uuid=True), unique=True, nullable=True)
 
     template_uid = Column(BIGINT, ForeignKey("generic_template.uid"), nullable=False)
 

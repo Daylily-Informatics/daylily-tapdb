@@ -44,17 +44,17 @@ def test_set_session_username_logs_and_swallows_execute_error(monkeypatch, caplo
         conn._set_session_username(BadSession())
 
 
-def test_set_session_sandbox_prefix_executes_for_postgresql(monkeypatch):
+def test_set_session_domain_code_executes_for_postgresql(monkeypatch):
     from daylily_tapdb import connection as m
 
-    monkeypatch.delenv("MERIDIAN_SANDBOX_PREFIX", raising=False)
+    monkeypatch.delenv("MERIDIAN_DOMAIN_CODE", raising=False)
     monkeypatch.setattr(
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
 
-    captured: dict[str, object] = {}
+    stmts: list[str] = []
 
     class Sess:
         def __init__(self):
@@ -63,15 +63,14 @@ def test_set_session_sandbox_prefix_executes_for_postgresql(monkeypatch):
             )
 
         def execute(self, stmt, params=None):
-            captured["stmt"] = str(stmt)
-            captured["params"] = params
+            stmts.append(str(stmt))
 
-    conn._set_session_sandbox_prefix(Sess(), local=True)
-    assert captured["stmt"] == "SET LOCAL session.current_sandbox_prefix = :prefix"
-    assert captured["params"] == {"prefix": "T"}
+    conn._set_session_domain_code(Sess(), local=True)
+    assert any("current_domain_code" in s for s in stmts)
+    assert any("current_app_code" in s for s in stmts)
 
 
-def test_set_session_sandbox_prefix_skips_non_postgresql(monkeypatch):
+def test_set_session_domain_code_skips_non_postgresql(monkeypatch):
     from daylily_tapdb import connection as m
 
     monkeypatch.setattr(
@@ -91,7 +90,7 @@ def test_set_session_sandbox_prefix_skips_non_postgresql(monkeypatch):
         def execute(self, *_a, **_k):
             calls["execute"] += 1
 
-    conn._set_session_sandbox_prefix(Sess(), local=True)
+    conn._set_session_domain_code(Sess(), local=True)
     assert calls["execute"] == 0
 
 

@@ -44,7 +44,6 @@ def get_config_paths(
     config_path: Optional[str | Path] = None,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
-    allow_namespace_fallback: bool = False,
 ) -> list[Path]:
     """Return ordered TAPDB config paths for the active namespace context."""
     override = config_path or active_config_path()
@@ -55,15 +54,10 @@ def get_config_paths(
         require_keys=False,
         client_id=client_id,
         database_name=database_name,
-        allow_namespace_fallback=allow_namespace_fallback,
     )
     if ctx:
         return [ctx.config_path()]
 
-    if allow_namespace_fallback:
-        raise RuntimeError(
-            "TapDB namespace is required. Set --client-id/--database-name."
-        )
     raise RuntimeError("TapDB config path is required. Set --config.")
 
 
@@ -72,14 +66,12 @@ def get_config_path(
     config_path: Optional[str | Path] = None,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
-    allow_namespace_fallback: bool = False,
 ) -> Path:
     """Return effective config path (existing file preferred)."""
     paths = get_config_paths(
         config_path=config_path,
         client_id=client_id,
         database_name=database_name,
-        allow_namespace_fallback=allow_namespace_fallback,
     )
     for p in paths:
         if p.exists():
@@ -121,13 +113,11 @@ def _load_config_with_path(
     config_path: Optional[str | Path] = None,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
-    allow_namespace_fallback: bool = False,
 ) -> tuple[dict[str, Any], Path, bool]:
     paths = get_config_paths(
         config_path=config_path,
         client_id=client_id,
         database_name=database_name,
-        allow_namespace_fallback=allow_namespace_fallback,
     )
     for path in paths:
         if path.exists():
@@ -177,25 +167,21 @@ def get_db_config_for_env(
     config_path: Optional[str | Path] = None,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
-    allow_namespace_fallback: bool = False,
 ) -> dict[str, str]:
     """Resolve DB config for an environment name (dev/test/prod/aurora_*)."""
     env_key = env_name.lower()
-    use_namespace_fallback = True if config_path is None else allow_namespace_fallback
     ctx = resolve_context(
         require_keys=True,
         client_id=client_id,
         database_name=database_name,
         env_name=env_key,
         config_path=config_path,
-        allow_namespace_fallback=use_namespace_fallback,
     )
 
     root, resolved_config_path, config_exists = _load_config_with_path(
         config_path=config_path,
         client_id=ctx.client_id,
         database_name=ctx.database_name,
-        allow_namespace_fallback=use_namespace_fallback,
     )
 
     if not config_exists:
@@ -367,7 +353,6 @@ def get_admin_settings_for_env(
     config_path: Optional[str | Path] = None,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
-    allow_namespace_fallback: bool = False,
 ) -> dict[str, Any]:
     """Resolve normalized admin/UI settings from the active TapDB config."""
     env_key = str(env_name or "").strip().lower()
@@ -379,13 +364,11 @@ def get_admin_settings_for_env(
         config_path=config_path,
         client_id=client_id,
         database_name=database_name,
-        allow_namespace_fallback=allow_namespace_fallback,
     )
     root, resolved_config_path, config_exists = _load_config_with_path(
         config_path=config_path,
         client_id=cfg.get("client_id"),
         database_name=cfg.get("database_name"),
-        allow_namespace_fallback=allow_namespace_fallback,
     )
     if not config_exists:
         raise RuntimeError(f"No TAPDB config found at {resolved_config_path}.")

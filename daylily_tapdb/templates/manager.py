@@ -41,7 +41,12 @@ class TemplateManager:
         self._template_euid_cache: Dict[str, Any] = {}
 
     def get_template(
-        self, session: Session, template_code: str
+        self,
+        session: Session,
+        template_code: str,
+        *,
+        domain_code: Optional[str] = None,
+        issuer_app_code: Optional[str] = None,
     ) -> Optional[generic_template]:
         """
         Get a template by its code string.
@@ -51,11 +56,14 @@ class TemplateManager:
 
         Args:
             template_code: Template code string.
+            domain_code: Filter by domain code (narrows lookup).
+            issuer_app_code: Filter by issuer app code (narrows lookup).
 
         Returns:
             The template object, or None if not found.
         """
-        cached_uid = self._template_uid_cache.get(template_code)
+        cache_key = f"{domain_code or ''}:{issuer_app_code or ''}:{template_code}"
+        cached_uid = self._template_uid_cache.get(cache_key)
         if cached_uid is not None:
             tmpl = session.get(generic_template, cached_uid)
             if tmpl is not None and tmpl.is_deleted is False:
@@ -69,20 +77,22 @@ class TemplateManager:
 
         category, type_, subtype, version = parts
 
-        template = (
-            session.query(generic_template)
-            .filter(
-                generic_template.category == category,
-                generic_template.type == type_,
-                generic_template.subtype == subtype,
-                generic_template.version == version,
-                generic_template.is_deleted.is_(False),
-            )
-            .first()
+        query = session.query(generic_template).filter(
+            generic_template.category == category,
+            generic_template.type == type_,
+            generic_template.subtype == subtype,
+            generic_template.version == version,
+            generic_template.is_deleted.is_(False),
         )
+        if domain_code is not None:
+            query = query.filter(generic_template.domain_code == domain_code)
+        if issuer_app_code is not None:
+            query = query.filter(generic_template.issuer_app_code == issuer_app_code)
+
+        template = query.first()
 
         if template:
-            self._template_uid_cache[template_code] = template.uid
+            self._template_uid_cache[cache_key] = template.uid
             self._template_euid_cache[template.euid] = template.uid
 
         return template
@@ -128,6 +138,8 @@ class TemplateManager:
         category: Optional[str] = None,
         type_: Optional[str] = None,
         include_deleted: bool = False,
+        domain_code: Optional[str] = None,
+        issuer_app_code: Optional[str] = None,
     ) -> List[generic_template]:
         """
         List templates with optional filtering.
@@ -136,6 +148,8 @@ class TemplateManager:
             category: Filter by category.
             type_: Filter by type.
             include_deleted: Include soft-deleted templates.
+            domain_code: Filter by domain code.
+            issuer_app_code: Filter by issuer app code.
 
         Returns:
             List of matching templates.
@@ -148,6 +162,10 @@ class TemplateManager:
             query = query.filter(generic_template.category == category)
         if type_:
             query = query.filter(generic_template.type == type_)
+        if domain_code is not None:
+            query = query.filter(generic_template.domain_code == domain_code)
+        if issuer_app_code is not None:
+            query = query.filter(generic_template.issuer_app_code == issuer_app_code)
 
         return query.all()
 

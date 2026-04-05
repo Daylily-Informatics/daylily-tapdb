@@ -160,14 +160,12 @@ def resolve_context(
     database_name: Optional[str] = None,
     env_name: Optional[str] = None,
     config_path: Optional[str | Path] = None,
-    allow_namespace_fallback: bool = False,
 ) -> Optional[TapdbContext]:
-    """Resolve TAPDB namespace context from explicit config or namespace input.
+    """Resolve TAPDB namespace context from config metadata.
 
-    Precedence:
-    1. Explicit config path / active CLI config path metadata
-    2. Explicit namespace args or active CLI namespace context when
-       ``allow_namespace_fallback`` is enabled
+    The config file's metadata section must contain ``client_id`` and
+    ``database_name``.  If the metadata is missing or incomplete, a
+    ``RuntimeError`` is raised (unless ``require_keys=False``).
     """
 
     resolved_config_path: Optional[Path] = None
@@ -183,38 +181,18 @@ def resolve_context(
         resolved_client = meta_client
         resolved_db = meta_db
 
-    if allow_namespace_fallback and (not resolved_client or not resolved_db):
-        fallback_client = _normalize_key(
-            client_id if client_id is not None else _ACTIVE_CLIENT_ID,
-            field_name="client-id",
-        )
-        fallback_db = _normalize_key(
-            database_name if database_name is not None else _ACTIVE_DATABASE_NAME,
-            field_name="database-name",
-        )
-        resolved_client = resolved_client or fallback_client
-        resolved_db = resolved_db or fallback_db
-
     if not resolved_client or not resolved_db:
         if not require_keys:
             return None
         if resolved_config_path is not None:
             raise RuntimeError(
                 "TapDB config metadata is required to resolve runtime context. "
-                f"Initialize or fix {resolved_config_path}."
+                f"Config file {resolved_config_path} must contain "
+                "'client_id' and 'database_name' in its metadata section."
             )
-        if allow_namespace_fallback:
-            missing: list[str] = []
-            if not resolved_client:
-                missing.append("client-id")
-            if not resolved_db:
-                missing.append("database-name")
-            missing_text = ", ".join(missing)
-            raise RuntimeError(
-                "Missing TAPDB namespace key(s): "
-                f"{missing_text}. Set --client-id/--database-name or --config."
-            )
-        raise RuntimeError("TapDB config path is required. Set --config.")
+        raise RuntimeError(
+            "TapDB config path is required. Set --config."
+        )
 
     resolved_env = (env_name or _ACTIVE_ENV_NAME or "").strip().lower() or None
     return TapdbContext(

@@ -39,7 +39,6 @@ def _write_context_file(
         require_keys=True,
         config_path=config_path,
         env_name=env_name,
-        allow_namespace_fallback=False,
     )
     ui_dir = ctx.ui_dir(env_name)
     ui_dir.mkdir(parents=True, exist_ok=True)

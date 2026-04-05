@@ -197,22 +197,22 @@ class TestRuntimeSandboxPrefix:
         assert resolve_runtime_sandbox_prefix({}) == DEFAULT_SANDBOX_PREFIX
 
     def test_explicit_empty_prefix_disables_prefixing(self):
-        assert resolve_runtime_sandbox_prefix({"MERIDIAN_SANDBOX_PREFIX": ""}) is None
+        assert resolve_runtime_sandbox_prefix({"MERIDIAN_DOMAIN_CODE": ""}) is None
 
     def test_explicit_prefix_is_normalized(self):
-        assert resolve_runtime_sandbox_prefix({"MERIDIAN_SANDBOX_PREFIX": "s"}) == "S"
+        assert resolve_runtime_sandbox_prefix({"MERIDIAN_DOMAIN_CODE": "s"}) == "S"
 
-    def test_runtime_validation_defaults_to_sandbox_t(self):
+    def test_runtime_validation_defaults_to_domain_t(self):
         assert resolve_runtime_validation_context({}) == {
-            "environment": "sandbox",
-            "allowed_sandbox_prefixes": ["T"],
+            "environment": "domain",
+            "allowed_domain_codes": ["T"],
         }
 
     def test_runtime_validation_respects_production_env(self):
         assert resolve_runtime_validation_context(
             {
                 "MERIDIAN_ENVIRONMENT": "production",
-                "MERIDIAN_SANDBOX_PREFIX": "",
+                "MERIDIAN_DOMAIN_CODE": "",
             }
         ) == {"environment": "production"}
 
@@ -248,25 +248,25 @@ class TestMeridianTestVectors:
                 f"validate_euid({euid_str!r}) should be True"
             )
 
-    def test_valid_sandbox_vectors(self, vectors):
-        """Each valid_sandbox vector must round-trip through format_euid."""
-        for v in vectors["valid_sandbox"]:
+    def test_valid_domain_vectors(self, vectors):
+        """Each valid_domain vector must round-trip through format_euid."""
+        for v in vectors["valid_domain"]:
             euid_str = v["euid"]
             integer = v["integer"]
-            allowed = v["allowed_sandbox_prefixes"]
-            # Parse sandbox:category-bodycheck
-            sandbox_prefix = euid_str[0]
-            category = euid_str[2:].split("-")[0]
-            generated = format_euid(category, integer, sandbox=sandbox_prefix)
+            allowed = v.get("allowed_domain_codes", v.get("allowed_sandbox_prefixes"))
+            # Parse domain_code:category-bodycheck
+            dc = euid_str.split(":")[0]
+            category = euid_str.split(":")[1].split("-")[0]
+            generated = format_euid(category, integer, domain_code=dc)
             assert generated == euid_str, (
-                f"format_euid({category!r}, {integer}, sandbox={sandbox_prefix!r}) "
+                f"format_euid({category!r}, {integer}, domain_code={dc!r}) "
                 f"= {generated!r}, expected {euid_str!r}"
             )
             assert (
                 validate_euid(
                     euid_str,
-                    environment="sandbox",
-                    allowed_sandbox_prefixes=allowed,
+                    environment="domain",
+                    allowed_domain_codes=allowed,
                 )
                 is True
             )
@@ -277,11 +277,11 @@ class TestMeridianTestVectors:
             euid_str = v["euid"]
             ctx = v.get("context", {})
             env = ctx.get("environment", "production")
-            allowed = ctx.get("allowed_sandbox_prefixes")
+            allowed = ctx.get("allowed_domain_codes", ctx.get("allowed_sandbox_prefixes"))
             result = validate_euid(
                 euid_str,
                 environment=env,
-                allowed_sandbox_prefixes=allowed,
+                allowed_domain_codes=allowed,
             )
             assert result is False, (
                 f"validate_euid({euid_str!r}) should be False: {v['reason']}"

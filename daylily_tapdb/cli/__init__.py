@@ -24,6 +24,7 @@ from daylily_tapdb.euid import (
     normalize_euid_client_code,
     resolve_client_scoped_core_prefix,
 )
+from cli_core_yo import ccyo_out
 
 DEFAULT_UI_PORT = 8911
 DEFAULT_UI_HOST = "localhost"
@@ -47,12 +48,11 @@ def _active_env_name() -> str:
 
 
 def _require_context(
-    *, env_name: Optional[str] = None, allow_namespace_fallback: bool = False
+    *, env_name: Optional[str] = None
 ) -> TapdbContext:
     return resolve_context(
         require_keys=True,
         env_name=env_name if env_name is not None else _active_env_name(),
-        allow_namespace_fallback=allow_namespace_fallback,
     )
 
 
@@ -346,23 +346,17 @@ def build_app():
 
         current = active_context_overrides()
         if not current["config_path"] or not current["env_name"]:
-            console.print(
-                "[red]✗[/red] Runtime TapDB commands require both --config and --env."
-            )
-            console.print(
-                "  Example: [cyan]tapdb --config "
-                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]"
-            )
+            ccyo_out.error("Runtime TapDB commands require both --config and --env.")
+            ccyo_out.print_text("  Example: [cyan]tapdb --config "
+                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]")
             raise typer.Exit(1)
 
         try:
-            _require_context(allow_namespace_fallback=False)
+            _require_context()
         except RuntimeError as exc:
-            console.print(f"[red]✗[/red] {exc}")
-            console.print(
-                "  Example: [cyan]tapdb --config "
-                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]"
-            )
+            ccyo_out.error(f"{exc}")
+            ccyo_out.print_text("  Example: [cyan]tapdb --config "
+                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]")
             raise typer.Exit(1)
 
     bootstrap_app = typer.Typer(help="One-command environment bootstrap")
@@ -396,10 +390,8 @@ def build_app():
 
         @aurora_stub.callback(invoke_without_command=True)
         def _aurora_missing(ctx: typer.Context):
-            console.print("[red]✗[/red] boto3 is required for Aurora commands.")
-            console.print(
-                "  Install with: [cyan]pip install 'daylily-tapdb[aurora]'[/cyan]"
-            )
+            ccyo_out.error("boto3 is required for Aurora commands.")
+            ccyo_out.print_text("  Install with: [cyan]pip install 'daylily-tapdb[aurora]'[/cyan]")
             raise typer.Exit(1)
 
         app.add_typer(aurora_stub, name="aurora")
@@ -443,39 +435,31 @@ def build_app():
         if port is None:
             port = configured_port
         elif port != configured_port:
-            console.print(
-                "[red]✗[/red] UI port override is not allowed in strict mode."
-            )
-            console.print(
-                f"  Configured ui_port for env {env_name}: "
-                f"[cyan]{configured_port}[/cyan]"
-            )
+            ccyo_out.error("UI port override is not allowed in strict mode.")
+            ccyo_out.print_text(f"  Configured ui_port for env {env_name}: "
+                f"[cyan]{configured_port}[/cyan]")
             raise typer.Exit(1)
 
         try:
             _require_admin_extras()
         except SystemExit:
-            console.print("[red]✗[/red] Admin UI dependencies are not installed.")
-            console.print(
-                "  Install with: [cyan]pip install 'daylily-tapdb[admin]'[/cyan]"
-            )
+            ccyo_out.error("Admin UI dependencies are not installed.")
+            ccyo_out.print_text("  Install with: [cyan]pip install 'daylily-tapdb[admin]'[/cyan]")
             raise typer.Exit(1)
 
         pid = _get_pid(pid_file)
         if pid:
-            console.print(f"[yellow]⚠[/yellow]  UI server already running (PID {pid})")
-            console.print(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
-            console.print(f"   PID file: [dim]{pid_file}[/dim]")
+            ccyo_out.warning(f"UI server already running (PID {pid})")
+            ccyo_out.print_text(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
+            ccyo_out.print_text(f"   PID file: [dim]{pid_file}[/dim]")
             return
 
         if not _port_is_available(host, port):
-            console.print(f"[red]✗[/red] {_port_conflict_details(port)}")
+            ccyo_out.error(f"{_port_conflict_details(port)}")
             ns = _require_context(env_name=env_name).namespace_slug()
-            console.print(f"  Namespace: [dim]{ns}[/dim]")
-            console.print(
-                "  Update environments."
-                f"{env_name}.ui_port in the namespaced config to a free port."
-            )
+            ccyo_out.print_text(f"  Namespace: [dim]{ns}[/dim]")
+            ccyo_out.print_text("  Update environments."
+                f"{env_name}.ui_port in the namespaced config to a free port.")
             raise typer.Exit(1)
 
         try:
@@ -486,7 +470,7 @@ def build_app():
                 key_file=ssl_keyfile,
             )
         except RuntimeError as e:
-            console.print(f"[red]✗[/red]  {e}")
+            ccyo_out.error(f"{e}")
             raise typer.Exit(1)
 
         effective_config_path = get_config_path()
@@ -521,25 +505,23 @@ def build_app():
 
             time.sleep(1)
             if proc.poll() is not None:
-                console.print("[red]✗[/red]  Server failed to start. Check logs:")
-                console.print(f"   [dim]{log_file}[/dim]")
+                ccyo_out.error("Server failed to start. Check logs:")
+                ccyo_out.print_text(f"   [dim]{log_file}[/dim]")
                 raise typer.Exit(1)
 
             pid_file.write_text(str(proc.pid))
-            console.print(f"[green]✓[/green]  UI server started (PID {proc.pid})")
-            console.print(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
-            console.print(f"   Logs: [dim]{log_file}[/dim]")
-            console.print(f"   PID:  [dim]{pid_file}[/dim]")
+            ccyo_out.success(f"UI server started (PID {proc.pid})")
+            ccyo_out.print_text(f"   URL: [cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]")
+            ccyo_out.print_text(f"   Logs: [dim]{log_file}[/dim]")
+            ccyo_out.print_text(f"   PID:  [dim]{pid_file}[/dim]")
         else:
-            console.print(
-                f"[green]✓[/green]  Starting UI server on "
-                f"[cyan]{DEFAULT_UI_SCHEME}://{host}:{port}[/cyan]"
-            )
-            console.print("   Press Ctrl+C to stop\n")
+            ccyo_out.success(f"Starting UI server on "
+                f"{DEFAULT_UI_SCHEME}://{host}:{port}")
+            ccyo_out.print_text("   Press Ctrl+C to stop\n")
             try:
                 subprocess.run(cmd)
             except KeyboardInterrupt:
-                console.print("\n[yellow]⚠[/yellow]  Server stopped")
+                ccyo_out.warning("\nServer stopped")
 
     @ui_app.command("mkcert")
     def ui_mkcert(
@@ -558,12 +540,8 @@ def build_app():
         env_name = _active_env_name()
         mkcert = shutil.which("mkcert")
         if not mkcert:
-            console.print(
-                "[red]✗[/red] mkcert is required for trusted local HTTPS certs."
-            )
-            console.print(
-                "  Install mkcert first, then rerun [cyan]tapdb ui mkcert[/cyan]."
-            )
+            ccyo_out.error("mkcert is required for trusted local HTTPS certs.")
+            ccyo_out.print_text("  Install mkcert first, then rerun [cyan]tapdb ui mkcert[/cyan].")
             raise typer.Exit(1)
 
         default_cert, default_key = _resolve_tls_paths(env_name)
@@ -576,9 +554,9 @@ def build_app():
         install_result = subprocess.run(install_cmd, capture_output=True, text=True)
         if install_result.returncode != 0:
             msg = (install_result.stderr or install_result.stdout or "").strip()
-            console.print("[red]✗[/red] Failed to install mkcert local CA.")
+            ccyo_out.error("Failed to install mkcert local CA.")
             if msg:
-                console.print(f"  [dim]{msg}[/dim]")
+                ccyo_out.print_text(f"  [dim]{msg}[/dim]")
             raise typer.Exit(1)
 
         generate_cmd = [
@@ -592,9 +570,9 @@ def build_app():
         generate_result = subprocess.run(generate_cmd, capture_output=True, text=True)
         if generate_result.returncode != 0:
             msg = (generate_result.stderr or generate_result.stdout or "").strip()
-            console.print("[red]✗[/red] Failed to generate mkcert TLS files.")
+            ccyo_out.error("Failed to generate mkcert TLS files.")
             if msg:
-                console.print(f"  [dim]{msg}[/dim]")
+                ccyo_out.print_text(f"  [dim]{msg}[/dim]")
             raise typer.Exit(1)
 
         try:
@@ -602,12 +580,10 @@ def build_app():
         except OSError:
             pass
 
-        console.print("[green]✓[/green] mkcert certificate ready for TAPDB UI HTTPS")
-        console.print(f"   Cert: [dim]{cert_path}[/dim]")
-        console.print(f"   Key:  [dim]{key_path}[/dim]")
-        console.print(
-            "   Restart UI: [cyan]tapdb --config <path> --env <name> ui restart[/cyan]"
-        )
+        ccyo_out.success("mkcert certificate ready for TAPDB UI HTTPS")
+        ccyo_out.print_text(f"   Cert: [dim]{cert_path}[/dim]")
+        ccyo_out.print_text(f"   Key:  [dim]{key_path}[/dim]")
+        ccyo_out.print_text("   Restart UI: [cyan]tapdb --config <path> --env <name> ui restart[/cyan]")
 
     @ui_app.command("stop")
     def ui_stop():
@@ -616,7 +592,7 @@ def build_app():
         pid_file, _, _ = _ui_runtime_paths(env_name)
         pid = _get_pid(pid_file)
         if not pid:
-            console.print("[yellow]⚠[/yellow]  No UI server running")
+            ccyo_out.warning("No UI server running")
             return
 
         try:
@@ -631,12 +607,12 @@ def build_app():
                 os.kill(pid, signal.SIGKILL)
 
             pid_file.unlink(missing_ok=True)
-            console.print(f"[green]✓[/green]  UI server stopped (was PID {pid})")
+            ccyo_out.success(f"UI server stopped (was PID {pid})")
         except ProcessLookupError:
             pid_file.unlink(missing_ok=True)
-            console.print("[yellow]⚠[/yellow]  Server was not running")
+            ccyo_out.warning("Server was not running")
         except PermissionError:
-            console.print(f"[red]✗[/red]  Permission denied stopping PID {pid}")
+            ccyo_out.error(f"Permission denied stopping PID {pid}")
             raise typer.Exit(1)
 
     @ui_app.command("status")
@@ -646,13 +622,11 @@ def build_app():
         pid_file, log_file, _ = _ui_runtime_paths(env_name)
         pid = _get_pid(pid_file)
         if pid:
-            console.print(
-                f"[green]●[/green]  UI server is [green]running[/green] (PID {pid})"
-            )
-            console.print(f"   Logs: [dim]{log_file}[/dim]")
-            console.print(f"   PID:  [dim]{pid_file}[/dim]")
+            ccyo_out.success(f"UI server is running (PID {pid})")
+            ccyo_out.print_text(f"   Logs: [dim]{log_file}[/dim]")
+            ccyo_out.print_text(f"   PID:  [dim]{pid_file}[/dim]")
         else:
-            console.print("[dim]○[/dim]  UI server is [dim]not running[/dim]")
+            ccyo_out.print_text("UI server is [dim]not running[/dim]")
 
     @ui_app.command("logs")
     def ui_logs(
@@ -668,25 +642,23 @@ def build_app():
         env_name = _active_env_name()
         _, log_file, _ = _ui_runtime_paths(env_name)
         if not log_file.exists():
-            console.print(
-                "[yellow]⚠[/yellow]  No log file found. Start the server first."
-            )
+            ccyo_out.warning("No log file found. Start the server first.")
             return
 
         if follow:
-            console.print(f"[dim]Following {log_file} (Ctrl+C to stop)[/dim]\n")
+            ccyo_out.print_text(f"[dim]Following {log_file} (Ctrl+C to stop)[/dim]\n")
             try:
                 subprocess.run(["tail", "-f", "-n", str(lines), str(log_file)])
             except KeyboardInterrupt:
-                console.print("\n[dim]Stopped.[/dim]")
+                ccyo_out.print_text("\n[dim]Stopped.[/dim]")
         else:
             try:
                 with open(log_file, "r") as f:
                     all_lines = f.readlines()
                     for line in all_lines[-lines:]:
-                        console.print(line.rstrip())
+                        ccyo_out.print_text(line.rstrip())
             except Exception as e:
-                console.print(f"[red]✗[/red]  Error reading logs: {e}")
+                ccyo_out.error(f"Error reading logs: {e}")
 
     @ui_app.command("restart")
     def ui_restart(
@@ -705,25 +677,21 @@ def build_app():
     def _resolve_bootstrap_env() -> DbEnvironment:
         raw = str(active_context_overrides().get("env_name") or "").strip().lower()
         if not raw:
-            console.print(
-                "[red]✗[/red] TapDB bootstrap requires an explicit --env value."
-            )
-            console.print(
-                "  Example: [cyan]tapdb --config <path> --env dev bootstrap local[/cyan]"
-            )
+            ccyo_out.error("TapDB bootstrap requires an explicit --env value.")
+            ccyo_out.print_text("  Example: [cyan]tapdb --config <path> --env dev bootstrap local[/cyan]")
             raise typer.Exit(1)
         try:
             return DbEnvironment(raw)
         except ValueError:
-            console.print(f"[red]✗[/red] Unsupported TapDB env '{raw}'")
-            console.print("  Supported values: dev, test, prod")
+            ccyo_out.error(f"Unsupported TapDB env '{raw}'")
+            ccyo_out.print_text("  Supported values: dev, test, prod")
             raise typer.Exit(1)
 
     def _maybe_start_ui_after_bootstrap(no_gui: bool) -> None:
         from daylily_tapdb.cli.db_config import get_db_config_for_env
 
         if no_gui:
-            console.print("  [dim]○[/dim] UI start skipped (--no-gui)")
+            ccyo_out.print_text("  UI start skipped (--no-gui)")
             return
         env_name = _active_env_name()
         cfg = get_db_config_for_env(env_name)
@@ -736,12 +704,10 @@ def build_app():
                 background=True,
             )
         except Exception as e:
-            console.print(f"[yellow]⚠[/yellow] DB is ready, but UI start failed: {e}")
-            console.print(
-                "  Recover with: "
+            ccyo_out.error(f"DB is ready, but UI start failed: {e}")
+            ccyo_out.print_text("  Recover with: "
                 f"[cyan]tapdb --config <path> --env {env_name} "
-                f"ui start --background --port {ui_port}[/cyan]"
-            )
+                f"ui start --background --port {ui_port}[/cyan]")
 
     @bootstrap_app.command("local")
     def bootstrap_local(
@@ -766,31 +732,29 @@ def build_app():
         env = _resolve_bootstrap_env()
         cfg = get_db_config_for_env(env.value)
         if cfg.get("engine_type") == "aurora":
-            console.print("[red]✗[/red] Active target is Aurora; use bootstrap aurora")
+            ccyo_out.error("Active target is Aurora; use bootstrap aurora")
             raise typer.Exit(1)
 
-        console.print(f"\n[bold cyan]━━━ Bootstrap Local ({env.value}) ━━━[/bold cyan]")
+        ccyo_out.print_text(f"\n[bold cyan]━━━ Bootstrap Local ({env.value}) ━━━[/bold cyan]")
 
         if env in (DbEnvironment.dev, DbEnvironment.test):
-            console.print("\n[bold]Step 1/6: Ensure local PostgreSQL runtime[/bold]")
+            ccyo_out.print_text("\n[bold]Step 1/6: Ensure local PostgreSQL runtime[/bold]")
             pg_init(env=env, force=False)
             pg_start_local(env=env, port=None)
         else:
-            console.print("\n[bold]Step 1/6: Local runtime management[/bold]")
-            console.print(
-                "  [dim]○[/dim] Skipping local runtime management for prod target"
-            )
+            ccyo_out.print_text("\n[bold]Step 1/6: Local runtime management[/bold]")
+            ccyo_out.print_text("  Skipping local runtime management for prod target")
 
-        console.print("\n[bold]Step 2/6: Ensure database exists[/bold]")
+        ccyo_out.print_text("\n[bold]Step 2/6: Ensure database exists[/bold]")
         create_database(env=env, owner=None)
 
-        console.print("\n[bold]Step 3/6: Apply schema[/bold]")
+        ccyo_out.print_text("\n[bold]Step 3/6: Apply schema[/bold]")
         apply_schema(env=env, reinitialize=False)
 
-        console.print("\n[bold]Step 4/6: Run migrations[/bold]")
+        ccyo_out.print_text("\n[bold]Step 4/6: Run migrations[/bold]")
         run_migrations(env=env, dry_run=False)
 
-        console.print("\n[bold]Step 5/6: Seed templates[/bold]")
+        ccyo_out.print_text("\n[bold]Step 5/6: Seed templates[/bold]")
         seed_templates(
             env=env,
             config_path=None,
@@ -799,13 +763,13 @@ def build_app():
             dry_run=False,
         )
 
-        console.print("\n[bold]Step 6/6: Ensure admin user[/bold]")
+        ccyo_out.print_text("\n[bold]Step 6/6: Ensure admin user[/bold]")
         _create_default_admin(env=env, insecure_dev_defaults=insecure_dev_defaults)
 
-        console.print("\n[bold]UI startup[/bold]")
+        ccyo_out.print_text("\n[bold]UI startup[/bold]")
         _maybe_start_ui_after_bootstrap(no_gui=no_gui)
 
-        console.print("\n[bold green]✓ Local bootstrap complete[/bold green]")
+        ccyo_out.success("\n✓ Local bootstrap complete")
 
     @bootstrap_app.command("aurora")
     def bootstrap_aurora(
@@ -843,16 +807,14 @@ def build_app():
         env = _resolve_bootstrap_env()
         stack_name = _stack_name_for_env(cluster)
 
-        console.print(
-            f"\n[bold cyan]━━━ Bootstrap Aurora ({env.value} -> {cluster})"
-            " ━━━[/bold cyan]"
-        )
+        ccyo_out.print_text(f"\n[bold cyan]━━━ Bootstrap Aurora ({env.value} -> {cluster})"
+            " ━━━[/bold cyan]")
 
-        console.print("\n[bold]Step 1/7: Ensure Aurora cluster[/bold]")
+        ccyo_out.print_text("\n[bold]Step 1/7: Ensure Aurora cluster[/bold]")
         mgr = AuroraStackManager(region=region)
         try:
             info = mgr.get_stack_status(stack_name)
-            console.print(f"  [green]✓[/green] Reusing existing stack {stack_name}")
+            ccyo_out.success(f"  Reusing existing stack {stack_name}")
         except RuntimeError:
             config = AuroraConfig(
                 region=region,
@@ -869,7 +831,7 @@ def build_app():
                 },
             )
             info = mgr.create_stack(config)
-            console.print(f"  [green]✓[/green] Created Aurora stack {stack_name}")
+            ccyo_out.success(f"  Created Aurora stack {stack_name}")
 
         outputs = info.get("outputs", {})
         endpoint = outputs.get("ClusterEndpoint", "")
@@ -880,12 +842,10 @@ def build_app():
             endpoint = outputs.get("ClusterEndpoint", "")
             port = str(outputs.get("ClusterPort", "5432"))
         if not endpoint:
-            console.print(
-                f"[red]✗[/red] Aurora endpoint not available for {stack_name}"
-            )
+            ccyo_out.error(f"Aurora endpoint not available for {stack_name}")
             raise typer.Exit(1)
 
-        console.print("\n[bold]Step 2/7: Update TAPDB target config[/bold]")
+        ccyo_out.print_text("\n[bold]Step 2/7: Update TAPDB target config[/bold]")
         _update_config_file(
             env.value,
             endpoint,
@@ -894,16 +854,16 @@ def build_app():
             cluster_identifier=cluster,
         )
 
-        console.print("\n[bold]Step 3/7: Ensure database exists[/bold]")
+        ccyo_out.print_text("\n[bold]Step 3/7: Ensure database exists[/bold]")
         create_database(env=env, owner=None)
 
-        console.print("\n[bold]Step 4/7: Apply schema[/bold]")
+        ccyo_out.print_text("\n[bold]Step 4/7: Apply schema[/bold]")
         apply_schema(env=env, reinitialize=False)
 
-        console.print("\n[bold]Step 5/7: Run migrations[/bold]")
+        ccyo_out.print_text("\n[bold]Step 5/7: Run migrations[/bold]")
         run_migrations(env=env, dry_run=False)
 
-        console.print("\n[bold]Step 6/7: Seed templates[/bold]")
+        ccyo_out.print_text("\n[bold]Step 6/7: Seed templates[/bold]")
         seed_templates(
             env=env,
             config_path=None,
@@ -912,13 +872,13 @@ def build_app():
             dry_run=False,
         )
 
-        console.print("\n[bold]Step 7/7: Ensure admin user[/bold]")
+        ccyo_out.print_text("\n[bold]Step 7/7: Ensure admin user[/bold]")
         _create_default_admin(env=env, insecure_dev_defaults=insecure_dev_defaults)
 
-        console.print("\n[bold]UI startup[/bold]")
+        ccyo_out.print_text("\n[bold]UI startup[/bold]")
         _maybe_start_ui_after_bootstrap(no_gui=no_gui)
 
-        console.print("\n[bold green]✓ Aurora bootstrap complete[/bold green]")
+        ccyo_out.success("\n✓ Aurora bootstrap complete")
 
     def _read_yaml_or_json_file(path: Path) -> dict:
         if not path.exists():
@@ -986,7 +946,7 @@ def build_app():
                     value = int(entered.strip())
                     if 1 <= value <= 65535:
                         return value
-                console.print(f"[red]✗[/red] Invalid {field} for {env_name}")
+                ccyo_out.error(f"Invalid {field} for {env_name}")
 
         raise RuntimeError(
             f"Missing required {field} for env {env_name}. "
@@ -1080,7 +1040,7 @@ def build_app():
             database_name=database_name,
             config_path=current["config_path"],
         )
-        ctx = _require_context(allow_namespace_fallback=True)
+        ctx = _require_context()
         config_path = _require_explicit_config_flag()
 
         env_names = sorted({e.strip().lower() for e in env if str(e).strip()})
@@ -1162,14 +1122,12 @@ def build_app():
             }
 
         _write_yaml_or_json_file(config_path, root)
-        console.print("[green]✓[/green] TAPDB namespaced config initialized")
-        console.print(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
-        console.print(f"  Path:      [dim]{config_path}[/dim]")
+        ccyo_out.success("TAPDB namespaced config initialized")
+        ccyo_out.print_text(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
+        ccyo_out.print_text(f"  Path:      [dim]{config_path}[/dim]")
         for env_name in env_names:
             env_cfg = root["environments"][env_name]
-            console.print(
-                f"  {env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}"
-            )
+            ccyo_out.print_text(f"  {env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}")
 
     @config_root_app.command("update")
     def config_update(
@@ -1448,21 +1406,21 @@ def build_app():
         env_cfg.update(updates)
 
         _write_yaml_or_json_file(config_path, root)
-        console.print("[green]✓[/green] TAPDB namespaced config updated")
-        console.print(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
-        console.print(f"  Path:      [dim]{config_path}[/dim]")
-        console.print(f"  Env:       [bold]{env_name}[/bold]")
+        ccyo_out.success("TAPDB namespaced config updated")
+        ccyo_out.print_text(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
+        ccyo_out.print_text(f"  Path:      [dim]{config_path}[/dim]")
+        ccyo_out.print_text(f"  Env:       [bold]{env_name}[/bold]")
         for field_name in sorted(clear_fields):
-            console.print(f"  cleared:   {field_name}")
+            ccyo_out.print_text(f"  cleared:   {field_name}")
         for field_name in sorted(updates.keys()):
-            console.print(f"  set:       {field_name}={env_cfg[field_name]}")
+            ccyo_out.print_text(f"  set:       {field_name}={env_cfg[field_name]}")
 
     @app.command("version")
     def version():
         """Show TAPDB version."""
         from daylily_tapdb import __version__
 
-        console.print(f"daylily-tapdb [cyan]{__version__}[/cyan]")
+        ccyo_out.print_text(f"daylily-tapdb [cyan]{__version__}[/cyan]")
 
     @app.command("info")
     def info(
@@ -1738,7 +1696,7 @@ def build_app():
             general.add_row("UI Uptime", str(ui_times.get("uptime_human") or "-"))
         general.add_row("UI PID File", str(ui_pid_file))
         general.add_row("UI Log File", str(ui_log_file))
-        console.print(general)
+        ccyo_out.print_text(general)
 
         # --- Config ---
         config_table = Table(title="Config", show_header=True)
@@ -1761,7 +1719,7 @@ def build_app():
                 "Template config dir", f"(not found) {template_config_error}"
             )
 
-        console.print(config_table)
+        ccyo_out.print_text(config_table)
 
         # --- Postgres ---
         pg_table = Table(title="PostgreSQL", show_header=True)
@@ -1787,7 +1745,7 @@ def build_app():
 
             pg_table.add_row(env_name, f"[dim]{url}[/dim]", pw, status, uptime)
 
-        console.print(pg_table)
+        ccyo_out.print_text(pg_table)
 
     return app
 
@@ -1808,10 +1766,35 @@ except Exception:
     app = None
 
 
+def register(registry, spec) -> None:
+    cli_app = app or build_app()
+    for cmd in getattr(cli_app, "registered_commands", []):
+        cmd_name = cmd.name or cmd.callback.__name__.replace("_", "-")
+        if cmd_name in ("version", "info", "config"):
+            continue
+        registry.add_command(
+            group_path=None,
+            name=cmd_name,
+            callback=cmd.callback,
+            help_text=cmd.help or "",
+        )
+    for group in getattr(cli_app, "registered_groups", []):
+        group_name = group.name or group.typer_instance.info.name
+        if group_name == "config":
+            group_name = "db-config"
+        registry.add_typer_app(
+            group_path=None,
+            typer_app=group.typer_instance,
+            name=group_name,
+            help_text=group.help or group.typer_instance.info.help or "",
+        )
+
 def main():
     """Main CLI entry point."""
-    cli_app = app or build_app()
-    cli_app()
+    import sys
+    from cli_core_yo.app import run
+    from daylily_tapdb.cli.spec import spec
+    sys.exit(run(spec))
 
 
 if __name__ == "__main__":
