@@ -328,6 +328,8 @@ ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS tenant_id UUID;
 
 -- generic_template indexes
 CREATE INDEX IF NOT EXISTS idx_generic_template_domain ON generic_template(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_generic_template_domain_code_lookup
+    ON generic_template(domain_code, category, type, subtype, version);
 CREATE INDEX IF NOT EXISTS idx_generic_template_polymorphic_discriminator ON generic_template(polymorphic_discriminator);
 CREATE INDEX IF NOT EXISTS idx_generic_template_type ON generic_template(type);
 CREATE INDEX IF NOT EXISTS idx_generic_template_is_deleted ON generic_template(is_deleted);
@@ -337,6 +339,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_unique_singleton_key
     ON generic_instance (category, type, subtype, version)
     WHERE is_singleton = TRUE;
 CREATE INDEX IF NOT EXISTS idx_generic_instance_domain ON generic_instance(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_template
+    ON generic_instance(domain_code, issuer_app_code, template_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_type
+    ON generic_instance(domain_code, issuer_app_code, category, type, subtype, version);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_tenant
+    ON generic_instance(domain_code, tenant_id);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_polymorphic_discriminator ON generic_instance(polymorphic_discriminator);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_type ON generic_instance(type);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_euid ON generic_instance(euid);
@@ -365,6 +373,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_lineage_unique_edge
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_domain ON generic_instance_lineage(domain_code, issuer_app_code);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_parent ON generic_instance_lineage(parent_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_child ON generic_instance_lineage(child_instance_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_domain_parent
+    ON generic_instance_lineage(domain_code, issuer_app_code, parent_instance_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_domain_child
+    ON generic_instance_lineage(domain_code, issuer_app_code, child_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_is_deleted ON generic_instance_lineage(is_deleted);
 
 -- audit_log indexes
@@ -377,6 +389,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_operation_type ON audit_log(operation_t
 CREATE INDEX IF NOT EXISTS idx_audit_log_changed_at ON audit_log(changed_at);
 CREATE INDEX IF NOT EXISTS idx_audit_log_changed_by ON audit_log(changed_by);
 CREATE INDEX IF NOT EXISTS idx_audit_log_json_addl_gin ON audit_log USING GIN (json_addl);
+CREATE INDEX IF NOT EXISTS idx_audit_log_domain_entity
+    ON audit_log(domain_code, issuer_app_code, rel_table_name, rel_table_uid_fk);
+CREATE INDEX IF NOT EXISTS idx_audit_log_domain_timeline
+    ON audit_log(domain_code, issuer_app_code, changed_at DESC);
 
 -- generic_instance machine_uuid index
 CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_machine_uuid
@@ -400,12 +416,39 @@ CREATE INDEX IF NOT EXISTS idx_outbox_event_lease
 CREATE INDEX IF NOT EXISTS idx_outbox_attempt_event_id
     ON outbox_event_attempt(outbox_event_id, attempt_no);
 
+-- outbox: scoped dispatch, destination, admin
+CREATE INDEX IF NOT EXISTS idx_outbox_event_domain_status_next
+    ON outbox_event(domain_code, issuer_app_code, status, next_attempt_at)
+    WHERE status IN ('pending', 'failed');
+CREATE INDEX IF NOT EXISTS idx_outbox_event_destination_status
+    ON outbox_event(destination, status);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_claim_token
+    ON outbox_event(claim_token)
+    WHERE claim_token IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_outbox_event_domain_status_created
+    ON outbox_event(domain_code, status, created_dt);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_machine_uuid
+    ON outbox_event(machine_uuid)
+    WHERE machine_uuid IS NOT NULL;
+
+-- outbox_event_attempt: time-ordered
+CREATE INDEX IF NOT EXISTS idx_outbox_attempt_event_time
+    ON outbox_event_attempt(outbox_event_id, attempted_at DESC);
+
 -- inbox_message indexes
 CREATE INDEX IF NOT EXISTS idx_inbox_message_domain
     ON inbox_message(domain_code, issuer_app_code);
 CREATE INDEX IF NOT EXISTS idx_inbox_message_status
     ON inbox_message(status)
     WHERE status IN ('received', 'processing');
+CREATE INDEX IF NOT EXISTS idx_inbox_message_domain_status
+    ON inbox_message(domain_code, issuer_app_code, status);
+CREATE INDEX IF NOT EXISTS idx_inbox_message_source_event
+    ON inbox_message(source_outbox_event_id)
+    WHERE source_outbox_event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_inbox_message_machine_uuid
+    ON inbox_message(machine_uuid)
+    WHERE machine_uuid IS NOT NULL;
 
 --------------------------------------------------------------------------------
 -- FUNCTIONS
