@@ -578,11 +578,11 @@ class TestOutboxRepository:
         assert row2.attempt_count == 3
         mock_session.flush.assert_called_once()
 
-    def test_mark_delivered(self):
-        from daylily_tapdb.outbox.repository import mark_delivered
+    def test_mark_received(self):
+        from daylily_tapdb.outbox.repository import mark_received
 
         mock_session = mock.MagicMock()
-        mark_delivered(mock_session, row_id=1)
+        mark_received(mock_session, row_id=1)
         mock_session.execute.assert_called_once()
         mock_session.flush.assert_called_once()
 

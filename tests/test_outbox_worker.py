@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from daylily_tapdb.outbox.contracts import DeliveryResult
 from daylily_tapdb.outbox import worker
 
 
@@ -117,6 +119,7 @@ def test_run_dispatch_loop_marks_delivered_on_success(monkeypatch: pytest.Monkey
 
     def _deliver_fn(ev: _FakeEvent):
         delivered_events.append(ev.id)
+        return DeliveryResult.received(uuid.uuid4())
 
     def _sleep(seconds: float):
         sleep_calls.append(seconds)

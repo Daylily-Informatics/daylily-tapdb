@@ -199,14 +199,12 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN (
             'pending', 'delivering', 'received', 'processed',
-            'failed', 'dead_letter', 'rejected', 'canceled',
-            'delivered'  -- deprecated, kept for backward compat
+            'failed', 'dead_letter', 'rejected', 'canceled'
         )),
     attempt_count INT NOT NULL DEFAULT 0,
     next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_error TEXT,
     created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    delivered_dt TIMESTAMP WITH TIME ZONE,  -- deprecated; use receipt_received_dt
 
     -- Claim / lease management
     claimed_by TEXT,

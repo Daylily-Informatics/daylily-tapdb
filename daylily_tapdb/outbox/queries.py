@@ -28,7 +28,6 @@ class OutboxStatusSummary:
     dead_letter: int = 0
     rejected: int = 0
     canceled: int = 0
-    delivered: int = 0  # deprecated status
 
 
 def outbox_status_summary(

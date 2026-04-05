@@ -301,15 +301,6 @@ def claim_events(
     return rows
 
 
-def mark_delivered(session: Session, row_id: int) -> None:
-    """Mark an outbox row delivered (deprecated — use mark_received)."""
-    session.execute(
-        update(outbox_event)
-        .where(outbox_event.id == row_id)
-        .values(status="delivered", delivered_dt=func.now())
-    )
-    session.flush()
-
 
 def mark_received(
     session: Session,

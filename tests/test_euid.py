@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 
 from daylily_tapdb.euid import (
-    DEFAULT_SANDBOX_PREFIX,
+    DEFAULT_DOMAIN_CODE,
     crockford_base32_encode,
     format_euid,
     meridian_checksum,
-    resolve_runtime_sandbox_prefix,
+    resolve_runtime_domain_code,
     resolve_runtime_validation_context,
     validate_euid,
 )
@@ -146,8 +146,8 @@ class TestFormatEuid:
         euid = format_euid("AGX", 42)
         assert "-" in euid
 
-    def test_format_sandbox(self):
-        euid = format_euid("TX", 1, sandbox="X")
+    def test_format_domain_code(self):
+        euid = format_euid("TX", 1, domain_code="X")
         assert euid.startswith("X:TX-")
 
 
@@ -168,13 +168,13 @@ class TestValidateEuid:
     def test_reject_whitespace(self):
         assert validate_euid(" TX-1C") is False
 
-    def test_reject_sandbox_in_production(self):
+    def test_reject_domain_in_production(self):
         assert validate_euid("X:TX-1C") is False
 
-    def test_reject_production_in_sandbox(self):
+    def test_reject_production_in_domain(self):
         assert (
             validate_euid(
-                "TX-1C", environment="sandbox", allowed_sandbox_prefixes=["X"]
+                "TX-1C", environment="domain", allowed_domain_codes=["X"]
             )
             is False
         )
@@ -192,15 +192,15 @@ class TestValidateEuid:
         assert validate_euid("TX14") is False
 
 
-class TestRuntimeSandboxPrefix:
-    def test_missing_prefix_defaults_to_t(self):
-        assert resolve_runtime_sandbox_prefix({}) == DEFAULT_SANDBOX_PREFIX
+class TestRuntimeDomainCode:
+    def test_missing_code_defaults_to_t(self):
+        assert resolve_runtime_domain_code({}) == DEFAULT_DOMAIN_CODE
 
-    def test_explicit_empty_prefix_disables_prefixing(self):
-        assert resolve_runtime_sandbox_prefix({"MERIDIAN_DOMAIN_CODE": ""}) is None
+    def test_explicit_empty_disables(self):
+        assert resolve_runtime_domain_code({"MERIDIAN_DOMAIN_CODE": ""}) is None
 
-    def test_explicit_prefix_is_normalized(self):
-        assert resolve_runtime_sandbox_prefix({"MERIDIAN_DOMAIN_CODE": "s"}) == "S"
+    def test_explicit_code_is_normalized(self):
+        assert resolve_runtime_domain_code({"MERIDIAN_DOMAIN_CODE": "s"}) == "S"
 
     def test_runtime_validation_defaults_to_domain_t(self):
         assert resolve_runtime_validation_context({}) == {
@@ -253,7 +253,7 @@ class TestMeridianTestVectors:
         for v in vectors["valid_domain"]:
             euid_str = v["euid"]
             integer = v["integer"]
-            allowed = v.get("allowed_domain_codes", v.get("allowed_sandbox_prefixes"))
+            allowed = v.get("allowed_domain_codes")
             # Parse domain_code:category-bodycheck
             dc = euid_str.split(":")[0]
             category = euid_str.split(":")[1].split("-")[0]
@@ -277,7 +277,7 @@ class TestMeridianTestVectors:
             euid_str = v["euid"]
             ctx = v.get("context", {})
             env = ctx.get("environment", "production")
-            allowed = ctx.get("allowed_domain_codes", ctx.get("allowed_sandbox_prefixes"))
+            allowed = ctx.get("allowed_domain_codes")
             result = validate_euid(
                 euid_str,
                 environment=env,
