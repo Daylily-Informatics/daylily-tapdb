@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import typer
+from cli_core_yo import ccyo_out
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -52,7 +53,6 @@ from daylily_tapdb.templates import (
     validate_template_configs as _loader_validate_template_configs,
 )
 from daylily_tapdb.timezone_utils import utc_now
-from cli_core_yo import ccyo_out
 
 console = Console()
 

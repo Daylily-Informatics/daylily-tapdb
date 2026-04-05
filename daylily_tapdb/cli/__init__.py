@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from cli_core_yo import ccyo_out
+
 from daylily_tapdb.cli.context import (
     TapdbContext,
     active_context_overrides,
@@ -25,7 +27,6 @@ from daylily_tapdb.euid import (
     normalize_euid_client_code,
     resolve_client_scoped_core_prefix,
 )
-from cli_core_yo import ccyo_out
 
 DEFAULT_UI_PORT = 8911
 DEFAULT_UI_HOST = "localhost"
@@ -252,10 +253,7 @@ def build_app():
     Lazy-imports CLI deps so core installs can import daylily_tapdb.
     """
     import typer
-    from rich.console import Console
     from rich.table import Table
-
-    console = Console()
 
     # Import subcommand modules (require Typer/Rich)
     from daylily_tapdb.cli.cognito import cognito_app
@@ -1792,7 +1790,9 @@ def register(registry, spec) -> None:
 def main():
     """Main CLI entry point."""
     import sys
+
     from cli_core_yo.app import run
+
     from daylily_tapdb.cli.spec import spec
 
     argv = sys.argv[1:]

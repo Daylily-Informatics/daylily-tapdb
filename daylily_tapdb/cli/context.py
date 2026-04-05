@@ -6,8 +6,8 @@ isolate config, runtime state, and local services per namespace.
 
 from __future__ import annotations
 
-import re
 import hashlib
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,7 +80,7 @@ class TapdbContext:
         resolved_env = (env_name or self.env_name or "").strip()
         if not resolved_env:
             raise RuntimeError("Environment name is required to resolve runtime_dir")
-        digest = hashlib.sha1(
+        digest = hashlib.sha256(
             f"{self.client_id}:{self.database_name}:{resolved_env}".encode("utf-8")
         ).hexdigest()[:12]
         return Path(tempfile.gettempdir()) / f"tapdb-pg-{digest}-{resolved_env}"
