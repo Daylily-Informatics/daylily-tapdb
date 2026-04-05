@@ -34,6 +34,8 @@ def _default_config_path() -> Path:
 def main() -> None:
     config_path = _default_config_path()
     env_name = os.environ.get("TAPDB_DOCS_ENV", "dev")
+    domain_code = os.environ.get("TAPDB_DOCS_DOMAIN_CODE", "T")
+    issuer_app_code = os.environ.get("TAPDB_DOCS_ISSUER_APP_CODE", "RDME")
     instance_name = os.environ.get(
         "TAPDB_DOCS_INSTANCE_NAME",
         "README Generic Object",
@@ -52,6 +54,8 @@ def main() -> None:
         db_pass=cfg["password"],
         db_name=cfg["database"],
         app_username="tapdb_readme_example",
+        domain_code=domain_code,
+        issuer_app_code=issuer_app_code,
     )
 
     template_manager = TemplateManager()

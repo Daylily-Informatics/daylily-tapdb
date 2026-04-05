@@ -57,7 +57,7 @@ For a fuller local bootstrap, use the namespaced config flow and then bring up t
 
 ```bash
 tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml \
-  config init \
+  db-config init \
   --client-id <client-id> \
   --database-name <database-name> \
   --euid-client-code <client-code> \

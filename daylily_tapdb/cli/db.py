@@ -126,16 +126,16 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
     """Persist required identity prefix config and ensure backing sequences."""
     prefixes = _required_identity_prefixes(env)
     values_sql = ",\n        ".join(
-        f"('{entity}', '{prefix}')" for entity, prefix in prefixes.items()
+        f"('{entity}', '', '', '{prefix}')" for entity, prefix in prefixes.items()
     )
     sequences_sql = "\n    ".join(
         f'CREATE SEQUENCE IF NOT EXISTS "{_shared_sequence_name(prefix)}";'
         for prefix in sorted(set(prefixes.values()))
     )
     sql = f"""
-    INSERT INTO tapdb_identity_prefix_config(entity, prefix)
+    INSERT INTO tapdb_identity_prefix_config(entity, domain_code, issuer_app_code, prefix)
     VALUES {values_sql}
-    ON CONFLICT (entity) DO UPDATE
+    ON CONFLICT (entity, domain_code, issuer_app_code) DO UPDATE
       SET prefix = EXCLUDED.prefix, updated_dt = NOW();
 
     {sequences_sql}
@@ -1387,7 +1387,7 @@ def db_restore(
 
 
 # Core template categories (always seeded)
-CORE_CATEGORIES = {"generic", "actor"}
+CORE_CATEGORIES = {"generic", "actor", "system"}
 
 # Optional template categories (only when provided via external config packs)
 # TAPDB no longer bundles non-core template packs in this repository.

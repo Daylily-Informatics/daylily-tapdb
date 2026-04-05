@@ -17,6 +17,7 @@ from daylily_tapdb.cli.context import (
     TapdbContext,
     active_context_overrides,
     active_env_name,
+    clear_cli_context,
     resolve_context,
     set_cli_context,
 )
@@ -1040,7 +1041,6 @@ def build_app():
             database_name=database_name,
             config_path=current["config_path"],
         )
-        ctx = _require_context()
         config_path = _require_explicit_config_flag()
 
         env_names = sorted({e.strip().lower() for e in env if str(e).strip()})
@@ -1123,7 +1123,7 @@ def build_app():
 
         _write_yaml_or_json_file(config_path, root)
         ccyo_out.success("TAPDB namespaced config initialized")
-        ccyo_out.print_text(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
+        ccyo_out.print_text(f"  Namespace: [bold]{client_id}/{database_name}[/bold]")
         ccyo_out.print_text(f"  Path:      [dim]{config_path}[/dim]")
         for env_name in env_names:
             env_cfg = root["environments"][env_name]
@@ -1794,7 +1794,94 @@ def main():
     import sys
     from cli_core_yo.app import run
     from daylily_tapdb.cli.spec import spec
-    sys.exit(run(spec))
+
+    argv = sys.argv[1:]
+    clear_cli_context()
+    argv = _prime_cli_context_from_argv(argv)
+    sys.exit(run(spec, argv))
+
+
+def _consume_root_option(
+    argv: list[str],
+    index: int,
+    option: str,
+) -> tuple[bool, Optional[str], int]:
+    arg = argv[index]
+    if arg == option:
+        if index + 1 >= len(argv):
+            return True, None, 1
+        return True, argv[index + 1], 2
+    prefix = f"{option}="
+    if arg.startswith(prefix):
+        return True, arg[len(prefix) :], 1
+    return False, None, 0
+
+
+def _prime_cli_context_from_argv(argv: list[str]) -> list[str]:
+    """Capture TAPDB root context flags before cli-core-yo parses argv."""
+
+    client_id: Optional[str] = None
+    database_name: Optional[str] = None
+    env_name: Optional[str] = None
+    config_path: Optional[str] = None
+    cleaned: list[str] = []
+    saw_command = False
+    index = 0
+
+    while index < len(argv):
+        arg = argv[index]
+        if saw_command:
+            cleaned.append(arg)
+            index += 1
+            continue
+
+        if arg == "--":
+            saw_command = True
+            cleaned.append(arg)
+            index += 1
+            continue
+
+        if not arg.startswith("-"):
+            saw_command = True
+            cleaned.append(arg)
+            index += 1
+            continue
+
+        matched, value, consumed = _consume_root_option(argv, index, "--config")
+        if matched:
+            config_path = value
+            cleaned.extend(argv[index : index + consumed])
+            index += consumed
+            continue
+
+        matched, value, consumed = _consume_root_option(argv, index, "--env")
+        if matched:
+            env_name = value
+            index += consumed
+            continue
+
+        matched, value, consumed = _consume_root_option(argv, index, "--client-id")
+        if matched:
+            client_id = value
+            index += consumed
+            continue
+
+        matched, value, consumed = _consume_root_option(argv, index, "--database-name")
+        if matched:
+            database_name = value
+            index += consumed
+            continue
+
+        cleaned.append(arg)
+        index += 1
+
+    set_cli_context(
+        client_id=client_id,
+        database_name=database_name,
+        env_name=env_name,
+        config_path=config_path,
+    )
+    return cleaned
 
 
 if __name__ == "__main__":

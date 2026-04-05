@@ -94,10 +94,12 @@ template code is the stable human-readable authoring key.
 
 Rules:
 
-- Bundled core templates must use the placeholder prefix `GX` in JSON.
-- Client templates must not persist the reserved core prefixes `GX` or `TGX`.
-- During seeding, core templates are rewritten to the namespace-scoped prefix
-  derived from `meta.euid_client_code`, such as `CGX`.
+- Bundled substrate templates use the placeholder prefix `GX` in JSON.
+- The bundled system message template keeps the reserved prefix `MSG`.
+- Client templates must not persist the reserved core prefixes `GX`, `TGX`, or `MSG`.
+- During seeding, bundled `GX` templates are rewritten to the namespace-scoped
+  prefix derived from `meta.euid_client_code`, such as `CGX`, while `MSG`
+  remains `MSG`.
 
 This keeps bundled core packs portable while still allowing each namespace to
 mint its own identifiers.

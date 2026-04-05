@@ -514,6 +514,8 @@ def pg_init(
     except subprocess.TimeoutExpired:
         ccyo_out.error("initdb timed out")
         raise typer.Exit(1)
+    except typer.Exit:
+        raise
     except Exception as e:
         ccyo_out.error(f"Error: {e}")
         raise typer.Exit(1)
@@ -631,6 +633,8 @@ def pg_start_local(
             ccyo_out.print_text(f"  {result.stderr}")
             ccyo_out.print_text(f"  Check log: {log_file}")
             raise typer.Exit(1)
+    except typer.Exit:
+        raise
     except Exception as e:
         ccyo_out.error(f"Error: {e}")
         raise typer.Exit(1)

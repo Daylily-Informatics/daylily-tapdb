@@ -30,7 +30,7 @@ CONFIG_PATH="${TAPDB_DOCS_CONFIG:-$WORKDIR/.config/tapdb/$CLIENT_ID/$DATABASE_NA
 
 mkdir -p "$(dirname "$CONFIG_PATH")"
 
-tapdb --config "$CONFIG_PATH" config init \
+tapdb --config "$CONFIG_PATH" db-config init \
     --client-id "$CLIENT_ID" \
     --database-name "$DATABASE_NAME" \
     --euid-client-code "$EUID_CLIENT_CODE" \

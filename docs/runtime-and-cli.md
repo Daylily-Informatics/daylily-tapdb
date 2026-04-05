@@ -36,6 +36,12 @@ Important subpaths used by the CLI:
 - `postgres/` for local Postgres state
 - `locks/` for local lock metadata
 
+For most namespaces the local Postgres socket directory lives under
+`<env>/postgres/run/`. When the full path would exceed PostgreSQL's Unix socket
+path limit, TAPDB automatically falls back to a short deterministic temp
+directory so the local bootstrap path remains runnable from deep worktrees or
+temporary test paths.
+
 The namespace model is tested indirectly through the CLI and integration suite, and the canonical config example lives in [`config/tapdb-config-example.yaml`](../config/tapdb-config-example.yaml).
 
 ## Command Groups
@@ -77,7 +83,7 @@ The basic local flow is:
 The CLI surfaces for that flow are already present and exercised in tests:
 
 ```bash
-tapdb --config <path> config init \
+tapdb --config <path> db-config init \
   --client-id <client-id> \
   --database-name <database-name> \
   --euid-client-code <client-code> \

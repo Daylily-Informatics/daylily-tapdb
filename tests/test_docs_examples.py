@@ -103,6 +103,7 @@ def test_readme_bootstrap_local_script_runs(docs_local_runtime: dict[str, object
 
     assert isinstance(config_path, Path)
     assert config_path.exists()
+    assert "Local bootstrap complete" in stdout
     assert "Bootstrap example completed." in stdout
 
 

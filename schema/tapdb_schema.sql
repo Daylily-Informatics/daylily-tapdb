@@ -433,7 +433,7 @@ CREATE INDEX IF NOT EXISTS idx_outbox_event_receipt_machine_uuid
 
 -- outbox_event_attempt: time-ordered
 CREATE INDEX IF NOT EXISTS idx_outbox_attempt_event_time
-    ON outbox_event_attempt(outbox_event_id, attempted_at DESC);
+    ON outbox_event_attempt(outbox_event_id, attempt_started_dt DESC);
 
 -- inbox_message indexes
 CREATE INDEX IF NOT EXISTS idx_inbox_message_domain
@@ -443,12 +443,8 @@ CREATE INDEX IF NOT EXISTS idx_inbox_message_status
     WHERE status IN ('received', 'processing');
 CREATE INDEX IF NOT EXISTS idx_inbox_message_domain_status
     ON inbox_message(domain_code, issuer_app_code, status);
-CREATE INDEX IF NOT EXISTS idx_inbox_message_source_event
-    ON inbox_message(source_outbox_event_id)
-    WHERE source_outbox_event_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_inbox_message_machine_uuid
-    ON inbox_message(machine_uuid)
-    WHERE machine_uuid IS NOT NULL;
+    ON inbox_message(message_machine_uuid);
 
 --------------------------------------------------------------------------------
 -- FUNCTIONS

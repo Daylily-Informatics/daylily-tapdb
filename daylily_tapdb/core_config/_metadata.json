@@ -8,7 +8,7 @@
     "type": "Type within category (core TAPDB bundles use generic and actor)",
     "subtype": "Specific variant (e.g., generic, system_user, external_object_link)",
     "version": "Template version (e.g., 1.0)",
-    "instance_prefix": "EUID prefix for instances (core TAPDB bundles use GX placeholder, rewritten to [client]GX at seed time)",
+    "instance_prefix": "EUID prefix for instances (bundled substrate templates use GX placeholder and are rewritten to [client]GX at seed time; the bundled system message template keeps MSG)",
     "json_addl": "Flexible JSON data for template-specific properties"
   },
   "euid_prefixes": {
@@ -16,6 +16,7 @@
     "generic_instance": "GX",
     "generic_instance_lineage": "GX",
     "actor": "GX",
-    "external_object_link": "GX"
+    "external_object_link": "GX",
+    "system_message": "MSG"
   }
 }
