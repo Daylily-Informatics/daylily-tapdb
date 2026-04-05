@@ -371,59 +371,92 @@ BEGIN
 END;
 $$;
 
--- Validate sandbox prefix (single uppercase letter, no I/L/O/U, sandbox-only range)
-CREATE OR REPLACE FUNCTION tapdb_validate_sandbox_prefix(prefix TEXT)
+-- Validate domain code (1-4 uppercase Crockford Base32 letters, no I/L/O/U)
+CREATE OR REPLACE FUNCTION tapdb_validate_domain_code(code TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
-    norm TEXT := upper(trim(prefix));
+    norm TEXT := upper(trim(code));
 BEGIN
-    IF norm !~ '^[HJ-KMNP-TV-Z]$' THEN
+    IF norm !~ '^[A-HJ-KMNP-TV-Z]{1,4}$' THEN
         RAISE EXCEPTION
-            'Invalid sandbox prefix "%" (must match ^[HJ-KMNP-TV-Z]$)',
-            prefix;
+            'Invalid domain code "%" (must be 1-4 Crockford Base32 letters)',
+            code;
     END IF;
     RETURN norm;
 END;
 $$;
 
--- Resolve runtime sandbox prefix from Postgres session state.
--- Missing session state defaults to T. Explicit empty string disables prefixing.
-CREATE OR REPLACE FUNCTION tapdb_current_sandbox_prefix()
-RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+-- Validate app code (1-4 uppercase Crockford Base32 letters, no I/L/O/U)
+CREATE OR REPLACE FUNCTION tapdb_validate_app_code(code TEXT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
-    raw_prefix TEXT;
+    norm TEXT := upper(trim(code));
 BEGIN
-    raw_prefix := current_setting('session.current_sandbox_prefix', true);
-    IF raw_prefix IS NULL THEN
-        RETURN 'T';
+    IF norm !~ '^[A-HJ-KMNP-TV-Z]{1,4}$' THEN
+        RAISE EXCEPTION
+            'Invalid app code "%" (must be 1-4 Crockford Base32 letters)',
+            code;
     END IF;
-
-    raw_prefix := trim(raw_prefix);
-    IF raw_prefix = '' THEN
-        RETURN NULL;
-    END IF;
-
-    RETURN tapdb_validate_sandbox_prefix(raw_prefix);
+    RETURN norm;
 END;
 $$;
 
--- Extract sandbox prefix from EUID string (e.g. T:GX-1AB -> T)
-CREATE OR REPLACE FUNCTION meridian_euid_sandbox_prefix(euid TEXT)
+-- Resolve runtime domain code from Postgres session state.
+-- Missing session state defaults to T. Explicit empty string disables prefixing.
+CREATE OR REPLACE FUNCTION tapdb_current_domain_code()
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    raw_code TEXT;
+BEGIN
+    raw_code := current_setting('session.current_domain_code', true);
+    IF raw_code IS NULL THEN
+        RETURN 'T';
+    END IF;
+
+    raw_code := trim(raw_code);
+    IF raw_code = '' THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN tapdb_validate_domain_code(raw_code);
+END;
+$$;
+
+-- Resolve runtime app code from Postgres session state.
+-- Missing session state defaults to TAPD.
+CREATE OR REPLACE FUNCTION tapdb_current_app_code()
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    raw_code TEXT;
+BEGIN
+    raw_code := current_setting('session.current_app_code', true);
+    IF raw_code IS NULL THEN
+        RETURN 'TAPD';
+    END IF;
+
+    raw_code := trim(raw_code);
+    IF raw_code = '' THEN
+        RETURN 'TAPD';
+    END IF;
+
+    RETURN tapdb_validate_app_code(raw_code);
+END;
+$$;
+
+-- Extract domain code from EUID string (e.g. T:GX-1AB -> T, TEST:GX-1AB -> TEST)
+CREATE OR REPLACE FUNCTION meridian_euid_domain_code(euid TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
     colon_pos INT;
-    prefix TEXT;
+    code TEXT;
 BEGIN
     colon_pos := position(':' IN euid);
     IF colon_pos = 0 THEN
         RETURN NULL;
     END IF;
-    IF colon_pos <> 2 THEN
-        RAISE EXCEPTION 'Invalid sandbox EUID format (bad prefix delimiter): %', euid;
-    END IF;
 
-    prefix := substr(euid, 1, colon_pos - 1);
-    RETURN tapdb_validate_sandbox_prefix(prefix);
+    code := substr(euid, 1, colon_pos - 1);
+    RETURN tapdb_validate_domain_code(code);
 END;
 $$;
 
@@ -496,37 +529,37 @@ BEGIN
 END;
 $$;
 
--- Meridian EUID: Generate full EUID string (PREFIX-BODYCHECK or T:PREFIX-BODYCHECK)
-CREATE OR REPLACE FUNCTION meridian_generate_euid(prefix TEXT, seq_val BIGINT, sandbox_prefix TEXT)
+-- Meridian EUID: Generate full EUID string (PREFIX-BODYCHECK or DC:PREFIX-BODYCHECK)
+CREATE OR REPLACE FUNCTION meridian_generate_euid(prefix TEXT, seq_val BIGINT, domain_code TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
     normalized_prefix TEXT;
-    normalized_sandbox_prefix TEXT;
+    normalized_dc TEXT;
     body TEXT;
     payload TEXT;
     check_char CHAR;
 BEGIN
     normalized_prefix := tapdb_validate_meridian_prefix(prefix);
-    normalized_sandbox_prefix := CASE
-        WHEN sandbox_prefix IS NULL OR trim(sandbox_prefix) = '' THEN NULL
-        ELSE tapdb_validate_sandbox_prefix(sandbox_prefix)
+    normalized_dc := CASE
+        WHEN domain_code IS NULL OR trim(domain_code) = '' THEN NULL
+        ELSE tapdb_validate_domain_code(domain_code)
     END;
 
     body := crockford_base32_encode(seq_val);
-    payload := COALESCE(normalized_sandbox_prefix, '') || normalized_prefix || body;
+    payload := COALESCE(normalized_dc, '') || normalized_prefix || body;
     check_char := meridian_luhn_mod32_check(payload);
 
-    IF normalized_sandbox_prefix IS NULL THEN
+    IF normalized_dc IS NULL THEN
         RETURN normalized_prefix || '-' || body || check_char;
     END IF;
-    RETURN normalized_sandbox_prefix || ':' || normalized_prefix || '-' || body || check_char;
+    RETURN normalized_dc || ':' || normalized_prefix || '-' || body || check_char;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION meridian_generate_euid(prefix TEXT, seq_val BIGINT)
 RETURNS TEXT LANGUAGE plpgsql STABLE STRICT AS $$
 BEGIN
-    RETURN meridian_generate_euid(prefix, seq_val, tapdb_current_sandbox_prefix());
+    RETURN meridian_generate_euid(prefix, seq_val, tapdb_current_domain_code());
 END;
 $$;
 
@@ -563,10 +596,14 @@ CREATE OR REPLACE FUNCTION set_generic_template_euid()
 RETURNS TRIGGER AS $$
 DECLARE
     prefix TEXT;
-    sandbox_prefix TEXT;
+    dc TEXT;
     seq_val BIGINT;
     seq_name TEXT;
 BEGIN
+    -- Populate domain_code and issuer_app_code from session context
+    NEW.domain_code := tapdb_current_domain_code();
+    NEW.issuer_app_code := tapdb_current_app_code();
+
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('generic_template');
         seq_name := lower(prefix) || '_instance_seq';
@@ -583,9 +620,9 @@ BEGIN
     ELSE
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
-        sandbox_prefix := meridian_euid_sandbox_prefix(NEW.euid);
+        dc := meridian_euid_domain_code(NEW.euid);
         prefix := tapdb_validate_meridian_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, sandbox_prefix) THEN
+        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -601,10 +638,14 @@ CREATE OR REPLACE FUNCTION set_generic_instance_euid()
 RETURNS TRIGGER AS $$
 DECLARE
     prefix TEXT;
-    sandbox_prefix TEXT;
+    dc TEXT;
     seq_val BIGINT;
     seq_name TEXT;
 BEGIN
+    -- Populate domain_code and issuer_app_code from session context
+    NEW.domain_code := tapdb_current_domain_code();
+    NEW.issuer_app_code := tapdb_current_app_code();
+
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         -- Get prefix from template
         SELECT instance_prefix INTO prefix FROM generic_template WHERE uid = NEW.template_uid;
@@ -636,9 +677,9 @@ BEGIN
     ELSE
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
-        sandbox_prefix := meridian_euid_sandbox_prefix(NEW.euid);
+        dc := meridian_euid_domain_code(NEW.euid);
         prefix := tapdb_validate_meridian_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, sandbox_prefix) THEN
+        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -654,10 +695,14 @@ CREATE OR REPLACE FUNCTION set_generic_instance_lineage_euid()
 RETURNS TRIGGER AS $$
 DECLARE
     prefix TEXT;
-    sandbox_prefix TEXT;
+    dc TEXT;
     seq_val BIGINT;
     seq_name TEXT;
 BEGIN
+    -- Populate domain_code and issuer_app_code from session context
+    NEW.domain_code := tapdb_current_domain_code();
+    NEW.issuer_app_code := tapdb_current_app_code();
+
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('generic_instance_lineage');
         seq_name := lower(prefix) || '_instance_seq';
@@ -674,9 +719,9 @@ BEGIN
     ELSE
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
-        sandbox_prefix := meridian_euid_sandbox_prefix(NEW.euid);
+        dc := meridian_euid_domain_code(NEW.euid);
         prefix := tapdb_validate_meridian_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, sandbox_prefix) THEN
+        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -692,10 +737,14 @@ CREATE OR REPLACE FUNCTION set_audit_log_euid()
 RETURNS TRIGGER AS $$
 DECLARE
     prefix TEXT;
-    sandbox_prefix TEXT;
+    dc TEXT;
     seq_val BIGINT;
     seq_name TEXT;
 BEGIN
+    -- Populate domain_code and issuer_app_code from session context
+    NEW.domain_code := tapdb_current_domain_code();
+    NEW.issuer_app_code := tapdb_current_app_code();
+
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('audit_log');
         seq_name := lower(prefix) || '_instance_seq';
@@ -713,9 +762,9 @@ BEGIN
     ELSE
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
-        sandbox_prefix := meridian_euid_sandbox_prefix(NEW.euid);
+        dc := meridian_euid_domain_code(NEW.euid);
         prefix := tapdb_validate_meridian_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, sandbox_prefix) THEN
+        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -746,10 +795,12 @@ BEGIN
     -- Record deletion in audit log with full record snapshot
     INSERT INTO audit_log (
         rel_table_name, rel_table_uid_fk, rel_table_euid_fk,
-        tenant_id, changed_by, operation_type, old_value
+        tenant_id, domain_code, issuer_app_code,
+        changed_by, operation_type, old_value
     ) VALUES (
         TG_TABLE_NAME, OLD.uid, OLD.euid,
-        OLD.tenant_id, app_username, 'DELETE', row_to_json(OLD)::TEXT
+        OLD.tenant_id, OLD.domain_code, OLD.issuer_app_code,
+        app_username, 'DELETE', row_to_json(OLD)::TEXT
     );
 
     RETURN NULL;  -- Prevent actual deletion
@@ -780,10 +831,12 @@ BEGIN
         IF old_value IS DISTINCT FROM new_value THEN
             INSERT INTO audit_log (rel_table_name, column_name, old_value, new_value,
                                    changed_by, rel_table_uid_fk, rel_table_euid_fk,
-                                   tenant_id, operation_type)
+                                   tenant_id, domain_code, issuer_app_code,
+                                   operation_type)
             VALUES (TG_TABLE_NAME, column_name, old_value, new_value,
                     app_username, NEW.uid, NEW.euid,
-                    NEW.tenant_id, TG_OP);
+                    NEW.tenant_id, NEW.domain_code, NEW.issuer_app_code,
+                    TG_OP);
         END IF;
     END LOOP;
 
@@ -804,8 +857,11 @@ BEGIN
     END;
 
     INSERT INTO audit_log (rel_table_name, rel_table_uid_fk, rel_table_euid_fk,
-                           tenant_id, changed_by, operation_type)
-    VALUES (TG_TABLE_NAME, NEW.uid, NEW.euid, NEW.tenant_id, app_username, 'INSERT');
+                           tenant_id, domain_code, issuer_app_code,
+                           changed_by, operation_type)
+    VALUES (TG_TABLE_NAME, NEW.uid, NEW.euid,
+            NEW.tenant_id, NEW.domain_code, NEW.issuer_app_code,
+            app_username, 'INSERT');
 
     RETURN NEW;
 END;

@@ -1122,10 +1122,15 @@ def db_nuke(
     DROP FUNCTION IF EXISTS set_audit_log_euid();
     DROP FUNCTION IF EXISTS tapdb_get_identity_prefix(TEXT);
     DROP FUNCTION IF EXISTS tapdb_validate_meridian_prefix(TEXT);
+    DROP FUNCTION IF EXISTS tapdb_validate_domain_code(TEXT);
+    DROP FUNCTION IF EXISTS tapdb_validate_app_code(TEXT);
+    DROP FUNCTION IF EXISTS tapdb_current_domain_code();
+    DROP FUNCTION IF EXISTS tapdb_current_app_code();
     DROP FUNCTION IF EXISTS tapdb_validate_sandbox_prefix(TEXT);
     DROP FUNCTION IF EXISTS tapdb_current_sandbox_prefix();
     DROP FUNCTION IF EXISTS meridian_generate_euid(TEXT, BIGINT, TEXT);
     DROP FUNCTION IF EXISTS meridian_generate_euid(TEXT, BIGINT);
+    DROP FUNCTION IF EXISTS meridian_euid_domain_code(TEXT);
     DROP FUNCTION IF EXISTS meridian_euid_sandbox_prefix(TEXT);
     DROP FUNCTION IF EXISTS meridian_euid_prefix(TEXT);
     DROP FUNCTION IF EXISTS meridian_euid_seq_from_euid(TEXT);
