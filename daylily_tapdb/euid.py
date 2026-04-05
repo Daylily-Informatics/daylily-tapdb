@@ -26,54 +26,65 @@ _CROCKFORD_VALUE: dict[str, int] = {ch: i for i, ch in enumerate(CROCKFORD_ALPHA
 # Canonical regex character classes from SPEC.md §6.4
 _ALNUM32 = r"[0-9A-HJ-KMNP-TV-Z]"
 _LETTERS32 = r"[A-HJ-KMNP-TV-Z]"
-_SANDBOX32 = r"[HJ-KMNP-TV-Z]"
 
 # Production: CATEGORY(2-3 letters) - BODY(no leading 0) CHECKSUM
 _PRODUCTION_RE = re.compile(
     rf"^{_LETTERS32}{{2,3}}-([1-9A-HJ-KMNP-TV-Z]{_ALNUM32}*){_ALNUM32}$"
 )
-# Sandbox: PREFIX : CATEGORY - BODY CHECKSUM
-_SANDBOX_RE = re.compile(
-    rf"^{_SANDBOX32}:{_LETTERS32}{{2,3}}-([1-9A-HJ-KMNP-TV-Z]{_ALNUM32}*){_ALNUM32}$"
+# Domain-scoped: DOMAIN_CODE(1-4 letters) : CATEGORY - BODY CHECKSUM
+_DOMAIN_RE = re.compile(
+    rf"^{_LETTERS32}{{1,4}}:{_LETTERS32}{{2,3}}-([1-9A-HJ-KMNP-TV-Z]{_ALNUM32}*){_ALNUM32}$"
 )
+# Backward compat alias
+_SANDBOX_RE = _DOMAIN_RE
 
-DEFAULT_SANDBOX_PREFIX = "T"
-MERIDIAN_SANDBOX_PREFIX_ENV = "MERIDIAN_SANDBOX_PREFIX"
+DEFAULT_DOMAIN_CODE = "T"
+DEFAULT_SANDBOX_PREFIX = DEFAULT_DOMAIN_CODE  # backward compat
+MERIDIAN_DOMAIN_CODE_ENV = "MERIDIAN_DOMAIN_CODE"
+MERIDIAN_SANDBOX_PREFIX_ENV = MERIDIAN_DOMAIN_CODE_ENV  # backward compat
 MERIDIAN_ENVIRONMENT_ENV = "MERIDIAN_ENVIRONMENT"
 LSMC_ENV_ENV = "LSMC_ENV"
 CORE_TEMPLATE_PLACEHOLDER_PREFIX = "GX"
-_EUID_CLIENT_CODE_RE = re.compile(rf"^{_LETTERS32}$")
+_EUID_CLIENT_CODE_RE = re.compile(rf"^{_LETTERS32}{{1,4}}$")
 
 
-def normalize_sandbox_prefix(prefix: str | None) -> str | None:
-    """Normalize and validate a sandbox prefix."""
-    if prefix is None:
+def normalize_domain_code(code: str | None) -> str | None:
+    """Normalize and validate a domain code (1-4 Crockford Base32 letters)."""
+    if code is None:
         return None
-    normalized = prefix.strip().upper()
+    normalized = code.strip().upper()
     if not normalized:
         return None
-    if not re.fullmatch(_SANDBOX32, normalized):
+    if not re.fullmatch(r"[A-HJ-KMNP-TV-Z]{1,4}", normalized):
         raise ValueError(
-            f"Invalid sandbox prefix {prefix!r}; expected a single Meridian sandbox letter"
+            f"Invalid domain code {code!r}; expected 1-4 Crockford Base32 letters"
         )
     return normalized
 
 
-def resolve_runtime_sandbox_prefix(
+# Backward compat alias
+normalize_sandbox_prefix = normalize_domain_code
+
+
+def resolve_runtime_domain_code(
     environ: Mapping[str, str] | None = None,
 ) -> str | None:
-    """Resolve the runtime sandbox prefix.
+    """Resolve the runtime domain code.
 
     Rules:
     - missing env var => default ``T``
-    - explicit empty string => disable sandbox prefixing
-    - explicit non-empty value => validated single-letter prefix
+    - explicit empty string => disable domain code prefixing
+    - explicit non-empty value => validated 1-4 letter domain code
     """
     env = environ or os.environ
-    raw_prefix = env.get(MERIDIAN_SANDBOX_PREFIX_ENV)
-    if raw_prefix is None:
-        return DEFAULT_SANDBOX_PREFIX
-    return normalize_sandbox_prefix(raw_prefix)
+    raw_code = env.get(MERIDIAN_DOMAIN_CODE_ENV)
+    if raw_code is None:
+        return DEFAULT_DOMAIN_CODE
+    return normalize_domain_code(raw_code)
+
+
+# Backward compat alias
+resolve_runtime_sandbox_prefix = resolve_runtime_domain_code
 
 
 def resolve_runtime_validation_context(
@@ -86,35 +97,35 @@ def resolve_runtime_validation_context(
         .strip()
         .lower()
     )
-    sandbox_prefix = resolve_runtime_sandbox_prefix(env)
+    domain_code = resolve_runtime_domain_code(env)
 
-    if raw_environment == "sandbox":
+    if raw_environment in ("sandbox", "domain"):
         return {
-            "environment": "sandbox",
-            "allowed_sandbox_prefixes": [sandbox_prefix] if sandbox_prefix else [],
+            "environment": "domain",
+            "allowed_domain_codes": [domain_code] if domain_code else [],
         }
     if raw_environment:
         return {"environment": "production"}
-    if sandbox_prefix:
+    if domain_code:
         return {
-            "environment": "sandbox",
-            "allowed_sandbox_prefixes": [sandbox_prefix],
+            "environment": "domain",
+            "allowed_domain_codes": [domain_code],
         }
     return {"environment": "production"}
 
 
 def normalize_euid_client_code(code: str | None) -> str:
-    """Normalize and validate a one-letter client code for TapDB core prefixes."""
+    """Normalize and validate a 1-4 letter client code for TapDB core prefixes."""
     normalized = str(code or "").strip().upper()
     if not normalized:
         raise ValueError("euid_client_code is required")
     if not _EUID_CLIENT_CODE_RE.fullmatch(normalized):
         raise ValueError(
-            "euid_client_code must be a single Meridian-safe letter (A-Z, excluding I/L/O/U)"
+            "euid_client_code must be 1-4 Meridian-safe letters (A-Z, excluding I/L/O/U)"
         )
-    if normalized == DEFAULT_SANDBOX_PREFIX:
+    if normalized == DEFAULT_DOMAIN_CODE:
         raise ValueError(
-            f"euid_client_code {normalized!r} is reserved for TapDB sandbox/runtime use"
+            f"euid_client_code {normalized!r} is reserved for TapDB domain/runtime use"
         )
     return normalized
 
@@ -165,25 +176,33 @@ def meridian_checksum(payload: str) -> str:
     return CROCKFORD_ALPHABET[check_value]
 
 
-def format_euid(prefix: str, seq_val: int, *, sandbox: str | None = None) -> str:
+def format_euid(
+    prefix: str,
+    seq_val: int,
+    *,
+    domain_code: str | None = None,
+    sandbox: str | None = None,  # backward compat alias
+) -> str:
     """Build a Meridian-conformant EUID string.
 
     Args:
         prefix: Category prefix (e.g. "TX", "AGX"). 2-3 uppercase Crockford letters.
         seq_val: Positive integer from the sequence.
-        sandbox: Optional single-letter sandbox prefix.
+        domain_code: Optional 1-4 letter domain code prefix.
+        sandbox: Deprecated alias for domain_code.
 
     Returns:
-        Formatted EUID, e.g. ``TX-1C`` or ``X:TX-1C``.
+        Formatted EUID, e.g. ``TX-1C`` or ``T:TX-1C``.
     """
+    dc = domain_code or sandbox
     body = crockford_base32_encode(seq_val)
-    if sandbox:
-        payload = sandbox + prefix + body
+    if dc:
+        payload = dc + prefix + body
     else:
         payload = prefix + body
     check = meridian_checksum(payload)
-    if sandbox:
-        return f"{sandbox}:{prefix}-{body}{check}"
+    if dc:
+        return f"{dc}:{prefix}-{body}{check}"
     return f"{prefix}-{body}{check}"
 
 
@@ -191,13 +210,18 @@ def validate_euid(
     euid: str,
     *,
     environment: str = "production",
-    allowed_sandbox_prefixes: list[str] | None = None,
+    allowed_domain_codes: list[str] | None = None,
+    allowed_sandbox_prefixes: list[str] | None = None,  # backward compat alias
 ) -> bool:
     """Validate an EUID string against Meridian spec.
 
     Returns True if the EUID is syntactically valid and checksum-correct
     for the given environment.
     """
+    allowed = allowed_domain_codes or allowed_sandbox_prefixes
+    # Accept "sandbox" as alias for "domain"
+    env = "domain" if environment == "sandbox" else environment
+
     # §8.1 — reject non-ASCII, whitespace, lowercase
     if not euid.isascii():
         return False
@@ -208,24 +232,22 @@ def validate_euid(
 
     has_colon = ":" in euid
     if has_colon:
-        # Sandbox EUID
-        if environment == "production":
+        # Domain-scoped EUID
+        if env == "production":
             return False
-        if not _SANDBOX_RE.match(euid):
+        if not _DOMAIN_RE.match(euid):
             return False
-        sandbox_prefix = euid[0]
-        if (
-            allowed_sandbox_prefixes is not None
-            and sandbox_prefix not in allowed_sandbox_prefixes
-        ):
+        # Extract domain code (everything before ':')
+        dc = euid.split(":")[0]
+        if allowed is not None and dc not in allowed:
             return False
-        # Checksum payload = sandbox + category + body (no delimiters)
+        # Checksum payload = domain_code + category + body (no delimiters)
         stripped = euid.replace(":", "").replace("-", "")
         payload = stripped[:-1]
         presented_check = stripped[-1]
     else:
         # Production EUID
-        if environment == "sandbox":
+        if env == "domain":
             return False
         if not _PRODUCTION_RE.match(euid):
             return False

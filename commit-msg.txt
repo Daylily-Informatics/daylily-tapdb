@@ -1,8 +1,10 @@
-feat: add domain_code + issuer_app_code columns to schema and ORM (Step 1)
+feat: update connection/session context for domain_code + issuer_app_code (Step 2)
 
-- Add domain_code TEXT NOT NULL DEFAULT '' and issuer_app_code TEXT NOT NULL DEFAULT '' to generic_template, generic_instance, generic_instance_lineage, audit_log, outbox_event
-- Add domain_code and issuer_app_code to tapdb_core ORM base class with server_default=FetchedValue()
-- Add tenant_id, domain_code, issuer_app_code to outbox_event ORM model
-- Update unique_template_code constraint to include (domain_code, issuer_app_code)
-- Record meridian-euid 0.3.0pre dependency in pyproject.toml
+- TAPDBConnection accepts domain_code and issuer_app_code params
+- Session vars: session.current_domain_code, session.current_app_code
+- Rename sandbox_prefix to domain_code throughout euid.py (backward compat aliases kept)
+- Env var MERIDIAN_DOMAIN_CODE replaces MERIDIAN_SANDBOX_PREFIX
+- Domain codes expanded from 1 char to 1-4 chars
+- format_euid() accepts domain_code= param
+- validate_euid() accepts allowed_domain_codes= and environment='domain'
 - 623 tests passing

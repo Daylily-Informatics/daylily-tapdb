@@ -197,22 +197,22 @@ class TestRuntimeSandboxPrefix:
         assert resolve_runtime_sandbox_prefix({}) == DEFAULT_SANDBOX_PREFIX
 
     def test_explicit_empty_prefix_disables_prefixing(self):
-        assert resolve_runtime_sandbox_prefix({"MERIDIAN_SANDBOX_PREFIX": ""}) is None
+        assert resolve_runtime_sandbox_prefix({"MERIDIAN_DOMAIN_CODE": ""}) is None
 
     def test_explicit_prefix_is_normalized(self):
-        assert resolve_runtime_sandbox_prefix({"MERIDIAN_SANDBOX_PREFIX": "s"}) == "S"
+        assert resolve_runtime_sandbox_prefix({"MERIDIAN_DOMAIN_CODE": "s"}) == "S"
 
-    def test_runtime_validation_defaults_to_sandbox_t(self):
+    def test_runtime_validation_defaults_to_domain_t(self):
         assert resolve_runtime_validation_context({}) == {
-            "environment": "sandbox",
-            "allowed_sandbox_prefixes": ["T"],
+            "environment": "domain",
+            "allowed_domain_codes": ["T"],
         }
 
     def test_runtime_validation_respects_production_env(self):
         assert resolve_runtime_validation_context(
             {
                 "MERIDIAN_ENVIRONMENT": "production",
-                "MERIDIAN_SANDBOX_PREFIX": "",
+                "MERIDIAN_DOMAIN_CODE": "",
             }
         ) == {"environment": "production"}
 

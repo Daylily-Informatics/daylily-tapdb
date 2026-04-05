@@ -4,7 +4,8 @@ Moonshot Phase 2 policy:
 - No surprise commits inside the library
 - Callers control transaction boundaries
 - Audit username is set per-transaction using `SET LOCAL session.current_username`
-- Sandbox prefix is set per-session using `session.current_sandbox_prefix`
+- Domain code is set per-session using `session.current_domain_code`
+- Issuer app code is set per-session using `session.current_app_code`
 
 Recommended usage:
 
@@ -28,7 +29,7 @@ from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session, sessionmaker
 
-from daylily_tapdb.euid import resolve_runtime_sandbox_prefix
+from daylily_tapdb.euid import resolve_runtime_domain_code
 
 logger = logging.getLogger(__name__)
 DEFAULT_TAPDB_POSTGRES_PORT = "5533"
@@ -69,6 +70,9 @@ class TAPDBConnection:
         region: str = "us-west-2",
         iam_auth: bool = True,
         secret_arn: Optional[str] = None,
+        domain_code: Optional[str] = None,
+        issuer_app_code: Optional[str] = None,
+        sandbox_prefix: Optional[str] = None,  # backward compat alias for domain_code
     ):
         """
         Initialize database connection.
@@ -91,13 +95,19 @@ class TAPDBConnection:
             region: AWS region (only used when engine_type="aurora").
             iam_auth: Use IAM database authentication (Aurora only).
             secret_arn: Secrets Manager ARN for password (Aurora fallback).
+            domain_code: Domain code for session scoping (1-4 chars).
+            issuer_app_code: Issuer app code for session scoping (1-4 chars).
+            sandbox_prefix: Deprecated alias for domain_code.
         """
         self.logger = logging.getLogger(__name__ + ".TAPDBConnection")
 
         # Resolve defaults from environment
         db_user = db_user or os.environ.get("USER", "tapdb")
         self.app_username = app_username or os.environ.get("USER", "tapdb_orm")
-        self.sandbox_prefix = resolve_runtime_sandbox_prefix()
+        self.domain_code = domain_code or sandbox_prefix or resolve_runtime_domain_code()
+        self.issuer_app_code = issuer_app_code or os.environ.get("TAPDB_APP_CODE", "TAPD")
+        # Backward compat
+        self.sandbox_prefix = self.domain_code
 
         if echo_sql is None:
             echo_env = os.environ.get("ECHO_SQL", "").lower()
@@ -185,22 +195,25 @@ class TAPDBConnection:
         except Exception as e:
             self.logger.warning(f"Could not set session username: {e}")
 
-    def _set_session_sandbox_prefix(self, session: Session, *, local: bool) -> None:
-        """Set the sandbox prefix seen by SQL EUID triggers."""
+    def _set_session_domain_code(self, session: Session, *, local: bool) -> None:
+        """Set the domain code and issuer app code seen by SQL triggers."""
         if not self._is_postgresql_session(session):
             return
-        statement = (
-            "SET LOCAL session.current_sandbox_prefix = :prefix"
+        dc_stmt = (
+            "SET LOCAL session.current_domain_code = :code"
             if local
-            else "SET session.current_sandbox_prefix = :prefix"
+            else "SET session.current_domain_code = :code"
+        )
+        app_stmt = (
+            "SET LOCAL session.current_app_code = :code"
+            if local
+            else "SET session.current_app_code = :code"
         )
         try:
-            session.execute(
-                text(statement),
-                {"prefix": self.sandbox_prefix or ""},
-            )
+            session.execute(text(dc_stmt), {"code": self.domain_code or ""})
+            session.execute(text(app_stmt), {"code": self.issuer_app_code or ""})
         except Exception as e:
-            self.logger.warning(f"Could not set session sandbox prefix: {e}")
+            self.logger.warning(f"Could not set session domain/app code: {e}")
 
     def get_session(self) -> Session:
         """
@@ -214,7 +227,7 @@ class TAPDBConnection:
         """
         session = self._Session()
         self._set_session_timezone_utc(session, local=False)
-        self._set_session_sandbox_prefix(session, local=False)
+        self._set_session_domain_code(session, local=False)
         return session
 
     @contextmanager
@@ -238,7 +251,7 @@ class TAPDBConnection:
         try:
             # Must happen inside a transaction for SET LOCAL.
             self._set_session_timezone_utc(session, local=True)
-            self._set_session_sandbox_prefix(session, local=True)
+            self._set_session_domain_code(session, local=True)
             self._set_session_username(session)
             yield session
             if commit:
