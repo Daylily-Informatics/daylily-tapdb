@@ -17,7 +17,7 @@ from daylily_tapdb.outbox.queries import (
     InboxStatusSummary,
     OutboxStatusSummary,
     get_event_attempts,
-    get_outbox_event_by_machine_uuid,
+    get_outbox_event_by_receipt_uuid,
     inbox_status_summary,
     list_events_by_destination,
     list_failed_events,
@@ -72,5 +72,5 @@ __all__ = [
     "list_stale_delivering",
     "get_event_attempts",
     "list_events_by_destination",
-    "get_outbox_event_by_machine_uuid",
+    "get_outbox_event_by_receipt_uuid",
 ]

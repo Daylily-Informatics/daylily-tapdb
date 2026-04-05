@@ -427,9 +427,9 @@ CREATE INDEX IF NOT EXISTS idx_outbox_event_claim_token
     WHERE claim_token IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_outbox_event_domain_status_created
     ON outbox_event(domain_code, status, created_dt);
-CREATE INDEX IF NOT EXISTS idx_outbox_event_machine_uuid
-    ON outbox_event(machine_uuid)
-    WHERE machine_uuid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_outbox_event_receipt_machine_uuid
+    ON outbox_event(receipt_machine_uuid)
+    WHERE receipt_machine_uuid IS NOT NULL;
 
 -- outbox_event_attempt: time-ordered
 CREATE INDEX IF NOT EXISTS idx_outbox_attempt_event_time

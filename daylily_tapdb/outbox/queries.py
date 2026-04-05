@@ -152,10 +152,12 @@ def list_events_by_destination(
     return list(session.execute(q).scalars().all())
 
 
-def get_outbox_event_by_machine_uuid(
+def get_outbox_event_by_receipt_uuid(
     session: Session,
-    machine_uuid,
+    receipt_machine_uuid,
 ) -> outbox_event | None:
-    """Look up an outbox event by its machine_uuid."""
-    q = select(outbox_event).where(outbox_event.machine_uuid == machine_uuid)
+    """Look up an outbox event by its receipt_machine_uuid."""
+    q = select(outbox_event).where(
+        outbox_event.receipt_machine_uuid == receipt_machine_uuid
+    )
     return session.execute(q).scalar_one_or_none()
