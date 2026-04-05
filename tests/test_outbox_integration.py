@@ -194,9 +194,13 @@ def test_postgres_outbox_fanout_multiple_destinations(pytestconfig):
             assert len(extra_ids) == 2
 
             # Verify total outbox rows: 1 original + 2 fanout = 3
-            all_rows = session.execute(
-                select(outbox_event).where(outbox_event.message_uid == msg.uid)
-            ).scalars().all()
+            all_rows = (
+                session.execute(
+                    select(outbox_event).where(outbox_event.message_uid == msg.uid)
+                )
+                .scalars()
+                .all()
+            )
             assert len(all_rows) == 3
 
             # All rows reference the same canonical message

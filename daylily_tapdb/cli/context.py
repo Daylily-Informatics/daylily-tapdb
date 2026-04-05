@@ -220,9 +220,7 @@ def resolve_context(
                 f"Config file {resolved_config_path} must contain "
                 "'client_id' and 'database_name' in its metadata section."
             )
-        raise RuntimeError(
-            "TapDB config path is required. Set --config."
-        )
+        raise RuntimeError("TapDB config path is required. Set --config.")
 
     resolved_env = (env_name or _ACTIVE_ENV_NAME or "").strip().lower() or None
     return TapdbContext(

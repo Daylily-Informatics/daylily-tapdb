@@ -70,7 +70,7 @@ def test_get_template_uses_uuid_cache():
     tm = TemplateManager()
     tmpl = _FakeTemplate(uid="u1", euid="GT1", is_deleted=False)
     code = "generic/generic/generic/1.0/"
-    cache_key = f"::{ code}"
+    cache_key = f"::{code}"
     tm._template_uid_cache[cache_key] = "u1"
 
     sess = _FakeSession(get_map={"u1": tmpl})
@@ -91,7 +91,7 @@ def test_get_template_query_populates_caches():
     got = tm.get_template(sess, code)
 
     assert got is tmpl
-    cache_key = f"::{ code}"
+    cache_key = f"::{code}"
     assert tm._template_uid_cache[cache_key] == "u2"
     assert tm._template_euid_cache["GT2"] == "u2"
 
@@ -104,7 +104,7 @@ def test_get_template_cache_hit_deleted_falls_back_to_query():
 
     deleted = _FakeTemplate(uid="ud", euid="GTd", is_deleted=True)
     fresh = _FakeTemplate(uid="uf", euid="GTf", is_deleted=False)
-    cache_key = f"::{ code}"
+    cache_key = f"::{code}"
     tm._template_uid_cache[cache_key] = "ud"
 
     sess = _FakeSession(get_map={"ud": deleted}, query_first=fresh)

@@ -173,9 +173,7 @@ class TestValidateEuid:
 
     def test_reject_production_in_domain(self):
         assert (
-            validate_euid(
-                "TX-1C", environment="domain", allowed_domain_codes=["X"]
-            )
+            validate_euid("TX-1C", environment="domain", allowed_domain_codes=["X"])
             is False
         )
 
@@ -198,6 +196,7 @@ class TestRuntimeDomainCode:
 
     def test_explicit_empty_raises(self):
         import pytest
+
         with pytest.raises(ValueError, match="empty string"):
             resolve_runtime_domain_code({"MERIDIAN_DOMAIN_CODE": ""})
 
@@ -220,10 +219,9 @@ class TestRuntimeDomainCode:
 
     def test_runtime_validation_empty_domain_code_raises(self):
         import pytest
+
         with pytest.raises(ValueError, match="empty string"):
-            resolve_runtime_validation_context(
-                {"MERIDIAN_DOMAIN_CODE": ""}
-            )
+            resolve_runtime_validation_context({"MERIDIAN_DOMAIN_CODE": ""})
 
 
 # ---------------------------------------------------------------------------

@@ -157,7 +157,6 @@ def mark_inbox_rejected(
     session.flush()
 
 
-
 def get_inbox_message_by_machine_uuid(
     session: Session,
     machine_uuid: uuid.UUID,

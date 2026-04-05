@@ -23,6 +23,7 @@ from daylily_tapdb.euid import (
 # §8.1 — fail-fast tests
 # ---------------------------------------------------------------------------
 
+
 class TestFailFastDomainCode:
     """domain_code must be provided; empty string raises."""
 
@@ -66,15 +67,19 @@ class TestFailFastConnection:
 # §8.2 — domain validation & normalization
 # ---------------------------------------------------------------------------
 
+
 class TestDomainCodeValidation:
     """Crockford Base32, 1-4 chars, normalized to uppercase."""
 
-    @pytest.mark.parametrize("raw,expected", [
-        ("t", "T"),
-        ("tapd", "TAPD"),
-        ("AB", "AB"),
-        ("X", "X"),
-    ])
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("t", "T"),
+            ("tapd", "TAPD"),
+            ("AB", "AB"),
+            ("X", "X"),
+        ],
+    )
     def test_valid_codes(self, raw, expected):
         assert normalize_domain_code(raw) == expected
 
@@ -91,6 +96,7 @@ class TestDomainCodeValidation:
 # §8.3 — EUID domain environment validation
 # ---------------------------------------------------------------------------
 
+
 class TestEuidDomainEnvironment:
     """validate_euid must reject cross-environment EUIDs."""
 
@@ -98,12 +104,16 @@ class TestEuidDomainEnvironment:
         assert validate_euid("T:TX-1C") is False
 
     def test_production_rejected_in_domain_mode(self):
-        assert validate_euid("TX-1C", environment="domain", allowed_domain_codes=["T"]) is False
+        assert (
+            validate_euid("TX-1C", environment="domain", allowed_domain_codes=["T"])
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------
 # §8.4 — TemplateManager cache isolation
 # ---------------------------------------------------------------------------
+
 
 class TestTemplateCacheIsolation:
     """Cache keys must include domain:app — no cross-domain bleed."""
@@ -132,6 +142,7 @@ class TestTemplateCacheIsolation:
 # ---------------------------------------------------------------------------
 # §8.5 — Factory domain/app scoping
 # ---------------------------------------------------------------------------
+
 
 class TestFactoryDomainScoping:
     """InstanceFactory passes domain/app through to get_template."""

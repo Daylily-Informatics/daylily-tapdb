@@ -559,7 +559,11 @@ def validate_template_configs(
                             ),
                         )
                     )
-                if not is_core_template and normalized_instance_prefix in {"GX", "TGX", "MSG"}:
+                if not is_core_template and normalized_instance_prefix in {
+                    "GX",
+                    "TGX",
+                    "MSG",
+                }:
                     issues.append(
                         ConfigIssue(
                             level="error",

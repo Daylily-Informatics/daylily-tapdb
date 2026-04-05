@@ -14,5 +14,5 @@ spec = CliSpec(
         explicit=[
             "daylily_tapdb.cli.register",
         ]
-    )
+    ),
 )

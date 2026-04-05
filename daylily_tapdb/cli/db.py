@@ -652,8 +652,10 @@ def _db_callback(ctx: typer.Context) -> None:
         _require_context()
     except RuntimeError as exc:
         ccyo_out.error(f"{exc}")
-        ccyo_out.print_text("  Example: [cyan]tapdb --client-id atlas --database-name app "
-            "db create dev[/cyan]")
+        ccyo_out.print_text(
+            "  Example: [cyan]tapdb --client-id atlas --database-name app "
+            "db create dev[/cyan]"
+        )
         raise typer.Exit(1) from exc
 
 
@@ -669,7 +671,9 @@ def db_create(
     db_name = cfg["database"]
     db_owner = owner or cfg["user"]
 
-    ccyo_out.print_text(f"\n[bold cyan]━━━ Create TAPDB Database ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        f"\n[bold cyan]━━━ Create TAPDB Database ({env.value}) ━━━[/bold cyan]"
+    )
     ccyo_out.print_text(f"  Host:     {cfg['host']}:{cfg['port']}")
     ccyo_out.print_text(f"  Database: {db_name}")
     ccyo_out.print_text(f"  Owner:    {db_owner}")
@@ -723,7 +727,9 @@ def db_delete(
 
     if not force:
         ccyo_out.error("\n⚠️  WARNING: DESTRUCTIVE OPERATION")
-        ccyo_out.print_text(f"This will permanently delete database: [bold]{db_name}[/bold]")
+        ccyo_out.print_text(
+            f"This will permanently delete database: [bold]{db_name}[/bold]"
+        )
         ccyo_out.print_text("All data will be lost!\n")
 
         if env == Environment.prod:
@@ -769,7 +775,9 @@ def db_schema_apply(
     _ensure_dirs()
     cfg = _get_db_config(env)
 
-    ccyo_out.print_text(f"\n[bold cyan]━━━ Apply TAPDB Schema ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        f"\n[bold cyan]━━━ Apply TAPDB Schema ({env.value}) ━━━[/bold cyan]"
+    )
     ccyo_out.print_text(f"  Host:     {cfg['host']}:{cfg['port']}")
     ccyo_out.print_text(f"  Database: {cfg['database']}")
     ccyo_out.print_text(f"  User:     {cfg['user']}")
@@ -788,7 +796,9 @@ def db_schema_apply(
         raise typer.Exit(1)
 
     if _schema_exists(env) and not reinitialize:
-        ccyo_out.print_text(f"Schema already exists in {cfg['database']} (skipping apply)")
+        ccyo_out.print_text(
+            f"Schema already exists in {cfg['database']} (skipping apply)"
+        )
         ccyo_out.warning("► Syncing required identity prefixes...")
         try:
             _sync_identity_prefix_config(env)
@@ -844,7 +854,9 @@ def db_status(
     # Check database exists
     if not _check_db_exists(env, cfg["database"]):
         ccyo_out.error(f"Database '{cfg['database']}' does not exist")
-        ccyo_out.print_text(f"\n  Create with: [cyan]tapdb db create {env.value}[/cyan]")
+        ccyo_out.print_text(
+            f"\n  Create with: [cyan]tapdb db create {env.value}[/cyan]"
+        )
         raise typer.Exit(1)
 
     ccyo_out.success(f"Database: {cfg['database']}")
@@ -852,7 +864,9 @@ def db_status(
     # Check schema
     if not _schema_exists(env):
         ccyo_out.error("TAPDB schema not found")
-        ccyo_out.print_text(f"\n  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]")
+        ccyo_out.print_text(
+            f"\n  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]"
+        )
         raise typer.Exit(1)
 
     ccyo_out.success("Schema: installed")
@@ -906,7 +920,8 @@ def db_schema_drift_check(
     if not _check_db_exists(env, cfg["database"]):
         message = f"Database '{cfg['database']}' does not exist"
         if json_output:
-            ccyo_out.print_text(json.dumps(
+            ccyo_out.print_text(
+                json.dumps(
                     {
                         "status": "error",
                         "env": env.value,
@@ -917,7 +932,8 @@ def db_schema_drift_check(
                     },
                     indent=2,
                     sort_keys=True,
-                ))
+                )
+            )
         else:
             ccyo_out.error(f"{message}")
         raise typer.Exit(2)
@@ -927,7 +943,8 @@ def db_schema_drift_check(
     except Exception as exc:
         message = str(exc)
         if json_output:
-            ccyo_out.print_text(json.dumps(
+            ccyo_out.print_text(
+                json.dumps(
                     {
                         "status": "error",
                         "env": env.value,
@@ -938,7 +955,8 @@ def db_schema_drift_check(
                     },
                     indent=2,
                     sort_keys=True,
-                ))
+                )
+            )
         else:
             ccyo_out.error(f"Drift check failed for {env.value}: {message}")
         raise typer.Exit(2) from exc
@@ -948,12 +966,16 @@ def db_schema_drift_check(
         raise typer.Exit(1 if has_drift else 0)
 
     schema_name = payload.get("schema_name") or "(not found)"
-    ccyo_out.print_text(f"\n[bold cyan]━━━ TAPDB Schema Drift Check ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        f"\n[bold cyan]━━━ TAPDB Schema Drift Check ({env.value}) ━━━[/bold cyan]"
+    )
     ccyo_out.print_text(f"  Database: {payload['database']}")
     ccyo_out.print_text(f"  Schema:   {schema_name}")
     ccyo_out.print_text(f"  Strict:   {'yes' if payload['strict'] else 'no'}")
     counts = payload["counts"]
-    ccyo_out.print_text(f"  Counts:   expected={counts['expected']} live={counts['live']}")
+    ccyo_out.print_text(
+        f"  Counts:   expected={counts['expected']} live={counts['live']}"
+    )
 
     if has_drift:
         ccyo_out.error("\nDrift detected")
@@ -1034,25 +1056,26 @@ def db_nuke(
     if not force:
         # Confirmation 1: Environment
         env_upper = env.value.upper()
-        ccyo_out.error(f"\nConfirmation 1/3: You are about"
-            f" to nuke the {env_upper}"
-            " database.")
+        ccyo_out.error(
+            f"\nConfirmation 1/3: You are about to nuke the {env_upper} database."
+        )
         if not Confirm.ask("  Proceed?", default=False):
             ccyo_out.print_text("[dim]Aborted.[/dim]")
             return
 
         # Confirmation 2: Type environment name
-        ccyo_out.print_text("\n[bold]Confirmation 2/3:[/bold] Type the environment name to confirm:")
+        ccyo_out.print_text(
+            "\n[bold]Confirmation 2/3:[/bold] Type the environment name to confirm:"
+        )
         typed_env = Prompt.ask("  Environment name")
         if typed_env.lower() != env.value.lower():
-            ccyo_out.error(f"Input '{typed_env}' does not"
-                f" match '{env.value}'. Aborted.")
+            ccyo_out.error(
+                f"Input '{typed_env}' does not match '{env.value}'. Aborted."
+            )
             return
 
         # Confirmation 3: Type DELETE EVERYTHING
-        ccyo_out.error("\nConfirmation 3/3: Type"
-            " DELETE EVERYTHING"
-            " to proceed:")
+        ccyo_out.error("\nConfirmation 3/3: Type DELETE EVERYTHING to proceed:")
         typed_confirm = Prompt.ask("  Confirm")
         if typed_confirm != "DELETE EVERYTHING":
             ccyo_out.error("Input does not match 'DELETE EVERYTHING'. Aborted.")
@@ -1146,7 +1169,9 @@ def db_nuke(
     if success:
         _log_operation(env.value, "NUKE", f"Deleted {total_rows} rows from all tables")
         ccyo_out.success("TAPDB schema nuked successfully")
-        ccyo_out.print_text(f"\n  Recreate with: [cyan]tapdb db schema apply {env.value}[/cyan]")
+        ccyo_out.print_text(
+            f"\n  Recreate with: [cyan]tapdb db schema apply {env.value}[/cyan]"
+        )
     else:
         ccyo_out.error(f"Nuke failed:\n{psql_out}")
         _log_operation(env.value, "NUKE_FAILED", psql_out[:200])
@@ -1163,7 +1188,9 @@ def db_migrate(
     """Apply schema migrations/updates to the specified environment."""
     cfg = _get_db_config(env)
 
-    ccyo_out.print_text(f"\n[bold cyan]━━━ Migrate TAPDB Schema ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        f"\n[bold cyan]━━━ Migrate TAPDB Schema ({env.value}) ━━━[/bold cyan]"
+    )
 
     # Check database and schema exist
     if not _check_db_exists(env, cfg["database"]):
@@ -1186,7 +1213,9 @@ def db_migrate(
 
     migration_files = sorted(migrations_dir.glob("*.sql"))
     if not migration_files:
-        ccyo_out.print_text("[dim]No migration files found. Schema is up to date.[/dim]")
+        ccyo_out.print_text(
+            "[dim]No migration files found. Schema is up to date.[/dim]"
+        )
         return
 
     # Track applied migrations
@@ -1355,8 +1384,7 @@ def db_restore(
     ccyo_out.print_text(f"  Target:   {cfg['database']} ({env.value})")
 
     if not force:
-        ccyo_out.warning("\nThis will overwrite"
-            f" existing data in {cfg['database']}")
+        ccyo_out.warning(f"\nThis will overwrite existing data in {cfg['database']}")
         if not Confirm.ask("  Proceed?", default=False):
             ccyo_out.print_text("[dim]Aborted.[/dim]")
             return
@@ -1467,7 +1495,9 @@ def db_validate_config(
         raise typer.Exit(1 if errors else 0)
 
     mode = "strict" if strict else "non-strict"
-    ccyo_out.print_text(f"\n[bold cyan]━━━ Validate Template Config ({mode}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        f"\n[bold cyan]━━━ Validate Template Config ({mode}) ━━━[/bold cyan]"
+    )
     ccyo_out.print_text("  Config directories:")
     for directory in config_dirs:
         ccyo_out.print_text(f"    - [dim]{directory}[/dim]")
@@ -1492,9 +1522,9 @@ def db_validate_config(
         ccyo_out.print_text(table)
 
     if errors:
-        ccyo_out.error(f"\nValidation failed:"
-            f" {len(errors)} error(s),"
-            f" {len(warnings)} warning(s)")
+        ccyo_out.error(
+            f"\nValidation failed: {len(errors)} error(s), {len(warnings)} warning(s)"
+        )
         raise typer.Exit(1)
     ccyo_out.success(f"\nValidation OK: {len(warnings)} warning(s)")
 
@@ -1546,8 +1576,9 @@ def _tapdb_connection_for_env(
 def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool:
     """Create default actor-backed tapdb_admin user for development flows."""
     if not insecure_dev_defaults:
-        ccyo_out.print_text("  Skipping default admin"
-            " creation (use --insecure-dev-defaults)")
+        ccyo_out.print_text(
+            "  Skipping default admin creation (use --insecure-dev-defaults)"
+        )
         return False
     if env == Environment.prod:
         ccyo_out.error("  Refusing to create default admin in prod")
@@ -1632,11 +1663,15 @@ def db_seed(
     cfg = _get_db_config(env)
 
     mode = "core + optional packs" if include_workflow else "core only"
-    ccyo_out.print_text(f"\n[bold cyan]━━━ Seed TAPDB Templates ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        f"\n[bold cyan]━━━ Seed TAPDB Templates ({env.value}) ━━━[/bold cyan]"
+    )
     ccyo_out.print_text(f"  Mode: {mode}")
     ccyo_out.print_text(f"  Core categories: {', '.join(sorted(CORE_CATEGORIES))}")
     if include_workflow and OPTIONAL_CATEGORIES:
-        ccyo_out.print_text(f"  Optional categories: {', '.join(sorted(OPTIONAL_CATEGORIES))}")
+        ccyo_out.print_text(
+            f"  Optional categories: {', '.join(sorted(OPTIONAL_CATEGORIES))}"
+        )
 
     # Resolve config directories (always include TAPDB core config first)
     try:
@@ -1657,7 +1692,9 @@ def db_seed(
 
     if not _schema_exists(env):
         ccyo_out.error("TAPDB schema not found")
-        ccyo_out.print_text(f"  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]")
+        ccyo_out.print_text(
+            f"  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]"
+        )
         raise typer.Exit(1)
 
     ccyo_out.warning("► Loading template configurations...")
@@ -1666,8 +1703,10 @@ def db_seed(
     warnings = [issue for issue in issues if issue.level == "warning"]
     if warnings:
         for issue in warnings:
-            ccyo_out.warning(f"  {issue.message}"
-                + (f" ({issue.source_file})" if issue.source_file else ""))
+            ccyo_out.warning(
+                f"  {issue.message}"
+                + (f" ({issue.source_file})" if issue.source_file else "")
+            )
     if errors:
         ccyo_out.error("Template config validation failed:")
         for issue in errors:
@@ -1685,8 +1724,10 @@ def db_seed(
 
     duplicates = _find_duplicate_template_keys(templates)
     if duplicates:
-        ccyo_out.error("Duplicate template keys detected across seed configs. "
-            "Aborting to prevent clashing templates:")
+        ccyo_out.error(
+            "Duplicate template keys detected across seed configs. "
+            "Aborting to prevent clashing templates:"
+        )
         for key, sources in sorted(duplicates.items()):
             ccyo_out.print_text(f"  • {key}")
             for source in sources:
@@ -1785,7 +1826,9 @@ def db_setup(
     is_aurora = cfg.get("engine_type") == "aurora"
 
     mode = "core + optional packs" if include_workflow else "core only"
-    ccyo_out.print_text(f"\n[bold cyan]━━━ TAPDB Full Setup ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        f"\n[bold cyan]━━━ TAPDB Full Setup ({env.value}) ━━━[/bold cyan]"
+    )
     ccyo_out.print_text(f"  Database: {cfg['database']}")
     ccyo_out.print_text(f"  Host:     {cfg['host']}:{cfg['port']}")
     if is_aurora:

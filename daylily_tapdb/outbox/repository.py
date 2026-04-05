@@ -278,7 +278,9 @@ def claim_events(
                 domain_code=domain_code,
                 issuer_app_code=issuer_app_code,
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     if not rows:
         return []
@@ -298,7 +300,6 @@ def claim_events(
 
     session.flush()
     return rows
-
 
 
 def mark_received(
@@ -459,7 +460,9 @@ def record_attempt(
         http_status=http_status,
         transport_error=transport_error[:10_000] if transport_error else None,
         response_headers=response_headers,
-        response_body_excerpt=response_body_excerpt[:10_000] if response_body_excerpt else None,
+        response_body_excerpt=response_body_excerpt[:10_000]
+        if response_body_excerpt
+        else None,
         receipt_machine_uuid=receipt_machine_uuid,
         receipt_status=receipt_status,
         receipt_received_dt=receipt_received_dt,

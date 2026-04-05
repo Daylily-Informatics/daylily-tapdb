@@ -49,7 +49,9 @@ def outbox_status_summary(
         q = q.where(outbox_event.issuer_app_code == issuer_app_code)
 
     rows = {r.status: r.cnt for r in session.execute(q).all()}
-    return OutboxStatusSummary(**{k: rows.get(k, 0) for k in OutboxStatusSummary.__dataclass_fields__})
+    return OutboxStatusSummary(
+        **{k: rows.get(k, 0) for k in OutboxStatusSummary.__dataclass_fields__}
+    )
 
 
 def list_failed_events(
@@ -135,8 +137,9 @@ def inbox_status_summary(
         q = q.where(inbox_message.issuer_app_code == issuer_app_code)
 
     rows = {r.status: r.cnt for r in session.execute(q).all()}
-    return InboxStatusSummary(**{k: rows.get(k, 0) for k in InboxStatusSummary.__dataclass_fields__})
-
+    return InboxStatusSummary(
+        **{k: rows.get(k, 0) for k in InboxStatusSummary.__dataclass_fields__}
+    )
 
 
 def list_events_by_destination(

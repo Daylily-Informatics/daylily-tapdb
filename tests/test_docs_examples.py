@@ -15,7 +15,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_DIR = REPO_ROOT / "examples" / "readme"
 
 
-def _run_bash(script: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run_bash(
+    script: Path, *, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(script)],
         cwd=REPO_ROOT,
@@ -97,7 +99,9 @@ def docs_local_runtime(tmp_path_factory: pytest.TempPathFactory) -> dict[str, ob
     )
 
 
-def test_readme_bootstrap_local_script_runs(docs_local_runtime: dict[str, object]) -> None:
+def test_readme_bootstrap_local_script_runs(
+    docs_local_runtime: dict[str, object],
+) -> None:
     config_path = docs_local_runtime["config_path"]
     stdout = str(docs_local_runtime["stdout"])
 

@@ -30,8 +30,10 @@ def _ensure_boto3():
 
         return boto3
     except ImportError:
-        ccyo_out.error("boto3 is required for Aurora commands.\n"
-            "  Install with: pip install 'daylily-tapdb'")
+        ccyo_out.error(
+            "boto3 is required for Aurora commands.\n"
+            "  Install with: pip install 'daylily-tapdb'"
+        )
         raise typer.Exit(1)
 
 
@@ -150,9 +152,11 @@ def aurora_create(
 ):
     """Create an Aurora PostgreSQL cluster via CloudFormation."""
     if cidr == "0.0.0.0/0" and publicly_accessible:
-        ccyo_out.warning("⚠️  WARNING: Creating publicly accessible cluster open to "
+        ccyo_out.warning(
+            "⚠️  WARNING: Creating publicly accessible cluster open to "
             "all IPs (0.0.0.0/0). Consider restricting --cidr to your IP.",
-            err=True,)
+            err=True,
+        )
 
     _ensure_boto3()
 
@@ -190,8 +194,9 @@ def aurora_create(
         if background:
             # Fire-and-forget: start creation, don't wait
             initiated = mgr.initiate_create_stack(config)
-            ccyo_out.success(f"Stack creation initiated "
-                f"(stack: {initiated['stack_name']}).")
+            ccyo_out.success(
+                f"Stack creation initiated (stack: {initiated['stack_name']})."
+            )
             ccyo_out.detail(
                 f"Check progress with: [cyan]tapdb aurora status {env}[/cyan]"
             )
@@ -251,10 +256,11 @@ def aurora_delete(
     if not force:
         from rich.prompt import Confirm
 
-        ccyo_out.warning(f"\nThis will delete stack {stack_name} "
-            f"in {region}.")
+        ccyo_out.warning(f"\nThis will delete stack {stack_name} in {region}.")
         if retain_networking:
-            ccyo_out.print_text("  Networking resources (SG, subnet group) will be retained.")
+            ccyo_out.print_text(
+                "  Networking resources (SG, subnet group) will be retained."
+            )
         else:
             ccyo_out.error("  All resources including networking will be deleted.")
         if not Confirm.ask("Proceed?", default=False):
@@ -281,17 +287,20 @@ def aurora_delete(
                 DeletionProtection=False,
                 ApplyImmediately=True,
             )
-            ccyo_out.print_text(f"  [dim]Disabled deletion protection on cluster {cluster_id}[/dim]")
+            ccyo_out.print_text(
+                f"  [dim]Disabled deletion protection on cluster {cluster_id}[/dim]"
+            )
         except Exception as exc:
-            ccyo_out.print_text(f"  [dim]Could not disable deletion protection: {exc}[/dim]")
+            ccyo_out.print_text(
+                f"  [dim]Could not disable deletion protection: {exc}[/dim]"
+            )
 
         result = mgr.delete_stack(stack_name, retain_networking=retain_networking)
     except RuntimeError as exc:
         ccyo_out.error(f"Stack deletion failed: {exc}")
         raise typer.Exit(1)
 
-    ccyo_out.success(f"Stack {stack_name} deleted "
-        f"(status: {result['status']}).")
+    ccyo_out.success(f"Stack {stack_name} deleted (status: {result['status']}).")
 
 
 @aurora_app.command("status")
@@ -370,8 +379,9 @@ def aurora_connect(
     port = int(outputs.get("ClusterPort", "5432"))
 
     if not endpoint:
-        ccyo_out.error(f"No endpoint found for stack {stack_name}. "
-            "Is the cluster fully created?")
+        ccyo_out.error(
+            f"No endpoint found for stack {stack_name}. Is the cluster fully created?"
+        )
         raise typer.Exit(1)
 
     if export:
@@ -387,9 +397,11 @@ def aurora_connect(
         ccyo_out.print_text(f"  Database: {db_name}")
         ccyo_out.print_text(f"  User:     {user}")
         ccyo_out.print_text("  SSL:      verify-full")
-        ccyo_out.print_text(f"\n  Connection URL (IAM auth):\n"
+        ccyo_out.print_text(
+            f"\n  Connection URL (IAM auth):\n"
             f"  [dim]postgresql+psycopg2://{user}:<iam-token>@{endpoint}:{port}/{db_name}"
-            f"?sslmode=verify-full[/dim]")
+            f"?sslmode=verify-full[/dim]"
+        )
 
 
 @aurora_app.command("list")

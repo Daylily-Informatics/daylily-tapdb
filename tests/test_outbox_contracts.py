@@ -19,7 +19,9 @@ class TestDeliveryResult:
     def test_processed_factory(self):
         rid = uuid.uuid4()
         now = datetime.now(UTC)
-        r = DeliveryResult.processed(rid, receipt_received_dt=now, receipt_processed_dt=now)
+        r = DeliveryResult.processed(
+            rid, receipt_received_dt=now, receipt_processed_dt=now
+        )
         assert r.success is True
         assert r.transport_status == "processed"
         assert r.receipt_status == "processed"

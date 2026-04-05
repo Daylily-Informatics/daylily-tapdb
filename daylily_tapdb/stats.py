@@ -91,7 +91,7 @@ def get_template_stats(
             AVG(AGE(NOW(), created_dt)) AS average_age,
             COUNT(CASE WHEN is_singleton THEN 1 END) AS singleton_count
         FROM generic_template
-        WHERE {' AND '.join(where)}
+        WHERE {" AND ".join(where)}
     """
     row = session.execute(text(sql), params).mappings().one()
     return TemplateStats(
@@ -133,7 +133,7 @@ def get_instance_stats(
             MIN(created_dt) AS earliest_created,
             AVG(AGE(NOW(), created_dt)) AS average_age
         FROM generic_instance
-        WHERE {' AND '.join(where)}
+        WHERE {" AND ".join(where)}
     """
     row = session.execute(text(sql), params).mappings().one()
     return InstanceStats(
@@ -175,7 +175,7 @@ def get_lineage_stats(
             MIN(created_dt) AS earliest_created,
             AVG(AGE(NOW(), created_dt)) AS average_age
         FROM generic_instance_lineage
-        WHERE {' AND '.join(where)}
+        WHERE {" AND ".join(where)}
     """
     row = session.execute(text(sql), params).mappings().one()
     return LineageStats(

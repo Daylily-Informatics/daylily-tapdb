@@ -510,7 +510,9 @@ def _finalize_setup_binding(
     cfg_path = _write_pool_id_to_tapdb_config(env, pool_id)
     ccyo_out.success(f"Bound pool ID to tapdb config: {pool_id}")
     ccyo_out.print_text(f"  TAPDB config: [dim]{cfg_path}[/dim]")
-    ccyo_out.print_text(f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]")
+    ccyo_out.print_text(
+        f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]"
+    )
 
 
 def _resolve_bound_daycog_context(
@@ -704,8 +706,10 @@ def cognito_setup(
     if port is None:
         selected_port = configured_port
     elif port != configured_port:
-        ccyo_out.error("--port does not match configured TAPDB UI port for env "
-            f"{env.value}: {configured_port}")
+        ccyo_out.error(
+            "--port does not match configured TAPDB UI port for env "
+            f"{env.value}: {configured_port}"
+        )
         raise typer.Exit(1)
     else:
         selected_port = port
@@ -713,11 +717,14 @@ def cognito_setup(
     selected_pool_name = pool_name or _default_pool_name(env)
     selected_client_name = client_name or REQUIRED_COGNITO_CLIENT_NAME
     if selected_client_name != REQUIRED_COGNITO_CLIENT_NAME:
-        ccyo_out.error("TAPDB requires Cognito app client name "
-            f"'{REQUIRED_COGNITO_CLIENT_NAME}'.")
+        ccyo_out.error(
+            f"TAPDB requires Cognito app client name '{REQUIRED_COGNITO_CLIENT_NAME}'."
+        )
         raise typer.Exit(1)
-    ccyo_out.print_text(f"[cyan]Setting up Cognito pool[/cyan] [bold]{selected_pool_name}[/bold] "
-        f"for env [bold]{env.value}[/bold]")
+    ccyo_out.print_text(
+        f"[cyan]Setting up Cognito pool[/cyan] [bold]{selected_pool_name}[/bold] "
+        f"for env [bold]{env.value}[/bold]"
+    )
 
     args = _build_daycog_setup_args(
         command="setup",
@@ -861,8 +868,10 @@ def cognito_setup_with_google(
     if port is None:
         selected_port = configured_port
     elif port != configured_port:
-        ccyo_out.error("--port does not match configured TAPDB UI port for env "
-            f"{env.value}: {configured_port}")
+        ccyo_out.error(
+            "--port does not match configured TAPDB UI port for env "
+            f"{env.value}: {configured_port}"
+        )
         raise typer.Exit(1)
     else:
         selected_port = port
@@ -870,11 +879,14 @@ def cognito_setup_with_google(
     selected_pool_name = pool_name or _default_pool_name(env)
     selected_client_name = client_name or REQUIRED_COGNITO_CLIENT_NAME
     if selected_client_name != REQUIRED_COGNITO_CLIENT_NAME:
-        ccyo_out.error("TAPDB requires Cognito app client name "
-            f"'{REQUIRED_COGNITO_CLIENT_NAME}'.")
+        ccyo_out.error(
+            f"TAPDB requires Cognito app client name '{REQUIRED_COGNITO_CLIENT_NAME}'."
+        )
         raise typer.Exit(1)
-    ccyo_out.print_text(f"[cyan]Setting up Cognito (Google)[/cyan] [bold]{selected_pool_name}[/bold] "
-        f"for env [bold]{env.value}[/bold]")
+    ccyo_out.print_text(
+        f"[cyan]Setting up Cognito (Google)[/cyan] [bold]{selected_pool_name}[/bold] "
+        f"for env [bold]{env.value}[/bold]"
+    )
 
     args = _build_daycog_setup_args(
         command="setup-with-google",
@@ -974,8 +986,7 @@ def cognito_status(
         env,
         values,
     )
-    ccyo_out.success("TAPDB UI port expectation: "
-        f"{expected_port} ({port_source})")
+    ccyo_out.success(f"TAPDB UI port expectation: {expected_port} ({port_source})")
     if notices:
         ccyo_out.success(f"URI checks inspected: {len(notices)}")
     if errors:
@@ -1444,11 +1455,14 @@ def cognito_add_user(
             display_name=display_name,
         )
     except Exception as e:
-        ccyo_out.error("Cognito user created, but failed to provision "
-            f"TAPDB actor user: {e}")
+        ccyo_out.error(
+            f"Cognito user created, but failed to provision TAPDB actor user: {e}"
+        )
         raise typer.Exit(1)
 
     ccyo_out.success(f"Created Cognito user: {email}")
     ccyo_out.print_text(f"  Pool: [dim]{pool_id}[/dim]")
-    ccyo_out.print_text(f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]")
+    ccyo_out.print_text(
+        f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]"
+    )
     ccyo_out.print_text(f"  tapdb role: [dim]{role}[/dim]")

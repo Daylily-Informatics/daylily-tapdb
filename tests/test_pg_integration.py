@@ -71,13 +71,17 @@ class TestSchemaApply:
         """Verify core tables exist after schema apply."""
         engine = create_engine(pg_instance["dsn"])
         with engine.connect() as conn:
-            tables = conn.execute(
-                text(
-                    "SELECT tablename FROM pg_tables "
-                    "WHERE schemaname = 'public' "
-                    "ORDER BY tablename"
+            tables = (
+                conn.execute(
+                    text(
+                        "SELECT tablename FROM pg_tables "
+                        "WHERE schemaname = 'public' "
+                        "ORDER BY tablename"
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         # After schema apply, we expect at least these core tables
         if tables:  # only assert if schema was applied
             assert "generic_template" in tables
@@ -183,6 +187,7 @@ class TestDbCommands:
         result = runner.invoke(app, ["info", "--json"])
         assert result.exit_code == 0
         import json
+
         payload = json.loads(result.output)
         assert "version" in payload
 
@@ -221,9 +226,7 @@ class TestORMOperations:
         engine = self._engine(pg_instance)
         with engine.connect() as conn:
             rows = conn.execute(
-                text(
-                    "SELECT uid FROM generic_instance_lineage LIMIT 5"
-                )
+                text("SELECT uid FROM generic_instance_lineage LIMIT 5")
             ).fetchall()
             assert isinstance(rows, list)
 
@@ -231,28 +234,28 @@ class TestORMOperations:
         """Verify audit_log table exists and is queryable."""
         engine = self._engine(pg_instance)
         with engine.connect() as conn:
-            rows = conn.execute(
-                text("SELECT uid FROM audit_log LIMIT 5")
-            ).fetchall()
+            rows = conn.execute(text("SELECT uid FROM audit_log LIMIT 5")).fetchall()
             assert isinstance(rows, list)
 
     def test_query_outbox(self, pg_instance):
         """Verify outbox_event table exists and is queryable."""
         engine = self._engine(pg_instance)
         with engine.connect() as conn:
-            rows = conn.execute(
-                text("SELECT id FROM outbox_event LIMIT 5")
-            ).fetchall()
+            rows = conn.execute(text("SELECT id FROM outbox_event LIMIT 5")).fetchall()
             assert isinstance(rows, list)
 
     def test_sequence_operations(self, pg_instance):
         """Test sequence functions against real DB."""
         engine = self._engine(pg_instance)
         with engine.connect() as conn:
-            seqs = conn.execute(
-                text(
-                    "SELECT sequencename FROM pg_sequences "
-                    "WHERE schemaname = 'public'"
+            seqs = (
+                conn.execute(
+                    text(
+                        "SELECT sequencename FROM pg_sequences "
+                        "WHERE schemaname = 'public'"
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert isinstance(seqs, list)

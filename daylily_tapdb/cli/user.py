@@ -138,7 +138,9 @@ def user_add(
             pw_hash = _hash_password(password)
         except RuntimeError as e:
             ccyo_out.error(f"{e}")
-            ccyo_out.print_text("  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]")
+            ccyo_out.print_text(
+                "  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]"
+            )
             raise typer.Exit(1)
 
     try:
@@ -163,9 +165,7 @@ def user_add(
         ccyo_out.error(f"User '{username}' already exists")
         raise typer.Exit(1)
 
-    ccyo_out.success(f"Created user"
-        f" {username}"
-        f" with role {role}")
+    ccyo_out.success(f"Created user {username} with role {role}")
 
 
 @user_app.command("set-role")
@@ -250,7 +250,9 @@ def user_set_password(
         pw_hash = _hash_password(password)
     except RuntimeError as e:
         ccyo_out.error(f"{e}")
-        ccyo_out.print_text("  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]")
+        ccyo_out.print_text(
+            "  Install with: [cyan]pip install 'passlib[bcrypt]'[/cyan]"
+        )
         raise typer.Exit(1)
 
     try:

@@ -210,12 +210,20 @@ def pg_start():
     if method == "unknown":
         ccyo_out.error("No system PostgreSQL service found")
         ccyo_out.print_text("")
-        ccyo_out.print_text("[bold]Recommended: Use TAPDB local dev/test commands[/bold]")
-        ccyo_out.print_text("  [cyan]tapdb pg init dev[/cyan]         # Initialize data directory")
-        ccyo_out.print_text("  [cyan]tapdb --config <path> --env dev pg start-local dev[/cyan]  # Start local instance")
+        ccyo_out.print_text(
+            "[bold]Recommended: Use TAPDB local dev/test commands[/bold]"
+        )
+        ccyo_out.print_text(
+            "  [cyan]tapdb pg init dev[/cyan]         # Initialize data directory"
+        )
+        ccyo_out.print_text(
+            "  [cyan]tapdb --config <path> --env dev pg start-local dev[/cyan]  # Start local instance"
+        )
         ccyo_out.print_text("")
-        ccyo_out.print_text("[dim]Install PostgreSQL so initdb/pg_ctl"
-            " are on PATH (conda recommended):[/dim]")
+        ccyo_out.print_text(
+            "[dim]Install PostgreSQL so initdb/pg_ctl"
+            " are on PATH (conda recommended):[/dim]"
+        )
         ccyo_out.print_text("  [dim]conda install -c conda-forge postgresql[/dim]")
         raise typer.Exit(1)
 
@@ -236,8 +244,7 @@ def pg_start():
                     ccyo_out.print_text(f"  {details}")
                     return
 
-            ccyo_out.warning("Start command succeeded"
-                " but PostgreSQL not responding")
+            ccyo_out.warning("Start command succeeded but PostgreSQL not responding")
             ccyo_out.print_text("  Check logs: [cyan]tapdb pg logs[/cyan]")
         else:
             ccyo_out.error("Failed to start PostgreSQL")
@@ -265,7 +272,9 @@ def pg_stop():
 
     if method == "unknown":
         ccyo_out.error("No system PostgreSQL service found")
-        ccyo_out.print_text("  For local instances, use: [cyan]tapdb pg stop-local <env>[/cyan]")
+        ccyo_out.print_text(
+            "  For local instances, use: [cyan]tapdb pg stop-local <env>[/cyan]"
+        )
         raise typer.Exit(1)
 
     ccyo_out.warning(f"► Stopping PostgreSQL ({method})...")
@@ -330,8 +339,10 @@ def pg_status():
         ccyo_out.success("Local PostgreSQL is running")
     else:
         ccyo_out.error("○ Local PostgreSQL is not running")
-        ccyo_out.print_text(f"  Start with: [cyan]tapdb --config <path> --env {env.value} "
-            f"pg start-local {env.value}[/cyan]")
+        ccyo_out.print_text(
+            f"  Start with: [cyan]tapdb --config <path> --env {env.value} "
+            f"pg start-local {env.value}[/cyan]"
+        )
 
     ccyo_out.print_text("\n[bold]Local Runtime:[/bold]")
     ctx = resolve_context(
@@ -453,7 +464,9 @@ def pg_init(
 
     data_dir = _get_postgres_data_dir(env)
 
-    ccyo_out.print_text(f"\n[bold cyan]━━━ Initialize PostgreSQL ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        f"\n[bold cyan]━━━ Initialize PostgreSQL ({env.value}) ━━━[/bold cyan]"
+    )
     ccyo_out.print_text(f"  Data directory: {data_dir}")
 
     # Check if initdb is available (must be in PATH)
@@ -468,7 +481,9 @@ def pg_init(
     if data_dir.exists() and (data_dir / "PG_VERSION").exists():
         if not force:
             ccyo_out.warning("Data directory already initialized")
-            ccyo_out.print_text("  Use --force to reinitialize (will delete existing data)")
+            ccyo_out.print_text(
+                "  Use --force to reinitialize (will delete existing data)"
+            )
             return
         else:
             ccyo_out.warning("► Removing existing data directory...")
@@ -502,11 +517,15 @@ def pg_init(
         if result.returncode == 0:
             ccyo_out.success("PostgreSQL data directory initialized")
             ccyo_out.print_text("\n[bold]Next steps:[/bold]")
-            ccyo_out.print_text(f"  [cyan]tapdb --config <path> --env {env.value} "
-                f"pg start-local {env.value}[/cyan]  # Start PostgreSQL")
-            ccyo_out.print_text(f"  [cyan]tapdb --config <path> --env {env.value} "
+            ccyo_out.print_text(
+                f"  [cyan]tapdb --config <path> --env {env.value} "
+                f"pg start-local {env.value}[/cyan]  # Start PostgreSQL"
+            )
+            ccyo_out.print_text(
+                f"  [cyan]tapdb --config <path> --env {env.value} "
                 f"db setup {env.value}[/cyan]"
-                "        # Create DB + schema + seed")
+                "        # Create DB + schema + seed"
+            )
         else:
             ccyo_out.error("initdb failed")
             ccyo_out.print_text(f"  {result.stderr}")
@@ -543,14 +562,18 @@ def pg_start_local(
     configured_port = int(str(cfg.get("port") or "0"))
     if configured_port < 1:
         ccyo_out.error(f"Missing/invalid configured port for env {env.value}.")
-        ccyo_out.print_text(f"  Set environments.{env.value}.port in the namespaced TAPDB config.")
+        ccyo_out.print_text(
+            f"  Set environments.{env.value}.port in the namespaced TAPDB config."
+        )
         raise typer.Exit(1)
 
     if port is None:
         port = configured_port
     elif port != configured_port:
         ccyo_out.error("--port override does not match configured TAPDB env port.")
-        ccyo_out.print_text(f"  Configured environments.{env.value}.port = {configured_port}")
+        ccyo_out.print_text(
+            f"  Configured environments.{env.value}.port = {configured_port}"
+        )
         raise typer.Exit(1)
 
     data_dir = _get_postgres_data_dir(env)
@@ -581,8 +604,10 @@ def pg_start_local(
 
     if not _is_port_available(port):
         ccyo_out.error(f"{_port_conflict_details(port)}")
-        ccyo_out.print_text("  Update environments."
-            f"{env.value}.port in the namespaced TAPDB config to a free port.")
+        ccyo_out.print_text(
+            "  Update environments."
+            f"{env.value}.port in the namespaced TAPDB config to a free port."
+        )
         raise typer.Exit(1)
 
     ccyo_out.warning(f"► Starting PostgreSQL ({env.value}) on port {port}...")
@@ -627,7 +652,9 @@ def pg_start_local(
             )
             ccyo_out.print_text(f"  Lock: {lock_file}")
             ccyo_out.print_text("\n[bold]Next step:[/bold]")
-            ccyo_out.print_text(f"  [cyan]tapdb --env {env.value} db setup {env.value}[/cyan]")
+            ccyo_out.print_text(
+                f"  [cyan]tapdb --env {env.value} db setup {env.value}[/cyan]"
+            )
         else:
             ccyo_out.error("Failed to start PostgreSQL")
             ccyo_out.print_text(f"  {result.stderr}")

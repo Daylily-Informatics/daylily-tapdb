@@ -192,9 +192,7 @@ def dispatch_batch(
     return len(claimed)
 
 
-def _invoke_deliver_fn(
-    deliver_fn: Callable, ev: outbox_event
-) -> DeliveryResult:
+def _invoke_deliver_fn(deliver_fn: Callable, ev: outbox_event) -> DeliveryResult:
     """Call deliver_fn. Must return a DeliveryResult."""
     try:
         result = deliver_fn(ev)
