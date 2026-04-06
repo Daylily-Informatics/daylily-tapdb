@@ -14,6 +14,90 @@ CREATE SEQUENCE IF NOT EXISTS ay_instance_seq;   -- AY (assay)
 CREATE SEQUENCE IF NOT EXISTS msg_instance_seq;  -- MSG (system messages)
 
 --------------------------------------------------------------------------------
+-- SESSION CONTEXT HELPERS
+--------------------------------------------------------------------------------
+
+-- Validate domain code (1-4 uppercase Crockford Base32 letters, no I/L/O/U)
+CREATE OR REPLACE FUNCTION tapdb_validate_domain_code(code TEXT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    norm TEXT := upper(trim(code));
+BEGIN
+    IF norm !~ '^[A-HJ-KMNP-TV-Z]{1,4}$' THEN
+        RAISE EXCEPTION
+            'Invalid domain code "%" (must be 1-4 Crockford Base32 letters)',
+            code;
+    END IF;
+    RETURN norm;
+END;
+$$;
+
+-- Validate app code (1-4 uppercase Crockford Base32 letters, no I/L/O/U)
+CREATE OR REPLACE FUNCTION tapdb_validate_app_code(code TEXT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    norm TEXT := upper(trim(code));
+BEGIN
+    IF norm !~ '^[A-HJ-KMNP-TV-Z]{1,4}$' THEN
+        RAISE EXCEPTION
+            'Invalid app code "%" (must be 1-4 Crockford Base32 letters)',
+            code;
+    END IF;
+    RETURN norm;
+END;
+$$;
+
+-- Resolve runtime domain code from Postgres session state.
+-- Missing session state is rejected. Explicit empty string is also rejected.
+CREATE OR REPLACE FUNCTION tapdb_current_domain_code()
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    raw_code TEXT;
+BEGIN
+    raw_code := current_setting('session.current_domain_code', true);
+    IF raw_code IS NULL THEN
+        RAISE EXCEPTION
+            'session.current_domain_code is required. '
+            'Set it to a valid 1-4 char Crockford Base32 domain code.';
+    END IF;
+
+    raw_code := trim(raw_code);
+    IF raw_code = '' THEN
+        RAISE EXCEPTION
+            'session.current_domain_code is set to empty string. '
+            'A valid 1-4 char Crockford Base32 domain code is required.';
+    END IF;
+
+    RETURN tapdb_validate_domain_code(raw_code);
+END;
+$$;
+
+-- Resolve runtime app code from Postgres session state.
+-- Missing session state is rejected.
+CREATE OR REPLACE FUNCTION tapdb_current_app_code()
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    raw_code TEXT;
+BEGIN
+    raw_code := current_setting('session.current_app_code', true);
+    IF raw_code IS NULL THEN
+        RAISE EXCEPTION
+            'session.current_app_code is required. '
+            'Set it to a valid 1-4 char Crockford Base32 app code.';
+    END IF;
+
+    raw_code := trim(raw_code);
+    IF raw_code = '' THEN
+        RAISE EXCEPTION
+            'session.current_app_code is set to empty string. '
+            'A valid 1-4 char Crockford Base32 app code is required.';
+    END IF;
+
+    RETURN tapdb_validate_app_code(raw_code);
+END;
+$$;
+
+--------------------------------------------------------------------------------
 -- TABLES
 --------------------------------------------------------------------------------
 
@@ -523,86 +607,6 @@ BEGIN
             prefix;
     END IF;
     RETURN norm;
-END;
-$$;
-
--- Validate domain code (1-4 uppercase Crockford Base32 letters, no I/L/O/U)
-CREATE OR REPLACE FUNCTION tapdb_validate_domain_code(code TEXT)
-RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
-DECLARE
-    norm TEXT := upper(trim(code));
-BEGIN
-    IF norm !~ '^[A-HJ-KMNP-TV-Z]{1,4}$' THEN
-        RAISE EXCEPTION
-            'Invalid domain code "%" (must be 1-4 Crockford Base32 letters)',
-            code;
-    END IF;
-    RETURN norm;
-END;
-$$;
-
--- Validate app code (1-4 uppercase Crockford Base32 letters, no I/L/O/U)
-CREATE OR REPLACE FUNCTION tapdb_validate_app_code(code TEXT)
-RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
-DECLARE
-    norm TEXT := upper(trim(code));
-BEGIN
-    IF norm !~ '^[A-HJ-KMNP-TV-Z]{1,4}$' THEN
-        RAISE EXCEPTION
-            'Invalid app code "%" (must be 1-4 Crockford Base32 letters)',
-            code;
-    END IF;
-    RETURN norm;
-END;
-$$;
-
--- Resolve runtime domain code from Postgres session state.
--- Missing session state is rejected. Explicit empty string is also rejected.
-CREATE OR REPLACE FUNCTION tapdb_current_domain_code()
-RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
-DECLARE
-    raw_code TEXT;
-BEGIN
-    raw_code := current_setting('session.current_domain_code', true);
-    IF raw_code IS NULL THEN
-        RAISE EXCEPTION
-            'session.current_domain_code is required. '
-            'Set it to a valid 1-4 char Crockford Base32 domain code.';
-    END IF;
-
-    raw_code := trim(raw_code);
-    IF raw_code = '' THEN
-        RAISE EXCEPTION
-            'session.current_domain_code is set to empty string. '
-            'A valid 1-4 char Crockford Base32 domain code is required.';
-    END IF;
-
-    RETURN tapdb_validate_domain_code(raw_code);
-END;
-$$;
-
--- Resolve runtime app code from Postgres session state.
--- Missing session state is rejected.
-CREATE OR REPLACE FUNCTION tapdb_current_app_code()
-RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
-DECLARE
-    raw_code TEXT;
-BEGIN
-    raw_code := current_setting('session.current_app_code', true);
-    IF raw_code IS NULL THEN
-        RAISE EXCEPTION
-            'session.current_app_code is required. '
-            'Set it to a valid 1-4 char Crockford Base32 app code.';
-    END IF;
-
-    raw_code := trim(raw_code);
-    IF raw_code = '' THEN
-        RAISE EXCEPTION
-            'session.current_app_code is set to empty string. '
-            'A valid 1-4 char Crockford Base32 app code is required.';
-    END IF;
-
-    RETURN tapdb_validate_app_code(raw_code);
 END;
 $$;
 
