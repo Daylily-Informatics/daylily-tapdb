@@ -17,6 +17,7 @@ from rich.console import Console
 from rich.table import Table
 
 from daylily_tapdb.cli.context import resolve_context
+from daylily_tapdb.cli.output import print_renderable
 
 console = Console()
 
@@ -447,4 +448,4 @@ def aurora_list(
         cost = info.get("tags", {}).get("lsmc-cost-center", "-")
         table.add_row(name, f"[{color}]{status}[/{color}]", endpoint, cost)
 
-    ccyo_out.print_text(table)
+    print_renderable(table)

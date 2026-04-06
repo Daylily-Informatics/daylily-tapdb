@@ -23,6 +23,7 @@ from daylily_tapdb.cli.context import (
     resolve_context,
     set_cli_context,
 )
+from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.euid import (
     normalize_euid_client_code,
     resolve_client_scoped_core_prefix,
@@ -1725,7 +1726,7 @@ def build_app():
             general.add_row("UI Uptime", str(ui_times.get("uptime_human") or "-"))
         general.add_row("UI PID File", str(ui_pid_file))
         general.add_row("UI Log File", str(ui_log_file))
-        ccyo_out.print_text(general)
+        print_renderable(general)
 
         # --- Config ---
         config_table = Table(title="Config", show_header=True)
@@ -1748,7 +1749,7 @@ def build_app():
                 "Template config dir", f"(not found) {template_config_error}"
             )
 
-        ccyo_out.print_text(config_table)
+        print_renderable(config_table)
 
         # --- Postgres ---
         pg_table = Table(title="PostgreSQL", show_header=True)
@@ -1774,7 +1775,7 @@ def build_app():
 
             pg_table.add_row(env_name, f"[dim]{url}[/dim]", pw, status, uptime)
 
-        ccyo_out.print_text(pg_table)
+        print_renderable(pg_table)
 
     return app
 
