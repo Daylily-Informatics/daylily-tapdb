@@ -365,7 +365,7 @@ def build_app():
     ui_app = typer.Typer(help="Admin UI server management commands")
     config_root_app = typer.Typer(help="TAPDB config namespace commands")
     app.add_typer(bootstrap_app, name="bootstrap")
-    app.add_typer(ui_app, name="server")
+    app.add_typer(ui_app, name="ui")
     app.add_typer(config_root_app, name="config")
     app.add_typer(db_app, name="db")
     app.add_typer(pg_app, name="pg")
