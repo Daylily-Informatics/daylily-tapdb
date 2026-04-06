@@ -1112,11 +1112,15 @@ def db_nuke(
       ON generic_instance_lineage;
 
     -- Drop tables (order matters for FK constraints)
+    DROP TABLE IF EXISTS outbox_event_attempt CASCADE;
+    DROP TABLE IF EXISTS outbox_event CASCADE;
+    DROP TABLE IF EXISTS inbox_message CASCADE;
     DROP TABLE IF EXISTS audit_log CASCADE;
     DROP TABLE IF EXISTS generic_instance_lineage CASCADE;
     DROP TABLE IF EXISTS generic_instance CASCADE;
     DROP TABLE IF EXISTS generic_template CASCADE;
     DROP TABLE IF EXISTS tapdb_identity_prefix_config CASCADE;
+    DROP TABLE IF EXISTS _tapdb_migrations CASCADE;
 
     -- Drop dynamic/shared sequences
     DO $$
