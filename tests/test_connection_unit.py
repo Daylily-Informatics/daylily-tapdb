@@ -49,6 +49,9 @@ def test_set_session_username_logs_and_swallows_execute_error(monkeypatch, caplo
         def execute(self, *a, **k):
             raise RuntimeError("boom")
 
+        def rollback(self):
+            return None
+
     with caplog.at_level("WARNING"):
         conn._set_session_username(BadSession())
 
@@ -76,6 +79,9 @@ def test_set_session_domain_code_executes_for_postgresql(monkeypatch):
 
         def execute(self, stmt, params=None):
             stmts.append(str(stmt))
+
+        def begin_nested(self):
+            return types.SimpleNamespace(commit=lambda: None, rollback=lambda: None)
 
     conn._set_session_domain_code(Sess(), local=True)
     assert any("current_domain_code" in s for s in stmts)
@@ -142,12 +148,18 @@ def test_session_scope_commit_true_commits(monkeypatch):
 
     class Sess:
         def __init__(self):
+            self.bind = types.SimpleNamespace(
+                dialect=types.SimpleNamespace(name="postgresql")
+            )
             self.trans = Trans()
             self.closed = False
             self.executed = False
 
         def begin(self):
             return self.trans
+
+        def begin_nested(self):
+            return types.SimpleNamespace(commit=lambda: None, rollback=lambda: None)
 
         def execute(self, *a, **k):
             self.executed = True
@@ -189,10 +201,16 @@ def test_session_scope_commit_false_rolls_back(monkeypatch):
 
     class Sess:
         def __init__(self):
+            self.bind = types.SimpleNamespace(
+                dialect=types.SimpleNamespace(name="postgresql")
+            )
             self.trans = Trans()
 
         def begin(self):
             return self.trans
+
+        def begin_nested(self):
+            return types.SimpleNamespace(commit=lambda: None, rollback=lambda: None)
 
         def execute(self, *a, **k):
             return None
@@ -231,10 +249,16 @@ def test_session_scope_exception_rolls_back_and_reraises(monkeypatch):
 
     class Sess:
         def __init__(self):
+            self.bind = types.SimpleNamespace(
+                dialect=types.SimpleNamespace(name="postgresql")
+            )
             self.trans = Trans()
 
         def begin(self):
             return self.trans
+
+        def begin_nested(self):
+            return types.SimpleNamespace(commit=lambda: None, rollback=lambda: None)
 
         def execute(self, *a, **k):
             return None
@@ -310,7 +334,7 @@ def test_set_session_timezone_utc_skips_non_postgresql(monkeypatch):
     assert calls["execute"] == 0
 
 
-def test_set_session_timezone_utc_executes_for_postgresql(monkeypatch):
+def test_set_session_timezone_utc_is_noop_for_postgresql(monkeypatch):
     from daylily_tapdb import connection as m
 
     monkeypatch.setattr(
@@ -319,7 +343,7 @@ def test_set_session_timezone_utc_executes_for_postgresql(monkeypatch):
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
 
-    captured: dict[str, str] = {}
+    calls = {"execute": 0}
 
     class Sess:
         def __init__(self):
@@ -327,8 +351,86 @@ def test_set_session_timezone_utc_executes_for_postgresql(monkeypatch):
                 dialect=types.SimpleNamespace(name="postgresql")
             )
 
-        def execute(self, stmt, *_a, **_k):
-            captured["stmt"] = str(stmt)
+        def execute(self, *_a, **_k):
+            calls["execute"] += 1
 
     conn._set_session_timezone_utc(Sess(), local=True)
-    assert captured["stmt"] == "SET LOCAL TIME ZONE 'UTC'"
+    assert calls["execute"] == 0
+
+
+def test_session_scope_domain_setup_failure_does_not_abort_outer_transaction(
+    monkeypatch,
+):
+    from daylily_tapdb import connection as m
+
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+    conn = m.TAPDBConnection(db_url="sqlite:///:memory:", app_username="pytest")
+
+    class Trans:
+        def __init__(self):
+            self.committed = False
+            self.rolled_back = False
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+    class Nested:
+        def __init__(self, owner):
+            self.owner = owner
+
+        def commit(self):
+            self.owner.in_savepoint = False
+
+        def rollback(self):
+            self.owner.in_savepoint = False
+            self.owner.poisoned = False
+
+    class Sess:
+        def __init__(self):
+            self.bind = types.SimpleNamespace(
+                dialect=types.SimpleNamespace(name="postgresql")
+            )
+            self.trans = Trans()
+            self.closed = False
+            self.poisoned = False
+            self.in_savepoint = False
+            self.fail_domain_once = True
+            self.body_executed = False
+
+        def begin(self):
+            return self.trans
+
+        def begin_nested(self):
+            self.in_savepoint = True
+            return Nested(self)
+
+        def execute(self, stmt, *_a, **_k):
+            sql = str(stmt)
+            if self.poisoned and not self.in_savepoint:
+                raise RuntimeError("current transaction is aborted")
+            if "current_domain_code" in sql and self.fail_domain_once:
+                self.fail_domain_once = False
+                self.poisoned = True
+                raise RuntimeError("could not set session.current_domain_code")
+            if sql == "SELECT 1":
+                self.body_executed = True
+
+        def close(self):
+            self.closed = True
+
+    s = Sess()
+    conn._Session = lambda: s
+
+    with conn.session_scope(commit=True) as session:
+        session.execute("SELECT 1")
+
+    assert s.body_executed is True
+    assert s.trans.committed is True
+    assert s.trans.rolled_back is False
+    assert s.closed is True
