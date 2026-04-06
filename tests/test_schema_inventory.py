@@ -37,6 +37,12 @@ def test_build_expected_schema_inventory_parses_repo_assets():
     assert "set_audit_log_euid()" in inventory.functions
     assert "audit_update_generic_instance" in inventory.triggers["generic_instance"]
     assert "idx_outbox_event_tenant_created_dt" in inventory.indexes["outbox_event"]
+    assert "generic_template_pkey" in inventory.indexes["generic_template"]
+    assert "generic_template_euid_key" in inventory.indexes["generic_template"]
+    assert (
+        "tapdb_identity_prefix_config_pkey"
+        in inventory.indexes["tapdb_identity_prefix_config"]
+    )
 
 
 def test_diff_schema_inventory_strict_mode_flags_only_tapdb_owned_extras():
