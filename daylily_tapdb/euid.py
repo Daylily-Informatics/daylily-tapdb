@@ -148,8 +148,8 @@ def crockford_base32_encode(n: int) -> str:
 def meridian_checksum(payload: str) -> str:
     """Compute the Meridian Luhn-style MOD 32 check character.
 
-    *payload* is CATEGORY + BODY (no delimiters). For sandbox EUIDs,
-    include the sandbox prefix character as well.
+    *payload* is CATEGORY + BODY (no delimiters). For domain-scoped EUIDs,
+    include the domain prefix character as well.
 
     Implements SPEC.md §7.5 exactly.
     """
