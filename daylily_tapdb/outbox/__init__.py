@@ -19,9 +19,11 @@ from daylily_tapdb.outbox.queries import (
     get_event_attempts,
     get_outbox_event_by_receipt_uuid,
     inbox_status_summary,
+    list_by_destination,
     list_events_by_destination,
     list_failed_events,
     list_stale_delivering,
+    lookup_by_machine_uuid,
     outbox_status_summary,
 )
 from daylily_tapdb.outbox.repository import (
@@ -71,6 +73,8 @@ __all__ = [
     "list_failed_events",
     "list_stale_delivering",
     "get_event_attempts",
+    "list_by_destination",
     "list_events_by_destination",
     "get_outbox_event_by_receipt_uuid",
+    "lookup_by_machine_uuid",
 ]

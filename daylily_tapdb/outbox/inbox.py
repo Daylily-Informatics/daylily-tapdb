@@ -24,10 +24,10 @@ def receive_message(
     message_machine_uuid: uuid.UUID,
     payload: dict,
     tenant_id: uuid.UUID | None = None,
-    domain_code: str = "",
-    issuer_app_code: str = "",
-    source_domain_code: str = "",
-    source_issuer_app_code: str = "",
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
+    source_domain_code: str | None = None,
+    source_issuer_app_code: str | None = None,
     source_destination: str | None = None,
 ) -> InboundReceipt:
     """Idempotently receive an inbound message.
@@ -39,20 +39,27 @@ def receive_message(
         InboundReceipt with the receipt_machine_uuid and status.
     """
     receipt_uuid = uuid.uuid4()
+    values: dict[str, object] = {
+        "message_machine_uuid": message_machine_uuid,
+        "receipt_machine_uuid": receipt_uuid,
+        "payload": payload,
+        "status": "received",
+    }
+    if tenant_id is not None:
+        values["tenant_id"] = tenant_id
+    if domain_code is not None:
+        values["domain_code"] = domain_code
+    if issuer_app_code is not None:
+        values["issuer_app_code"] = issuer_app_code
+    if source_domain_code is not None:
+        values["source_domain_code"] = source_domain_code
+    if source_issuer_app_code is not None:
+        values["source_issuer_app_code"] = source_issuer_app_code
+    if source_destination is not None:
+        values["source_destination"] = source_destination
     stmt = (
         pg_insert(inbox_message)
-        .values(
-            message_machine_uuid=message_machine_uuid,
-            receipt_machine_uuid=receipt_uuid,
-            tenant_id=tenant_id,
-            domain_code=domain_code,
-            issuer_app_code=issuer_app_code,
-            source_domain_code=source_domain_code,
-            source_issuer_app_code=source_issuer_app_code,
-            source_destination=source_destination,
-            payload=payload,
-            status="received",
-        )
+        .values(**values)
         .on_conflict_do_nothing(index_elements=["message_machine_uuid"])
         .returning(
             inbox_message.receipt_machine_uuid,

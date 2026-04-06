@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.outbox import (
     inbox_message,
     outbox_event,
@@ -146,15 +147,41 @@ def list_events_by_destination(
     session: Session,
     destination: str,
     *,
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
     status: str | None = None,
     limit: int = 100,
 ) -> list[outbox_event]:
     """List outbox events for a given destination, optionally filtered by status."""
     q = select(outbox_event).where(outbox_event.destination == destination)
+    if domain_code is not None:
+        q = q.where(outbox_event.domain_code == domain_code)
+    if issuer_app_code is not None:
+        q = q.where(outbox_event.issuer_app_code == issuer_app_code)
     if status is not None:
         q = q.where(outbox_event.status == status)
     q = q.order_by(outbox_event.created_dt.desc()).limit(limit)
     return list(session.execute(q).scalars().all())
+
+
+def list_by_destination(
+    session: Session,
+    destination: str,
+    *,
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[outbox_event]:
+    """Spec-compatible alias for ``list_events_by_destination``."""
+    return list_events_by_destination(
+        session,
+        destination,
+        domain_code=domain_code,
+        issuer_app_code=issuer_app_code,
+        status=status,
+        limit=limit,
+    )
 
 
 def get_outbox_event_by_receipt_uuid(
@@ -165,4 +192,24 @@ def get_outbox_event_by_receipt_uuid(
     q = select(outbox_event).where(
         outbox_event.receipt_machine_uuid == receipt_machine_uuid
     )
+    return session.execute(q).scalar_one_or_none()
+
+
+def lookup_by_machine_uuid(
+    session: Session,
+    machine_uuid,
+    *,
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
+) -> outbox_event | None:
+    """Look up an outbox event by its canonical message machine_uuid."""
+    q = (
+        select(outbox_event)
+        .join(generic_instance, outbox_event.message_uid == generic_instance.uid)
+        .where(generic_instance.machine_uuid == machine_uuid)
+    )
+    if domain_code is not None:
+        q = q.where(outbox_event.domain_code == domain_code)
+    if issuer_app_code is not None:
+        q = q.where(outbox_event.issuer_app_code == issuer_app_code)
     return session.execute(q).scalar_one_or_none()

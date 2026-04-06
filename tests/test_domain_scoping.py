@@ -31,8 +31,9 @@ class TestFailFastDomainCode:
         with pytest.raises(ValueError, match="empty string"):
             resolve_runtime_domain_code({"MERIDIAN_DOMAIN_CODE": ""})
 
-    def test_missing_env_var_defaults_to_t(self):
-        assert resolve_runtime_domain_code({}) == "T"
+    def test_missing_env_var_raises(self):
+        with pytest.raises(ValueError, match="MERIDIAN_DOMAIN_CODE is required"):
+            resolve_runtime_domain_code({})
 
     def test_explicit_valid_code(self):
         assert resolve_runtime_domain_code({"MERIDIAN_DOMAIN_CODE": "abcd"}) == "ABCD"

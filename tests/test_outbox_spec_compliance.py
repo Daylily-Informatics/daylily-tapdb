@@ -196,6 +196,8 @@ class TestSenderReceiverRoundTrip:
                 payload={"key": "value"},
                 destination="svc://downstream",
                 dedupe_key="msg-001",
+                domain_code="T",
+                issuer_app_code="TAPD",
             )
         assert session.execute.call_count >= 1
 
@@ -262,6 +264,11 @@ class TestFanout:
 
         # enqueue_fanout uses session.execute per destination
         session.execute.return_value.scalar_one_or_none.return_value = 42
+        session.execute.return_value.one_or_none.return_value = mock.MagicMock(
+            tenant_id=None,
+            domain_code="T",
+            issuer_app_code="TAPD",
+        )
 
         enqueue_fanout(
             session,
@@ -269,8 +276,8 @@ class TestFanout:
             destinations=destinations,
         )
 
-        # Should execute 3 inserts + 1 flush
-        assert session.execute.call_count == 3
+        # One scope lookup + 3 inserts + 1 flush
+        assert session.execute.call_count == 4
         session.flush.assert_called_once()
 
 
@@ -326,6 +333,21 @@ class TestAdminQueryHelpers:
         result = list_events_by_destination(session, "svc://test", status="failed")
         assert result == []
 
+    def test_list_by_destination_alias(self):
+        from daylily_tapdb.outbox.queries import list_by_destination
+
+        session = mock.MagicMock()
+        session.execute.return_value.scalars.return_value.all.return_value = []
+
+        result = list_by_destination(
+            session,
+            "svc://test",
+            domain_code="A",
+            issuer_app_code="APPA",
+            status="failed",
+        )
+        assert result == []
+
     def test_get_outbox_event_by_receipt_uuid(self):
         from daylily_tapdb.outbox.queries import get_outbox_event_by_receipt_uuid
 
@@ -342,6 +364,20 @@ class TestAdminQueryHelpers:
         session.query.return_value.filter.return_value.first.return_value = None
 
         result = get_inbox_message_by_machine_uuid(session, uuid.uuid4())
+        assert result is None
+
+    def test_lookup_by_machine_uuid(self):
+        from daylily_tapdb.outbox.queries import lookup_by_machine_uuid
+
+        session = mock.MagicMock()
+        session.execute.return_value.scalar_one_or_none.return_value = None
+
+        result = lookup_by_machine_uuid(
+            session,
+            uuid.uuid4(),
+            domain_code="A",
+            issuer_app_code="APPA",
+        )
         assert result is None
 
 

@@ -88,6 +88,7 @@ CREATE POLICY outbox_event_domain_isolation
 -- outbox_event_attempt (scoped via outbox_event FK, but add domain for safety)
 -- ---------------------------------------------------------------------------
 ALTER TABLE outbox_event_attempt ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS outbox_event_attempt_domain_isolation ON outbox_event_attempt;
 CREATE POLICY outbox_event_attempt_domain_isolation
     ON outbox_event_attempt
     USING (
@@ -103,6 +104,7 @@ CREATE POLICY outbox_event_attempt_domain_isolation
 -- inbox_message
 -- ---------------------------------------------------------------------------
 ALTER TABLE inbox_message ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS inbox_message_domain_isolation ON inbox_message;
 CREATE POLICY inbox_message_domain_isolation
     ON inbox_message
     USING (
@@ -115,9 +117,10 @@ CREATE POLICY inbox_message_domain_isolation
 -- tapdb_identity_prefix_config (scoped or global)
 -- ---------------------------------------------------------------------------
 ALTER TABLE tapdb_identity_prefix_config ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tapdb_identity_prefix_config_domain_isolation ON tapdb_identity_prefix_config;
 CREATE POLICY tapdb_identity_prefix_config_domain_isolation
     ON tapdb_identity_prefix_config
     USING (
         domain_code = '' OR domain_code = tapdb_current_domain_code()
+        AND (issuer_app_code = '' OR issuer_app_code = tapdb_current_app_code())
     );
-

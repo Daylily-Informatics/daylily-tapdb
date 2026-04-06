@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from daylily_tapdb.euid import (
-    DEFAULT_DOMAIN_CODE,
     crockford_base32_encode,
     format_euid,
     meridian_checksum,
@@ -191,8 +190,9 @@ class TestValidateEuid:
 
 
 class TestRuntimeDomainCode:
-    def test_missing_code_defaults_to_t(self):
-        assert resolve_runtime_domain_code({}) == DEFAULT_DOMAIN_CODE
+    def test_missing_code_raises(self):
+        with pytest.raises(ValueError, match="MERIDIAN_DOMAIN_CODE is required"):
+            resolve_runtime_domain_code({})
 
     def test_explicit_empty_raises(self):
         import pytest
@@ -203,11 +203,8 @@ class TestRuntimeDomainCode:
     def test_explicit_code_is_normalized(self):
         assert resolve_runtime_domain_code({"MERIDIAN_DOMAIN_CODE": "s"}) == "S"
 
-    def test_runtime_validation_defaults_to_domain_t(self):
-        assert resolve_runtime_validation_context({}) == {
-            "environment": "domain",
-            "allowed_domain_codes": ["T"],
-        }
+    def test_runtime_validation_defaults_to_production(self):
+        assert resolve_runtime_validation_context({}) == {"environment": "production"}
 
     def test_runtime_validation_respects_production_env(self):
         # Production mode: MERIDIAN_DOMAIN_CODE not set (absent, not empty)
@@ -222,6 +219,10 @@ class TestRuntimeDomainCode:
 
         with pytest.raises(ValueError, match="empty string"):
             resolve_runtime_validation_context({"MERIDIAN_DOMAIN_CODE": ""})
+
+    def test_runtime_validation_domain_mode_requires_domain_code(self):
+        with pytest.raises(ValueError, match="MERIDIAN_DOMAIN_CODE is required"):
+            resolve_runtime_validation_context({"MERIDIAN_ENVIRONMENT": "domain"})
 
 
 # ---------------------------------------------------------------------------

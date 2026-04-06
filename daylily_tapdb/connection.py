@@ -102,8 +102,14 @@ class TAPDBConnection:
         # Resolve defaults from environment
         db_user = db_user or os.environ.get("USER", "tapdb")
         self.app_username = app_username or os.environ.get("USER", "tapdb_orm")
-        self.domain_code = domain_code or resolve_runtime_domain_code()
-        self.issuer_app_code = issuer_app_code or os.environ.get("TAPDB_APP_CODE")
+        self.domain_code = (
+            domain_code if domain_code is not None else resolve_runtime_domain_code()
+        )
+        self.issuer_app_code = (
+            issuer_app_code
+            if issuer_app_code is not None
+            else os.environ.get("TAPDB_APP_CODE")
+        )
         if not self.domain_code:
             raise ValueError(
                 "domain_code is required. Set MERIDIAN_DOMAIN_CODE env var or pass domain_code= param."
@@ -179,25 +185,61 @@ class TAPDBConnection:
         dialect_name = str(getattr(dialect, "name", "") or "").strip().lower()
         return dialect_name == "postgresql"
 
-    def _set_session_timezone_utc(self, session: Session, *, local: bool) -> None:
-        """Ensure the DB session timezone is pinned to UTC for PostgreSQL."""
-        if not self._is_postgresql_session(session):
-            return
-        statement = "SET LOCAL TIME ZONE 'UTC'" if local else "SET TIME ZONE 'UTC'"
+    def _execute_session_setting(
+        self,
+        session: Session,
+        statement: str,
+        params: Optional[dict[str, str]] = None,
+        *,
+        use_savepoint: bool,
+        warning: str,
+    ) -> bool:
+        """Execute best-effort session setup SQL without poisoning the outer transaction."""
+        nested = None
         try:
-            session.execute(text(statement))
+            if use_savepoint:
+                nested = session.begin_nested()
+            session.execute(text(statement), params or {})
+            if nested is not None:
+                nested.commit()
+            return True
         except Exception as e:
-            self.logger.warning(f"Could not set session timezone to UTC: {e}")
+            if nested is not None:
+                try:
+                    nested.rollback()
+                except Exception as rollback_error:
+                    self.logger.warning(
+                        f"Could not roll back session setup savepoint: {rollback_error}"
+                    )
+            else:
+                try:
+                    session.rollback()
+                except Exception as rollback_error:
+                    self.logger.warning(
+                        f"Could not roll back session after setup failure: {rollback_error}"
+                    )
+            self.logger.warning(f"{warning}: {e}")
+            return False
+
+    def _set_session_timezone_utc(self, session: Session, *, local: bool) -> None:
+        """Intentionally leave the session timezone unchanged.
+
+        TAPDB timestamps are DB-managed `TIMESTAMP WITH TIME ZONE` values backed by
+        `CURRENT_TIMESTAMP`/`NOW()` defaults and triggers, so mutating the session
+        TimeZone is not required for storage correctness and breaks some
+        PostgreSQL-compatible backends.
+        """
+        return
 
     def _set_session_username(self, session: Session) -> None:
         """Set the per-transaction username for audit logging (no commit)."""
-        try:
-            session.execute(
-                text("SET LOCAL session.current_username = :username"),
-                {"username": self.app_username},
-            )
-        except Exception as e:
-            self.logger.warning(f"Could not set session username: {e}")
+        self._execute_session_setting(
+            session,
+            "SET LOCAL session.current_username = :username",
+            {"username": self.app_username},
+            use_savepoint=True,
+            warning="Could not set session username",
+        )
 
     def _set_session_domain_code(self, session: Session, *, local: bool) -> None:
         """Set the domain code and issuer app code seen by SQL triggers."""
@@ -213,11 +255,20 @@ class TAPDBConnection:
             if local
             else "SET session.current_app_code = :code"
         )
-        try:
-            session.execute(text(dc_stmt), {"code": self.domain_code or ""})
-            session.execute(text(app_stmt), {"code": self.issuer_app_code or ""})
-        except Exception as e:
-            self.logger.warning(f"Could not set session domain/app code: {e}")
+        self._execute_session_setting(
+            session,
+            dc_stmt,
+            {"code": self.domain_code or ""},
+            use_savepoint=local,
+            warning="Could not set session domain code",
+        )
+        self._execute_session_setting(
+            session,
+            app_stmt,
+            {"code": self.issuer_app_code or ""},
+            use_savepoint=local,
+            warning="Could not set session app code",
+        )
 
     def get_session(self) -> Session:
         """
