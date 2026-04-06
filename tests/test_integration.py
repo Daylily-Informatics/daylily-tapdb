@@ -26,8 +26,8 @@ from daylily_tapdb.schema_inventory import (
     load_live_schema_inventory,
     schema_asset_files,
 )
-from daylily_tapdb.templates.mutation import allow_template_mutations
 from daylily_tapdb.templates.manager import TemplateManager
+from daylily_tapdb.templates.mutation import allow_template_mutations
 from tests.conftest import resolve_tapdb_test_dsn
 
 _UNSET = object()
