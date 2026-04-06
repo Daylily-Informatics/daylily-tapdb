@@ -362,14 +362,14 @@ def build_app():
             raise typer.Exit(1)
 
     bootstrap_app = typer.Typer(help="One-command environment bootstrap")
-    ui_app = typer.Typer(help="Admin UI management commands")
+    ui_app = typer.Typer(help="Admin UI server management commands")
     config_root_app = typer.Typer(help="TAPDB config namespace commands")
     app.add_typer(bootstrap_app, name="bootstrap")
-    app.add_typer(ui_app, name="ui")
+    app.add_typer(ui_app, name="server")
     app.add_typer(config_root_app, name="config")
     app.add_typer(db_app, name="db")
     app.add_typer(pg_app, name="pg")
-    app.add_typer(user_app, name="user")
+    app.add_typer(user_app, name="users")
     app.add_typer(cognito_app, name="cognito")
 
     # Aurora subcommand — always visible, but requires boto3
