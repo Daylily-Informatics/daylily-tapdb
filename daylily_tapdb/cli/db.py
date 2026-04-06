@@ -797,9 +797,7 @@ def db_schema_apply(
 
     if _schema_exists(env):
         if reinitialize:
-            ccyo_out.warning(
-                "► Reapplying schema to refresh existing TAPDB objects..."
-            )
+            ccyo_out.warning("► Reapplying schema to refresh existing TAPDB objects...")
         else:
             ccyo_out.warning(
                 "► Schema already exists; reapplying idempotent schema to "
