@@ -284,7 +284,9 @@ def enqueue_fanout(
     Returns:
         List of outbox_event IDs that were inserted (skips conflicts).
     """
-    tenant_id, domain_code, issuer_app_code = _lookup_message_scope(session, message_uid)
+    tenant_id, domain_code, issuer_app_code = _lookup_message_scope(
+        session, message_uid
+    )
     inserted_ids = []
     for destination, dedupe_key in destinations:
         row_id = session.execute(
