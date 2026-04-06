@@ -524,6 +524,8 @@ CREATE INDEX IF NOT EXISTS idx_outbox_event_domain_status_created
 CREATE INDEX IF NOT EXISTS idx_outbox_event_receipt_machine_uuid
     ON outbox_event(receipt_machine_uuid)
     WHERE receipt_machine_uuid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_outbox_event_tenant_created_dt
+    ON outbox_event(tenant_id, created_dt DESC);
 
 -- outbox_event_attempt: time-ordered
 CREATE INDEX IF NOT EXISTS idx_outbox_attempt_event_time

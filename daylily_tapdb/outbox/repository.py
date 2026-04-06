@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 import uuid6
 from sqlalchemy import Select, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.outbox import outbox_event
@@ -321,7 +321,8 @@ def _build_claim_select(
     if issuer_app_code is not None:
         q = q.where(outbox_event.issuer_app_code == issuer_app_code)
     return (
-        q.order_by(outbox_event.created_dt.asc())
+        q.options(selectinload(outbox_event.message))
+        .order_by(outbox_event.created_dt.asc())
         .limit(batch_size)
         .with_for_update(skip_locked=True)
     )

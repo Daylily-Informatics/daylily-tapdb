@@ -26,6 +26,7 @@ from daylily_tapdb.schema_inventory import (
     load_live_schema_inventory,
     schema_asset_files,
 )
+from daylily_tapdb.templates.mutation import allow_template_mutations
 from daylily_tapdb.templates.manager import TemplateManager
 from tests.conftest import resolve_tapdb_test_dsn
 
@@ -36,9 +37,9 @@ def _set_runtime_prefix_env(monkeypatch, prefix=_UNSET) -> None:
     monkeypatch.delenv("MERIDIAN_ENVIRONMENT", raising=False)
     monkeypatch.delenv("LSMC_ENV", raising=False)
     if prefix is _UNSET:
-        monkeypatch.delenv("MERIDIAN_SANDBOX_PREFIX", raising=False)
+        monkeypatch.setenv("MERIDIAN_DOMAIN_CODE", "T")
     else:
-        monkeypatch.setenv("MERIDIAN_SANDBOX_PREFIX", prefix)
+        monkeypatch.setenv("MERIDIAN_DOMAIN_CODE", prefix)
 
 
 def _install_schema(dsn: str, schema_name: str, schema_sql_path: Path) -> None:
@@ -104,40 +105,46 @@ def _seed_templates(session, tmpl_list: list[dict]) -> None:
         "workflow_step_template": workflow_step_template,
     }
 
-    for t in tmpl_list:
-        disc = t["polymorphic_discriminator"]
-        cls = disc_to_cls.get(disc, generic_template)
+    with allow_template_mutations():
+        for t in tmpl_list:
+            disc = t["polymorphic_discriminator"]
+            cls = disc_to_cls.get(disc, generic_template)
 
-        obj = cls(
-            name=t["name"],
-            polymorphic_discriminator=disc,
-            category=t["category"],
-            type=t["type"],
-            subtype=t["subtype"],
-            version=t["version"],
-            bstatus=t.get("bstatus", "active"),
-            instance_prefix=t["instance_prefix"],
-            instance_polymorphic_identity=t.get("instance_polymorphic_identity"),
-            json_addl_schema=t.get("json_addl_schema"),
-            json_addl=t.get("json_addl", {}),
-            is_singleton=bool(t.get("is_singleton", False)),
-        )
-        session.add(obj)
+            obj = cls(
+                name=t["name"],
+                polymorphic_discriminator=disc,
+                category=t["category"],
+                type=t["type"],
+                subtype=t["subtype"],
+                version=t["version"],
+                bstatus=t.get("bstatus", "active"),
+                instance_prefix=t["instance_prefix"],
+                instance_polymorphic_identity=t.get("instance_polymorphic_identity"),
+                json_addl_schema=t.get("json_addl_schema"),
+                json_addl=t.get("json_addl", {}),
+                is_singleton=bool(t.get("is_singleton", False)),
+            )
+            session.add(obj)
 
-    session.flush()
+        session.flush()
 
 
 def _seed_identity_prefixes(session, prefix: str = "AGX") -> None:
     session.execute(
         text(
             """
-            INSERT INTO tapdb_identity_prefix_config(entity, prefix)
+            INSERT INTO tapdb_identity_prefix_config(
+                entity,
+                domain_code,
+                issuer_app_code,
+                prefix
+            )
             VALUES
-                ('generic_template', :prefix),
-                ('generic_instance', :prefix),
-                ('generic_instance_lineage', :prefix),
-                ('audit_log', :prefix)
-            ON CONFLICT (entity) DO UPDATE
+                ('generic_template', '', '', :prefix),
+                ('generic_instance', '', '', :prefix),
+                ('generic_instance_lineage', '', '', :prefix),
+                ('audit_log', '', '', :prefix)
+            ON CONFLICT (entity, domain_code, issuer_app_code) DO UPDATE
               SET prefix = EXCLUDED.prefix, updated_dt = NOW();
             """
         ),
@@ -235,7 +242,7 @@ def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch, pytestconfig
 
         with conn.session_scope(commit=False) as session:
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
-
+            _seed_identity_prefixes(session, "AGX")
             _seed_templates(session, _integration_templates())
 
             tenant_id = uuid.uuid4()
@@ -283,7 +290,7 @@ def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch, pytestconfig
             latest_audit_euid = session.execute(
                 text("SELECT euid FROM audit_log ORDER BY uid DESC LIMIT 1")
             ).scalar_one()
-            assert latest_audit_euid.startswith("T:AD-")
+            assert latest_audit_euid.startswith("T:AGX-")
 
             wf_uid = wf.uid
             session.delete(wf)
@@ -302,7 +309,7 @@ def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch, pytestconfig
 @pytest.mark.parametrize(
     ("prefix_env", "expected_prefix"),
     [
-        ("", "AGX-"),
+        ("T", "T:AGX-"),
         ("S", "S:AGX-"),
     ],
 )
@@ -535,15 +542,22 @@ def test_postgres_restricted_role_schema_install_and_identity_triggers(pytestcon
             role_cur.execute(
                 psql.SQL("SET search_path TO {};").format(psql.Identifier(schema_name))
             )
+            role_cur.execute("SET session.current_domain_code = 'T'")
+            role_cur.execute("SET session.current_app_code = 'TAPD'")
             role_cur.execute(
                 """
-                INSERT INTO tapdb_identity_prefix_config(entity, prefix)
+                INSERT INTO tapdb_identity_prefix_config(
+                    entity,
+                    domain_code,
+                    issuer_app_code,
+                    prefix
+                )
                 VALUES
-                    ('generic_template', 'AGX'),
-                    ('generic_instance', 'AGX'),
-                    ('generic_instance_lineage', 'AGX'),
-                    ('audit_log', 'AGX')
-                ON CONFLICT (entity) DO UPDATE
+                    ('generic_template', '', '', 'AGX'),
+                    ('generic_instance', '', '', 'AGX'),
+                    ('generic_instance_lineage', '', '', 'AGX'),
+                    ('audit_log', '', '', 'AGX')
+                ON CONFLICT (entity, domain_code, issuer_app_code) DO UPDATE
                   SET prefix = EXCLUDED.prefix, updated_dt = NOW();
                 """
             )

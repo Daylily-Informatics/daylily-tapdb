@@ -26,6 +26,16 @@ _ALTER_ADD_COLUMN_RE = re.compile(
     r"\"?([A-Za-z_][A-Za-z0-9_]*)\"?",
     re.IGNORECASE,
 )
+_ALTER_ADD_COLUMN_UNIQUE_RE = re.compile(
+    r"ALTER TABLE\s+\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s+ADD COLUMN(?: IF NOT EXISTS)?\s+"
+    r"\"?([A-Za-z_][A-Za-z0-9_]*)\"?[^;]*\bUNIQUE\b",
+    re.IGNORECASE,
+)
+_ALTER_ADD_UNIQUE_CONSTRAINT_RE = re.compile(
+    r"ALTER TABLE\s+\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s+ADD CONSTRAINT(?: IF NOT EXISTS)?\s+"
+    r"\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s+UNIQUE\b",
+    re.IGNORECASE,
+)
 _CREATE_SEQUENCE_RE = re.compile(
     r"CREATE SEQUENCE(?: IF NOT EXISTS)?\s+\"?([A-Za-z_][A-Za-z0-9_]*)\"?",
     re.IGNORECASE,
@@ -62,6 +72,13 @@ _UNEXPECTED_FUNCTION_PREFIXES = (
     "crockford_",
 )
 _UNEXPECTED_FUNCTION_NAMES = {"soft_delete_row", "update_modified_dt"}
+_COLUMN_LINE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PRIMARY_KEY_RE = re.compile(r"\bPRIMARY\s+KEY\b", re.IGNORECASE)
+_UNIQUE_RE = re.compile(r"\bUNIQUE\b", re.IGNORECASE)
+_NAMED_UNIQUE_CONSTRAINT_RE = re.compile(
+    r"CONSTRAINT\s+\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s+UNIQUE\b",
+    re.IGNORECASE,
+)
 
 
 class SchemaDriftOperationalError(RuntimeError):
@@ -433,12 +450,24 @@ def _parse_schema_file(path: Path, inventory: TapdbSchemaInventory) -> None:
 
     for match in _TABLE_BLOCK_RE.finditer(sql):
         table_name = match.group(1)
+        if _normalize_identifier(table_name) in inventory.tables:
+            continue
         inventory.add_table(table_name)
         for column_name in _parse_table_columns(match.group(2)):
             inventory.add_column(table_name, column_name)
+        _add_constraint_backed_indexes(table_name, match.group(2), inventory)
 
     for match in _ALTER_ADD_COLUMN_RE.finditer(sql):
         inventory.add_column(match.group(1), match.group(2))
+
+    for match in _ALTER_ADD_COLUMN_UNIQUE_RE.finditer(sql):
+        inventory.add_index(
+            match.group(1),
+            f"{_normalize_identifier(match.group(1))}_{_normalize_identifier(match.group(2))}_key",
+        )
+
+    for match in _ALTER_ADD_UNIQUE_CONSTRAINT_RE.finditer(sql):
+        inventory.add_index(match.group(1), match.group(2))
 
     for match in _CREATE_SEQUENCE_RE.finditer(sql):
         inventory.add_sequence(match.group(1))
@@ -466,6 +495,43 @@ def _parse_table_columns(block: str) -> list[str]:
             continue
         columns.append(token)
     return columns
+
+
+def _add_constraint_backed_indexes(
+    table_name: str,
+    block: str,
+    inventory: TapdbSchemaInventory,
+) -> None:
+    normalized_table = _normalize_identifier(table_name)
+    has_primary_key = False
+
+    for raw_line in block.splitlines():
+        line = raw_line.strip().rstrip(",")
+        if not line:
+            continue
+
+        if _PRIMARY_KEY_RE.search(line):
+            has_primary_key = True
+
+        named_unique = _NAMED_UNIQUE_CONSTRAINT_RE.search(line)
+        if named_unique:
+            inventory.add_index(table_name, named_unique.group(1))
+            continue
+
+        token = line.split(None, 1)[0].strip('"')
+        if token.upper() in _COLUMN_SKIP_TOKENS:
+            continue
+        if not _COLUMN_LINE_RE.match(token):
+            continue
+
+        if _UNIQUE_RE.search(line):
+            inventory.add_index(
+                table_name,
+                f"{normalized_table}_{_normalize_identifier(token)}_key",
+            )
+
+    if has_primary_key:
+        inventory.add_index(table_name, f"{normalized_table}_pkey")
 
 
 def _strip_sql_comments(sql: str) -> str:
