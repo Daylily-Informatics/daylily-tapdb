@@ -96,6 +96,49 @@ def test_sync_identity_prefix_config_raises_on_psql_failure(monkeypatch):
         db_mod._sync_identity_prefix_config(db_mod.Environment.dev)
 
 
+def test_db_schema_apply_reapplies_when_schema_table_already_exists(
+    monkeypatch, tmp_path
+):
+    schema_file = tmp_path / "tapdb_schema.sql"
+    schema_file.write_text("-- schema\n", encoding="utf-8")
+
+    monkeypatch.setattr(db_mod, "_ensure_dirs", lambda: None)
+    monkeypatch.setattr(
+        db_mod,
+        "_get_db_config",
+        lambda _env: {
+            "host": "localhost",
+            "port": "5432",
+            "database": "tapdb_dev",
+            "user": "tapdb",
+        },
+    )
+    monkeypatch.setattr(db_mod, "_check_db_exists", lambda _env, _db: True)
+    monkeypatch.setattr(db_mod, "_find_schema_file", lambda: schema_file)
+    monkeypatch.setattr(db_mod, "_schema_exists", lambda _env: True)
+
+    psql_calls: list[tuple[object | None, object | None, object | None]] = []
+    sync_calls: list[db_mod.Environment] = []
+    baseline_calls: list[db_mod.Environment] = []
+    log_calls: list[tuple[object, ...]] = []
+
+    def _fake_run_psql(_env, sql=None, file=None, database=None):
+        psql_calls.append((sql, file, database))
+        return True, ""
+
+    monkeypatch.setattr(db_mod, "_run_psql", _fake_run_psql)
+    monkeypatch.setattr(db_mod, "_sync_identity_prefix_config", sync_calls.append)
+    monkeypatch.setattr(db_mod, "_write_migration_baseline", baseline_calls.append)
+    monkeypatch.setattr(db_mod, "_log_operation", lambda *args: log_calls.append(args))
+
+    db_mod.db_schema_apply(db_mod.Environment.dev)
+
+    assert psql_calls == [(None, schema_file, None)]
+    assert sync_calls == [db_mod.Environment.dev]
+    assert baseline_calls == [db_mod.Environment.dev]
+    assert log_calls == [("dev", "SCHEMA_APPLY", f"Schema applied from {schema_file}")]
+
+
 def test_euid_client_code_helpers():
     assert normalize_euid_client_code("a") == "A"
     assert resolve_client_scoped_core_prefix("b") == "BGX"

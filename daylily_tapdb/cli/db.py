@@ -768,7 +768,13 @@ def db_delete(
 def db_schema_apply(
     env: Environment = typer.Argument(..., help="Target environment"),
     reinitialize: bool = typer.Option(
-        False, "--reinitialize", "-r", help="Reapply schema even if it already exists"
+        False,
+        "--reinitialize",
+        "-r",
+        help=(
+            "Compatibility flag. Schema apply is idempotent and refreshes "
+            "existing objects."
+        ),
     ),
 ):
     """Apply TAPDB schema to an existing database."""
@@ -795,20 +801,19 @@ def db_schema_apply(
         ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
-    if _schema_exists(env) and not reinitialize:
-        ccyo_out.print_text(
-            f"Schema already exists in {cfg['database']} (skipping apply)"
-        )
-        ccyo_out.warning("► Syncing required identity prefixes...")
-        try:
-            _sync_identity_prefix_config(env)
-            ccyo_out.success("Identity prefixes synced")
-        except (ValueError, RuntimeError) as e:
-            ccyo_out.error(f"{e}")
-            raise typer.Exit(1)
-        return
+    if _schema_exists(env):
+        if reinitialize:
+            ccyo_out.warning(
+                "► Reapplying schema to refresh existing TAPDB objects..."
+            )
+        else:
+            ccyo_out.warning(
+                "► Schema already exists; reapplying idempotent schema to "
+                "refresh functions, triggers, and tables..."
+            )
+    else:
+        ccyo_out.warning("► Applying schema...")
 
-    ccyo_out.warning("► Applying schema...")
     success, psql_out = _run_psql(env, file=schema_file)
     if not success:
         ccyo_out.error(f"Schema apply failed:\n{psql_out}")
