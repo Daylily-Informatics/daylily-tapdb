@@ -102,8 +102,14 @@ class TAPDBConnection:
         # Resolve defaults from environment
         db_user = db_user or os.environ.get("USER", "tapdb")
         self.app_username = app_username or os.environ.get("USER", "tapdb_orm")
-        self.domain_code = domain_code or resolve_runtime_domain_code()
-        self.issuer_app_code = issuer_app_code or os.environ.get("TAPDB_APP_CODE")
+        self.domain_code = (
+            domain_code if domain_code is not None else resolve_runtime_domain_code()
+        )
+        self.issuer_app_code = (
+            issuer_app_code
+            if issuer_app_code is not None
+            else os.environ.get("TAPDB_APP_CODE")
+        )
         if not self.domain_code:
             raise ValueError(
                 "domain_code is required. Set MERIDIAN_DOMAIN_CODE env var or pass domain_code= param."

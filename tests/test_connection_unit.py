@@ -56,12 +56,15 @@ def test_set_session_username_logs_and_swallows_execute_error(monkeypatch, caplo
 def test_set_session_domain_code_executes_for_postgresql(monkeypatch):
     from daylily_tapdb import connection as m
 
-    monkeypatch.delenv("MERIDIAN_DOMAIN_CODE", raising=False)
     monkeypatch.setattr(
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
+    conn = m.TAPDBConnection(
+        db_url="sqlite:///:memory:",
+        domain_code="T",
+        issuer_app_code="TAPD",
+    )
 
     stmts: list[str] = []
 
@@ -77,6 +80,20 @@ def test_set_session_domain_code_executes_for_postgresql(monkeypatch):
     conn._set_session_domain_code(Sess(), local=True)
     assert any("current_domain_code" in s for s in stmts)
     assert any("current_app_code" in s for s in stmts)
+
+
+def test_missing_domain_env_raises(monkeypatch):
+    from daylily_tapdb import connection as m
+
+    monkeypatch.delenv("MERIDIAN_DOMAIN_CODE", raising=False)
+    monkeypatch.delenv("TAPDB_APP_CODE", raising=False)
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+
+    with pytest.raises(ValueError, match="MERIDIAN_DOMAIN_CODE is required"):
+        m.TAPDBConnection(db_url="sqlite:///:memory:")
 
 
 def test_set_session_domain_code_skips_non_postgresql(monkeypatch):

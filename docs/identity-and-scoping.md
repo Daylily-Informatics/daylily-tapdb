@@ -103,17 +103,17 @@ See [`daylily_tapdb/connection.py`](../daylily_tapdb/connection.py) and
 
 The SQL layer resolves these session values as follows:
 
-- `tapdb_current_domain_code()` defaults missing session state to `T`.
-- `tapdb_current_app_code()` defaults missing session state to `TAPD`.
+- `tapdb_current_domain_code()` rejects missing session state.
+- `tapdb_current_app_code()` rejects missing session state.
 - explicit empty strings are rejected.
 
-The Python connection layer is stricter than the SQL fallback:
+The Python connection layer follows the same fail-fast contract:
 
-- `domain_code` is resolved from `MERIDIAN_DOMAIN_CODE` or passed explicitly.
-- `issuer_app_code` is expected explicitly or from `TAPDB_APP_CODE`.
+- `domain_code` must be passed explicitly or supplied via `MERIDIAN_DOMAIN_CODE`.
+- `issuer_app_code` must be passed explicitly or supplied via `TAPDB_APP_CODE`.
 
-This means application code should always set both values deliberately rather
-than relying on defaults.
+Application code should always set both values deliberately. There is no
+implicit fallback domain.
 
 ## Row-Level Scope
 
@@ -145,4 +145,3 @@ flowchart LR
 - Use `issuer_app_code` for application-level issuance scope.
 - Use `tenant_id` for tenancy.
 - Treat `euid` as opaque lookup data, not as business logic.
-

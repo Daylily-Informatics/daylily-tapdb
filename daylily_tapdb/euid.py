@@ -63,14 +63,17 @@ def resolve_runtime_domain_code(
     """Resolve the runtime domain code.
 
     Rules:
-    - missing env var => default ``T``
+    - missing env var => raises ValueError
     - explicit empty string => raises ValueError (fail-fast)
     - explicit non-empty value => validated 1-4 letter domain code
     """
-    env = environ or os.environ
+    env = os.environ if environ is None else environ
     raw_code = env.get(MERIDIAN_DOMAIN_CODE_ENV)
     if raw_code is None:
-        return DEFAULT_DOMAIN_CODE
+        raise ValueError(
+            "MERIDIAN_DOMAIN_CODE is required. "
+            "Set it to a valid 1-4 char Crockford Base32 domain code."
+        )
     normalized = normalize_domain_code(raw_code)
     if normalized is None:
         raise ValueError(
@@ -84,22 +87,22 @@ def resolve_runtime_validation_context(
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """Resolve EUID validation mode from runtime env vars."""
-    env = environ or os.environ
+    env = os.environ if environ is None else environ
     raw_environment = (
         str(env.get(MERIDIAN_ENVIRONMENT_ENV) or env.get(LSMC_ENV_ENV) or "")
         .strip()
         .lower()
     )
-    domain_code = resolve_runtime_domain_code(env)
-
     if raw_environment == "domain":
+        domain_code = resolve_runtime_domain_code(env)
         return {
             "environment": "domain",
             "allowed_domain_codes": [domain_code] if domain_code else [],
         }
     if raw_environment:
         return {"environment": "production"}
-    if domain_code:
+    if env.get(MERIDIAN_DOMAIN_CODE_ENV) is not None:
+        domain_code = resolve_runtime_domain_code(env)
         return {
             "environment": "domain",
             "allowed_domain_codes": [domain_code],

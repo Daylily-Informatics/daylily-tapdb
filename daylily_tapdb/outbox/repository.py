@@ -14,7 +14,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import uuid6
-from sqlalchemy import Select, func, select, update
+from sqlalchemy import Select, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -33,23 +33,32 @@ def _build_enqueue_stmt(
     destination: str,
     dedupe_key: str,
     tenant_id: uuid.UUID | None = None,
-    domain_code: str = "",
-    issuer_app_code: str = "",
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
 ):
     """Build an INSERT ... ON CONFLICT DO NOTHING for the execution index."""
     values = dict(
         message_uid=message_uid,
         destination=destination,
         dedupe_key=dedupe_key,
-        domain_code=domain_code,
-        issuer_app_code=issuer_app_code,
     )
     if tenant_id is not None:
         values["tenant_id"] = tenant_id
+    if domain_code is not None:
+        values["domain_code"] = domain_code
+    if issuer_app_code is not None:
+        values["issuer_app_code"] = issuer_app_code
     return (
         pg_insert(outbox_event)
         .values(**values)
-        .on_conflict_do_nothing(index_elements=["destination", "dedupe_key"])
+        .on_conflict_do_nothing(
+            index_elements=[
+                "domain_code",
+                "issuer_app_code",
+                "destination",
+                "dedupe_key",
+            ]
+        )
         .returning(outbox_event.id)
     )
 
@@ -111,10 +120,15 @@ def _lookup_existing_machine_uuid(
     session: Session,
     destination: str,
     dedupe_key: str,
+    *,
+    domain_code: str,
+    issuer_app_code: str,
 ) -> uuid.UUID | None:
     """Return the machine_uuid of an existing outbox row, or None."""
     row = session.execute(
         select(outbox_event.message_uid).where(
+            outbox_event.domain_code == domain_code,
+            outbox_event.issuer_app_code == issuer_app_code,
             outbox_event.destination == destination,
             outbox_event.dedupe_key == dedupe_key,
         )
@@ -128,6 +142,44 @@ def _lookup_existing_machine_uuid(
     ).scalar_one()
 
 
+def _resolve_session_scope(
+    session: Session,
+    *,
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
+) -> tuple[str, str]:
+    """Return the effective domain/app scope for the current session."""
+    if domain_code is not None and issuer_app_code is not None:
+        return domain_code, issuer_app_code
+    resolved_domain_code, resolved_issuer_app_code = session.execute(
+        text(
+            "SELECT tapdb_current_domain_code() AS domain_code, "
+            "tapdb_current_app_code() AS issuer_app_code"
+        )
+    ).one()
+    return (
+        domain_code or str(resolved_domain_code),
+        issuer_app_code or str(resolved_issuer_app_code),
+    )
+
+
+def _lookup_message_scope(
+    session: Session,
+    message_uid: int,
+) -> tuple[uuid.UUID | None, str, str]:
+    """Return the canonical message's tenant/domain/app scope."""
+    row = session.execute(
+        select(
+            generic_instance.tenant_id,
+            generic_instance.domain_code,
+            generic_instance.issuer_app_code,
+        ).where(generic_instance.uid == message_uid)
+    ).one_or_none()
+    if row is None:
+        raise ValueError(f"Message uid {message_uid} not found")
+    return row.tenant_id, str(row.domain_code), str(row.issuer_app_code)
+
+
 def enqueue_event(
     session: Session,
     tenant_id: uuid.UUID,
@@ -137,8 +189,8 @@ def enqueue_event(
     destination: str,
     dedupe_key: str,
     *,
-    domain_code: str = "",
-    issuer_app_code: str = "",
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
 ) -> uuid.UUID:
     """Create a canonical message and enqueue a delivery row.
 
@@ -152,8 +204,20 @@ def enqueue_event(
        re-read the existing row.
     4. Returns the ``machine_uuid`` (the external idempotency key).
     """
+    resolved_domain_code, resolved_issuer_app_code = _resolve_session_scope(
+        session,
+        domain_code=domain_code,
+        issuer_app_code=issuer_app_code,
+    )
+
     # ── fast path: row already exists ──
-    existing = _lookup_existing_machine_uuid(session, destination, dedupe_key)
+    existing = _lookup_existing_machine_uuid(
+        session,
+        destination,
+        dedupe_key,
+        domain_code=resolved_domain_code,
+        issuer_app_code=resolved_issuer_app_code,
+    )
     if existing is not None:
         return existing
 
@@ -173,8 +237,8 @@ def enqueue_event(
                 destination=destination,
                 dedupe_key=dedupe_key,
                 tenant_id=tenant_id,
-                domain_code=domain_code,
-                issuer_app_code=issuer_app_code,
+                domain_code=resolved_domain_code,
+                issuer_app_code=resolved_issuer_app_code,
             )
         ).scalar_one_or_none()
 
@@ -190,7 +254,13 @@ def enqueue_event(
         raise
 
     # Re-read the winner's machine_uuid
-    winner = _lookup_existing_machine_uuid(session, destination, dedupe_key)
+    winner = _lookup_existing_machine_uuid(
+        session,
+        destination,
+        dedupe_key,
+        domain_code=resolved_domain_code,
+        issuer_app_code=resolved_issuer_app_code,
+    )
     if winner is None:
         raise RuntimeError(
             f"outbox_event({destination!r}, {dedupe_key!r}) disappeared "
@@ -214,6 +284,7 @@ def enqueue_fanout(
     Returns:
         List of outbox_event IDs that were inserted (skips conflicts).
     """
+    tenant_id, domain_code, issuer_app_code = _lookup_message_scope(session, message_uid)
     inserted_ids = []
     for destination, dedupe_key in destinations:
         row_id = session.execute(
@@ -221,6 +292,9 @@ def enqueue_fanout(
                 message_uid=message_uid,
                 destination=destination,
                 dedupe_key=dedupe_key,
+                tenant_id=tenant_id,
+                domain_code=domain_code,
+                issuer_app_code=issuer_app_code,
             )
         ).scalar_one_or_none()
         if row_id is not None:
@@ -430,8 +504,8 @@ def record_attempt(
     attempt_no: int,
     transport_status: str,
     tenant_id: uuid.UUID | None = None,
-    domain_code: str = "",
-    issuer_app_code: str = "",
+    domain_code: str | None = None,
+    issuer_app_code: str | None = None,
     worker_id: str | None = None,
     claim_token: uuid.UUID | None = None,
     http_status: int | None = None,
@@ -447,13 +521,10 @@ def record_attempt(
     """Record a delivery attempt in the append-only history table."""
     from daylily_tapdb.models.outbox import outbox_event_attempt
 
-    attempt = outbox_event_attempt(
+    values: dict[str, object] = dict(
         outbox_event_id=outbox_event_id,
         attempt_no=attempt_no,
         transport_status=transport_status,
-        tenant_id=tenant_id,
-        domain_code=domain_code,
-        issuer_app_code=issuer_app_code,
         worker_id=worker_id,
         claim_token=claim_token,
         attempt_finished_dt=func.now(),
@@ -469,6 +540,13 @@ def record_attempt(
         receipt_processed_dt=receipt_processed_dt,
         retry_scheduled_dt=retry_scheduled_dt,
     )
+    if tenant_id is not None:
+        values["tenant_id"] = tenant_id
+    if domain_code is not None:
+        values["domain_code"] = domain_code
+    if issuer_app_code is not None:
+        values["issuer_app_code"] = issuer_app_code
+    attempt = outbox_event_attempt(**values)
     session.add(attempt)
     session.flush()
     return int(attempt.uid)

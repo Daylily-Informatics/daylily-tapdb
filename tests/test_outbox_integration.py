@@ -8,6 +8,7 @@ from sqlalchemy import select, text
 from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.outbox import outbox_event
+from daylily_tapdb.outbox import list_by_destination, lookup_by_machine_uuid
 from daylily_tapdb.outbox.repository import (
     claim_events,
     enqueue_event,
@@ -89,6 +90,8 @@ def test_postgres_outbox_enqueue_creates_message_instance(pytestconfig):
                     generic_instance.machine_uuid == machine_uuid
                 )
             ).scalar_one()
+            assert msg.domain_code == "T"
+            assert msg.issuer_app_code == "TAPD"
             assert msg.category == "system"
             assert msg.type == "message"
             assert msg.subtype == "webhook_event"
@@ -101,6 +104,8 @@ def test_postgres_outbox_enqueue_creates_message_instance(pytestconfig):
             oe = session.execute(
                 select(outbox_event).where(outbox_event.message_uid == msg.uid)
             ).scalar_one()
+            assert oe.domain_code == "T"
+            assert oe.issuer_app_code == "TAPD"
             assert oe.status == "pending"
             assert oe.destination == "atlas"
             assert oe.dedupe_key == "atlas|order.created|TGX-ABC"
@@ -108,6 +113,108 @@ def test_postgres_outbox_enqueue_creates_message_instance(pytestconfig):
             # Verify outbox row does NOT have payload columns
             assert not hasattr(oe, "payload") or not isinstance(
                 getattr(type(oe), "payload", None), property
+            )
+    finally:
+        _drop_schema(dsn, schema_name)
+
+
+def test_postgres_outbox_domain_scoping_isolates_dedupe_and_queries(pytestconfig):
+    """Same destination+dedupe can exist in separate domain/app scopes."""
+    dsn, schema_name = _setup_schema(pytestconfig, suffix="scope")
+
+    try:
+        tenant_id = uuid.uuid4()
+        conn_a = TAPDBConnection(
+            db_url=dsn,
+            app_username="pytest-a",
+            domain_code="A",
+            issuer_app_code="APPA",
+        )
+        conn_b = TAPDBConnection(
+            db_url=dsn,
+            app_username="pytest-b",
+            domain_code="B",
+            issuer_app_code="APPB",
+        )
+
+        with conn_a.session_scope(commit=True) as session:
+            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
+            machine_a = enqueue_event(
+                session=session,
+                tenant_id=tenant_id,
+                event_type="order.created",
+                aggregate_euid="ORD-A",
+                payload={"order_number": "ORD-A"},
+                destination="https://tenant.example.com/webhook",
+                dedupe_key="shared-dedupe-key",
+            )
+
+        with conn_b.session_scope(commit=True) as session:
+            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
+            machine_b = enqueue_event(
+                session=session,
+                tenant_id=tenant_id,
+                event_type="order.created",
+                aggregate_euid="ORD-B",
+                payload={"order_number": "ORD-B"},
+                destination="https://tenant.example.com/webhook",
+                dedupe_key="shared-dedupe-key",
+            )
+
+        assert machine_a != machine_b
+
+        with conn_a.session_scope(commit=False) as session:
+            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
+            rows = list_by_destination(
+                session,
+                "https://tenant.example.com/webhook",
+                domain_code="A",
+                issuer_app_code="APPA",
+            )
+            assert len(rows) == 1
+            assert rows[0].domain_code == "A"
+            assert rows[0].issuer_app_code == "APPA"
+            assert lookup_by_machine_uuid(
+                session,
+                machine_a,
+                domain_code="A",
+                issuer_app_code="APPA",
+            )
+            assert (
+                lookup_by_machine_uuid(
+                    session,
+                    machine_b,
+                    domain_code="A",
+                    issuer_app_code="APPA",
+                )
+                is None
+            )
+
+        with conn_b.session_scope(commit=False) as session:
+            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
+            rows = list_by_destination(
+                session,
+                "https://tenant.example.com/webhook",
+                domain_code="B",
+                issuer_app_code="APPB",
+            )
+            assert len(rows) == 1
+            assert rows[0].domain_code == "B"
+            assert rows[0].issuer_app_code == "APPB"
+            assert lookup_by_machine_uuid(
+                session,
+                machine_b,
+                domain_code="B",
+                issuer_app_code="APPB",
+            )
+            assert (
+                lookup_by_machine_uuid(
+                    session,
+                    machine_a,
+                    domain_code="B",
+                    issuer_app_code="APPB",
+                )
+                is None
             )
     finally:
         _drop_schema(dsn, schema_name)
