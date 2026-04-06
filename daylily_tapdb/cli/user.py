@@ -17,6 +17,7 @@ from rich.table import Table
 from daylily_tapdb import TAPDBConnection
 from daylily_tapdb.cli.db import Environment
 from daylily_tapdb.cli.db_config import get_db_config_for_env
+from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.passwords import hash_password as _hash_password
 from daylily_tapdb.user_store import (
     create_or_get,
@@ -111,7 +112,7 @@ def user_list(
             _format_date(user.last_login_dt, include_time=True),
         )
 
-    ccyo_out.print_text(table)
+    print_renderable(table)
 
 
 @user_app.command("add")
