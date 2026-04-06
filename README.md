@@ -140,3 +140,4 @@ That boundary is the point of the project. TAPDB is the substrate, not the busin
 - [docs/identity-and-scoping.md](docs/identity-and-scoping.md)
 - [docs/runtime-and-cli.md](docs/runtime-and-cli.md)
 - [docs/tapdb_gui_inclusion.md](docs/tapdb_gui_inclusion.md)
+ 
