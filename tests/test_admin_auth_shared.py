@@ -86,8 +86,25 @@ def test_resolve_shared_auth_user_reuses_existing_user(monkeypatch: pytest.Monke
     monkeypatch.setattr(auth, "_shared_auth_enabled", lambda: True)
     monkeypatch.setattr(
         auth,
+        "_admin_settings",
+        lambda: {
+            "auth_mode": "shared_host",
+            "allowed_email_domains": [
+                "lsmc.com",
+                "lsmc.bio",
+                "lsmc.life",
+                "daylilyinformatics.com",
+            ],
+            "auto_provision_allowed_domains": ["lsmc.com"],
+            "shared_host_session_secret": "secret-a",
+            "shared_host_session_cookie": "session",
+            "shared_host_session_max_age_seconds": 1209600,
+        },
+    )
+    monkeypatch.setattr(
+        auth,
         "_extract_bloom_user",
-        lambda _request: {"email": "admin@example.com", "role": "admin"},
+        lambda _request: {"email": "admin@lsmc.com", "role": "admin"},
     )
     monkeypatch.setattr(
         auth,
@@ -111,7 +128,7 @@ def test_resolve_shared_auth_user_reuses_existing_user(monkeypatch: pytest.Monke
     assert user is not None
     assert user["uid"] == 42
     assert request.session["user_uid"] == 42
-    assert request.session["cognito_username"] == "admin@example.com"
+    assert request.session["cognito_username"] == "admin@lsmc.com"
     assert "cognito_challenge" not in request.session
     assert "cognito_challenge_session" not in request.session
 
@@ -122,8 +139,25 @@ def test_resolve_shared_auth_user_creates_missing_user(monkeypatch: pytest.Monke
     monkeypatch.setattr(auth, "_shared_auth_enabled", lambda: True)
     monkeypatch.setattr(
         auth,
+        "_admin_settings",
+        lambda: {
+            "auth_mode": "shared_host",
+            "allowed_email_domains": [
+                "lsmc.com",
+                "lsmc.bio",
+                "lsmc.life",
+                "daylilyinformatics.com",
+            ],
+            "auto_provision_allowed_domains": ["lsmc.com"],
+            "shared_host_session_secret": "secret-a",
+            "shared_host_session_cookie": "session",
+            "shared_host_session_max_age_seconds": 1209600,
+        },
+    )
+    monkeypatch.setattr(
+        auth,
         "_extract_bloom_user",
-        lambda _request: {"email": "new@example.com", "role": "user"},
+        lambda _request: {"email": "new@lsmc.com", "role": "user"},
     )
     monkeypatch.setattr(auth, "get_user_by_username", lambda _username: None)
 
@@ -138,9 +172,50 @@ def test_resolve_shared_auth_user_creates_missing_user(monkeypatch: pytest.Monke
     user = auth._resolve_shared_auth_user(request)
 
     assert user is not None
-    assert created == {"email": "new@example.com", "role": "user"}
+    assert created == {"email": "new@lsmc.com", "role": "user"}
     assert request.session["user_uid"] == 77
-    assert request.session["cognito_username"] == "new@example.com"
+    assert request.session["cognito_username"] == "new@lsmc.com"
+
+
+def test_resolve_shared_auth_user_rejects_missing_user_outside_autoprovision_domain(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(auth, "_shared_auth_enabled", lambda: True)
+    monkeypatch.setattr(
+        auth,
+        "_admin_settings",
+        lambda: {
+            "auth_mode": "shared_host",
+            "allowed_email_domains": [
+                "lsmc.com",
+                "lsmc.bio",
+                "lsmc.life",
+                "daylilyinformatics.com",
+            ],
+            "auto_provision_allowed_domains": ["lsmc.com"],
+            "shared_host_session_secret": "secret-a",
+            "shared_host_session_cookie": "session",
+            "shared_host_session_max_age_seconds": 1209600,
+        },
+    )
+    monkeypatch.setattr(
+        auth,
+        "_extract_bloom_user",
+        lambda _request: {"email": "new@lsmc.bio", "role": "user"},
+    )
+    monkeypatch.setattr(auth, "get_user_by_username", lambda _username: None)
+    monkeypatch.setattr(
+        auth,
+        "get_or_create_user_from_email",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Should not auto-provision outside the allowlist")
+        ),
+    )
+
+    request = SimpleNamespace(session={})
+
+    assert auth._resolve_shared_auth_user(request) is None
+    assert request.session == {}
 
 
 def test_resolve_shared_auth_user_handles_create_error(
@@ -149,8 +224,25 @@ def test_resolve_shared_auth_user_handles_create_error(
     monkeypatch.setattr(auth, "_shared_auth_enabled", lambda: True)
     monkeypatch.setattr(
         auth,
+        "_admin_settings",
+        lambda: {
+            "auth_mode": "shared_host",
+            "allowed_email_domains": [
+                "lsmc.com",
+                "lsmc.bio",
+                "lsmc.life",
+                "daylilyinformatics.com",
+            ],
+            "auto_provision_allowed_domains": ["lsmc.com"],
+            "shared_host_session_secret": "secret-a",
+            "shared_host_session_cookie": "session",
+            "shared_host_session_max_age_seconds": 1209600,
+        },
+    )
+    monkeypatch.setattr(
+        auth,
         "_extract_bloom_user",
-        lambda _request: {"email": "new@example.com", "role": "user"},
+        lambda _request: {"email": "new@lsmc.com", "role": "user"},
     )
     monkeypatch.setattr(auth, "get_user_by_username", lambda _username: None)
 

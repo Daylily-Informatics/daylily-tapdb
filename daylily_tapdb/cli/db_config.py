@@ -396,6 +396,21 @@ def get_admin_settings_for_env(
             "TapDB config admin.auth.mode must be one of: tapdb, shared_host, disabled."
         )
 
+    raw_allowed_email_domains = auth.get("allowed_email_domains")
+    allowed_email_domains = _string_list(raw_allowed_email_domains)
+    if raw_allowed_email_domains is None:
+        allowed_email_domains = [
+            "lsmc.com",
+            "lsmc.bio",
+            "lsmc.life",
+            "daylilyinformatics.com",
+        ]
+
+    raw_auto_provision_domains = auth.get("auto_provision_allowed_domains")
+    auto_provision_allowed_domains = _string_list(raw_auto_provision_domains)
+    if raw_auto_provision_domains is None:
+        auto_provision_allowed_domains = ["lsmc.com"]
+
     return {
         "config_path": str(resolved_config_path),
         "env_name": env_key,
@@ -409,6 +424,12 @@ def get_admin_settings_for_env(
         ),
         "session_secret": _string(session.get("secret")),
         "auth_mode": auth_mode,
+        "allowed_email_domains": allowed_email_domains,
+        "auto_provision_allowed_domains": auto_provision_allowed_domains,
+        "default_tenant_id": _string(
+            auth.get("default_tenant_id"),
+            default="00000000-0000-0000-0000-000000000000",
+        ),
         "disabled_user_email": _string(
             disabled_user.get("email"),
             default=DEFAULT_DISABLED_ADMIN_EMAIL,

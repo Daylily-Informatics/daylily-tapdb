@@ -40,6 +40,8 @@ from admin.auth import (
     get_or_create_user_from_email,
     get_user_by_username,
     get_user_permissions,
+    is_allowed_email_domain,
+    is_auto_provision_allowed_domain,
     require_admin,
     require_auth,
     respond_to_new_password_challenge,
@@ -111,6 +113,14 @@ def _default_admin_settings() -> dict[str, Any]:
         "repo_url": DEFAULT_GITHUB_REPO_URL,
         "session_secret": "",
         "auth_mode": "tapdb",
+        "allowed_email_domains": [
+            "lsmc.com",
+            "lsmc.bio",
+            "lsmc.life",
+            "daylilyinformatics.com",
+        ],
+        "auto_provision_allowed_domains": ["lsmc.com"],
+        "default_tenant_id": "00000000-0000-0000-0000-000000000000",
         "disabled_user_email": "tapdb-admin@localhost",
         "disabled_user_role": "admin",
         "shared_host_session_secret": "",
@@ -905,11 +915,29 @@ async def oauth_callback(
         runtime = _resolve_cognito_oauth_runtime(env_name)
         tokens = _exchange_oauth_authorization_code(runtime, code)
         profile = _resolve_oauth_user_profile(env_name, tokens, runtime)
-        user = get_or_create_user_from_email(
-            profile["email"],
-            display_name=profile.get("display_name") or None,
-            role="user",
-        )
+        email = profile["email"]
+        if not is_allowed_email_domain(email):
+            content = templates.get_template("login.html").render(
+                request=request,
+                style=get_style(request),
+                error="This account is not provisioned for TAPDB access. Contact an administrator for an invite.",
+            )
+            return HTMLResponse(content=content)
+
+        user = get_user_by_username(email)
+        if not user:
+            if not is_auto_provision_allowed_domain(email):
+                content = templates.get_template("login.html").render(
+                    request=request,
+                    style=get_style(request),
+                    error="This account is not provisioned for TAPDB access. Contact an administrator for an invite.",
+                )
+                return HTMLResponse(content=content)
+            user = get_or_create_user_from_email(
+                email,
+                display_name=profile.get("display_name") or None,
+                role="user",
+            )
     except Exception as exc:
         content = templates.get_template("login.html").render(
             request=request,
@@ -984,8 +1012,23 @@ async def login_submit(
         )
         return HTMLResponse(content=content)
 
+    if not is_allowed_email_domain(cognito_username):
+        content = templates.get_template("login.html").render(
+            request=request,
+            style=get_style(request),
+            error="This account is not provisioned for TAPDB access. Contact an administrator for an invite.",
+        )
+        return HTMLResponse(content=content)
+
     # Provision DB user row on first successful Cognito authentication.
     if not user:
+        if not is_auto_provision_allowed_domain(cognito_username):
+            content = templates.get_template("login.html").render(
+                request=request,
+                style=get_style(request),
+                error="This account is not provisioned for TAPDB access. Contact an administrator for an invite.",
+            )
+            return HTMLResponse(content=content)
         try:
             user = get_or_create_user_from_email(cognito_username)
         except Exception as e:
@@ -1086,6 +1129,13 @@ async def signup_submit(
         return HTMLResponse(content=content)
 
     try:
+        if not is_auto_provision_allowed_domain(normalized_email):
+            content = templates.get_template("signup.html").render(
+                request=request,
+                style=get_style(request),
+                error="This account is not provisioned for TAPDB access. Contact an administrator for an invite.",
+            )
+            return HTMLResponse(content=content)
         create_cognito_user_account(
             normalized_email,
             password,
