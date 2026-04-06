@@ -223,6 +223,65 @@ def test_db_migrate_uses_installed_data_migrations(tmp_path, monkeypatch):
     assert any(c["file"] == migration_file for c in calls)
 
 
+def test_db_nuke_drops_outbox_and_inbox_tables_before_scope_functions(monkeypatch):
+    import daylily_tapdb.cli.db as m
+
+    monkeypatch.setattr(
+        m,
+        "_get_db_config",
+        lambda _env: {
+            "database": "tapdb_dev",
+            "host": "localhost",
+            "port": "5533",
+            "engine_type": "local",
+        },
+    )
+    monkeypatch.setattr(m, "_check_db_exists", lambda _env, _db: True)
+    monkeypatch.setattr(
+        m,
+        "_get_table_counts",
+        lambda _env: {
+            "generic_template": 0,
+            "generic_instance": 0,
+            "generic_instance_lineage": 0,
+            "audit_log": 0,
+            "tapdb_identity_prefix_config": 0,
+        },
+    )
+    monkeypatch.setattr(m, "_log_operation", lambda *_args, **_kwargs: None)
+
+    captured: dict[str, str] = {}
+
+    def fake_run_psql(env, *, sql=None, file=None):
+        assert env == m.Environment.dev
+        assert file is None
+        captured["sql"] = sql or ""
+        return True, ""
+
+    monkeypatch.setattr(m, "_run_psql", fake_run_psql)
+
+    m.db_nuke(m.Environment.dev, force=True)
+
+    sql = captured["sql"]
+    outbox_attempt_drop = "DROP TABLE IF EXISTS outbox_event_attempt CASCADE;"
+    outbox_drop = "DROP TABLE IF EXISTS outbox_event CASCADE;"
+    inbox_drop = "DROP TABLE IF EXISTS inbox_message CASCADE;"
+    migrations_drop = "DROP TABLE IF EXISTS _tapdb_migrations CASCADE;"
+    domain_fn_drop = "DROP FUNCTION IF EXISTS tapdb_current_domain_code();"
+    app_fn_drop = "DROP FUNCTION IF EXISTS tapdb_current_app_code();"
+
+    assert outbox_attempt_drop in sql
+    assert outbox_drop in sql
+    assert inbox_drop in sql
+    assert migrations_drop in sql
+    assert sql.index(outbox_attempt_drop) < sql.index(outbox_drop)
+    assert sql.index(outbox_drop) < sql.index(domain_fn_drop)
+    assert sql.index(inbox_drop) < sql.index(domain_fn_drop)
+    assert sql.index(migrations_drop) < sql.index(domain_fn_drop)
+    assert sql.index(outbox_drop) < sql.index(app_fn_drop)
+    assert sql.index(inbox_drop) < sql.index(app_fn_drop)
+
+
 # ---------------------------------------------------------------------------
 # M5: _ensure_instance_prefix_sequence rejects non-alpha prefixes
 # ---------------------------------------------------------------------------
