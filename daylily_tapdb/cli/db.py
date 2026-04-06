@@ -274,12 +274,6 @@ class Environment(str, Enum):
     prod = "prod"
 
 
-# Legacy compatibility constants; runtime code resolves active namespace paths lazily.
-# Keep these import-safe and context-free to avoid stale/incorrect values.
-CONFIG_DIR = Path.home() / ".config" / "tapdb"
-LOG_DIR = CONFIG_DIR / "logs"
-
-
 def _ensure_dirs():
     """Ensure config directories exist."""
     config_dir = get_config_path().parent
