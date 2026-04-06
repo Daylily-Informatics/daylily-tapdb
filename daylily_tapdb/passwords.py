@@ -1,10 +1,6 @@
 """Password hashing helpers.
 
-Phase 4 requirement: move off salted SHA-256 to a modern password hash.
-
-Implementation:
-- Preferred: bcrypt via passlib (install with passlib[bcrypt])
-- Backward compatible verify for legacy stored hashes in "salt:sha256" format.
+Implementation: bcrypt via passlib (install with passlib[bcrypt]).
 """
 
 from __future__ import annotations

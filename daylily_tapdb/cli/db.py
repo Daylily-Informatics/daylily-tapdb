@@ -211,7 +211,7 @@ def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
 
 
 def _write_migration_baseline(env: "Environment") -> None:
-    """Write a migration baseline so fresh installs never apply legacy migrations."""
+    """Write a migration baseline so fresh installs never re-apply prior migrations."""
     try:
         schema_root = _find_schema_root(required_subpath=Path("migrations"))
     except FileNotFoundError:
