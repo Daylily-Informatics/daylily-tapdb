@@ -7,6 +7,7 @@ import pytest
 
 from admin.cognito import resolve_tapdb_pool_config
 from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
+from daylily_tapdb.cli.db_config import get_admin_settings_for_env
 
 
 def _write(path: Path, content: str) -> None:
@@ -151,3 +152,64 @@ def test_resolve_tapdb_pool_config_requires_tapdb_client_name(
     set_cli_context(config_path=cfg_path, env_name="dev")
     with pytest.raises(RuntimeError, match="cognito_client_name"):
         resolve_tapdb_pool_config("dev")
+
+
+def test_get_admin_settings_for_env_exposes_allowed_domain_policy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    cfg_path = _config_path(tmp_path)
+
+    _write(
+        cfg_path,
+        "meta:\n"
+        "  config_version: 3\n"
+        "  client_id: local\n"
+        "  database_name: tapdb\n"
+        "  euid_client_code: C\n"
+        "environments:\n"
+        "  dev:\n"
+        "    host: localhost\n"
+        "    port: 5432\n"
+        "    ui_port: 8911\n"
+        "    user: test\n"
+        "    database: tapdb_dev\n"
+        "    audit_log_euid_prefix: CGX\n"
+        "    cognito_user_pool_id: us-east-1_TESTPOOL\n"
+        "    cognito_app_client_id: client123\n"
+        "    cognito_client_name: tapdb\n"
+        "    cognito_region: us-east-1\n"
+        "    cognito_domain: tapdb-dev-users.auth.us-east-1.amazoncognito.com\n"
+        "    cognito_callback_url: https://localhost:8911/auth/callback\n"
+        "    cognito_logout_url: https://localhost:8911/login\n"
+        "    aws_profile: test-profile\n"
+        "admin:\n"
+        "  session:\n"
+        "    secret: admin-secret\n"
+        "  auth:\n"
+        "    mode: shared_host\n"
+        "    allowed_email_domains:\n"
+        "      - lsmc.com\n"
+        "      - lsmc.bio\n"
+        "      - lsmc.life\n"
+        "      - daylilyinformatics.com\n"
+        "    auto_provision_allowed_domains:\n"
+        "      - lsmc.com\n"
+        "    default_tenant_id: 00000000-0000-0000-0000-000000000000\n"
+        "    shared_host:\n"
+        "      session_secret: shared-secret\n",
+    )
+
+    set_cli_context(config_path=cfg_path, env_name="dev")
+    admin_settings = get_admin_settings_for_env("dev")
+
+    assert admin_settings["allowed_email_domains"] == [
+        "lsmc.com",
+        "lsmc.bio",
+        "lsmc.life",
+        "daylilyinformatics.com",
+    ]
+    assert admin_settings["auto_provision_allowed_domains"] == ["lsmc.com"]
+    assert (
+        admin_settings["default_tenant_id"]
+        == "00000000-0000-0000-0000-000000000000"
+    )

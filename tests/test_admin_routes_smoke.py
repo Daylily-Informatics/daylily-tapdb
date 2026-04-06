@@ -953,7 +953,7 @@ def test_oauth_login_redirect_and_callback_success(
         admin_main,
         "_resolve_oauth_user_profile",
         lambda _env, _tokens, _runtime: {
-            "email": "google.user@example.com",
+            "email": "google.user@lsmc.com",
             "display_name": "Google User",
         },
     )

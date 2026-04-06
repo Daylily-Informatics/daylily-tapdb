@@ -1002,6 +1002,14 @@ def build_app():
             },
             "auth": {
                 "mode": "tapdb",
+                "allowed_email_domains": [
+                    "lsmc.com",
+                    "lsmc.bio",
+                    "lsmc.life",
+                    "daylilyinformatics.com",
+                ],
+                "auto_provision_allowed_domains": ["lsmc.com"],
+                "default_tenant_id": "00000000-0000-0000-0000-000000000000",
                 "disabled_user": {
                     "email": "tapdb-admin@localhost",
                     "role": "admin",

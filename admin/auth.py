@@ -30,11 +30,35 @@ from daylily_tapdb.user_store import (
 # Session cookie settings
 SESSION_COOKIE_NAME = "tapdb_session"
 SESSION_MAX_AGE = 86400  # 24 hours
+_BASE_ALLOWED_EMAIL_DOMAINS = {
+    "lsmc.com",
+    "lsmc.bio",
+    "lsmc.life",
+    "daylilyinformatics.com",
+}
+_DEFAULT_AUTO_PROVISION_ALLOWED_DOMAINS = {"lsmc.com"}
+
+
+def _default_admin_settings() -> dict[str, Any]:
+    return {
+        "auth_mode": "tapdb",
+        "allowed_email_domains": list(_BASE_ALLOWED_EMAIL_DOMAINS),
+        "auto_provision_allowed_domains": list(_DEFAULT_AUTO_PROVISION_ALLOWED_DOMAINS),
+        "default_tenant_id": "00000000-0000-0000-0000-000000000000",
+        "shared_host_session_secret": "",
+        "shared_host_session_cookie": "session",
+        "shared_host_session_max_age_seconds": 1209600,
+        "disabled_user_email": "tapdb-admin@localhost",
+        "disabled_user_role": "admin",
+    }
 
 
 def _admin_settings() -> dict[str, Any]:
     env_name = active_env_name("dev").strip().lower()
-    return get_admin_settings_for_env(env_name)
+    try:
+        return get_admin_settings_for_env(env_name)
+    except Exception:
+        return _default_admin_settings()
 
 
 def _auth_disabled() -> bool:
@@ -47,6 +71,52 @@ def _shared_auth_enabled() -> bool:
     return (
         str(_admin_settings().get("auth_mode") or "").strip().lower() == "shared_host"
     )
+
+
+def _normalized_domain_list(value: Any) -> set[str]:
+    domains: set[str] = set()
+    if value is None:
+        return domains
+    if isinstance(value, list):
+        raw_items = [str(item).strip() for item in value]
+    else:
+        raw_items = [part.strip() for part in str(value).split(",")]
+    for item in raw_items:
+        if item:
+            domains.add(item.lower())
+    return domains
+
+
+def _email_domain(email: str) -> str:
+    return str(email or "").strip().lower().rsplit("@", 1)[-1]
+
+
+def is_allowed_email_domain(email: str) -> bool:
+    """Return True when the configured admin allowlist accepts the email domain."""
+    admin_settings = _admin_settings()
+    raw_allowed = admin_settings.get("allowed_email_domains")
+    allowed = _normalized_domain_list(raw_allowed)
+    if raw_allowed is None:
+        allowed = set(_BASE_ALLOWED_EMAIL_DOMAINS)
+    if not allowed:
+        return False
+    if "*" in allowed:
+        return True
+    return _email_domain(email) in allowed
+
+
+def is_auto_provision_allowed_domain(email: str) -> bool:
+    """Return True when the email domain may be auto-provisioned."""
+    admin_settings = _admin_settings()
+    raw_allowed = admin_settings.get("auto_provision_allowed_domains")
+    allowed = _normalized_domain_list(raw_allowed)
+    if raw_allowed is None:
+        allowed = set(_DEFAULT_AUTO_PROVISION_ALLOWED_DOMAINS)
+    if not allowed:
+        return False
+    if "*" in allowed:
+        return True
+    return _email_domain(email) in allowed
 
 
 def _disabled_auth_user() -> dict:
@@ -132,8 +202,12 @@ def _resolve_shared_auth_user(request: Request) -> Optional[dict]:
         return None
 
     email = bloom_user["email"]
+    if not is_allowed_email_domain(email):
+        return None
     user = get_user_by_username(email)
     if not user:
+        if not is_auto_provision_allowed_domain(email):
+            return None
         try:
             user = get_or_create_user_from_email(email, role=bloom_user["role"])
         except Exception:
@@ -316,6 +390,9 @@ async def get_current_user(request: Request) -> Optional[dict]:
         return None
     user = get_user_by_uid(user_uid)
     if not user:
+        return None
+    if not is_allowed_email_domain(str(user.get("email") or "")):
+        request.session.clear()
         return None
 
     # Challenge state is tracked in session for Cognito login flows.
