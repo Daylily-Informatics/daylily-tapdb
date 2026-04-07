@@ -73,8 +73,10 @@ tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml \
 
 tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml \
   --env dev \
-  info --json
+  --json info
 ```
+
+`--json` is a root-global flag in the CLI v2 contract, so it belongs before the subcommand name.
 
 If optional workflow packs are present in the config, add `--include-workflow` to the bootstrap command. If you want the generated scripts rather than inline commands, use the companion examples under `examples/readme/`:
 

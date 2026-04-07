@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Optional
 
 from cli_core_yo import ccyo_out
+from cli_core_yo.app import create_app
 
+from daylily_tapdb.cli._registry_v2 import help_text, policy_for_command
 from daylily_tapdb.cli.context import (
     TapdbContext,
     active_context_overrides,
@@ -25,6 +27,7 @@ from daylily_tapdb.cli.context import (
     set_cli_context,
 )
 from daylily_tapdb.cli.output import print_renderable
+from daylily_tapdb.cli.spec import spec
 from daylily_tapdb.euid import (
     normalize_euid_client_code,
     resolve_client_scoped_core_prefix,
@@ -36,15 +39,6 @@ DEFAULT_UI_SCHEME = "https"
 # Legacy module globals retained for compatibility with older tests/tools.
 PID_FILE = Path.home() / ".tapdb" / "ui.pid"
 LOG_FILE = Path.home() / ".tapdb" / "ui.log"
-NAMESPACE_REQUIRED_TOPLEVEL = {
-    "bootstrap",
-    "db",
-    "pg",
-    "ui",
-    "cognito",
-    "user",
-    "info",
-}
 
 
 def _active_env_name() -> str:
@@ -305,17 +299,16 @@ def build_app():
             help="Explicit TapDB environment name for this invocation.",
         ),
     ):
-        """Set global CLI context options."""
+        """Legacy direct-invocation context bridge for tests and embedding."""
         if ctx.resilient_parsing:
             return
+        try:
+            from cli_core_yo.runtime import _reset
+
+            _reset()
+        except Exception:
+            pass
         prior_context = active_context_overrides()
-        requested_help = any(
-            arg in ("--help", "-h")
-            for arg in [
-                *list(getattr(ctx, "args", []) or []),
-                *sys.argv[1:],
-            ]
-        )
         set_cli_context(
             client_id=(
                 client_id if client_id is not None else prior_context.get("client_id")
@@ -334,33 +327,6 @@ def build_app():
                 else prior_context.get("config_path")
             ),
         )
-
-        if requested_help:
-            return
-
-        invoked = (ctx.invoked_subcommand or "").strip().lower()
-        strict = invoked in NAMESPACE_REQUIRED_TOPLEVEL
-        if not strict:
-            return
-
-        current = active_context_overrides()
-        if not current["config_path"] or not current["env_name"]:
-            ccyo_out.error("Runtime TapDB commands require both --config and --env.")
-            ccyo_out.print_text(
-                "  Example: [cyan]tapdb --config "
-                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]"
-            )
-            raise typer.Exit(1)
-
-        try:
-            _require_context()
-        except RuntimeError as exc:
-            ccyo_out.error(f"{exc}")
-            ccyo_out.print_text(
-                "  Example: [cyan]tapdb --config "
-                "~/.config/tapdb/atlas/app/tapdb-config.yaml --env dev info[/cyan]"
-            )
-            raise typer.Exit(1)
 
     bootstrap_app = typer.Typer(help="One-command environment bootstrap")
     ui_app = typer.Typer(help="Admin UI server management commands")
@@ -1796,13 +1762,7 @@ try:
 except Exception:
     app = None
 
-
-def _default_command_policy():
-    try:
-        from cli_core_yo.spec import CommandPolicy
-    except ImportError:
-        return None
-    return CommandPolicy()
+legacy_app = app
 
 
 def _registry_add_command(
@@ -1819,9 +1779,7 @@ def _registry_add_command(
     except (TypeError, ValueError):
         add_command_params = {}
     if "policy" in add_command_params:
-        policy = _default_command_policy()
-        if policy is not None:
-            kwargs["policy"] = policy
+        kwargs["policy"] = policy_for_command(group_path, name)
     registry.add_command(**kwargs)
 
 
@@ -1860,20 +1818,9 @@ def register(registry, spec) -> None:
             group_path=None,
             name=cmd_name,
             callback=cmd.callback,
-            help_text=cmd.help or "",
+            help_text=help_text(cmd.callback),
         )
     for group in getattr(cli_app, "registered_groups", []):
-        if hasattr(registry, "add_typer_app"):
-            group_name = group.name or group.typer_instance.info.name
-            if group_name == "config":
-                group_name = "db-config"
-            registry.add_typer_app(
-                group_path=None,
-                typer_app=group.typer_instance,
-                name=group_name,
-                help_text=group.help or group.typer_instance.info.help or "",
-            )
-            continue
         _register_typer_group(registry, group)
 
 
@@ -1883,95 +1830,15 @@ def main():
 
     from cli_core_yo.app import run
 
-    from daylily_tapdb.cli.spec import spec
-
-    argv = sys.argv[1:]
     clear_cli_context()
-    argv = _prime_cli_context_from_argv(argv)
-    sys.exit(run(spec, argv))
+    sys.exit(run(spec, sys.argv[1:]))
 
+try:
+    framework_app = create_app(spec)
+except Exception:
+    framework_app = None
 
-def _consume_root_option(
-    argv: list[str],
-    index: int,
-    option: str,
-) -> tuple[bool, Optional[str], int]:
-    arg = argv[index]
-    if arg == option:
-        if index + 1 >= len(argv):
-            return True, None, 1
-        return True, argv[index + 1], 2
-    prefix = f"{option}="
-    if arg.startswith(prefix):
-        return True, arg[len(prefix) :], 1
-    return False, None, 0
-
-
-def _prime_cli_context_from_argv(argv: list[str]) -> list[str]:
-    """Capture TAPDB root context flags before cli-core-yo parses argv."""
-
-    client_id: Optional[str] = None
-    database_name: Optional[str] = None
-    env_name: Optional[str] = None
-    config_path: Optional[str] = None
-    cleaned: list[str] = []
-    saw_command = False
-    index = 0
-
-    while index < len(argv):
-        arg = argv[index]
-        if saw_command:
-            cleaned.append(arg)
-            index += 1
-            continue
-
-        if arg == "--":
-            saw_command = True
-            cleaned.append(arg)
-            index += 1
-            continue
-
-        if not arg.startswith("-"):
-            saw_command = True
-            cleaned.append(arg)
-            index += 1
-            continue
-
-        matched, value, consumed = _consume_root_option(argv, index, "--config")
-        if matched:
-            config_path = value
-            cleaned.extend(argv[index : index + consumed])
-            index += consumed
-            continue
-
-        matched, value, consumed = _consume_root_option(argv, index, "--env")
-        if matched:
-            env_name = value
-            index += consumed
-            continue
-
-        matched, value, consumed = _consume_root_option(argv, index, "--client-id")
-        if matched:
-            client_id = value
-            index += consumed
-            continue
-
-        matched, value, consumed = _consume_root_option(argv, index, "--database-name")
-        if matched:
-            database_name = value
-            index += consumed
-            continue
-
-        cleaned.append(arg)
-        index += 1
-
-    set_cli_context(
-        client_id=client_id,
-        database_name=database_name,
-        env_name=env_name,
-        config_path=config_path,
-    )
-    return cleaned
+cli = framework_app
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ Primary goals:
 4. For local engine configs, host must be exactly `localhost`.
 5. Treat destructive operations as opt-in only.
 6. Treat native `tenant_id` columns as canonical tenant scope for TAPDB rows.
+7. When a command needs machine-readable output, use the root-global `--json` flag before the subcommand name.
 
 ## Required Context (Strict Namespace)
 TAPDB is namespace-isolated. For commands that touch config/runtime/db/ui/cognito/user/aurora/info, require both:

@@ -181,14 +181,17 @@ class TestCLIMain:
         result = runner.invoke(app, ["db", "create", "dev"])
         clear_cli_context()
         assert result.exit_code != 0
-        assert "require both --config and --env" in _strip_ansi(result.output)
+        assert "TapDB config path is required. Set --config." in _strip_ansi(
+            result.output
+        )
 
     def test_runtime_command_without_config_for_ui_fails(self):
         clear_cli_context()
         result = runner.invoke(app, ["ui", "status"])
         clear_cli_context()
         assert result.exit_code != 0
-        assert "require both --config and --env" in _strip_ansi(result.output)
+        assert isinstance(result.exception, RuntimeError)
+        assert str(result.exception) == "TapDB config path is required. Set --config."
 
 
 class TestCLIUI:
@@ -876,7 +879,9 @@ class TestCLIBootstrap:
         result = runner.invoke(fresh_app, ["bootstrap", "local", "--no-gui"])
         clear_cli_context()
         assert result.exit_code != 0
-        assert "require both --config and --env" in _strip_ansi(result.output)
+        assert "TapDB bootstrap requires an explicit --env value." in _strip_ansi(
+            result.output
+        )
 
     def test_bootstrap_local_no_gui(self, monkeypatch):
         monkeypatch.setenv("TAPDB_ENV", "dev")

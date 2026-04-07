@@ -29,8 +29,7 @@ If you need a fresh local TAPDB first:
 
 ```bash
 mkdir -p "$HOME/.config/tapdb/tapdb/tapdb"
-tapdb config init \
-  --config "$HOME/.config/tapdb/tapdb/tapdb/tapdb-config.yaml" \
+tapdb --config "$HOME/.config/tapdb/tapdb/tapdb/tapdb-config.yaml" db-config init \
   --client-id tapdb \
   --database-name tapdb \
   --euid-client-code T
