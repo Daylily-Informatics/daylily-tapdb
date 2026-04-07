@@ -111,7 +111,10 @@ def _build_fake_admin_main():
         _external_ref_payloads=lambda obj: list(getattr(obj, "external_refs", [])),
         get_external_ref_by_index=lambda obj, idx: obj.refs[idx],
         fetch_remote_graph=lambda _request, _ref, *, depth: {
-            "elements": {"nodes": [{"data": {"id": "AT-1", "euid": "AT-1"}}], "edges": []},
+            "elements": {
+                "nodes": [{"data": {"id": "AT-1", "euid": "AT-1"}}],
+                "edges": [],
+            },
             "meta": {"remote_depth": depth},
         },
         namespace_external_graph=lambda payload, *, ref, ref_index, source_euid: {
@@ -143,7 +146,9 @@ def test_build_dag_capability_advertisement_has_canonical_paths() -> None:
     assert payload["endpoints"][1]["path"] == "/api/dag/data"
 
 
-def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(monkeypatch) -> None:
+def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         "daylily_tapdb.web.dag._load_admin_main",
         lambda _config_path, _env_name: _build_fake_admin_main(),
@@ -167,7 +172,9 @@ def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(monkeypa
     assert object_body["record_type"] == "instance"
     assert object_body["external_refs"][0]["root_euid"] == "AT-1"
 
-    graph_response = client.get("/api/dag/data", params={"start_euid": "GX1", "depth": 2})
+    graph_response = client.get(
+        "/api/dag/data", params={"start_euid": "GX1", "depth": 2}
+    )
     assert graph_response.status_code == 200
     graph_body = graph_response.json()
     assert graph_body["meta"] == {

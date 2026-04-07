@@ -84,7 +84,9 @@ def normalize_host_user(payload: Mapping[str, Any] | None) -> dict[str, Any] | N
     }
 
 
-def resolve_host_shell(bridge: TapdbHostBridge | None, request: Request) -> dict[str, Any]:
+def resolve_host_shell(
+    bridge: TapdbHostBridge | None, request: Request
+) -> dict[str, Any]:
     """Build request-local shell context consumed by TapDB templates."""
 
     if bridge is None:
@@ -121,7 +123,9 @@ def resolve_host_shell(bridge: TapdbHostBridge | None, request: Request) -> dict
     }
 
 
-def resolve_host_context(bridge: TapdbHostBridge | None, request: Request) -> dict[str, Any]:
+def resolve_host_context(
+    bridge: TapdbHostBridge | None, request: Request
+) -> dict[str, Any]:
     """Resolve optional host-supplied template context."""
 
     if bridge is None or bridge.extra_context is None:

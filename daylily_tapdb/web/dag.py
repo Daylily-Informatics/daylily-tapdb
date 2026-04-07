@@ -88,7 +88,9 @@ def _node_payload(
     record_type: str,
     service_name: str,
 ) -> dict[str, Any]:
-    category = str(getattr(obj, "category", "") or "generic").strip().lower() or "generic"
+    category = (
+        str(getattr(obj, "category", "") or "generic").strip().lower() or "generic"
+    )
     return {
         "data": {
             "id": getattr(obj, "euid", None),
@@ -117,7 +119,8 @@ def _lineage_edge_payload(lineage: Any, *, service_name: str) -> dict[str, Any] 
             "euid": getattr(lineage, "euid", None),
             "source": getattr(child, "euid", None),
             "target": getattr(parent, "euid", None),
-            "relationship_type": getattr(lineage, "relationship_type", None) or "related",
+            "relationship_type": getattr(lineage, "relationship_type", None)
+            or "related",
             "system": service_name,
             "record_type": "lineage",
         }
@@ -158,9 +161,13 @@ def _build_graph_payload(
         if not euid or current_depth > depth or euid in visited_nodes:
             return
         visited_nodes.add(euid)
-        nodes.append(_node_payload(instance, record_type="instance", service_name=service_name))
+        nodes.append(
+            _node_payload(instance, record_type="instance", service_name=service_name)
+        )
 
-        for lineage in getattr(instance, "parent_of_lineages").filter_by(is_deleted=False):
+        for lineage in getattr(instance, "parent_of_lineages").filter_by(
+            is_deleted=False
+        ):
             edge_euid = str(getattr(lineage, "euid", "") or "").strip()
             if edge_euid and edge_euid not in visited_edges:
                 payload = _lineage_edge_payload(lineage, service_name=service_name)
@@ -169,7 +176,9 @@ def _build_graph_payload(
                     visited_edges.add(edge_euid)
             traverse(getattr(lineage, "child_instance", None), current_depth + 1)
 
-        for lineage in getattr(instance, "child_of_lineages").filter_by(is_deleted=False):
+        for lineage in getattr(instance, "child_of_lineages").filter_by(
+            is_deleted=False
+        ):
             edge_euid = str(getattr(lineage, "euid", "") or "").strip()
             if edge_euid and edge_euid not in visited_edges:
                 payload = _lineage_edge_payload(lineage, service_name=service_name)
@@ -180,7 +189,9 @@ def _build_graph_payload(
 
     traverse(obj, 0)
     if not nodes:
-        nodes.append(_node_payload(obj, record_type=record_type, service_name=service_name))
+        nodes.append(
+            _node_payload(obj, record_type=record_type, service_name=service_name)
+        )
     return {"elements": {"nodes": nodes, "edges": edges}}
 
 
@@ -233,7 +244,9 @@ def create_tapdb_dag_router(
 ) -> APIRouter:
     """Build the canonical `/api/dag/*` router for a TapDB-backed service."""
 
-    admin_main = _load_admin_main(str(config_path or "").strip(), str(env_name or "").strip())
+    admin_main = _load_admin_main(
+        str(config_path or "").strip(), str(env_name or "").strip()
+    )
     resolved_service_name = _service_name_for(config_path, env_name, service_name)
     router = APIRouter()
 
@@ -243,7 +256,9 @@ def create_tapdb_dag_router(
             with conn.session_scope() as session:
                 obj, record_type = admin_main._find_object_by_euid(session, euid)
                 if obj is None or not record_type:
-                    raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
+                    raise HTTPException(
+                        status_code=404, detail=f"Object not found: {euid}"
+                    )
                 return _object_detail_payload(
                     admin_main,
                     obj,
@@ -289,7 +304,9 @@ def create_tapdb_dag_router(
     ) -> dict[str, Any]:
         with admin_main.get_db() as conn:
             with conn.session_scope() as session:
-                obj, _record_type = admin_main._find_object_by_euid(session, source_euid)
+                obj, _record_type = admin_main._find_object_by_euid(
+                    session, source_euid
+                )
                 if obj is None:
                     raise HTTPException(
                         status_code=404,
@@ -330,7 +347,9 @@ def create_tapdb_dag_router(
     ) -> dict[str, Any]:
         with admin_main.get_db() as conn:
             with conn.session_scope() as session:
-                obj, _record_type = admin_main._find_object_by_euid(session, source_euid)
+                obj, _record_type = admin_main._find_object_by_euid(
+                    session, source_euid
+                )
                 if obj is None:
                     raise HTTPException(
                         status_code=404,
@@ -341,7 +360,9 @@ def create_tapdb_dag_router(
                 except IndexError as exc:
                     raise HTTPException(status_code=404, detail=str(exc)) from exc
                 try:
-                    payload = admin_main.fetch_remote_object_detail(request, ref, euid=euid)
+                    payload = admin_main.fetch_remote_object_detail(
+                        request, ref, euid=euid
+                    )
                     payload.setdefault("system", ref.system)
                     payload.setdefault("contract_version", CONTRACT_VERSION)
                     return payload

@@ -81,7 +81,9 @@ def test_host_bridge_mount_redirects_html_and_blocks_api_without_user() -> None:
         login_url="/login?next=/tapdb",
         resolve_user=lambda _request: None,
     )
-    client = TestClient(TapdbHostBridgeMount(downstream, bridge), base_url="https://localhost")
+    client = TestClient(
+        TapdbHostBridgeMount(downstream, bridge), base_url="https://localhost"
+    )
 
     html_response = client.get("/", follow_redirects=False)
     assert html_response.status_code == 302
@@ -112,7 +114,9 @@ def test_host_bridge_mount_injects_user_into_scope() -> None:
             "role": "admin",
         },
     )
-    client = TestClient(TapdbHostBridgeMount(downstream, bridge), base_url="https://localhost")
+    client = TestClient(
+        TapdbHostBridgeMount(downstream, bridge), base_url="https://localhost"
+    )
 
     response = client.get("/?foo=bar")
     assert response.status_code == 200

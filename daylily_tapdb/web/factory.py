@@ -43,11 +43,11 @@ def _configure_template_environment(admin_main, bridge: TapdbHostBridge | None) 
     loaders = [FileSystemLoader(path) for path in override_dirs]
     loaders.append(FileSystemLoader(str(admin_main.TEMPLATES_DIR)))
     admin_main.templates.loader = ChoiceLoader(loaders)
-    admin_main.templates.globals["tapdb_host_shell"] = (
-        lambda request: resolve_host_shell(bridge, request)
+    admin_main.templates.globals["tapdb_host_shell"] = lambda request: (
+        resolve_host_shell(bridge, request)
     )
-    admin_main.templates.globals["tapdb_host_context"] = (
-        lambda request: resolve_host_context(bridge, request)
+    admin_main.templates.globals["tapdb_host_context"] = lambda request: (
+        resolve_host_context(bridge, request)
     )
 
 
@@ -93,7 +93,9 @@ class TapdbHostBridgeMount:
 
         request = Request(scope, receive)
         user = normalize_host_user(
-            self.bridge.resolve_user(request) if self.bridge.resolve_user is not None else None
+            self.bridge.resolve_user(request)
+            if self.bridge.resolve_user is not None
+            else None
         )
         if user is None:
             path = str(scope.get("path") or "")
