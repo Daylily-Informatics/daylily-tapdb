@@ -591,7 +591,7 @@ function buildExternalGraphUrl(sourceEuid, refIndex) {
         ref_index: String(refIndex),
         depth: String(currentDepth()),
     });
-    return `${tapdbUrl('/api/graph/external')}?${params.toString()}`;
+    return `${tapdbUrl('/api/dag/external')}?${params.toString()}`;
 }
 
 function buildExternalObjectUrl(sourceEuid, refIndex, euid) {
@@ -600,7 +600,7 @@ function buildExternalObjectUrl(sourceEuid, refIndex, euid) {
         ref_index: String(refIndex),
         euid,
     });
-    return `${tapdbUrl('/api/graph/external/object')}?${params.toString()}`;
+    return `${tapdbUrl('/api/dag/external/object')}?${params.toString()}`;
 }
 
 function renderExternalRefs(refs, sourceEuid, allowMerge) {
@@ -712,7 +712,7 @@ function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
 }
 
 async function fetchObjectData(euid) {
-    const response = await fetch(tapdbUrl(`/api/object/${encodeURIComponent(euid)}`), {
+    const response = await fetch(tapdbUrl(`/api/dag/object/${encodeURIComponent(euid)}`), {
         headers: {
             Accept: 'application/json',
         },
@@ -883,10 +883,17 @@ async function loadGraph() {
     const depth = document.getElementById('depth').value;
 
     const container = document.getElementById('cy');
+    if (!startEuid) {
+        container.innerHTML = '<div class="loading">Enter an exact EUID to load the native DAG root.</div>';
+        updateLegend({});
+        setStatus('Enter an exact EUID to load a DAG root.', 'warn');
+        return;
+    }
+
     container.innerHTML = '<div class="loading">Loading graph data...</div>';
 
     try {
-        let url = tapdbUrl('/api/graph/data') + '?depth=' + depth;
+        let url = tapdbUrl('/api/dag/data') + '?depth=' + depth;
         if (startEuid) {
             url += '&start_euid=' + encodeURIComponent(startEuid);
         }

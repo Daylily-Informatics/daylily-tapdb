@@ -26,6 +26,7 @@ from daylily_tapdb.user_store import (
 from daylily_tapdb.user_store import (
     get_by_uid as get_actor_user_by_uid,
 )
+from daylily_tapdb.web.bridge import normalize_host_user
 
 # Session cookie settings
 SESSION_COOKIE_NAME = "tapdb_session"
@@ -304,6 +305,10 @@ def update_last_login(user_uid: int | str) -> None:
 
 async def get_current_user(request: Request) -> Optional[dict]:
     """Get current user from session."""
+    host_user = normalize_host_user(request.scope.get("tapdb_host_user"))
+    if host_user:
+        return host_user
+
     if _auth_disabled():
         return _disabled_auth_user()
 
