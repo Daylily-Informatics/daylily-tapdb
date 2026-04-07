@@ -21,6 +21,32 @@ _ACTIVE_ENV_NAME: Optional[str] = None
 _ACTIVE_CONFIG_PATH: Optional[Path] = None
 
 
+def _runtime_context():
+    try:
+        from cli_core_yo.runtime import get_context
+    except Exception:
+        return None
+
+    try:
+        return get_context()
+    except Exception:
+        return None
+
+
+def _runtime_invocation_value(name: str) -> Optional[str]:
+    runtime_context = _runtime_context()
+    if runtime_context is None:
+        return None
+    invocation = getattr(runtime_context, "invocation", None)
+    if not isinstance(invocation, dict):
+        return None
+    value = invocation.get(name)
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
 def _normalize_key(value: Optional[str], *, field_name: str) -> Optional[str]:
     if value is None:
         return None
@@ -120,7 +146,9 @@ def clear_cli_context() -> None:
 
 def active_env_name(default: str = "dev") -> str:
     """Return the current explicit TapDB env name for this process."""
-
+    runtime_env = _runtime_invocation_value("env_name")
+    if runtime_env:
+        return runtime_env.lower()
     return (_ACTIVE_ENV_NAME or default).strip()
 
 
@@ -130,14 +158,8 @@ def active_config_path() -> Optional[Path]:
     if _ACTIVE_CONFIG_PATH is not None:
         return _ACTIVE_CONFIG_PATH
 
-    try:
-        from cli_core_yo.runtime import get_context
-    except Exception:
-        return None
-
-    try:
-        runtime_context = get_context()
-    except Exception:
+    runtime_context = _runtime_context()
+    if runtime_context is None:
         return None
 
     config_path = getattr(runtime_context, "config_path", None)
@@ -149,10 +171,15 @@ def active_config_path() -> Optional[Path]:
 def active_context_overrides() -> dict[str, Optional[str | Path]]:
     """Return the current process-local CLI overrides."""
 
+    runtime_client = _runtime_invocation_value("client_id")
+    runtime_database = _runtime_invocation_value("database_name")
+    runtime_env = _runtime_invocation_value("env_name")
     return {
-        "client_id": _ACTIVE_CLIENT_ID,
-        "database_name": _ACTIVE_DATABASE_NAME,
-        "env_name": _ACTIVE_ENV_NAME,
+        "client_id": _ACTIVE_CLIENT_ID
+        or _normalize_key(runtime_client, field_name="client-id"),
+        "database_name": _ACTIVE_DATABASE_NAME
+        or _normalize_key(runtime_database, field_name="database-name"),
+        "env_name": _ACTIVE_ENV_NAME or (runtime_env.lower() if runtime_env else None),
         "config_path": active_config_path(),
     }
 
@@ -205,11 +232,32 @@ def resolve_context(
 
     resolved_client: Optional[str] = None
     resolved_db: Optional[str] = None
+    active_overrides = active_context_overrides()
 
     if resolved_config_path is not None:
         meta_client, meta_db = _load_meta_from_config_path(resolved_config_path)
         resolved_client = meta_client
         resolved_db = meta_db
+
+    if resolved_client is None:
+        resolved_client = _normalize_key(
+            client_id or active_overrides["client_id"],
+            field_name="client-id",
+        )
+    if resolved_db is None:
+        resolved_db = _normalize_key(
+            database_name or active_overrides["database_name"],
+            field_name="database-name",
+        )
+
+    if resolved_config_path is None and not require_keys and resolved_client and resolved_db:
+        resolved_env = (env_name or active_overrides["env_name"] or "").strip().lower() or None
+        return TapdbContext(
+            client_id=resolved_client,
+            database_name=resolved_db,
+            env_name=resolved_env,
+            explicit_config_path=None,
+        )
 
     if not resolved_client or not resolved_db:
         if not require_keys:
@@ -222,7 +270,9 @@ def resolve_context(
             )
         raise RuntimeError("TapDB config path is required. Set --config.")
 
-    resolved_env = (env_name or _ACTIVE_ENV_NAME or "").strip().lower() or None
+    resolved_env = (
+        env_name or active_overrides["env_name"] or ""
+    ).strip().lower() or None
     return TapdbContext(
         client_id=resolved_client,
         database_name=resolved_db,

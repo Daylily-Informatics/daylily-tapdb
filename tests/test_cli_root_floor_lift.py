@@ -13,7 +13,6 @@ from typer.testing import CliRunner
 
 import daylily_tapdb.cli as cli_mod
 from daylily_tapdb.cli.context import (
-    active_context_overrides,
     clear_cli_context,
     set_cli_context,
 )
@@ -182,7 +181,7 @@ def test_root_tls_helpers_and_admin_module_lookup(
         cli_mod._find_admin_module()
 
 
-def test_root_port_details_option_parsing_register_and_main(
+def test_root_port_details_register_and_main(
     cli_namespace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
@@ -196,60 +195,36 @@ def test_root_port_details_option_parsing_register_and_main(
     )
     assert "python 12345" in cli_mod._port_conflict_details(8911)
 
-    matched, value, consumed = cli_mod._consume_root_option(
-        ["--env", "dev"], 0, "--env"
-    )
-    assert (matched, value, consumed) == (True, "dev", 2)
-    matched, value, consumed = cli_mod._consume_root_option(["--env=dev"], 0, "--env")
-    assert (matched, value, consumed) == (True, "dev", 1)
-    matched, value, consumed = cli_mod._consume_root_option(["info"], 0, "--env")
-    assert (matched, value, consumed) == (False, None, 0)
+    captured: dict[str, object] = {}
 
-    clear_cli_context()
-    cleaned = cli_mod._prime_cli_context_from_argv(
+    def _fake_run(_spec, argv):
+        captured["argv"] = list(argv)
+        return 17
+
+    monkeypatch.setattr("cli_core_yo.app.run", _fake_run)
+    monkeypatch.setattr(
+        "sys.argv",
         [
+            "tapdb",
             "--config",
             str(cli_namespace),
             "--env",
             "dev",
-            "--client-id",
-            "atlas",
-            "--database-name",
-            "app",
-            "info",
-            "--json",
-        ]
+            "ui",
+            "status",
+        ],
     )
-    assert cleaned == ["--config", str(cli_namespace), "info", "--json"]
-    assert active_context_overrides()["env_name"] == "dev"
-    assert active_context_overrides()["client_id"] == "atlas"
-    assert active_context_overrides()["database_name"] == "app"
-
-    clear_cli_context()
-    set_cli_context(
-        client_id="testclient",
-        database_name="testdb",
-        env_name="dev",
-        config_path=cli_namespace,
-    )
-
-    registry_calls: list[tuple[str, object]] = []
-
-    class _Registry:
-        def add_command(self, **kwargs):
-            registry_calls.append(("cmd", kwargs["name"]))
-
-        def add_typer_app(self, **kwargs):
-            registry_calls.append(("group", kwargs["name"]))
-
-    cli_mod.register(_Registry(), object())
-    assert ("group", "db-config") in registry_calls
-
-    monkeypatch.setattr("cli_core_yo.app.run", lambda _spec, argv: 17)
-    monkeypatch.setattr("sys.argv", ["tapdb", "--env", "dev", "info"])
     with pytest.raises(SystemExit) as exc:
         cli_mod.main()
     assert exc.value.code == 17
+    assert captured["argv"] == [
+        "--config",
+        str(cli_namespace),
+        "--env",
+        "dev",
+        "ui",
+        "status",
+    ]
 
 
 def test_register_supports_registry_without_add_typer_app(
@@ -258,7 +233,7 @@ def test_register_supports_registry_without_add_typer_app(
     fresh_app = cli_mod.build_app()
     sentinel_policy = object()
     monkeypatch.setattr(cli_mod, "app", fresh_app)
-    monkeypatch.setattr(cli_mod, "_default_command_policy", lambda: sentinel_policy)
+    monkeypatch.setattr(cli_mod, "policy_for_command", lambda *_args: sentinel_policy)
 
     class _Registry:
         def __init__(self) -> None:
@@ -313,7 +288,8 @@ def test_root_callback_and_ui_start_branches(
         ["--config", str(cli_namespace), "--env", "dev", "info"],
     )
     assert result.exit_code == 1
-    assert "bad context" in _strip(result.output)
+    assert isinstance(result.exception, RuntimeError)
+    assert str(result.exception) == "bad context"
 
     fake_context = SimpleNamespace(
         ui_dir=lambda _env: cli_namespace.parent / ".tapdb-ui",

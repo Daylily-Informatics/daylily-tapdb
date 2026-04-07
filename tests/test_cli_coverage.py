@@ -222,18 +222,19 @@ class TestCliCommandsWithContext:
 
 
 class TestCliCommandsNoContext:
-    """Tests verifying the root callback guard rejects without context."""
+    """Tests verifying help surfaces remain available without runtime context."""
 
     def test_pg_requires_config(self):
         clear_cli_context()
         result = runner.invoke(app, ["pg", "--help"])
-        assert result.exit_code == 1
-        assert "require both --config and --env" in _strip(result.output)
+        assert result.exit_code == 0
+        assert "start-local" in _strip(result.output)
 
     def test_db_requires_config(self):
         clear_cli_context()
         result = runner.invoke(app, ["db", "--help"])
-        assert result.exit_code == 1
+        assert result.exit_code == 0
+        assert "schema" in _strip(result.output)
 
 
 # ────────────────────────────────────────────────────────────────────

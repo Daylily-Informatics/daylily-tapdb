@@ -133,7 +133,8 @@ def test_runtime_command_requires_explicit_config_and_env(tmp_path: Path):
     result = runner.invoke(app, ["info"])
 
     assert result.exit_code != 0
-    assert "--config and --env" in result.output
+    assert isinstance(result.exception, RuntimeError)
+    assert str(result.exception) == "TapDB config path is required. Set --config."
 
     result = runner.invoke(app, ["--config", str(cfg_path), "--env", "dev", "info"])
 

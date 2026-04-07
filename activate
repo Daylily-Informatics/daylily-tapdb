@@ -79,6 +79,37 @@ raise SystemExit(0 if editable_path == repo_root else 1)
 PY
 }
 
+_tapdb_distribution_is_published() {
+    python - "$1" "$2" >/dev/null 2>&1 <<'PY'
+import subprocess
+import sys
+
+dist_name = sys.argv[1]
+expected_version = sys.argv[2]
+proc = subprocess.run(
+    [sys.executable, "-m", "pip", "show", dist_name],
+    check=False,
+    capture_output=True,
+    text=True,
+)
+if proc.returncode != 0:
+    raise SystemExit(1)
+
+version = ""
+editable_location = ""
+for line in proc.stdout.splitlines():
+    if line.startswith("Version:"):
+        version = line.split(":", 1)[1].strip()
+    elif line.startswith("Editable project location:"):
+        editable_location = line.split(":", 1)[1].strip()
+
+if version != expected_version or editable_location:
+    raise SystemExit(1)
+
+raise SystemExit(0)
+PY
+}
+
 printf "${_tapdb_bold}${_tapdb_cyan}━━━ TAPDB Activation ━━━${_tapdb_reset}\n"
 
 # Flags
@@ -173,6 +204,26 @@ if [ ! -x "${_tapdb_tapdb}" ] || ! _tapdb_distribution_is_editable_from_repo "${
             return 1 2>/dev/null || exit 1
         fi
         printf "${_tapdb_green}✓${_tapdb_reset} tapdb installed.\n"
+    fi
+fi
+
+_tapdb_cli_core_yo_version="2.0.0"
+if ! _tapdb_distribution_is_published "cli-core-yo" "${_tapdb_cli_core_yo_version}"; then
+    if [ "${_tapdb_smoke}" = "1" ]; then
+        printf "${_tapdb_yellow}⚠${_tapdb_reset} cli-core-yo must be installed as published %s.\n" "${_tapdb_cli_core_yo_version}"
+        printf "  Install with: ${_tapdb_cyan}(cd %s && python -m pip install cli-core-yo==%s)${_tapdb_reset}\n" "${_tapdb_repo_root}" "${_tapdb_cli_core_yo_version}"
+    else
+        printf "${_tapdb_yellow}⚠${_tapdb_reset} cli-core-yo is not installed as published %s. Installing...\n" "${_tapdb_cli_core_yo_version}"
+        (cd "${_tapdb_repo_root}" && python -m pip install "cli-core-yo==${_tapdb_cli_core_yo_version}" -q)
+        if [ $? -ne 0 ]; then
+            printf "${_tapdb_red}✗${_tapdb_reset} Failed to install published cli-core-yo ${_tapdb_cli_core_yo_version}.\n"
+            return 1 2>/dev/null || exit 1
+        fi
+        if ! _tapdb_distribution_is_published "cli-core-yo" "${_tapdb_cli_core_yo_version}"; then
+            printf "${_tapdb_red}✗${_tapdb_reset} cli-core-yo is not installed as published %s.\n" "${_tapdb_cli_core_yo_version}"
+            return 1 2>/dev/null || exit 1
+        fi
+        printf "${_tapdb_green}✓${_tapdb_reset} Published cli-core-yo %s installed.\n" "${_tapdb_cli_core_yo_version}"
     fi
 fi
 

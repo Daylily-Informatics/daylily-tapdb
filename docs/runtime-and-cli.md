@@ -125,6 +125,8 @@ That separation matters because TAPDB uses the database as the runtime source of
 - Postgres probe status
 - optional JSON output via `--json`
 
+For CLI v2, JSON is a root-global flag, so use `tapdb --config <path> --env <name> --json info` rather than a command-local JSON switch.
+
 It also performs best-effort `psql` probes when available. The implementation lives in [`daylily_tapdb/cli/__init__.py`](../daylily_tapdb/cli/__init__.py), and the runtime context resolution lives in [`daylily_tapdb/cli/context.py`](../daylily_tapdb/cli/context.py).
 
 ## UI Runtime
