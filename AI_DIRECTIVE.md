@@ -81,7 +81,7 @@ Use these functional groups only:
 
 6. `tapdb cognito`
 - Cognito lifecycle and validation flows.
-- Integrates TAPDB config with `daylily-cognito` (`daycog`) config files.
+- Integrates TAPDB config with `daylily-auth-cognito` (`daycog`) config files.
 
 ## Bootstrap-First Workflow
 Preferred setup path:
@@ -221,10 +221,8 @@ Agent requirements:
 TAPDB config stores only the pool reference per environment:
 - `environments.<env>.cognito_user_pool_id`
 
-All Cognito app/client/domain auth context is managed in daycog files under:
-- `~/.config/daycog/<pool>.<region>.env`
-- `~/.config/daycog/<pool>.<region>.<app>.env`
-- `~/.config/daycog/default.env`
+All Cognito app/client/domain auth context is managed in the Daycog flat config file:
+- `~/.config/daycog/config.yaml`
 
 Operational requirements:
 1. Use app client name `tapdb` for TAPDB UI.
