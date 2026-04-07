@@ -12,9 +12,12 @@ def test_pyproject_pins_published_cli_core_yo() -> None:
 
     dependencies = data["project"]["dependencies"]
     dev_dependencies = data["project"]["optional-dependencies"]["dev"]
+    admin_dependencies = data["project"]["optional-dependencies"]["admin"]
 
     assert "cli-core-yo==2.0.0" in dependencies
     assert "cli-core-yo==2.0.0" in dev_dependencies
+    assert "daylily-auth-cognito==2.0.2" in admin_dependencies
+    assert all("daylily-cognito" not in dependency for dependency in admin_dependencies)
 
 
 def test_activate_uses_published_cli_core_yo_metadata_check() -> None:
