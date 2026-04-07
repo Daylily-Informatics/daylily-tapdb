@@ -225,7 +225,7 @@ def get_user_by_uid(user_uid: int | str) -> Optional[dict]:
 
 
 def authenticate_with_cognito(username_or_email: str, password: str) -> dict:
-    """Authenticate against Cognito using daylily-cognito."""
+    """Authenticate against Cognito using daylily-auth-cognito."""
     auth = get_cognito_auth()
     return auth.authenticate(email=username_or_email, password=password)
 

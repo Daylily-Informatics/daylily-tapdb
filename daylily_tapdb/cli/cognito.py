@@ -1,6 +1,6 @@
 """TAPDB Cognito integration commands.
 
-Operational lifecycle is delegated to the daylily-cognito CLI (`daycog`).
+Operational lifecycle is delegated to the daylily-auth-cognito CLI (`daycog`).
 TAPDB stores only Cognito pool ID in tapdb config.
 """
 

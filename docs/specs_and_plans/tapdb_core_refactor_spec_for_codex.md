@@ -128,7 +128,7 @@ Keep `admin` as a separate optional extra, but make it conceptually sit on top o
 
 - `admin`
   - includes `fastapi` and admin-specific dependencies
-  - includes `uvicorn`, `jinja2`, `python-multipart`, `itsdangerous`, `daylily-cognito[auth]`, password/auth deps, etc.
+  - includes `uvicorn`, `jinja2`, `python-multipart`, `itsdangerous`, `daylily-auth-cognito`, password/auth deps, etc.
 
 ### Packaging rules
 
