@@ -562,9 +562,7 @@ def test_main_query_helpers_and_footer_metadata(route_client, monkeypatch):
     monkeypatch.setattr(
         admin_main,
         "_git_output",
-        lambda *args: {"rev-parse": "abc123", "describe": "v5.0.0"}.get(
-            args[0], "main"
-        ),
+        lambda *args: {"rev-parse": "abc123", "describe": "5.0.0"}.get(args[0], "main"),
     )
     monkeypatch.setattr(
         admin_main,
