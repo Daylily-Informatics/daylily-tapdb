@@ -252,6 +252,53 @@ def test_root_port_details_option_parsing_register_and_main(
     assert exc.value.code == 17
 
 
+def test_register_supports_registry_without_add_typer_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fresh_app = cli_mod.build_app()
+    sentinel_policy = object()
+    monkeypatch.setattr(cli_mod, "app", fresh_app)
+    monkeypatch.setattr(cli_mod, "_default_command_policy", lambda: sentinel_policy)
+
+    class _Registry:
+        def __init__(self) -> None:
+            self.groups: list[tuple[str, str]] = []
+            self.commands: list[tuple[str | None, str, str, object]] = []
+
+        def add_group(
+            self,
+            name,
+            *,
+            help_text="",
+            order=None,
+            metadata=None,
+        ):
+            _ = (order, metadata)
+            self.groups.append((name, help_text))
+
+        def add_command(
+            self,
+            group_path,
+            name,
+            callback,
+            *,
+            help_text="",
+            policy,
+            order=None,
+        ):
+            _ = (callback, order)
+            self.commands.append((group_path, name, help_text, policy))
+
+    registry = _Registry()
+    cli_mod.register(registry, object())
+
+    assert any(name == "db-config" for name, _help_text in registry.groups)
+    assert any(
+        group_path == "ui" and name == "start" and policy is sentinel_policy
+        for group_path, name, _help_text, policy in registry.commands
+    )
+
+
 def test_root_callback_and_ui_start_branches(
     cli_namespace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
