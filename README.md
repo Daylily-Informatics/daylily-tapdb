@@ -1,4 +1,4 @@
-# tapdb-core
+# tapdb (Templated Abstract Polymorphic Database)
 
 `tapdb-core` is the repository for TAPDB, a reusable PostgreSQL-backed substrate for typed, versioned, auditable entities. The Python import package remains `daylily_tapdb` for now.
 
