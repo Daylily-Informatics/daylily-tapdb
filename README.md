@@ -1,6 +1,6 @@
-# Templated Abstract Polymorphic Database
+# tapdb-core
 
-Templated Abstract Polymorphic Database, or TAPDB, is a reusable PostgreSQL-backed substrate for typed, versioned, auditable entities.
+`tapdb-core` is the repository for TAPDB, a reusable PostgreSQL-backed substrate for typed, versioned, auditable entities. The Python import package remains `daylily_tapdb` for now.
 
 It is intentionally not a domain application. TAPDB provides the generic persistence and runtime mechanics that higher-level repos use to model their own business objects. Bloom is a motivating example of the kind of system TAPDB supports, but Bloom-specific workflow semantics do not belong in TAPDB itself.
 
@@ -19,7 +19,7 @@ flowchart TB
     CLI["tapdb CLI"]
     Lib["daylily_tapdb library"]
     DB["PostgreSQL\nschema + triggers + RLS"]
-    Core["TAPDB core substrate\nTemplates / Instances / Lineage / Audit / Outbox / Inbox"]
+    Core["tapdb-core repository\nTAPDB core substrate\nTemplates / Instances / Lineage / Audit / Outbox / Inbox"]
     Domain["App-owned domain code\nTemplates, workflows, UI, integrations"]
 
     App --> Domain
@@ -33,7 +33,7 @@ flowchart TB
 
 ## Quickstart
 
-The repo follows a CLI-first workflow. Start by activating the repo environment:
+The tapdb-core repo follows a CLI-first workflow. Start by activating the repo environment:
 
 ```bash
 source ./activate

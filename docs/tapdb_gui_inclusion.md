@@ -1,5 +1,7 @@
 # TAPDB GUI Inclusion Guide
 
+This guide lives in the `tapdb-core` repository. The Python import package remains `daylily_tapdb`.
+
 This guide explains how to embed the TAPDB Admin GUI inside another app and
 choose an auth strategy. For the broader FastAPI + Jinja2 host-app pattern, see
 [../README.md](../README.md).

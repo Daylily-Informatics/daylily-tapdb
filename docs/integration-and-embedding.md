@@ -1,6 +1,8 @@
 # Integration and Embedding
 
-TAPDB can run as a standalone substrate, or it can be embedded inside a larger application. The current codebase supports both patterns, but the responsibilities stay sharply divided.
+This guide lives in the `tapdb-core` repository. The Python import package remains `daylily_tapdb`.
+
+TAPDB can run as a standalone substrate, or it can be embedded inside a larger application. The tapdb-core codebase supports both patterns, but the responsibilities stay sharply divided.
 
 ## What TAPDB Owns
 

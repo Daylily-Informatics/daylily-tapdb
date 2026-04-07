@@ -59,13 +59,6 @@ from admin.domain_access import (
     is_allowed_origin,
     validate_allowed_origins,
 )
-from admin.external_graph import (
-    fetch_remote_graph,
-    fetch_remote_object_detail,
-    get_external_ref_by_index,
-    namespace_external_graph,
-    resolve_external_graph_refs,
-)
 from daylily_tapdb import InstanceFactory, TemplateManager, __version__
 from daylily_tapdb.cli.context import active_env_name
 from daylily_tapdb.cli.db_config import (
@@ -77,6 +70,14 @@ from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
+from daylily_tapdb.services.external_refs import (
+    external_ref_payloads as _shared_external_ref_payloads,
+    fetch_remote_graph,
+    fetch_remote_object_detail,
+    get_external_ref_by_index,
+    namespace_external_graph,
+)
+from daylily_tapdb.services.object_lookup import find_object_by_euid as _shared_find_object_by_euid
 from daylily_tapdb.web.bridge import resolve_host_context, resolve_host_shell
 
 # Logging setup
@@ -102,7 +103,7 @@ def _active_tapdb_env() -> str:
 APP_ENV = _active_tapdb_env()
 IS_PROD = APP_ENV == "prod"
 DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
-DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/daylily-tapdb"
+DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/tapdb-core"
 _RESERVED_TEMPLATE_COORDS = {("generic", "actor", "system_user")}
 
 
@@ -324,27 +325,11 @@ templates.globals["tapdb_host_context"] = tapdb_host_context
 
 
 def _external_ref_payloads(obj: Any) -> list[dict[str, Any]]:
-    return [
-        ref.to_public_dict(ref_index=index)
-        for index, ref in enumerate(resolve_external_graph_refs(obj))
-    ]
+    return _shared_external_ref_payloads(obj)
 
 
 def _find_object_by_euid(session: Any, euid: str) -> tuple[Any | None, str | None]:
-    obj = session.query(generic_template).filter_by(euid=euid, is_deleted=False).first()
-    if obj is not None:
-        return obj, "template"
-    obj = session.query(generic_instance).filter_by(euid=euid, is_deleted=False).first()
-    if obj is not None:
-        return obj, "instance"
-    obj = (
-        session.query(generic_instance_lineage)
-        .filter_by(euid=euid, is_deleted=False)
-        .first()
-    )
-    if obj is not None:
-        return obj, "lineage"
-    return None, None
+    return _shared_find_object_by_euid(session, euid)
 
 
 def get_db():

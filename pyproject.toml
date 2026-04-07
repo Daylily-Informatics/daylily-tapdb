@@ -67,6 +67,11 @@ aurora = [
     "botocore",
 ]
 
+# Optional reusable API surface.
+api = [
+    "fastapi",
+]
+
 # Optional Admin UI (FastAPI). Keep out of core installs.
 admin = [
     "fastapi",
@@ -86,8 +91,8 @@ admin = [
 tapdb = "daylily_tapdb.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Daylily-Informatics/daylily-tapdb"
-Repository = "https://github.com/Daylily-Informatics/daylily-tapdb.git"
+Homepage = "https://github.com/Daylily-Informatics/tapdb-core"
+Repository = "https://github.com/Daylily-Informatics/tapdb-core.git"
 Documentation = "https://daylily-tapdb.readthedocs.io"
 
 [tool.setuptools.packages.find]

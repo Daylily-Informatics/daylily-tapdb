@@ -1,5 +1,7 @@
 # TAPDB Architecture
 
+This document describes the `tapdb-core` repository. The Python import package remains `daylily_tapdb`.
+
 TAPDB is a small substrate with a large surface area. The point of the design is not to be clever; it is to keep the durable pieces generic so that application repos can stay domain-specific without re-implementing the persistence layer.
 
 The current architecture centers on these principles:
@@ -86,4 +88,3 @@ TAPDB is not:
 - a place to encode domain meaning into EUID strings
 
 That separation is what makes the substrate reusable. Bloom, or any other client repo, can build a rich domain model on top without forcing TAPDB to become the domain itself.
-

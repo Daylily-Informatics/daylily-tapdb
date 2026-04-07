@@ -1,5 +1,7 @@
 # Runtime and CLI
 
+This guide lives in the `tapdb-core` repository. The Python import package remains `daylily_tapdb`.
+
 This document describes how TAPDB is operated today: config-first, namespace-scoped, and CLI-driven. It is intentionally about the substrate layer, not about any one application domain.
 
 ## Operating Model
