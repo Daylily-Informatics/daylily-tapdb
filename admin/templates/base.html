@@ -1,13 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
 	<head>
+	    {% set host_shell = tapdb_host_shell(request) %}
 	    <meta charset="UTF-8">
 	    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-	    <title>{% block title %}TAPDB Admin{% endblock %}</title>
+	    <title>{% if host_shell.shell_title %}{{ host_shell.shell_title }} · {% endif %}{% block title %}TAPDB Admin{% endblock %}</title>
 	    <link rel="preconnect" href="https://fonts.googleapis.com">
 	    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 	    <link rel="stylesheet" type="text/css" href="{{ style.skin_css }}">
+        {% for stylesheet in host_shell.extra_stylesheets %}
+	    <link rel="stylesheet" type="text/css" href="{{ stylesheet }}">
+        {% endfor %}
 	    <script>
 	        window.TAPDB_BASE_PATH = "{{ tapdb_base_path(request) | e }}";
 	    </script>
@@ -235,8 +239,13 @@
 </head>
 <body class="{% if user and user.role == 'admin' %}is-admin{% endif %}">
     <nav class="navbar">
-        <a href="{{ tapdb_url(request, '/') }}" class="navbar-brand">🗄️ TAPDB Admin</a>
+        <a href="{{ host_shell.home_url or tapdb_url(request, '/') }}" class="navbar-brand">
+            {% if host_shell.active %}{{ host_shell.app_name }} / {% endif %}🗄️ TAPDB
+        </a>
         <ul class="navbar-nav">
+            {% for nav in host_shell.nav_links %}
+            <li><a href="{{ nav.href }}">{{ nav.label }}</a></li>
+            {% endfor %}
             <li><a href="{{ tapdb_url(request, '/') }}">Home</a></li>
             <li><a href="{{ tapdb_url(request, '/templates') }}">Templates</a></li>
             <li><a href="{{ tapdb_url(request, '/instances') }}">Instances</a></li>
@@ -250,8 +259,12 @@
             <span class="username">{{ user.display_name or user.username }}</span>
             <span class="role-badge {{ user.role }}">{{ user.role }}</span>
             <div class="user-menu">
+                {% if host_shell.change_password_url %}
+                <a href="{{ host_shell.change_password_url }}">🔐</a>
+                {% else %}
                 <a href="{{ tapdb_url(request, '/change-password') }}">🔐</a>
-                <a href="{{ tapdb_url(request, '/logout') }}">Logout</a>
+                {% endif %}
+                <a href="{{ host_shell.logout_url or tapdb_url(request, '/logout') }}">Logout</a>
             </div>
         </div>
         {% endif %}

@@ -15,41 +15,77 @@ TAPDB owns the substrate layer:
 
 The current object model and relationships are implemented in [`daylily_tapdb/models`](../daylily_tapdb/models) and the outbox/inbox helpers in [`daylily_tapdb/outbox`](../daylily_tapdb/outbox).
 
-## Admin Mounting
+## Reusable Web Surface
 
-The admin UI can be mounted into another FastAPI app using the loader in [`daylily_tapdb.cli.admin_server`](../daylily_tapdb/cli/admin_server.py).
+TapDB now exposes a reusable library surface in
+[`daylily_tapdb.web`](../daylily_tapdb/web):
 
-The current pattern is:
+- `create_tapdb_web_app(...)` for the full mounted HTML/UI surface
+- `create_tapdb_dag_router(...)` for canonical root-level `/api/dag/*` routes
+- `TapdbHostBridge` for host auth, shell links, template overrides, and host CSS
+- `build_dag_capability_advertisement(...)` for `obs_services`-style discovery
+
+The supported embedding pattern is:
 
 ```python
-from fastapi import FastAPI
-from daylily_tapdb.cli.admin_server import load_admin_app
+from fastapi import Depends, FastAPI
+
+from daylily_tapdb.web import (
+    TapdbHostBridge,
+    TapdbHostNavLink,
+    create_tapdb_dag_router,
+    create_tapdb_web_app,
+)
 
 app = FastAPI()
-tapdb_admin = load_admin_app(
-    config_path="/abs/path/to/tapdb-config.yaml",
-    env_name="dev",
+bridge = TapdbHostBridge(
+    auth_mode="host_session",
+    service_name="dewey",
+    app_name="Dewey",
+    home_url="/ui",
+    login_url="/login",
+    logout_url="/auth/logout",
+    nav_links=(TapdbHostNavLink(label="Dashboard", href="/ui"),),
+    extra_stylesheets=("/static/console.css",),
+    resolve_user=my_host_user_resolver,
 )
-app.mount("/tapdb", tapdb_admin)
+
+app.mount(
+    "/tapdb",
+    create_tapdb_web_app(
+        config_path="/abs/path/to/tapdb-config.yaml",
+        env_name="dev",
+        host_bridge=bridge,
+    ),
+)
+app.include_router(
+    create_tapdb_dag_router(
+        config_path="/abs/path/to/tapdb-config.yaml",
+        env_name="dev",
+        service_name="dewey",
+    ),
+    dependencies=[Depends(my_session_or_service_auth)],
+)
 ```
 
-The UI assumes HTTPS for login and callback flows. The supported mounting and auth guidance is also summarized in [`docs/tapdb_gui_inclusion.md`](./tapdb_gui_inclusion.md).
+The standalone `tapdb ui start` path also builds on this same factory.
 
 ## Auth Modes
 
-Current TAPDB admin auth modes are configured in TAPDB config and handled by the admin server:
+TapDB now supports two embedding stories:
 
-- `tapdb` for TAPDB-native auth
-- `shared_host` for host-app session sharing
-- `disabled` for local development or diagnostics
+- `tapdb` auth in TapDB config when TapDB owns its own session/login flow
+- `host_session` through `TapdbHostBridge` when a parent app owns browser auth
 
-The config example in [`config/tapdb-config-example.yaml`](../config/tapdb-config-example.yaml) shows the expected shape. The current docs and code treat `disabled` as non-production only.
+The older `shared_host` cookie-decoding mode still exists inside the admin app,
+but it is no longer the preferred host integration pattern.
 
 Practical guidance:
 
-- Use `tapdb` when TAPDB should own its own login flow.
-- Use `shared_host` when a parent app already has a session system and can provide the expected payload.
-- Use `disabled` only when the parent app already enforces access or when you are working locally.
+- Use `TapdbHostBridge(auth_mode="host_session", ...)` when the parent app
+  already authenticates operators and wants `/tapdb` to inherit host auth and
+  host chrome.
+- Use TapDB-native auth only when TapDB should own its own login screens.
 
 ## Client Repository Responsibilities
 
@@ -99,7 +135,17 @@ Application repos should not outsource these responsibilities to TAPDB:
 
 TAPDB can store, validate, and expose those objects. It should not decide what they mean.
 
+## Dewey Reference Pattern
+
+Dewey is the reference adopter for this embedding model:
+
+- mounted HTML surface at `/tapdb`
+- root-level DAG contract at `/api/dag/*`
+- Dewey session or bearer-token auth guarding the root DAG API
+- host shell link and CSS integration through `TapdbHostBridge`
+
 ## Related Materials
 
+- [`docs/dag_spec.md`](./dag_spec.md)
 - [`docs/runtime-and-cli.md`](./runtime-and-cli.md)
 - [`docs/tapdb_gui_inclusion.md`](./tapdb_gui_inclusion.md)

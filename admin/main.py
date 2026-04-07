@@ -77,6 +77,7 @@ from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
+from daylily_tapdb.web.bridge import resolve_host_context, resolve_host_shell
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -302,6 +303,24 @@ def tapdb_url(request: Request, path: str) -> str:
 
 templates.globals["tapdb_base_path"] = tapdb_base_path
 templates.globals["tapdb_url"] = tapdb_url
+
+
+def tapdb_host_shell(request: Request) -> dict[str, Any]:
+    """Resolve optional host-shell chrome for embedded TapDB mounts."""
+
+    bridge = getattr(getattr(request.app, "state", None), "tapdb_host_bridge", None)
+    return resolve_host_shell(bridge, request)
+
+
+def tapdb_host_context(request: Request) -> dict[str, Any]:
+    """Resolve optional host-provided template context."""
+
+    bridge = getattr(getattr(request.app, "state", None), "tapdb_host_bridge", None)
+    return resolve_host_context(bridge, request)
+
+
+templates.globals["tapdb_host_shell"] = tapdb_host_shell
+templates.globals["tapdb_host_context"] = tapdb_host_context
 
 
 def _external_ref_payloads(obj: Any) -> list[dict[str, Any]]:

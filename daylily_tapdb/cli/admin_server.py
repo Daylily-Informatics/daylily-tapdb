@@ -78,6 +78,7 @@ def load_admin_app(*, config_path: str, env_name: str):
     set_cli_context(config_path=config_path, env_name=env_name)
     admin_main = importlib.import_module("admin.main")
     admin_main = importlib.reload(admin_main)
+    admin_main.app.state.tapdb_admin_module = admin_main
     return admin_main.app
 
 
@@ -111,7 +112,9 @@ def build_app():
     env_name = str(context.get("env_name") or "").strip()
     if not config_path or not env_name:
         raise RuntimeError("TapDB admin context file is incomplete.")
-    return load_admin_app(config_path=config_path, env_name=env_name)
+    from daylily_tapdb.web import create_tapdb_web_app
+
+    return create_tapdb_web_app(config_path=config_path, env_name=env_name)
 
 
 if __name__ == "__main__":
