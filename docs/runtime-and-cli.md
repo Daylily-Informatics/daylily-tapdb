@@ -68,7 +68,7 @@ That split is deliberate:
 - `db` manages database lifecycle, schema, migrations, backup, and data seeding.
 - `ui` manages the admin server process.
 - `bootstrap` is the one-command orchestration path.
-- `cognito` is the TAPDB-side bridge to `daylily-cognito`.
+- `cognito` is the TAPDB-side bridge to `daylily-auth-cognito`.
 - `aurora` is optional cloud infrastructure support.
 
 ## Local Lifecycle
