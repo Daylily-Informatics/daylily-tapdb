@@ -281,9 +281,7 @@ def namespace_external_graph(
         edge_data["external_source_euid"] = source_euid
         namespaced_edges.append({"data": edge_data})
 
-    bridge_id = (
-        f"bridge::{source_euid}::{ref.system}::{ref.tenant_id or 'global'}::{ref.root_euid}"
-    )
+    bridge_id = f"bridge::{source_euid}::{ref.system}::{ref.tenant_id or 'global'}::{ref.root_euid}"
     namespaced_edges.append(
         {
             "data": {

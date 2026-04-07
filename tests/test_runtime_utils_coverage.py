@@ -279,7 +279,9 @@ def test_inbox_status_helpers_execute_and_flush():
     assert captured["count"] == 4
     assert captured["flushed"] == 4
     assert (
-        inbox_mod.get_inbox_message_by_machine_uuid(session, expected.message_machine_uuid)
+        inbox_mod.get_inbox_message_by_machine_uuid(
+            session, expected.message_machine_uuid
+        )
         is expected
     )
 
@@ -342,13 +344,19 @@ def test_outbox_query_helpers_return_structured_results():
         limit=3,
     ) == [event]
     assert outbox_queries_mod.list_by_destination(session, "atlas") == [event]
-    assert outbox_queries_mod.get_outbox_event_by_receipt_uuid(session, uuid.uuid4()) is event
-    assert outbox_queries_mod.lookup_by_machine_uuid(
-        session,
-        uuid.uuid4(),
-        domain_code="DAY",
-        issuer_app_code="CORE",
-    ) is event
+    assert (
+        outbox_queries_mod.get_outbox_event_by_receipt_uuid(session, uuid.uuid4())
+        is event
+    )
+    assert (
+        outbox_queries_mod.lookup_by_machine_uuid(
+            session,
+            uuid.uuid4(),
+            domain_code="DAY",
+            issuer_app_code="CORE",
+        )
+        is event
+    )
 
 
 def test_admin_server_context_file_helpers_round_trip(tmp_path, monkeypatch):
@@ -402,7 +410,9 @@ def test_admin_server_load_build_and_main_paths(tmp_path, monkeypatch):
     fake_app = SimpleNamespace(state=SimpleNamespace())
     fake_admin_main = SimpleNamespace(app=fake_app)
     set_calls = []
-    monkeypatch.setattr(admin_server_mod, "set_cli_context", lambda **kwargs: set_calls.append(kwargs))
+    monkeypatch.setattr(
+        admin_server_mod, "set_cli_context", lambda **kwargs: set_calls.append(kwargs)
+    )
     monkeypatch.setattr(
         admin_server_mod.importlib,
         "import_module",
@@ -449,7 +459,9 @@ def test_admin_server_load_build_and_main_paths(tmp_path, monkeypatch):
     context_file = tmp_path / "ui" / "context.json"
     context_file.parent.mkdir(parents=True, exist_ok=True)
     context_file.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(admin_server_mod, "_write_context_file", lambda **_kwargs: context_file)
+    monkeypatch.setattr(
+        admin_server_mod, "_write_context_file", lambda **_kwargs: context_file
+    )
 
     run_calls = []
     monkeypatch.setitem(
@@ -555,8 +567,10 @@ def test_runtime_engine_helpers_cover_auth_modes_and_cache(monkeypatch):
     monkeypatch.setattr(
         runtime_mod,
         "create_engine",
-        lambda url, **kwargs: captured.setdefault("engines", []).append((url, kwargs))
-        or SimpleNamespace(dispose=lambda: None),
+        lambda url, **kwargs: (
+            captured.setdefault("engines", []).append((url, kwargs))
+            or SimpleNamespace(dispose=lambda: None)
+        ),
     )
     runtime_mod._create_engine(
         runtime_mod.URL.create("postgresql+psycopg2", username="tapdb", host="db"),
@@ -568,7 +582,11 @@ def test_runtime_engine_helpers_cover_auth_modes_and_cache(monkeypatch):
     assert captured["engines"][0][1]["echo"] is True
 
     listeners = {}
-    monkeypatch.setattr(runtime_mod.event, "listen", lambda _engine, name, fn, **_kwargs: listeners.setdefault(name, fn))
+    monkeypatch.setattr(
+        runtime_mod.event,
+        "listen",
+        lambda _engine, name, fn, **_kwargs: listeners.setdefault(name, fn),
+    )
     monkeypatch.setattr(
         runtime_mod.AuroraConnectionBuilder,
         "get_iam_auth_token",
@@ -589,7 +607,11 @@ def test_runtime_engine_helpers_cover_auth_modes_and_cache(monkeypatch):
     assert cparams["password"] == "iam-token"
 
     listeners = {}
-    monkeypatch.setattr(runtime_mod.event, "listen", lambda _engine, name, fn, **_kwargs: listeners.setdefault(name, fn))
+    monkeypatch.setattr(
+        runtime_mod.event,
+        "listen",
+        lambda _engine, name, fn, **_kwargs: listeners.setdefault(name, fn),
+    )
     runtime_mod._attach_aurora_password_provider(
         SimpleNamespace(),
         region="us-west-2",
@@ -605,7 +627,11 @@ def test_runtime_engine_helpers_cover_auth_modes_and_cache(monkeypatch):
     assert cparams["password"] == "secret"
 
     listeners = {}
-    monkeypatch.setattr(runtime_mod.event, "listen", lambda _engine, name, fn, **_kwargs: listeners.setdefault(name, fn))
+    monkeypatch.setattr(
+        runtime_mod.event,
+        "listen",
+        lambda _engine, name, fn, **_kwargs: listeners.setdefault(name, fn),
+    )
     runtime_mod._attach_aurora_password_provider(
         SimpleNamespace(),
         region="us-west-2",
@@ -636,8 +662,10 @@ def test_runtime_engine_helpers_cover_auth_modes_and_cache(monkeypatch):
     monkeypatch.setattr(
         runtime_mod,
         "_build_engine_for_cfg",
-        lambda cfg, *, config_path, env_name: created.append((cfg, config_path, env_name))
-        or SimpleNamespace(dispose=lambda: None),
+        lambda cfg, *, config_path, env_name: (
+            created.append((cfg, config_path, env_name))
+            or SimpleNamespace(dispose=lambda: None)
+        ),
     )
     runtime_mod._clear_runtime_cache_for_tests()
     conn1 = runtime_mod.get_db("/tmp/tapdb.yaml", "DEV")
@@ -667,17 +695,22 @@ async def test_web_factory_helpers_require_user_and_build_apps(monkeypatch):
 
     monkeypatch.setattr("admin.auth.get_current_user", _anon)
     with pytest.raises(HTTPException, match="tapdb_auth_required"):
-        await web_factory_mod.require_tapdb_api_user(SimpleNamespace(state=SimpleNamespace()))
-
-    assert web_factory_mod._requested_path(
-        SimpleNamespace(
-            scope={
-                "root_path": "/tapdb",
-                "path": "/graph",
-                "query_string": b"depth=2",
-            }
+        await web_factory_mod.require_tapdb_api_user(
+            SimpleNamespace(state=SimpleNamespace())
         )
-    ) == "/tapdb/graph?depth=2"
+
+    assert (
+        web_factory_mod._requested_path(
+            SimpleNamespace(
+                scope={
+                    "root_path": "/tapdb",
+                    "path": "/graph",
+                    "query_string": b"depth=2",
+                }
+            )
+        )
+        == "/tapdb/graph?depth=2"
+    )
 
     configured = []
     attached = []

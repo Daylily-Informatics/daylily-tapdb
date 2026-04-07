@@ -44,13 +44,21 @@ def test_cognito_detect_running_ui_port_branches(
     pid_file = tmp_path / "ui.pid"
     monkeypatch.setattr(cognito_mod, "_ui_pid_file_for_env", lambda _env: pid_file)
 
-    assert cognito_mod._detect_running_ui_port(Environment.dev) == (None, "ui not running")
+    assert cognito_mod._detect_running_ui_port(Environment.dev) == (
+        None,
+        "ui not running",
+    )
 
     pid_file.write_text("1234\n", encoding="utf-8")
     monkeypatch.setattr(
-        cognito_mod.os, "kill", lambda *_args, **_kwargs: (_ for _ in ()).throw(ProcessLookupError())
+        cognito_mod.os,
+        "kill",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ProcessLookupError()),
     )
-    assert cognito_mod._detect_running_ui_port(Environment.dev) == (None, "ui pid missing/stale")
+    assert cognito_mod._detect_running_ui_port(Environment.dev) == (
+        None,
+        "ui pid missing/stale",
+    )
 
     monkeypatch.setattr(cognito_mod.os, "kill", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -76,7 +84,9 @@ def test_cognito_detect_running_ui_port_branches(
     monkeypatch.setattr(
         cognito_mod.subprocess,
         "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="python -m uvicorn", stderr=""),
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout="python -m uvicorn", stderr=""
+        ),
     )
     assert cognito_mod._detect_running_ui_port(Environment.dev) == (
         None,
@@ -86,23 +96,39 @@ def test_cognito_detect_running_ui_port_branches(
     monkeypatch.setattr(
         cognito_mod.subprocess,
         "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="uvicorn --port 9443", stderr=""),
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout="uvicorn --port 9443", stderr=""
+        ),
     )
-    assert cognito_mod._detect_running_ui_port(Environment.dev) == (9443, "running ui process")
+    assert cognito_mod._detect_running_ui_port(Environment.dev) == (
+        9443,
+        "running ui process",
+    )
 
 
 def test_cognito_resolve_expected_ui_port(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cognito_mod, "get_db_config_for_env", lambda _env: {"ui_port": "9443"})
+    monkeypatch.setattr(
+        cognito_mod, "get_db_config_for_env", lambda _env: {"ui_port": "9443"}
+    )
     assert cognito_mod._resolve_expected_ui_port(Environment.dev) == (
         9443,
         "config environments.dev.ui_port",
     )
 
-    monkeypatch.setattr(cognito_mod, "get_db_config_for_env", lambda _env: {"ui_port": ""})
-    monkeypatch.setattr(cognito_mod, "_detect_running_ui_port", lambda _env: (9555, "ui process"))
-    assert cognito_mod._resolve_expected_ui_port(Environment.dev) == (9555, "ui process")
+    monkeypatch.setattr(
+        cognito_mod, "get_db_config_for_env", lambda _env: {"ui_port": ""}
+    )
+    monkeypatch.setattr(
+        cognito_mod, "_detect_running_ui_port", lambda _env: (9555, "ui process")
+    )
+    assert cognito_mod._resolve_expected_ui_port(Environment.dev) == (
+        9555,
+        "ui process",
+    )
 
-    monkeypatch.setattr(cognito_mod, "_detect_running_ui_port", lambda _env: (None, "ui not running"))
+    monkeypatch.setattr(
+        cognito_mod, "_detect_running_ui_port", lambda _env: (None, "ui not running")
+    )
     assert cognito_mod._resolve_expected_ui_port(Environment.dev) == (
         cognito_mod.DEFAULT_COGNITO_CALLBACK_PORT,
         "default (ui not running)",
@@ -110,11 +136,15 @@ def test_cognito_resolve_expected_ui_port(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_cognito_validate_bound_cognito_uris(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cognito_mod, "_resolve_expected_ui_port", lambda _env: (8911, "config"))
+    monkeypatch.setattr(
+        cognito_mod, "_resolve_expected_ui_port", lambda _env: (8911, "config")
+    )
 
-    expected_port, port_source, errors, notices = cognito_mod._validate_bound_cognito_uris(
-        Environment.dev,
-        {},
+    expected_port, port_source, errors, notices = (
+        cognito_mod._validate_bound_cognito_uris(
+            Environment.dev,
+            {},
+        )
     )
     assert (expected_port, port_source, errors, notices) == (8911, "config", [], [])
 
@@ -123,16 +153,22 @@ def test_cognito_validate_bound_cognito_uris(monkeypatch: pytest.MonkeyPatch) ->
         "COGNITO_LOGOUT_URL": "http://localhost:8911/logout",
         "COGNITO_REDIRECT_URIS": "https://localhost:9443/auth/callback https://example.com/ok",
     }
-    _, _, errors, notices = cognito_mod._validate_bound_cognito_uris(Environment.dev, values)
+    _, _, errors, notices = cognito_mod._validate_bound_cognito_uris(
+        Environment.dev, values
+    )
     assert any("invalid URI" in msg for msg in errors)
     assert any("must use https" in msg for msg in errors)
     assert any("does not match TAPDB UI port 8911" in msg for msg in errors)
     assert notices == ["COGNITO_REDIRECT_URIS: https://example.com/ok"]
 
 
-def test_cognito_filename_pool_and_context_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cognito_filename_pool_and_context_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     assert cognito_mod._sanitize_filename_part("TapDB App!") == "TapDB-App"
-    monkeypatch.setattr(cognito_mod, "get_db_config_for_env", lambda _env: {"database": "TapDB Dev"})
+    monkeypatch.setattr(
+        cognito_mod, "get_db_config_for_env", lambda _env: {"database": "TapDB Dev"}
+    )
     assert cognito_mod._default_pool_name(Environment.dev) == "tapdb-tapdb-dev-users"
     assert cognito_mod._parse_daycog_context_name("pool.us-east-1.app") == (
         "pool",
@@ -302,7 +338,9 @@ def test_cognito_run_daycog_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
 
     printed: list[str] = []
     monkeypatch.setattr(cognito_mod, "_run_daycog", lambda args, env=None: "printed")
-    monkeypatch.setattr(cognito_mod.ccyo_out, "print_text", lambda text: printed.append(text))
+    monkeypatch.setattr(
+        cognito_mod.ccyo_out, "print_text", lambda text: printed.append(text)
+    )
     cognito_mod._run_daycog_printing(["status"])
     assert printed == ["printed"]
 
@@ -371,7 +409,11 @@ def test_cognito_build_setup_args_and_finalize_binding(
             {"COGNITO_CLIENT_NAME": "tapdb"},
         ),
     )
-    monkeypatch.setattr(cognito_mod, "_write_pool_id_to_tapdb_config", lambda *_args: Path("/tmp/tapdb-config.yaml"))
+    monkeypatch.setattr(
+        cognito_mod,
+        "_write_pool_id_to_tapdb_config",
+        lambda *_args: Path("/tmp/tapdb-config.yaml"),
+    )
     cognito_mod._finalize_setup_binding(
         env=Environment.dev,
         selected_pool_name="tapdb-dev",
@@ -408,7 +450,9 @@ def test_cognito_bound_context_resolution_and_actor_user_row(
             {"COGNITO_CLIENT_NAME": "tapdb", "COGNITO_REGION": "us-east-1"},
         ),
     )
-    pool_id, context_name, values, proc_env = cognito_mod._resolve_bound_daycog_context(Environment.dev)
+    pool_id, context_name, values, proc_env = cognito_mod._resolve_bound_daycog_context(
+        Environment.dev
+    )
     assert pool_id == "pool-1"
     assert context_name == "tapdb-dev.us-east-1.tapdb"
     assert proc_env["COGNITO_CLIENT_NAME"] == "tapdb"
@@ -419,11 +463,13 @@ def test_cognito_bound_context_resolution_and_actor_user_row(
         "_resolve_bound_daycog_context",
         lambda _env: (_ for _ in ()).throw(RuntimeError("not bound")),
     )
-    selected_pool, proc_env, region, profile = cognito_mod._resolve_pool_command_context(
-        Environment.dev,
-        pool_name=None,
-        region=None,
-        profile=None,
+    selected_pool, proc_env, region, profile = (
+        cognito_mod._resolve_pool_command_context(
+            Environment.dev,
+            pool_name=None,
+            region=None,
+            profile=None,
+        )
     )
     assert selected_pool
     assert proc_env is None
@@ -453,7 +499,9 @@ def test_cognito_bound_context_resolution_and_actor_user_row(
     with pytest.raises(RuntimeError, match="email is required"):
         cognito_mod._ensure_actor_user_row(Environment.dev, email="", role="user")
     with pytest.raises(RuntimeError, match="invalid role"):
-        cognito_mod._ensure_actor_user_row(Environment.dev, email="alice@example.com", role="owner")
+        cognito_mod._ensure_actor_user_row(
+            Environment.dev, email="alice@example.com", role="owner"
+        )
 
     monkeypatch.setattr(cognito_mod, "TAPDBConnection", _FakeConn)
     monkeypatch.setattr(
@@ -481,8 +529,12 @@ def test_cognito_bound_context_resolution_and_actor_user_row(
     )
 
 
-def test_cognito_setup_and_setup_with_google_branches(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cognito_mod, "get_db_config_for_env", lambda _env: {"ui_port": "8911"})
+def test_cognito_setup_and_setup_with_google_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cognito_mod, "get_db_config_for_env", lambda _env: {"ui_port": "8911"}
+    )
 
     result = runner.invoke(cognito_mod.cognito_app, ["setup", "dev", "--port", "9000"])
     assert result.exit_code == 1
@@ -494,7 +546,11 @@ def test_cognito_setup_and_setup_with_google_branches(monkeypatch: pytest.Monkey
     assert result.exit_code == 1
 
     captured: list[list[str]] = []
-    monkeypatch.setattr(cognito_mod, "_run_daycog", lambda args, env=None: captured.append(list(args)) or "")
+    monkeypatch.setattr(
+        cognito_mod,
+        "_run_daycog",
+        lambda args, env=None: captured.append(list(args)) or "",
+    )
     monkeypatch.setattr(cognito_mod, "_finalize_setup_binding", lambda **_kwargs: None)
     result = runner.invoke(
         cognito_mod.cognito_app,
@@ -511,7 +567,9 @@ def test_cognito_setup_and_setup_with_google_branches(monkeypatch: pytest.Monkey
     assert "--google-client-json" in captured[0]
     assert "--google-scopes" in captured[0]
 
-    result = runner.invoke(cognito_mod.cognito_app, ["setup-with-google", "dev", "--port", "9000"])
+    result = runner.invoke(
+        cognito_mod.cognito_app, ["setup-with-google", "dev", "--port", "9000"]
+    )
     assert result.exit_code == 1
     result = runner.invoke(
         cognito_mod.cognito_app,
@@ -551,12 +609,22 @@ def test_cognito_status_and_management_command_branches(
             },
         ),
     )
-    monkeypatch.setattr(cognito_mod, "_validate_bound_cognito_uris", lambda *_args, **_kwargs: (8911, "config", ["bad uri"], []))
-    monkeypatch.setattr(cognito_mod, "_ui_pid_file_for_env", lambda _env: Path("/tmp/ui.pid"))
+    monkeypatch.setattr(
+        cognito_mod,
+        "_validate_bound_cognito_uris",
+        lambda *_args, **_kwargs: (8911, "config", ["bad uri"], []),
+    )
+    monkeypatch.setattr(
+        cognito_mod, "_ui_pid_file_for_env", lambda _env: Path("/tmp/ui.pid")
+    )
     result = runner.invoke(cognito_mod.cognito_app, ["status", "dev"])
     assert result.exit_code == 1
 
-    monkeypatch.setattr(cognito_mod, "_validate_bound_cognito_uris", lambda *_args, **_kwargs: (8911, "config", [], ["ok"]))
+    monkeypatch.setattr(
+        cognito_mod,
+        "_validate_bound_cognito_uris",
+        lambda *_args, **_kwargs: (8911, "config", [], ["ok"]),
+    )
     result = runner.invoke(cognito_mod.cognito_app, ["status", "dev"])
     assert result.exit_code == 0
 
@@ -564,9 +632,18 @@ def test_cognito_status_and_management_command_branches(
     monkeypatch.setattr(
         cognito_mod,
         "_resolve_pool_command_context",
-        lambda *_args, **_kwargs: ("tapdb-dev", {"AWS_PROFILE": "dev-profile"}, "us-east-1", "dev-profile"),
+        lambda *_args, **_kwargs: (
+            "tapdb-dev",
+            {"AWS_PROFILE": "dev-profile"},
+            "us-east-1",
+            "dev-profile",
+        ),
     )
-    monkeypatch.setattr(cognito_mod, "_run_daycog_printing", lambda args, env=None: captured.append(list(args)))
+    monkeypatch.setattr(
+        cognito_mod,
+        "_run_daycog_printing",
+        lambda args, env=None: captured.append(list(args)),
+    )
     runner.invoke(
         cognito_mod.cognito_app,
         [
@@ -673,9 +750,18 @@ def test_cognito_fix_auth_flows_config_commands_and_add_user(
     monkeypatch.setattr(
         cognito_mod,
         "_resolve_bound_daycog_context",
-        lambda _env: ("pool-1", "ctx", {"COGNITO_CLIENT_NAME": "tapdb"}, {"COGNITO_CLIENT_NAME": "tapdb"}),
+        lambda _env: (
+            "pool-1",
+            "ctx",
+            {"COGNITO_CLIENT_NAME": "tapdb"},
+            {"COGNITO_CLIENT_NAME": "tapdb"},
+        ),
     )
-    monkeypatch.setattr(cognito_mod, "_run_daycog_printing", lambda args, env=None: printed.append(list(args)))
+    monkeypatch.setattr(
+        cognito_mod,
+        "_run_daycog_printing",
+        lambda args, env=None: printed.append(list(args)),
+    )
     result = runner.invoke(cognito_mod.cognito_app, ["fix-auth-flows", "dev"])
     assert result.exit_code == 0
     assert printed[-1] == ["fix-auth-flows"]
@@ -683,21 +769,43 @@ def test_cognito_fix_auth_flows_config_commands_and_add_user(
     monkeypatch.setattr(
         cognito_mod,
         "_resolve_pool_command_context",
-        lambda *_args, **_kwargs: ("tapdb-dev", {"AWS_PROFILE": "dev-profile"}, "us-east-1", "dev-profile"),
+        lambda *_args, **_kwargs: (
+            "tapdb-dev",
+            {"AWS_PROFILE": "dev-profile"},
+            "us-east-1",
+            "dev-profile",
+        ),
     )
     printed.clear()
-    assert runner.invoke(cognito_mod.cognito_app, ["config", "print", "dev"]).exit_code == 0
+    assert (
+        runner.invoke(cognito_mod.cognito_app, ["config", "print", "dev"]).exit_code
+        == 0
+    )
     assert printed[-1][:3] == ["config", "print", "--pool-name"]
-    assert runner.invoke(cognito_mod.cognito_app, ["config", "create", "dev"]).exit_code == 0
+    assert (
+        runner.invoke(cognito_mod.cognito_app, ["config", "create", "dev"]).exit_code
+        == 0
+    )
     assert printed[-1][:3] == ["config", "create", "--pool-name"]
     assert "--profile" in printed[-1]
-    assert runner.invoke(cognito_mod.cognito_app, ["config", "update", "dev"]).exit_code == 0
+    assert (
+        runner.invoke(cognito_mod.cognito_app, ["config", "update", "dev"]).exit_code
+        == 0
+    )
     assert printed[-1][:3] == ["config", "update", "--pool-name"]
     assert "--profile" in printed[-1]
 
     result = runner.invoke(
         cognito_mod.cognito_app,
-        ["add-user", "dev", "alice@example.com", "--password", "secret", "--role", "owner"],
+        [
+            "add-user",
+            "dev",
+            "alice@example.com",
+            "--password",
+            "secret",
+            "--role",
+            "owner",
+        ],
     )
     assert result.exit_code == 1
 
@@ -715,13 +823,20 @@ def test_cognito_fix_auth_flows_config_commands_and_add_user(
     monkeypatch.setattr(
         cognito_mod,
         "_resolve_bound_daycog_context",
-        lambda _env: ("pool-1", "ctx", {"COGNITO_CLIENT_NAME": "tapdb"}, {"COGNITO_CLIENT_NAME": "tapdb"}),
+        lambda _env: (
+            "pool-1",
+            "ctx",
+            {"COGNITO_CLIENT_NAME": "tapdb"},
+            {"COGNITO_CLIENT_NAME": "tapdb"},
+        ),
     )
     monkeypatch.setattr(cognito_mod, "_run_daycog", lambda args, env=None: "")
     monkeypatch.setattr(
         cognito_mod,
         "_ensure_actor_user_row",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("actor sync failed")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("actor sync failed")
+        ),
     )
     result = runner.invoke(
         cognito_mod.cognito_app,

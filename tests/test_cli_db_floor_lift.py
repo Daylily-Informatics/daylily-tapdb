@@ -85,7 +85,11 @@ def test_db_sequence_baseline_and_run_psql_branches(
     with pytest.raises(ValueError, match="alphabetic"):
         db_mod._ensure_instance_prefix_sequence(db_mod.Environment.dev, "A1")
 
-    monkeypatch.setattr(db_mod, "_find_schema_root", lambda **_kwargs: (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(
+        db_mod,
+        "_find_schema_root",
+        lambda **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+    )
     db_mod._write_migration_baseline(db_mod.Environment.dev)
 
     migrations_root = tmp_path / "schema"
@@ -93,7 +97,9 @@ def test_db_sequence_baseline_and_run_psql_branches(
     monkeypatch.setattr(db_mod, "_find_schema_root", lambda **_kwargs: migrations_root)
     db_mod._write_migration_baseline(db_mod.Environment.dev)
 
-    (migrations_root / "migrations" / "20260407_init.sql").write_text("-- migration\n", encoding="utf-8")
+    (migrations_root / "migrations" / "20260407_init.sql").write_text(
+        "-- migration\n", encoding="utf-8"
+    )
     calls: list[str] = []
 
     def _run_create_fail(_env, sql=None, file=None, database=None, user=None):
@@ -118,7 +124,9 @@ def test_db_sequence_baseline_and_run_psql_branches(
     with pytest.raises(RuntimeError, match="insert failed"):
         db_mod._write_migration_baseline(db_mod.Environment.dev)
 
-    monkeypatch.setattr(db_mod, "_get_db_config", lambda _env: _base_cfg(password="secret"))
+    monkeypatch.setattr(
+        db_mod, "_get_db_config", lambda _env: _base_cfg(password="secret")
+    )
     captured_envs: list[dict[str, str]] = []
 
     def _fake_run(cmd, capture_output=True, text=True, env=None):
@@ -143,7 +151,9 @@ def test_db_sequence_baseline_and_run_psql_branches(
 def test_db_role_counts_schema_and_drift_helpers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(db_mod, "_get_db_config", lambda _env: _base_cfg(engine_type="aurora"))
+    monkeypatch.setattr(
+        db_mod, "_get_db_config", lambda _env: _base_cfg(engine_type="aurora")
+    )
     db_mod._ensure_local_role(db_mod.Environment.dev, "tapdb")
     db_mod._ensure_local_role(db_mod.Environment.prod, "tapdb")
     db_mod._ensure_local_role(db_mod.Environment.dev, "")
@@ -164,7 +174,9 @@ def test_db_role_counts_schema_and_drift_helpers(
         return True, ""
 
     monkeypatch.setattr(db_mod, "_run_psql", _local_role_failure)
-    with pytest.raises(RuntimeError, match="Failed to create missing local PostgreSQL role"):
+    with pytest.raises(
+        RuntimeError, match="Failed to create missing local PostgreSQL role"
+    ):
         db_mod._ensure_local_role(db_mod.Environment.dev, "tapdb")
 
     responses = iter(
@@ -183,20 +195,37 @@ def test_db_role_counts_schema_and_drift_helpers(
 
     monkeypatch.setattr(db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "boom"))
     assert db_mod._schema_exists(db_mod.Environment.dev) is False
-    monkeypatch.setattr(db_mod, "_run_psql", lambda *_args, **_kwargs: (True, "bad-int"))
+    monkeypatch.setattr(
+        db_mod, "_run_psql", lambda *_args, **_kwargs: (True, "bad-int")
+    )
     assert db_mod._schema_exists(db_mod.Environment.dev) is False
 
     monkeypatch.setattr(db_mod, "_get_db_config", lambda _env: _base_cfg())
     monkeypatch.setattr(db_mod, "_find_schema_root", lambda **_kwargs: tmp_path)
-    monkeypatch.setattr(db_mod, "schema_asset_files", lambda _root: [tmp_path / "tapdb_schema.sql"])
+    monkeypatch.setattr(
+        db_mod, "schema_asset_files", lambda _root: [tmp_path / "tapdb_schema.sql"]
+    )
     monkeypatch.setattr(
         db_mod,
         "_required_identity_prefixes",
         lambda _env: {"generic_template": "AGX"},
     )
-    monkeypatch.setattr(db_mod, "_shared_sequence_name", lambda prefix: f"{prefix.lower()}_instance_seq")
-    monkeypatch.setattr(db_mod, "build_expected_schema_inventory", lambda paths, dynamic_sequence_name: {"expected": paths, "seq": dynamic_sequence_name})
-    monkeypatch.setattr(db_mod, "load_live_schema_inventory", lambda session: {"live": True, "session": session})
+    monkeypatch.setattr(
+        db_mod, "_shared_sequence_name", lambda prefix: f"{prefix.lower()}_instance_seq"
+    )
+    monkeypatch.setattr(
+        db_mod,
+        "build_expected_schema_inventory",
+        lambda paths, dynamic_sequence_name: {
+            "expected": paths,
+            "seq": dynamic_sequence_name,
+        },
+    )
+    monkeypatch.setattr(
+        db_mod,
+        "load_live_schema_inventory",
+        lambda session: {"live": True, "session": session},
+    )
 
     class _Result:
         has_drift = True
@@ -215,45 +244,69 @@ def test_db_role_counts_schema_and_drift_helpers(
                 "unexpected": {"tables": []},
             }
 
-    monkeypatch.setattr(db_mod, "diff_schema_inventory", lambda *args, **kwargs: _Result())
-    monkeypatch.setattr(db_mod, "inventory_counts", lambda value: {"count": len(value.get("tables", []))})
-    monkeypatch.setattr(db_mod, "drift_entry_counts", lambda value: {"count": len(value.get("tables", []))})
+    monkeypatch.setattr(
+        db_mod, "diff_schema_inventory", lambda *args, **kwargs: _Result()
+    )
+    monkeypatch.setattr(
+        db_mod,
+        "inventory_counts",
+        lambda value: {"count": len(value.get("tables", []))},
+    )
+    monkeypatch.setattr(
+        db_mod,
+        "drift_entry_counts",
+        lambda value: {"count": len(value.get("tables", []))},
+    )
     monkeypatch.setattr(
         db_mod,
         "_tapdb_connection_for_env",
         lambda _env, app_username: _FakeConn(session="session"),
     )
 
-    payload, has_drift = db_mod._run_schema_drift_check(db_mod.Environment.dev, strict=True)
+    payload, has_drift = db_mod._run_schema_drift_check(
+        db_mod.Environment.dev, strict=True
+    )
     assert has_drift is True
     assert payload["counts"]["expected"]["count"] == 1
     assert payload["counts"]["missing"]["count"] == 1
 
 
-def test_db_callback_create_and_delete_branches(monkeypatch: pytest.MonkeyPatch) -> None:
-    db_mod._db_callback(SimpleNamespace(resilient_parsing=True, invoked_subcommand="schema"))
-    db_mod._db_callback(SimpleNamespace(resilient_parsing=False, invoked_subcommand="config"))
+def test_db_callback_create_and_delete_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_mod._db_callback(
+        SimpleNamespace(resilient_parsing=True, invoked_subcommand="schema")
+    )
+    db_mod._db_callback(
+        SimpleNamespace(resilient_parsing=False, invoked_subcommand="config")
+    )
 
     monkeypatch.setattr(
         "daylily_tapdb.cli._require_context",
         lambda: (_ for _ in ()).throw(RuntimeError("missing context")),
     )
     with pytest.raises(typer.Exit) as exc:
-        db_mod._db_callback(SimpleNamespace(resilient_parsing=False, invoked_subcommand="schema"))
+        db_mod._db_callback(
+            SimpleNamespace(resilient_parsing=False, invoked_subcommand="schema")
+        )
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(db_mod, "_get_db_config", lambda _env: _base_cfg())
     monkeypatch.setattr(
         db_mod,
         "_ensure_local_role",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("role bootstrap failed")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("role bootstrap failed")
+        ),
     )
     with pytest.raises(typer.Exit) as exc:
         db_mod.db_create(db_mod.Environment.dev, owner=None)
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(db_mod, "_ensure_local_role", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "cannot connect"))
+    monkeypatch.setattr(
+        db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "cannot connect")
+    )
     with pytest.raises(typer.Exit) as exc:
         db_mod.db_create(db_mod.Environment.dev, owner=None)
     assert exc.value.exit_code == 1
@@ -276,20 +329,22 @@ def test_db_callback_create_and_delete_branches(monkeypatch: pytest.MonkeyPatch)
     with pytest.raises(typer.Exit) as exc:
         db_mod.db_create(db_mod.Environment.dev, owner=None)
     assert exc.value.exit_code == 1
-    assert any('CREATE DATABASE "tapdb_dev" OWNER "tapdb"' in sql for sql in create_sqls)
+    assert any(
+        'CREATE DATABASE "tapdb_dev" OWNER "tapdb"' in sql for sql in create_sqls
+    )
 
     monkeypatch.setattr(
         db_mod,
         "_run_psql",
         lambda _env, sql=None, file=None, database=None, user=None: (
-            (True, "1")
-            if database == "postgres" and sql == "SELECT 1"
-            else (True, "")
+            (True, "1") if database == "postgres" and sql == "SELECT 1" else (True, "")
         ),
     )
     db_mod.db_create(db_mod.Environment.dev, owner="owner1")
 
-    monkeypatch.setattr(db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "cannot connect"))
+    monkeypatch.setattr(
+        db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "cannot connect")
+    )
     with pytest.raises(typer.Exit) as exc:
         db_mod.db_delete(db_mod.Environment.dev, force=False)
     assert exc.value.exit_code == 1
@@ -330,9 +385,7 @@ def test_db_callback_create_and_delete_branches(monkeypatch: pytest.MonkeyPatch)
         db_mod,
         "_run_psql",
         lambda _env, sql=None, file=None, database=None, user=None: (
-            (True, "1")
-            if database == "postgres" and sql == "SELECT 1"
-            else (True, "")
+            (True, "1") if database == "postgres" and sql == "SELECT 1" else (True, "")
         ),
     )
     db_mod.db_delete(db_mod.Environment.dev, force=True)
@@ -363,7 +416,9 @@ def test_db_schema_apply_status_and_drift_command_branches(
 
     monkeypatch.setattr(db_mod, "_find_schema_file", lambda: schema_file)
     monkeypatch.setattr(db_mod, "_schema_exists", lambda _env: True)
-    monkeypatch.setattr(db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "schema apply failed"))
+    monkeypatch.setattr(
+        db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "schema apply failed")
+    )
     log_calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(db_mod, "_log_operation", lambda *args: log_calls.append(args))
     with pytest.raises(typer.Exit) as exc:
@@ -402,7 +457,13 @@ def test_db_schema_apply_status_and_drift_command_branches(
         db_mod.db_status(db_mod.Environment.dev)
     assert exc.value.exit_code == 1
 
-    monkeypatch.setattr(db_mod, "_get_db_config", lambda _env: _base_cfg(engine_type="aurora", region="us-east-1", iam_auth="false"))
+    monkeypatch.setattr(
+        db_mod,
+        "_get_db_config",
+        lambda _env: _base_cfg(
+            engine_type="aurora", region="us-east-1", iam_auth="false"
+        ),
+    )
     monkeypatch.setattr(db_mod, "_schema_exists", lambda _env: True)
     monkeypatch.setattr(
         db_mod,
@@ -419,11 +480,15 @@ def test_db_schema_apply_status_and_drift_command_branches(
 
     monkeypatch.setattr(db_mod, "_check_db_exists", lambda *_args, **_kwargs: False)
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_schema_drift_check(db_mod.Environment.dev, json_output=False, strict=False)
+        db_mod.db_schema_drift_check(
+            db_mod.Environment.dev, json_output=False, strict=False
+        )
     assert exc.value.exit_code == 2
 
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_schema_drift_check(db_mod.Environment.dev, json_output=True, strict=False)
+        db_mod.db_schema_drift_check(
+            db_mod.Environment.dev, json_output=True, strict=False
+        )
     assert exc.value.exit_code == 2
 
     monkeypatch.setattr(db_mod, "_check_db_exists", lambda *_args, **_kwargs: True)
@@ -433,10 +498,14 @@ def test_db_schema_apply_status_and_drift_command_branches(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("drift exploded")),
     )
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_schema_drift_check(db_mod.Environment.dev, json_output=False, strict=False)
+        db_mod.db_schema_drift_check(
+            db_mod.Environment.dev, json_output=False, strict=False
+        )
     assert exc.value.exit_code == 2
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_schema_drift_check(db_mod.Environment.dev, json_output=True, strict=False)
+        db_mod.db_schema_drift_check(
+            db_mod.Environment.dev, json_output=True, strict=False
+        )
     assert exc.value.exit_code == 2
 
     monkeypatch.setattr(
@@ -455,7 +524,9 @@ def test_db_schema_apply_status_and_drift_command_branches(
         ),
     )
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_schema_drift_check(db_mod.Environment.dev, json_output=False, strict=True)
+        db_mod.db_schema_drift_check(
+            db_mod.Environment.dev, json_output=False, strict=True
+        )
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(
@@ -473,7 +544,9 @@ def test_db_schema_apply_status_and_drift_command_branches(
             False,
         ),
     )
-    db_mod.db_schema_drift_check(db_mod.Environment.dev, json_output=False, strict=False)
+    db_mod.db_schema_drift_check(
+        db_mod.Environment.dev, json_output=False, strict=False
+    )
 
 
 def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
@@ -505,7 +578,9 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
 
     prompts = iter(["dev", "DELETE EVERYTHING"])
     monkeypatch.setattr(db_mod.Prompt, "ask", lambda _msg: next(prompts))
-    monkeypatch.setattr(db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "nuke failed"))
+    monkeypatch.setattr(
+        db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "nuke failed")
+    )
     log_calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(db_mod, "_log_operation", lambda *args: log_calls.append(args))
     with pytest.raises(typer.Exit) as exc:
@@ -542,7 +617,9 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
 
     migration_file = migrations_root / "migrations" / "20260407_init.sql"
     migration_file.write_text("-- migration\n", encoding="utf-8")
-    monkeypatch.setattr(db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "ensure table failed"))
+    monkeypatch.setattr(
+        db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "ensure table failed")
+    )
     with pytest.raises(typer.Exit) as exc:
         db_mod.db_migrate(db_mod.Environment.dev, dry_run=False)
     assert exc.value.exit_code == 1
@@ -560,7 +637,9 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         if sql == "SELECT filename FROM _tapdb_migrations":
             return True, ""
         if file is not None:
-            return migration_state["apply"], "apply failed" if not migration_state["apply"] else ""
+            return migration_state["apply"], "apply failed" if not migration_state[
+                "apply"
+            ] else ""
         return True, ""
 
     monkeypatch.setattr(db_mod, "_run_psql", _migrate_dry_run)
@@ -594,7 +673,9 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         lambda *args, **kwargs: SimpleNamespace(returncode=1, stderr="pg_dump failed"),
     )
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_backup(db_mod.Environment.dev, backup_path=backup_path, data_only=False)
+        db_mod.db_backup(
+            db_mod.Environment.dev, backup_path=backup_path, data_only=False
+        )
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(
@@ -603,7 +684,9 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError()),
     )
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_backup(db_mod.Environment.dev, backup_path=backup_path, data_only=False)
+        db_mod.db_backup(
+            db_mod.Environment.dev, backup_path=backup_path, data_only=False
+        )
     assert exc.value.exit_code == 1
 
     with pytest.raises(typer.Exit) as exc:
@@ -622,7 +705,9 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(db_mod, "_check_db_exists", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "restore failed"))
+    monkeypatch.setattr(
+        db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "restore failed")
+    )
     with pytest.raises(typer.Exit) as exc:
         db_mod.db_restore(db_mod.Environment.dev, restore_input, force=True)
     assert exc.value.exit_code == 1
@@ -658,8 +743,18 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         lambda *_args, **_kwargs: (
             [],
             [
-                issue_type(level="error", message="bad template", source_file="a.json", template_code="generic/a"),
-                issue_type(level="warning", message="warn template", source_file="b.json", template_code="generic/b"),
+                issue_type(
+                    level="error",
+                    message="bad template",
+                    source_file="a.json",
+                    template_code="generic/a",
+                ),
+                issue_type(
+                    level="warning",
+                    message="warn template",
+                    source_file="b.json",
+                    template_code="generic/b",
+                ),
             ],
         ),
     )
@@ -670,12 +765,24 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         db_mod.db_validate_config(config_path=None, strict=True, json_output=False)
     assert exc.value.exit_code == 1
 
-    monkeypatch.setattr(db_mod, "_validate_template_configs", lambda *_args, **_kwargs: ([], []))
+    monkeypatch.setattr(
+        db_mod, "_validate_template_configs", lambda *_args, **_kwargs: ([], [])
+    )
     db_mod.db_validate_config(config_path=None, strict=False, json_output=False)
 
     monkeypatch.setattr(db_mod, "_get_db_config", lambda _env: _base_cfg())
-    assert db_mod._create_default_admin(db_mod.Environment.dev, insecure_dev_defaults=False) is False
-    assert db_mod._create_default_admin(db_mod.Environment.prod, insecure_dev_defaults=True) is False
+    assert (
+        db_mod._create_default_admin(
+            db_mod.Environment.dev, insecure_dev_defaults=False
+        )
+        is False
+    )
+    assert (
+        db_mod._create_default_admin(
+            db_mod.Environment.prod, insecure_dev_defaults=True
+        )
+        is False
+    )
 
     monkeypatch.setattr(
         db_mod,
@@ -686,21 +793,32 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         "daylily_tapdb.user_store.create_or_get",
         lambda *_args, **_kwargs: (SimpleNamespace(username="tapdb_admin"), False),
     )
-    monkeypatch.setattr("daylily_tapdb.cli.user._hash_password", lambda _value: "hashed")
-    assert db_mod._create_default_admin(db_mod.Environment.dev, insecure_dev_defaults=True) is False
+    monkeypatch.setattr(
+        "daylily_tapdb.cli.user._hash_password", lambda _value: "hashed"
+    )
+    assert (
+        db_mod._create_default_admin(db_mod.Environment.dev, insecure_dev_defaults=True)
+        is False
+    )
 
     monkeypatch.setattr(
         "daylily_tapdb.user_store.create_or_get",
         lambda *_args, **_kwargs: (SimpleNamespace(username="tapdb_admin"), True),
     )
-    assert db_mod._create_default_admin(db_mod.Environment.dev, insecure_dev_defaults=True) is True
+    assert (
+        db_mod._create_default_admin(db_mod.Environment.dev, insecure_dev_defaults=True)
+        is True
+    )
 
     monkeypatch.setattr(
         db_mod,
         "TAPDBConnection",
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("connection failed")),
     )
-    assert db_mod._create_default_admin(db_mod.Environment.dev, insecure_dev_defaults=True) is False
+    assert (
+        db_mod._create_default_admin(db_mod.Environment.dev, insecure_dev_defaults=True)
+        is False
+    )
 
     monkeypatch.setattr(
         db_mod,
@@ -709,19 +827,37 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
     )
     monkeypatch.setattr(db_mod, "_get_db_config", lambda _env: _base_cfg())
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_seed(db_mod.Environment.dev, config_path=None, include_workflow=False, skip_existing=True, dry_run=False)
+        db_mod.db_seed(
+            db_mod.Environment.dev,
+            config_path=None,
+            include_workflow=False,
+            skip_existing=True,
+            dry_run=False,
+        )
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(db_mod, "_resolve_seed_config_dirs", lambda _path: [tmp_path])
     monkeypatch.setattr(db_mod, "_check_db_exists", lambda *_args, **_kwargs: False)
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_seed(db_mod.Environment.dev, config_path=None, include_workflow=False, skip_existing=True, dry_run=False)
+        db_mod.db_seed(
+            db_mod.Environment.dev,
+            config_path=None,
+            include_workflow=False,
+            skip_existing=True,
+            dry_run=False,
+        )
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(db_mod, "_check_db_exists", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(db_mod, "_schema_exists", lambda _env: False)
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_seed(db_mod.Environment.dev, config_path=None, include_workflow=False, skip_existing=True, dry_run=False)
+        db_mod.db_seed(
+            db_mod.Environment.dev,
+            config_path=None,
+            include_workflow=False,
+            skip_existing=True,
+            dry_run=False,
+        )
     assert exc.value.exit_code == 1
 
     issue_type = SimpleNamespace
@@ -730,30 +866,73 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         "_validate_template_configs",
         lambda *_args, **_kwargs: (
             [],
-            [issue_type(level="error", message="bad template", source_file="a.json", template_code="generic/a")],
+            [
+                issue_type(
+                    level="error",
+                    message="bad template",
+                    source_file="a.json",
+                    template_code="generic/a",
+                )
+            ],
         ),
     )
     monkeypatch.setattr(db_mod, "_schema_exists", lambda _env: True)
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_seed(db_mod.Environment.dev, config_path=None, include_workflow=False, skip_existing=True, dry_run=False)
+        db_mod.db_seed(
+            db_mod.Environment.dev,
+            config_path=None,
+            include_workflow=False,
+            skip_existing=True,
+            dry_run=False,
+        )
     assert exc.value.exit_code == 1
 
-    monkeypatch.setattr(db_mod, "_validate_template_configs", lambda *_args, **_kwargs: ([], []))
-    db_mod.db_seed(db_mod.Environment.dev, config_path=None, include_workflow=False, skip_existing=True, dry_run=False)
+    monkeypatch.setattr(
+        db_mod, "_validate_template_configs", lambda *_args, **_kwargs: ([], [])
+    )
+    db_mod.db_seed(
+        db_mod.Environment.dev,
+        config_path=None,
+        include_workflow=False,
+        skip_existing=True,
+        dry_run=False,
+    )
 
-    templates = [{"category": "generic", "type": "core", "subtype": "foo", "version": "1.0", "name": "Foo"}]
-    monkeypatch.setattr(db_mod, "_validate_template_configs", lambda *_args, **_kwargs: (templates, []))
+    templates = [
+        {
+            "category": "generic",
+            "type": "core",
+            "subtype": "foo",
+            "version": "1.0",
+            "name": "Foo",
+        }
+    ]
+    monkeypatch.setattr(
+        db_mod, "_validate_template_configs", lambda *_args, **_kwargs: (templates, [])
+    )
     monkeypatch.setattr(
         db_mod,
         "_find_duplicate_template_keys",
         lambda _templates: {("generic", "core", "foo", "1.0"): ["a.json", "b.json"]},
     )
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_seed(db_mod.Environment.dev, config_path=None, include_workflow=False, skip_existing=True, dry_run=False)
+        db_mod.db_seed(
+            db_mod.Environment.dev,
+            config_path=None,
+            include_workflow=False,
+            skip_existing=True,
+            dry_run=False,
+        )
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(db_mod, "_find_duplicate_template_keys", lambda _templates: {})
-    db_mod.db_seed(db_mod.Environment.dev, config_path=None, include_workflow=False, skip_existing=True, dry_run=True)
+    db_mod.db_seed(
+        db_mod.Environment.dev,
+        config_path=None,
+        include_workflow=False,
+        skip_existing=True,
+        dry_run=True,
+    )
 
     monkeypatch.setattr(
         db_mod,
@@ -761,7 +940,13 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         lambda _env, app_username: (_ for _ in ()).throw(RuntimeError("seed failed")),
     )
     with pytest.raises(typer.Exit) as exc:
-        db_mod.db_seed(db_mod.Environment.dev, config_path=None, include_workflow=False, skip_existing=True, dry_run=False)
+        db_mod.db_seed(
+            db_mod.Environment.dev,
+            config_path=None,
+            include_workflow=False,
+            skip_existing=True,
+            dry_run=False,
+        )
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(
@@ -769,24 +954,50 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         "_tapdb_connection_for_env",
         lambda _env, app_username: _FakeConn(session="session"),
     )
-    monkeypatch.setattr(db_mod, "_loader_find_tapdb_core_config_dir", lambda: tmp_path / "core")
+    monkeypatch.setattr(
+        db_mod, "_loader_find_tapdb_core_config_dir", lambda: tmp_path / "core"
+    )
     monkeypatch.setattr(
         db_mod,
         "_loader_seed_templates",
-        lambda *_args, **_kwargs: SimpleNamespace(inserted=2, updated=1, skipped=3, prefixes_ensured=4),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            inserted=2, updated=1, skipped=3, prefixes_ensured=4
+        ),
     )
-    db_mod.db_seed(db_mod.Environment.dev, config_path=None, include_workflow=True, skip_existing=False, dry_run=False)
+    db_mod.db_seed(
+        db_mod.Environment.dev,
+        config_path=None,
+        include_workflow=True,
+        skip_existing=False,
+        dry_run=False,
+    )
 
     db_calls: list[str] = []
-    monkeypatch.setattr(db_mod, "db_delete", lambda *_args, **_kwargs: db_calls.append("delete"))
-    monkeypatch.setattr(db_mod, "db_create", lambda *_args, **_kwargs: db_calls.append("create"))
-    monkeypatch.setattr(db_mod, "db_schema_apply", lambda *_args, **_kwargs: db_calls.append("apply"))
-    monkeypatch.setattr(db_mod, "db_migrate", lambda *_args, **_kwargs: db_calls.append("migrate"))
-    monkeypatch.setattr(db_mod, "db_seed", lambda *_args, **_kwargs: db_calls.append("seed"))
+    monkeypatch.setattr(
+        db_mod, "db_delete", lambda *_args, **_kwargs: db_calls.append("delete")
+    )
+    monkeypatch.setattr(
+        db_mod, "db_create", lambda *_args, **_kwargs: db_calls.append("create")
+    )
+    monkeypatch.setattr(
+        db_mod, "db_schema_apply", lambda *_args, **_kwargs: db_calls.append("apply")
+    )
+    monkeypatch.setattr(
+        db_mod, "db_migrate", lambda *_args, **_kwargs: db_calls.append("migrate")
+    )
+    monkeypatch.setattr(
+        db_mod, "db_seed", lambda *_args, **_kwargs: db_calls.append("seed")
+    )
     monkeypatch.setattr(db_mod, "_create_default_admin", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(db_mod, "_get_connection_string", lambda _env: "postgresql://tapdb@localhost:5533/tapdb_dev")
+    monkeypatch.setattr(
+        db_mod,
+        "_get_connection_string",
+        lambda _env: "postgresql://tapdb@localhost:5533/tapdb_dev",
+    )
 
-    monkeypatch.setattr(db_mod, "_get_db_config", lambda _env: _base_cfg(engine_type="local"))
+    monkeypatch.setattr(
+        db_mod, "_get_db_config", lambda _env: _base_cfg(engine_type="local")
+    )
     monkeypatch.setattr(db_mod, "_check_db_exists", lambda *_args, **_kwargs: True)
     db_mod.db_setup(
         db_mod.Environment.dev,
@@ -797,7 +1008,9 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
     assert db_calls[:6] == ["delete", "create", "apply", "migrate", "seed"]
 
     db_calls.clear()
-    monkeypatch.setattr(db_mod, "_get_db_config", lambda _env: _base_cfg(engine_type="aurora"))
+    monkeypatch.setattr(
+        db_mod, "_get_db_config", lambda _env: _base_cfg(engine_type="aurora")
+    )
     db_mod.db_setup(
         db_mod.Environment.dev,
         force=True,

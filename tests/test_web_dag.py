@@ -221,7 +221,9 @@ def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(
 
     runtime = _build_fake_runtime_connection()
     session = runtime.conn._session
-    assert session.query(generic_instance).filter_by(euid="GX1", is_deleted=False).first()
+    assert (
+        session.query(generic_instance).filter_by(euid="GX1", is_deleted=False).first()
+    )
 
     object_response = client.get("/api/dag/object/GX1")
     assert object_response.status_code == 200

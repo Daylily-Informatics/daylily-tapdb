@@ -136,11 +136,19 @@ class _FakeSession:
         obj.is_deleted = False
         obj.created_dt = datetime.now(timezone.utc)
         parent = next(
-            (item for item in self._state["instances"] if item.uid == obj.parent_instance_uid),
+            (
+                item
+                for item in self._state["instances"]
+                if item.uid == obj.parent_instance_uid
+            ),
             None,
         )
         child = next(
-            (item for item in self._state["instances"] if item.uid == obj.child_instance_uid),
+            (
+                item
+                for item in self._state["instances"]
+                if item.uid == obj.child_instance_uid
+            ),
             None,
         )
         if not hasattr(obj, "_sa_instance_state"):
@@ -344,13 +352,21 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         "get_template",
         lambda name: _FakeTemplateRender(name, state),
     )
-    monkeypatch.setattr(admin_main, "get_style", lambda *_args, **_kwargs: {"skin_css": "x.css"})
+    monkeypatch.setattr(
+        admin_main, "get_style", lambda *_args, **_kwargs: {"skin_css": "x.css"}
+    )
     monkeypatch.setattr(admin_main, "get_db", lambda: _FakeConn(state))
-    monkeypatch.setattr(admin_main, "get_user_permissions", lambda _user: {"can_manage_users": True})
+    monkeypatch.setattr(
+        admin_main, "get_user_permissions", lambda _user: {"can_manage_users": True}
+    )
     monkeypatch.setattr(admin_main, "get_user_by_username", lambda _user: None)
     monkeypatch.setattr(admin_main, "update_last_login", lambda _uid: None)
-    monkeypatch.setattr(admin_main, "authenticate_with_cognito", lambda *_args: {"access_token": "tok"})
-    monkeypatch.setattr(admin_main, "create_cognito_user_account", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        admin_main, "authenticate_with_cognito", lambda *_args: {"access_token": "tok"}
+    )
+    monkeypatch.setattr(
+        admin_main, "create_cognito_user_account", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         admin_main,
         "get_or_create_user_from_email",
@@ -362,7 +378,11 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
             "require_password_change": False,
         },
     )
-    monkeypatch.setattr(admin_main, "respond_to_new_password_challenge", lambda *_args: {"access_token": "tok"})
+    monkeypatch.setattr(
+        admin_main,
+        "respond_to_new_password_challenge",
+        lambda *_args: {"access_token": "tok"},
+    )
     monkeypatch.setattr(admin_main, "change_cognito_password", lambda *_args: None)
     monkeypatch.setattr(
         admin_main,
@@ -374,7 +394,14 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
             "period_start_utc": "2026-01-01T00:00:00+00:00",
             "limit": 5000,
             "dropped_count": 0,
-            "summary": {"count": 2, "p95_ms": 2.0, "max_ms": 3.0, "slowest": [], "by_path": [], "by_table": []},
+            "summary": {
+                "count": 2,
+                "p95_ms": 2.0,
+                "max_ms": 3.0,
+                "slowest": [],
+                "by_path": [],
+                "by_table": [],
+            },
         },
     )
     monkeypatch.setattr(
@@ -394,13 +421,38 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
                 "functions": 5,
                 "indexes": 6,
             },
-            "db_inventory_tables": [{"schema_name": "public", "table_name": "generic_template"}],
-            "db_inventory_views": [{"schema_name": "public", "view_name": "v_instances"}],
-            "db_inventory_materialized_views": [{"schema_name": "public", "materialized_view_name": "mv_instances"}],
-            "db_inventory_sequences": [{"schema_name": "public", "sequence_name": "gx_instance_seq"}],
-            "db_inventory_triggers": [{"schema_name": "public", "table_name": "generic_instance", "trigger_name": "trigger_update"}],
-            "db_inventory_functions": [{"schema_name": "public", "function_signature": "set_generic_instance_euid()"}],
-            "db_inventory_indexes": [{"schema_name": "public", "table_name": "generic_instance", "index_name": "idx_generic_instance_euid"}],
+            "db_inventory_tables": [
+                {"schema_name": "public", "table_name": "generic_template"}
+            ],
+            "db_inventory_views": [
+                {"schema_name": "public", "view_name": "v_instances"}
+            ],
+            "db_inventory_materialized_views": [
+                {"schema_name": "public", "materialized_view_name": "mv_instances"}
+            ],
+            "db_inventory_sequences": [
+                {"schema_name": "public", "sequence_name": "gx_instance_seq"}
+            ],
+            "db_inventory_triggers": [
+                {
+                    "schema_name": "public",
+                    "table_name": "generic_instance",
+                    "trigger_name": "trigger_update",
+                }
+            ],
+            "db_inventory_functions": [
+                {
+                    "schema_name": "public",
+                    "function_signature": "set_generic_instance_euid()",
+                }
+            ],
+            "db_inventory_indexes": [
+                {
+                    "schema_name": "public",
+                    "table_name": "generic_instance",
+                    "index_name": "idx_generic_instance_euid",
+                }
+            ],
         },
     )
     monkeypatch.setattr(
@@ -458,7 +510,10 @@ def test_main_query_helpers_and_footer_metadata(route_client, monkeypatch):
     assert admin_main._normalize_complex_kind("bad") == "all"
     assert admin_main._match_object_query(state["instances"][0], "gx11") is True
     assert admin_main._match_object_query(state["instances"][0], "") is False
-    assert admin_main._to_object_result("instance", state["instances"][0])["euid"] == "GX11"
+    assert (
+        admin_main._to_object_result("instance", state["instances"][0])["euid"]
+        == "GX11"
+    )
     assert admin_main._timestamp_rank(None) == 0.0
 
     results = admin_main._run_simple_object_query(session, "GX", "all", 10)
@@ -489,21 +544,35 @@ def test_main_query_helpers_and_footer_metadata(route_client, monkeypatch):
 
     assert admin_main._mask_sensitive_value("db_password", "secret") == "(redacted)"
     assert admin_main._mask_sensitive_value("host", "") == "(empty)"
-    assert admin_main._parse_allowed_origins(" https://a.example, https://b.example ") == [
+    assert admin_main._parse_allowed_origins(
+        " https://a.example, https://b.example "
+    ) == [
         "https://a.example",
         "https://b.example",
     ]
-    assert admin_main._normalize_cognito_domain("example.auth.us-west-2.amazoncognito.com") == "example.auth.us-west-2.amazoncognito.com"
+    assert (
+        admin_main._normalize_cognito_domain("example.auth.us-west-2.amazoncognito.com")
+        == "example.auth.us-west-2.amazoncognito.com"
+    )
     with pytest.raises(RuntimeError, match="COGNITO_DOMAIN"):
         admin_main._normalize_cognito_domain("")
     with pytest.raises(RuntimeError, match="https URL"):
         admin_main._require_https_url("http://not-secure", label="endpoint")
 
-    monkeypatch.setattr(admin_main, "_git_output", lambda *args: {"rev-parse": "abc123", "describe": "v5.0.0"}.get(args[0], "main"))
+    monkeypatch.setattr(
+        admin_main,
+        "_git_output",
+        lambda *args: {"rev-parse": "abc123", "describe": "v5.0.0"}.get(
+            args[0], "main"
+        ),
+    )
     monkeypatch.setattr(
         admin_main,
         "ADMIN_SETTINGS",
-        {"support_email": "support@example.com", "repo_url": "https://example.com/repo"},
+        {
+            "support_email": "support@example.com",
+            "repo_url": "https://example.com/repo",
+        },
     )
     footer = admin_main._build_footer_metadata()
     assert footer["support_email"] == "support@example.com"
@@ -572,7 +641,10 @@ def test_main_oauth_helpers_cover_success_and_error_branches(monkeypatch):
     monkeypatch.setattr(
         admin_main,
         "_fetch_oauth_userinfo",
-        lambda runtime_cfg, access_token: {"email": "oauth@example.com", "name": "OAuth User"},
+        lambda runtime_cfg, access_token: {
+            "email": "oauth@example.com",
+            "name": "OAuth User",
+        },
     )
     profile = admin_main._resolve_oauth_user_profile(
         "dev",
@@ -581,11 +653,17 @@ def test_main_oauth_helpers_cover_success_and_error_branches(monkeypatch):
     )
     assert profile == {"email": "oauth@example.com", "display_name": "OAuth User"}
 
-    monkeypatch.setattr(admin_main, "_fetch_oauth_userinfo", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no userinfo")))
+    monkeypatch.setattr(
+        admin_main,
+        "_fetch_oauth_userinfo",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no userinfo")),
+    )
     monkeypatch.setattr(
         admin_main,
         "get_cognito_auth",
-        lambda env_name: SimpleNamespace(verify_token=lambda token: {"cognito:username": "fallback@example.com"}),
+        lambda env_name: SimpleNamespace(
+            verify_token=lambda token: {"cognito:username": "fallback@example.com"}
+        ),
     )
     profile = admin_main._resolve_oauth_user_profile(
         "dev",
@@ -608,13 +686,42 @@ def test_main_load_db_inventory_context_covers_success_and_error(monkeypatch):
         [
             SimpleNamespace(scalar=lambda: "tapdb_dev"),
             _InventoryMappings([{"schema_name": "public"}, {"schema_name": "app_ns"}]),
-            _InventoryMappings([{"schema_name": "public", "table_name": "generic_instance"}]),
+            _InventoryMappings(
+                [{"schema_name": "public", "table_name": "generic_instance"}]
+            ),
             _InventoryMappings([{"schema_name": "public", "view_name": "v_active"}]),
-            _InventoryMappings([{"schema_name": "public", "materialized_view_name": "mv_active"}]),
-            _InventoryMappings([{"schema_name": "public", "sequence_name": "gx_instance_seq"}]),
-            _InventoryMappings([{"schema_name": "public", "table_name": "generic_instance", "trigger_name": "trigger_update"}]),
-            _InventoryMappings([{"schema_name": "public", "function_signature": "set_generic_instance_euid()"}]),
-            _InventoryMappings([{"schema_name": "public", "table_name": "generic_instance", "index_name": "idx_generic_instance_euid"}]),
+            _InventoryMappings(
+                [{"schema_name": "public", "materialized_view_name": "mv_active"}]
+            ),
+            _InventoryMappings(
+                [{"schema_name": "public", "sequence_name": "gx_instance_seq"}]
+            ),
+            _InventoryMappings(
+                [
+                    {
+                        "schema_name": "public",
+                        "table_name": "generic_instance",
+                        "trigger_name": "trigger_update",
+                    }
+                ]
+            ),
+            _InventoryMappings(
+                [
+                    {
+                        "schema_name": "public",
+                        "function_signature": "set_generic_instance_euid()",
+                    }
+                ]
+            ),
+            _InventoryMappings(
+                [
+                    {
+                        "schema_name": "public",
+                        "table_name": "generic_instance",
+                        "index_name": "idx_generic_instance_euid",
+                    }
+                ]
+            ),
         ]
     )
 
@@ -690,36 +797,62 @@ def test_main_public_routes_and_protected_pages(route_client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_main_form_handlers_cover_login_signup_and_password_flows(route_client, monkeypatch):
+async def test_main_form_handlers_cover_login_signup_and_password_flows(
+    route_client, monkeypatch
+):
     _client, state = route_client
     request = _request(path="/login", session={})
 
-    monkeypatch.setattr(admin_main, "get_style", lambda *_args, **_kwargs: {"skin_css": "x.css"})
-    monkeypatch.setattr(admin_main.templates, "get_template", lambda name: _FakeTemplateRender(name, state))
+    monkeypatch.setattr(
+        admin_main, "get_style", lambda *_args, **_kwargs: {"skin_css": "x.css"}
+    )
+    monkeypatch.setattr(
+        admin_main.templates,
+        "get_template",
+        lambda name: _FakeTemplateRender(name, state),
+    )
     monkeypatch.setattr(admin_main, "get_user_by_username", lambda username: None)
     monkeypatch.setattr(
         admin_main,
         "authenticate_with_cognito",
         lambda *_args: (_ for _ in ()).throw(ValueError("bad credentials")),
     )
-    response = await admin_main.login_submit(request, username="alice@example.com", password="pw")
+    response = await admin_main.login_submit(
+        request, username="alice@example.com", password="pw"
+    )
     assert response.status_code == 200
-    assert _last_render_context(state, "login.html")["error"] == "Invalid username or password"
+    assert (
+        _last_render_context(state, "login.html")["error"]
+        == "Invalid username or password"
+    )
 
     monkeypatch.setattr(
         admin_main,
         "authenticate_with_cognito",
-        lambda *_args: {"challenge": "NEW_PASSWORD_REQUIRED", "session": "challenge-token"},
+        lambda *_args: {
+            "challenge": "NEW_PASSWORD_REQUIRED",
+            "session": "challenge-token",
+        },
     )
-    response = await admin_main.login_submit(request, username="alice@example.com", password="pw")
+    response = await admin_main.login_submit(
+        request, username="alice@example.com", password="pw"
+    )
     assert response.status_code == 302
     assert response.headers["location"] == "/change-password"
     assert request.session["cognito_challenge"] == "NEW_PASSWORD_REQUIRED"
 
     request = _request(path="/login", session={})
-    monkeypatch.setattr(admin_main, "get_user_by_username", lambda username: {"uid": 9, "email": username, "require_password_change": True})
-    monkeypatch.setattr(admin_main, "authenticate_with_cognito", lambda *_args: {"access_token": "tok"})
-    response = await admin_main.login_submit(request, username="alice@example.com", password="pw")
+    monkeypatch.setattr(
+        admin_main,
+        "get_user_by_username",
+        lambda username: {"uid": 9, "email": username, "require_password_change": True},
+    )
+    monkeypatch.setattr(
+        admin_main, "authenticate_with_cognito", lambda *_args: {"access_token": "tok"}
+    )
+    response = await admin_main.login_submit(
+        request, username="alice@example.com", password="pw"
+    )
     assert response.status_code == 302
     assert response.headers["location"] == "/change-password"
 
@@ -749,13 +882,23 @@ async def test_main_form_handlers_cover_login_signup_and_password_flows(route_cl
     )
     assert response.status_code == 200
 
-    monkeypatch.setattr(admin_main, "create_cognito_user_account", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        admin_main, "create_cognito_user_account", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         admin_main,
         "get_or_create_user_from_email",
-        lambda email, **_kwargs: {"uid": 77, "username": email, "email": email, "role": "user", "require_password_change": False},
+        lambda email, **_kwargs: {
+            "uid": 77,
+            "username": email,
+            "email": email,
+            "role": "user",
+            "require_password_change": False,
+        },
     )
-    monkeypatch.setattr(admin_main, "authenticate_with_cognito", lambda *_args: {"access_token": "tok"})
+    monkeypatch.setattr(
+        admin_main, "authenticate_with_cognito", lambda *_args: {"access_token": "tok"}
+    )
     response = await admin_main.signup_submit(
         request,
         email="alice@example.com",
@@ -767,7 +910,12 @@ async def test_main_form_handlers_cover_login_signup_and_password_flows(route_cl
     assert response.headers["location"] == "/"
 
     async def _current_user(_request):
-        return {"uid": 77, "username": "alice@example.com", "email": "alice@example.com", "require_password_change": False}
+        return {
+            "uid": 77,
+            "username": "alice@example.com",
+            "email": "alice@example.com",
+            "require_password_change": False,
+        }
 
     monkeypatch.setattr(admin_main, "get_current_user", _current_user)
     request = _request(path="/change-password", session={})
@@ -805,7 +953,10 @@ async def test_main_form_handlers_cover_login_signup_and_password_flows(route_cl
         confirm_password="Password1!",
     )
     assert response.status_code == 200
-    assert _last_render_context(state, "change_password.html")["success"] == "Password changed successfully"
+    assert (
+        _last_render_context(state, "change_password.html")["success"]
+        == "Password changed successfully"
+    )
 
 
 def test_main_oauth_routes_and_api_routes(route_client, monkeypatch):
@@ -891,18 +1042,38 @@ def test_main_oauth_routes_and_api_routes(route_client, monkeypatch):
             }
         }
     }
-    assert client.get("/api/graph/external", params={"source_euid": "GX11", "ref_index": 0, "depth": 2}).status_code == 200
-    assert client.get("/api/graph/external/object", params={"source_euid": "GX11", "ref_index": 0, "euid": "AT-2"}).status_code == 200
+    assert (
+        client.get(
+            "/api/graph/external",
+            params={"source_euid": "GX11", "ref_index": 0, "depth": 2},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            "/api/graph/external/object",
+            params={"source_euid": "GX11", "ref_index": 0, "euid": "AT-2"},
+        ).status_code
+        == 200
+    )
 
     duplicate = client.post(
         "/api/lineage",
-        json={"parent_euid": "GX11", "child_euid": "GX12", "relationship_type": "contains"},
+        json={
+            "parent_euid": "GX11",
+            "child_euid": "GX12",
+            "relationship_type": "contains",
+        },
     )
     assert duplicate.status_code == 409
 
     created = client.post(
         "/api/lineage",
-        json={"parent_euid": "GX11", "child_euid": "GX12", "relationship_type": "depends_on"},
+        json={
+            "parent_euid": "GX11",
+            "child_euid": "GX12",
+            "relationship_type": "depends_on",
+        },
     )
     assert created.status_code == 200
     assert state["lineages"][-1].relationship_type == "depends_on"
@@ -913,7 +1084,9 @@ def test_main_oauth_routes_and_api_routes(route_client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_main_create_instance_submit_success_and_errors(route_client, monkeypatch):
+async def test_main_create_instance_submit_success_and_errors(
+    route_client, monkeypatch
+):
     _client, state = route_client
     request = _request(
         path="/create-instance/GT1",
@@ -925,7 +1098,9 @@ async def test_main_create_instance_submit_success_and_errors(route_client, monk
         def __init__(self, manager):
             self.manager = manager
 
-        def create_instance(self, session, template_code, name, properties=None, create_children=False):
+        def create_instance(
+            self, session, template_code, name, properties=None, create_children=False
+        ):
             return SimpleNamespace(euid="GX99")
 
         def link_instances(self, session, parent, child, relationship_type):
@@ -959,8 +1134,11 @@ async def test_main_create_instance_submit_success_and_errors(route_client, monk
     monkeypatch.setattr(
         admin_main,
         "_resolve_lineage_targets_or_raise",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("missing parent EUID(s): GX404")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ValueError("missing parent EUID(s): GX404")
+        ),
     )
+
     async def _validation_form():
         return _Form(
             instance_name="Broken Item",
@@ -973,13 +1151,18 @@ async def test_main_create_instance_submit_success_and_errors(route_client, monk
     request.form = _validation_form
     response = await admin_main.create_instance_submit.__wrapped__(request, "GT1")
     assert response.status_code == 200
-    assert "Validation error" in _last_render_context(state, "create_instance.html")["error"]
+    assert (
+        "Validation error"
+        in _last_render_context(state, "create_instance.html")["error"]
+    )
 
     monkeypatch.setattr(
         admin_main,
         "InstanceFactory",
         lambda manager: SimpleNamespace(
-            create_instance=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+            create_instance=lambda **kwargs: (_ for _ in ()).throw(
+                RuntimeError("boom")
+            ),
             link_instances=lambda **kwargs: None,
         ),
     )
@@ -990,4 +1173,7 @@ async def test_main_create_instance_submit_success_and_errors(route_client, monk
     )
     response = await admin_main.create_instance_submit.__wrapped__(request, "GT1")
     assert response.status_code == 200
-    assert "Error creating instance" in _last_render_context(state, "create_instance.html")["error"]
+    assert (
+        "Error creating instance"
+        in _last_render_context(state, "create_instance.html")["error"]
+    )

@@ -124,7 +124,9 @@ def test_root_tls_helpers_and_admin_module_lookup(
 
     cert_file = tmp_path / "certs" / "localhost.crt"
     key_file = tmp_path / "certs" / "localhost.key"
-    monkeypatch.setattr(cli_mod, "_resolve_tls_paths", lambda *_args, **_kwargs: (cert_file, key_file))
+    monkeypatch.setattr(
+        cli_mod, "_resolve_tls_paths", lambda *_args, **_kwargs: (cert_file, key_file)
+    )
     monkeypatch.setattr(cli_mod.shutil, "which", lambda _name: None)
     with pytest.raises(RuntimeError, match="openssl is required"):
         cli_mod._ensure_tls_certificates("localhost", env_name="dev")
@@ -157,13 +159,19 @@ def test_root_tls_helpers_and_admin_module_lookup(
     monkeypatch.setattr(
         cli_mod.subprocess,
         "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="still broken"),
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1, stdout="", stderr="still broken"
+        ),
     )
     with pytest.raises(RuntimeError, match="Failed to generate TLS certificate"):
         cli_mod._ensure_tls_certificates("localhost", env_name="dev")
 
     monkeypatch.setattr(cli_mod.subprocess, "run", _openssl_success)
-    monkeypatch.setattr(cli_mod.os, "chmod", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("chmod blocked")))
+    monkeypatch.setattr(
+        cli_mod.os,
+        "chmod",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("chmod blocked")),
+    )
     cli_mod._ensure_tls_certificates("localhost", env_name="dev")
 
     monkeypatch.chdir(tmp_path)
@@ -188,7 +196,9 @@ def test_root_port_details_option_parsing_register_and_main(
     )
     assert "python 12345" in cli_mod._port_conflict_details(8911)
 
-    matched, value, consumed = cli_mod._consume_root_option(["--env", "dev"], 0, "--env")
+    matched, value, consumed = cli_mod._consume_root_option(
+        ["--env", "dev"], 0, "--env"
+    )
     assert (matched, value, consumed) == (True, "dev", 2)
     matched, value, consumed = cli_mod._consume_root_option(["--env=dev"], 0, "--env")
     assert (matched, value, consumed) == (True, "dev", 1)
@@ -246,7 +256,11 @@ def test_root_callback_and_ui_start_branches(
     cli_namespace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fresh_app = cli_mod.build_app()
-    monkeypatch.setattr(cli_mod, "_require_context", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("bad context")))
+    monkeypatch.setattr(
+        cli_mod,
+        "_require_context",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("bad context")),
+    )
     result = runner.invoke(
         fresh_app,
         ["--config", str(cli_namespace), "--env", "dev", "info"],
@@ -275,7 +289,9 @@ def test_root_callback_and_ui_start_branches(
     assert result.exit_code == 1
 
     fresh_app = cli_mod.build_app()
-    monkeypatch.setattr(cli_mod, "_require_admin_extras", lambda: (_ for _ in ()).throw(SystemExit(1)))
+    monkeypatch.setattr(
+        cli_mod, "_require_admin_extras", lambda: (_ for _ in ()).throw(SystemExit(1))
+    )
     monkeypatch.setattr(
         "daylily_tapdb.cli.db_config.get_db_config_for_env",
         lambda _env: {"ui_port": "8911"},
@@ -337,7 +353,10 @@ def test_root_callback_and_ui_start_branches(
     monkeypatch.setattr(
         cli_mod,
         "_ensure_tls_certificates",
-        lambda *_args, **_kwargs: (Path("/tmp/localhost.crt"), Path("/tmp/localhost.key")),
+        lambda *_args, **_kwargs: (
+            Path("/tmp/localhost.crt"),
+            Path("/tmp/localhost.key"),
+        ),
     )
     monkeypatch.setattr(
         "daylily_tapdb.cli.db_config.get_db_config_for_env",
@@ -371,7 +390,10 @@ def test_root_callback_and_ui_start_branches(
     monkeypatch.setattr(
         cli_mod,
         "_ensure_tls_certificates",
-        lambda *_args, **_kwargs: (Path("/tmp/localhost.crt"), Path("/tmp/localhost.key")),
+        lambda *_args, **_kwargs: (
+            Path("/tmp/localhost.crt"),
+            Path("/tmp/localhost.key"),
+        ),
     )
     monkeypatch.setattr(
         "daylily_tapdb.cli.db_config.get_db_config_for_env",
@@ -405,7 +427,10 @@ def test_root_callback_and_ui_start_branches(
     monkeypatch.setattr(
         cli_mod,
         "_ensure_tls_certificates",
-        lambda *_args, **_kwargs: (Path("/tmp/localhost.crt"), Path("/tmp/localhost.key")),
+        lambda *_args, **_kwargs: (
+            Path("/tmp/localhost.crt"),
+            Path("/tmp/localhost.key"),
+        ),
     )
     monkeypatch.setattr(
         "daylily_tapdb.cli.db_config.get_db_config_for_env",
@@ -465,7 +490,11 @@ def test_ui_mkcert_stop_logs_restart_and_bootstrap(
         "run",
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
-    monkeypatch.setattr(cli_mod.os, "chmod", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("chmod blocked")))
+    monkeypatch.setattr(
+        cli_mod.os,
+        "chmod",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("chmod blocked")),
+    )
     result = runner.invoke(fresh_app, ["ui", "mkcert"])
     assert result.exit_code == 0
 
@@ -488,14 +517,22 @@ def test_ui_mkcert_stop_logs_restart_and_bootstrap(
 
     fresh_app = cli_mod.build_app()
     monkeypatch.setattr(cli_mod, "_get_pid", lambda _pid_file: 123)
-    monkeypatch.setattr(cli_mod.os, "kill", lambda *_args, **_kwargs: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(
+        cli_mod.os,
+        "kill",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ProcessLookupError()),
+    )
     result = runner.invoke(fresh_app, ["ui", "stop"])
     assert result.exit_code == 0
     assert "Server was not running" in _strip(result.output)
 
     fresh_app = cli_mod.build_app()
     monkeypatch.setattr(cli_mod, "_get_pid", lambda _pid_file: 123)
-    monkeypatch.setattr(cli_mod.os, "kill", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError()))
+    monkeypatch.setattr(
+        cli_mod.os,
+        "kill",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError()),
+    )
     result = runner.invoke(fresh_app, ["ui", "stop"])
     assert result.exit_code == 1
 
@@ -534,7 +571,10 @@ def test_ui_mkcert_stop_logs_restart_and_bootstrap(
     monkeypatch.setattr(
         cli_mod,
         "_ensure_tls_certificates",
-        lambda *_args, **_kwargs: (Path("/tmp/localhost.crt"), Path("/tmp/localhost.key")),
+        lambda *_args, **_kwargs: (
+            Path("/tmp/localhost.crt"),
+            Path("/tmp/localhost.key"),
+        ),
     )
     monkeypatch.setattr(
         "daylily_tapdb.cli.db_config.get_db_config_for_env",
@@ -561,11 +601,18 @@ def test_ui_mkcert_stop_logs_restart_and_bootstrap(
     monkeypatch.setattr("daylily_tapdb.cli.db.apply_schema", lambda **_kwargs: None)
     monkeypatch.setattr("daylily_tapdb.cli.db.run_migrations", lambda **_kwargs: None)
     monkeypatch.setattr("daylily_tapdb.cli.db.seed_templates", lambda **_kwargs: None)
-    monkeypatch.setattr("daylily_tapdb.cli.db._create_default_admin", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        "daylily_tapdb.cli.db._create_default_admin", lambda **_kwargs: False
+    )
     monkeypatch.setattr("daylily_tapdb.cli.pg.pg_init", lambda **_kwargs: None)
     monkeypatch.setattr("daylily_tapdb.cli.pg.pg_start_local", lambda **_kwargs: None)
-    monkeypatch.setattr("daylily_tapdb.cli.db_config.get_db_config_for_env", lambda _env: {"engine_type": "local", "ui_port": "9443"})
-    monkeypatch.setattr(cli_mod, "_require_admin_extras", lambda: (_ for _ in ()).throw(SystemExit(1)))
+    monkeypatch.setattr(
+        "daylily_tapdb.cli.db_config.get_db_config_for_env",
+        lambda _env: {"engine_type": "local", "ui_port": "9443"},
+    )
+    monkeypatch.setattr(
+        cli_mod, "_require_admin_extras", lambda: (_ for _ in ()).throw(SystemExit(1))
+    )
     clear_cli_context()
     set_cli_context(
         client_id="testclient",
@@ -661,7 +708,9 @@ def test_config_init_update_and_info_commands(
         config_path=empty_cfg,
     )
     fresh_app = cli_mod.build_app()
-    result = runner.invoke(fresh_app, ["config", "update", "--env", "dev", "--host", "db.local"])
+    result = runner.invoke(
+        fresh_app, ["config", "update", "--env", "dev", "--host", "db.local"]
+    )
     assert result.exit_code != 0
 
     bad_meta_cfg = tmp_path / "bad-meta.yaml"
@@ -674,7 +723,9 @@ def test_config_init_update_and_info_commands(
         config_path=bad_meta_cfg,
     )
     fresh_app = cli_mod.build_app()
-    result = runner.invoke(fresh_app, ["config", "update", "--env", "dev", "--host", "db.local"])
+    result = runner.invoke(
+        fresh_app, ["config", "update", "--env", "dev", "--host", "db.local"]
+    )
     assert result.exit_code != 0
 
     bad_admin_cfg = tmp_path / "bad-admin.yaml"
@@ -695,7 +746,9 @@ def test_config_init_update_and_info_commands(
         config_path=bad_admin_cfg,
     )
     fresh_app = cli_mod.build_app()
-    result = runner.invoke(fresh_app, ["config", "update", "--env", "dev", "--host", "db.local"])
+    result = runner.invoke(
+        fresh_app, ["config", "update", "--env", "dev", "--host", "db.local"]
+    )
     assert result.exit_code != 0
 
     clear_cli_context()
@@ -758,7 +811,10 @@ def test_config_init_update_and_info_commands(
     assert result.exit_code == 0
     updated = yaml.safe_load(cli_namespace.read_text(encoding="utf-8"))
     assert updated["environments"]["dev"]["host"] == "db.internal"
-    assert updated["admin"]["footer"]["repo_url"] == "https://github.com/example/tapdb-core"
+    assert (
+        updated["admin"]["footer"]["repo_url"]
+        == "https://github.com/example/tapdb-core"
+    )
     assert updated["admin"]["auth"]["mode"] == "shared_host"
     assert updated["admin"]["metrics"]["queue_max"] == 500
 
@@ -798,7 +854,9 @@ def test_config_init_update_and_info_commands(
     monkeypatch.setattr(
         cli_mod.subprocess,
         "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="ps failed"),
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1, stdout="", stderr="ps failed"
+        ),
     )
     result = runner.invoke(fresh_app, ["info"])
     assert result.exit_code == 0

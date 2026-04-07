@@ -103,7 +103,9 @@ def test_user_format_date_blank_and_raw_string() -> None:
 
 def test_user_list_error_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        user_mod, "_open_connection", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom"))
+        user_mod,
+        "_open_connection",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
     with pytest.raises(typer.Exit) as exc:
@@ -124,7 +126,11 @@ def test_user_add_invalid_role_and_hash_error(monkeypatch: pytest.MonkeyPatch) -
         )
     assert exc.value.exit_code == 1
 
-    monkeypatch.setattr(user_mod, "_hash_password", lambda _value: (_ for _ in ()).throw(RuntimeError("bcrypt missing")))
+    monkeypatch.setattr(
+        user_mod,
+        "_hash_password",
+        lambda _value: (_ for _ in ()).throw(RuntimeError("bcrypt missing")),
+    )
     with pytest.raises(typer.Exit) as exc:
         user_mod.user_add(
             Environment.dev,
@@ -139,7 +145,9 @@ def test_user_add_invalid_role_and_hash_error(monkeypatch: pytest.MonkeyPatch) -
 
 def test_user_add_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        user_mod, "_open_connection", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("db down"))
+        user_mod,
+        "_open_connection",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("db down")),
     )
 
     with pytest.raises(typer.Exit) as exc:
@@ -167,7 +175,9 @@ def test_user_set_role_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(
-        user_mod, "_open_connection", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("db down"))
+        user_mod,
+        "_open_connection",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("db down")),
     )
     with pytest.raises(typer.Exit) as exc:
         user_mod.user_set_role(Environment.dev, "alice", "admin")
@@ -189,7 +199,9 @@ def test_user_activate_deactivate_error_paths(
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(
-        user_mod, "_open_connection", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("db down"))
+        user_mod,
+        "_open_connection",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("db down")),
     )
     with pytest.raises(typer.Exit) as exc:
         fn(Environment.dev, "alice")
@@ -197,7 +209,11 @@ def test_user_activate_deactivate_error_paths(
 
 
 def test_user_set_password_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(user_mod, "_hash_password", lambda _value: (_ for _ in ()).throw(RuntimeError("bcrypt missing")))
+    monkeypatch.setattr(
+        user_mod,
+        "_hash_password",
+        lambda _value: (_ for _ in ()).throw(RuntimeError("bcrypt missing")),
+    )
     with pytest.raises(typer.Exit) as exc:
         user_mod.user_set_password(Environment.dev, "alice", "secret")
     assert exc.value.exit_code == 1
@@ -210,7 +226,9 @@ def test_user_set_password_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(
-        user_mod, "_open_connection", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("db down"))
+        user_mod,
+        "_open_connection",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("db down")),
     )
     with pytest.raises(typer.Exit) as exc:
         user_mod.user_set_password(Environment.dev, "alice", "secret")
@@ -227,7 +245,9 @@ def test_user_delete_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exc.value.exit_code == 1
 
     monkeypatch.setattr(
-        user_mod, "_open_connection", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("db down"))
+        user_mod,
+        "_open_connection",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("db down")),
     )
     with pytest.raises(typer.Exit) as exc:
         user_mod.user_delete(Environment.dev, "alice", True)
@@ -384,7 +404,9 @@ def test_runtime_get_db_requires_env_name() -> None:
         runtime_mod.get_db("/tmp/tapdb-config.yaml", "")
 
 
-def test_runtime_clear_cache_logs_dispose_errors(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+def test_runtime_clear_cache_logs_dispose_errors(
+    monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
     class _Engine:
         def dispose(self) -> None:
             raise RuntimeError("dispose boom")
@@ -405,7 +427,9 @@ def test_runtime_clear_cache_logs_dispose_errors(monkeypatch: pytest.MonkeyPatch
     assert runtime_mod._bundles == {}
 
 
-def test_pg_socket_dir_prefers_configured_value(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pg_socket_dir_prefers_configured_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         pg_mod,
         "get_db_config_for_env",
@@ -422,7 +446,9 @@ def test_pg_active_env_invalid_defaults_to_dev(monkeypatch: pytest.MonkeyPatch) 
     assert pg_mod._active_env() == Environment.dev
 
 
-def test_pg_get_pg_service_cmd_linux_and_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pg_get_pg_service_cmd_linux_and_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(pg_mod.platform, "system", lambda: "Linux")
 
     def _linux_systemd(path_self) -> bool:
@@ -444,13 +470,19 @@ def test_pg_get_pg_service_cmd_linux_and_unknown(monkeypatch: pytest.MonkeyPatch
 
 
 def test_pg_is_pg_running_exception_branch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pg_mod.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        pg_mod.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
     assert pg_mod._is_pg_running() == (False, "boom")
 
 
 def test_pg_start_unknown_service_and_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pg_mod, "_is_pg_running", lambda: (False, ""))
-    monkeypatch.setattr(pg_mod, "_get_pg_service_cmd", lambda: ("unknown", [], [], Path()))
+    monkeypatch.setattr(
+        pg_mod, "_get_pg_service_cmd", lambda: ("unknown", [], [], Path())
+    )
 
     with pytest.raises(typer.Exit) as exc:
         pg_mod.pg_start()
@@ -482,19 +514,25 @@ def test_pg_start_unknown_service_and_failure(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         pg_mod.subprocess,
         "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=1, stderr="cannot start", stdout=""),
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1, stderr="cannot start", stdout=""
+        ),
     )
     with pytest.raises(typer.Exit) as exc:
         pg_mod.pg_start()
     assert exc.value.exit_code == 1
 
 
-def test_pg_stop_status_logs_and_restart(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_pg_stop_status_logs_and_restart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(pg_mod, "_is_pg_running", lambda: (False, ""))
     pg_mod.pg_stop()
 
     monkeypatch.setattr(pg_mod, "_is_pg_running", lambda: (True, "16"))
-    monkeypatch.setattr(pg_mod, "_get_pg_service_cmd", lambda: ("unknown", [], [], Path()))
+    monkeypatch.setattr(
+        pg_mod, "_get_pg_service_cmd", lambda: ("unknown", [], [], Path())
+    )
     with pytest.raises(typer.Exit) as exc:
         pg_mod.pg_stop()
     assert exc.value.exit_code == 1
@@ -531,10 +569,18 @@ def test_pg_stop_status_logs_and_restart(monkeypatch: pytest.MonkeyPatch, tmp_pa
         "get_db_config_for_env",
         lambda _env: {"host": "localhost", "port": "5533", "user": "tapdb"},
     )
-    monkeypatch.setattr(pg_mod, "_get_postgres_data_dir", lambda _env: Path("/tmp/data"))
-    monkeypatch.setattr(pg_mod, "_get_postgres_log_file", lambda _env: Path("/tmp/postgresql.log"))
-    monkeypatch.setattr(pg_mod, "_get_postgres_socket_dir", lambda _env: Path("/tmp/socket"))
-    monkeypatch.setattr(pg_mod, "_get_instance_lock_file", lambda _env: Path("/tmp/instance.lock"))
+    monkeypatch.setattr(
+        pg_mod, "_get_postgres_data_dir", lambda _env: Path("/tmp/data")
+    )
+    monkeypatch.setattr(
+        pg_mod, "_get_postgres_log_file", lambda _env: Path("/tmp/postgresql.log")
+    )
+    monkeypatch.setattr(
+        pg_mod, "_get_postgres_socket_dir", lambda _env: Path("/tmp/socket")
+    )
+    monkeypatch.setattr(
+        pg_mod, "_get_instance_lock_file", lambda _env: Path("/tmp/instance.lock")
+    )
     monkeypatch.setattr(
         pg_mod,
         "resolve_context",
@@ -549,7 +595,9 @@ def test_pg_stop_status_logs_and_restart(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     log_file = tmp_path / "postgresql.log"
     log_file.write_text("line-1\nline-2\nline-3\n", encoding="utf-8")
-    monkeypatch.setattr(pg_mod, "_get_pg_service_cmd", lambda: ("unknown", [], [], Path("/missing.log")))
+    monkeypatch.setattr(
+        pg_mod, "_get_pg_service_cmd", lambda: ("unknown", [], [], Path("/missing.log"))
+    )
     monkeypatch.setattr(pg_mod, "_active_env", lambda: Environment.dev)
     monkeypatch.setattr(pg_mod, "_get_postgres_log_file", lambda _env: log_file)
     pg_mod.pg_logs(False, 2)
@@ -661,11 +709,17 @@ def test_pg_init_start_local_and_stop_local_branches(
     monkeypatch.setattr(
         pg_mod.subprocess,
         "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=1, stderr="could not stop", stdout=""),
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1, stderr="could not stop", stdout=""
+        ),
     )
     pg_mod.pg_stop_local(Environment.dev)
 
-    monkeypatch.setattr(pg_mod.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        pg_mod.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
     with pytest.raises(typer.Exit) as exc:
         pg_mod.pg_stop_local(Environment.dev)
     assert exc.value.exit_code == 1

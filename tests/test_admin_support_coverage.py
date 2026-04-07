@@ -24,7 +24,10 @@ def _signed_cookie(secret: str, payload: dict) -> str:
 
 
 def test_domain_access_helpers_cover_allowed_hosts_and_origins():
-    assert domain_mod._normalize_host("https://user@example.lsmc.bio:8443/path") == "example.lsmc.bio"
+    assert (
+        domain_mod._normalize_host("https://user@example.lsmc.bio:8443/path")
+        == "example.lsmc.bio"
+    )
     assert domain_mod._normalize_host(" [::1]:8911 ") == "::1"
     assert domain_mod._normalize_host("") == ""
 
@@ -34,9 +37,17 @@ def test_domain_access_helpers_cover_allowed_hosts_and_origins():
     assert domain_mod.is_allowed_host("127.0.0.1", allow_local=True) is True
     assert domain_mod.is_allowed_host("127.0.0.1", allow_local=False) is False
 
-    assert domain_mod.is_allowed_origin("https://portal.lsmc.bio", allow_local=False) is True
-    assert domain_mod.is_allowed_origin("http://localhost:8911", allow_local=True) is True
-    assert domain_mod.is_allowed_origin("http://portal.lsmc.bio", allow_local=False) is False
+    assert (
+        domain_mod.is_allowed_origin("https://portal.lsmc.bio", allow_local=False)
+        is True
+    )
+    assert (
+        domain_mod.is_allowed_origin("http://localhost:8911", allow_local=True) is True
+    )
+    assert (
+        domain_mod.is_allowed_origin("http://portal.lsmc.bio", allow_local=False)
+        is False
+    )
     assert domain_mod.is_allowed_origin("notaurl", allow_local=True) is False
 
     assert domain_mod.validate_allowed_origins(
@@ -44,7 +55,9 @@ def test_domain_access_helpers_cover_allowed_hosts_and_origins():
         allow_local=True,
     ) == ["https://portal.lsmc.bio", "http://localhost:8911"]
     with pytest.raises(ValueError, match="outside the approved allowlist"):
-        domain_mod.validate_allowed_origins(["https://evil.example.com"], allow_local=False)
+        domain_mod.validate_allowed_origins(
+            ["https://evil.example.com"], allow_local=False
+        )
 
     trusted_hosts = domain_mod.build_trusted_hosts(allow_local=True)
     assert "localhost" in trusted_hosts
@@ -63,9 +76,22 @@ def test_db_metrics_helpers_cover_parse_extract_tail_and_summary(tmp_path, monke
     assert metrics_mod._sanitize_tsv("a\tb\nc") == "a b c"
     assert metrics_mod._extract_op("UPDATE foo SET name='x'") == "UPDATE"
     assert metrics_mod._extract_op("VACUUM") == "OTHER"
-    assert metrics_mod._extract_table_hint('SELECT * FROM "generic_instance"', "SELECT") == "generic_instance"
-    assert metrics_mod._extract_table_hint("INSERT INTO public.generic_template VALUES (1)", "INSERT") == "public.generic_template"
-    assert metrics_mod._extract_table_hint("DELETE FROM generic_instance WHERE uid=1", "DELETE") == "generic_instance"
+    assert (
+        metrics_mod._extract_table_hint('SELECT * FROM "generic_instance"', "SELECT")
+        == "generic_instance"
+    )
+    assert (
+        metrics_mod._extract_table_hint(
+            "INSERT INTO public.generic_template VALUES (1)", "INSERT"
+        )
+        == "public.generic_template"
+    )
+    assert (
+        metrics_mod._extract_table_hint(
+            "DELETE FROM generic_instance WHERE uid=1", "DELETE"
+        )
+        == "generic_instance"
+    )
     assert metrics_mod._extract_table_hint("bad sql", "UPDATE") == ""
 
     monkeypatch.setattr(metrics_mod, "active_env_name", lambda default="dev": "DEV")
@@ -101,11 +127,15 @@ def test_db_metrics_helpers_cover_parse_extract_tail_and_summary(tmp_path, monke
         "2026-04-07T10:01:00+00:00\t9.5\t0\tUPDATE\tgeneric_template\t/info\tGET\tadmin\t\tValueError\n",
         encoding="utf-8",
     )
-    assert metrics_mod._tail_lines(metrics_file, max_lines=2)[0].startswith("2026-04-07T10:00:00")
+    assert metrics_mod._tail_lines(metrics_file, max_lines=2)[0].startswith(
+        "2026-04-07T10:00:00"
+    )
     assert metrics_mod._tail_lines(metrics_file, max_lines=0) == []
     assert metrics_mod._tail_lines(tmp_path / "missing.tsv", max_lines=5) == []
 
-    monkeypatch.setattr(metrics_mod, "current_metrics_path", lambda env_name, now_utc=None: metrics_file)
+    monkeypatch.setattr(
+        metrics_mod, "current_metrics_path", lambda env_name, now_utc=None: metrics_file
+    )
     rows = metrics_mod.read_recent_metrics("dev", max_lines=10)
     assert rows[0]["ok"] is True
     assert rows[1]["error_type"] == "ValueError"
@@ -151,21 +181,33 @@ def test_db_metrics_writer_cache_and_engine_metrics_callbacks(monkeypatch):
             self.stopped += 1
 
     monkeypatch.setattr(metrics_mod, "metrics_enabled", lambda: True)
-    monkeypatch.setattr(metrics_mod, "TSVMetricsWriter", lambda env_name: created.append(_FakeWriter(env_name)) or created[-1])
+    monkeypatch.setattr(
+        metrics_mod,
+        "TSVMetricsWriter",
+        lambda env_name: created.append(_FakeWriter(env_name)) or created[-1],
+    )
     writer1 = metrics_mod._get_writer("DEV")
     writer2 = metrics_mod._get_writer("dev")
     assert writer1 is writer2
     assert metrics_mod.get_dropped_count("dev") == 11
 
     listeners = {}
-    monkeypatch.setattr(metrics_mod.event, "listen", lambda _engine, name, fn: listeners.setdefault(name, fn))
+    monkeypatch.setattr(
+        metrics_mod.event,
+        "listen",
+        lambda _engine, name, fn: listeners.setdefault(name, fn),
+    )
     writer = _FakeWriter("dev")
     monkeypatch.setattr(metrics_mod, "_get_writer", lambda env_name: writer)
     metrics_mod._installed_engine_ids.clear()
     engine = object()
     metrics_mod.maybe_install_engine_metrics(engine, env_name="dev")
     metrics_mod.maybe_install_engine_metrics(engine, env_name="dev")
-    assert set(listeners) == {"before_cursor_execute", "after_cursor_execute", "handle_error"}
+    assert set(listeners) == {
+        "before_cursor_execute",
+        "after_cursor_execute",
+        "handle_error",
+    }
 
     conn = SimpleNamespace(info={})
     cursor = SimpleNamespace(rowcount=4)
@@ -173,9 +215,13 @@ def test_db_metrics_writer_cache_and_engine_metrics_callbacks(monkeypatch):
     token_method = metrics_mod.request_method_var.set("GET")
     token_user = metrics_mod.db_username_var.set("admin")
     try:
-        listeners["before_cursor_execute"](conn, cursor, "SELECT * FROM generic_instance", None, None, False)
+        listeners["before_cursor_execute"](
+            conn, cursor, "SELECT * FROM generic_instance", None, None, False
+        )
         listeners["after_cursor_execute"](conn, cursor, "", None, None, False)
-        listeners["before_cursor_execute"](conn, cursor, "UPDATE generic_template SET name='x'", None, None, False)
+        listeners["before_cursor_execute"](
+            conn, cursor, "UPDATE generic_template SET name='x'", None, None, False
+        )
         listeners["handle_error"](
             SimpleNamespace(
                 connection=conn,
@@ -232,7 +278,11 @@ def test_auth_helpers_cover_disabled_and_shared_auth(monkeypatch):
     }
 
     monkeypatch.setattr(auth_mod, "_shared_auth_enabled", lambda: True)
-    monkeypatch.setattr(auth_mod, "_extract_bloom_user", lambda _request: {"email": "shared@example.com", "role": "admin"})
+    monkeypatch.setattr(
+        auth_mod,
+        "_extract_bloom_user",
+        lambda _request: {"email": "shared@example.com", "role": "admin"},
+    )
     monkeypatch.setattr(auth_mod, "get_user_by_username", lambda _username: None)
     monkeypatch.setattr(
         auth_mod,
@@ -269,11 +319,24 @@ def test_auth_database_and_cognito_helpers_cover_error_paths(monkeypatch):
 
             return _Scope()
 
-    session_user = SimpleNamespace(to_session_user=lambda: {"uid": 7, "username": "alice@example.com"})
+    session_user = SimpleNamespace(
+        to_session_user=lambda: {"uid": 7, "username": "alice@example.com"}
+    )
     monkeypatch.setattr(auth_mod, "get_db", lambda: _Conn())
-    monkeypatch.setattr(auth_mod, "get_by_login_or_email", lambda _session, _username, include_inactive=False: session_user)
-    monkeypatch.setattr(auth_mod, "get_actor_user_by_uid", lambda _session, _uid, include_inactive=False: session_user)
-    assert auth_mod.get_user_by_username("alice@example.com") == {"uid": 7, "username": "alice@example.com"}
+    monkeypatch.setattr(
+        auth_mod,
+        "get_by_login_or_email",
+        lambda _session, _username, include_inactive=False: session_user,
+    )
+    monkeypatch.setattr(
+        auth_mod,
+        "get_actor_user_by_uid",
+        lambda _session, _uid, include_inactive=False: session_user,
+    )
+    assert auth_mod.get_user_by_username("alice@example.com") == {
+        "uid": 7,
+        "username": "alice@example.com",
+    }
     assert auth_mod.get_user_by_uid(7) == {"uid": 7, "username": "alice@example.com"}
 
     monkeypatch.setattr(
@@ -282,7 +345,10 @@ def test_auth_database_and_cognito_helpers_cover_error_paths(monkeypatch):
         lambda _session, **kwargs: (
             SimpleNamespace(
                 is_active=False,
-                to_session_user=lambda: {"uid": 8, "username": kwargs["login_identifier"]},
+                to_session_user=lambda: {
+                    "uid": 8,
+                    "username": kwargs["login_identifier"],
+                },
             ),
             True,
         ),
@@ -343,7 +409,9 @@ def test_auth_database_and_cognito_helpers_cover_error_paths(monkeypatch):
         "email": "alice@example.com",
         "password": "pw",
     }
-    assert auth_mod.respond_to_new_password_challenge("alice@example.com", "new", "sess") == {
+    assert auth_mod.respond_to_new_password_challenge(
+        "alice@example.com", "new", "sess"
+    ) == {
         "email": "alice@example.com",
         "new_password": "new",
         "session": "sess",
@@ -351,14 +419,26 @@ def test_auth_database_and_cognito_helpers_cover_error_paths(monkeypatch):
     auth_mod.change_cognito_password("token", "old", "new")
     assert calls[-1][0] == "change-password"
 
-    monkeypatch.setattr(auth_mod, "set_last_login", lambda _session, user_uid: calls.append(("last-login", user_uid)))
+    monkeypatch.setattr(
+        auth_mod,
+        "set_last_login",
+        lambda _session, user_uid: calls.append(("last-login", user_uid)),
+    )
     auth_mod.update_last_login(11)
     assert calls[-1] == ("last-login", 11)
-    assert auth_mod._tapdb_base_path(SimpleNamespace(scope={"root_path": "/tapdb/"})) == "/tapdb"
-    assert auth_mod._tapdb_url(SimpleNamespace(scope={"root_path": "/tapdb"}), "/login") == "/tapdb/login"
+    assert (
+        auth_mod._tapdb_base_path(SimpleNamespace(scope={"root_path": "/tapdb/"}))
+        == "/tapdb"
+    )
+    assert (
+        auth_mod._tapdb_url(SimpleNamespace(scope={"root_path": "/tapdb"}), "/login")
+        == "/tapdb/login"
+    )
 
 
-def test_db_pool_helpers_cover_engine_build_session_scope_and_dispose(monkeypatch, caplog):
+def test_db_pool_helpers_cover_engine_build_session_scope_and_dispose(
+    monkeypatch, caplog
+):
     assert pool_mod._parse_bool("yes", default=False) is True
     assert pool_mod._parse_bool("wat", default=True) is True
     assert pool_mod._audit_username_for_session("") == "unknown"
@@ -401,7 +481,10 @@ def test_db_pool_helpers_cover_engine_build_session_scope_and_dispose(monkeypatc
     )
     conn = pool_mod.AdminDBConnection(bundle)
     conn.app_username = "admin"
-    monkeypatch.setattr("admin.db_metrics.db_username_var", SimpleNamespace(set=lambda value: value, reset=lambda token: None))
+    monkeypatch.setattr(
+        "admin.db_metrics.db_username_var",
+        SimpleNamespace(set=lambda value: value, reset=lambda token: None),
+    )
 
     with conn.session_scope(commit=True) as active:
         assert active is session
@@ -413,17 +496,23 @@ def test_db_pool_helpers_cover_engine_build_session_scope_and_dispose(monkeypatc
     assert "Could not set session audit username" in caplog.text
 
     captured = {}
-    monkeypatch.setattr(pool_mod, "_admin_settings", lambda _env: {
-        "db_pool_size": 8,
-        "db_max_overflow": 2,
-        "db_pool_timeout": 11,
-        "db_pool_recycle": 22,
-    })
+    monkeypatch.setattr(
+        pool_mod,
+        "_admin_settings",
+        lambda _env: {
+            "db_pool_size": 8,
+            "db_max_overflow": 2,
+            "db_pool_timeout": 11,
+            "db_pool_recycle": 22,
+        },
+    )
     monkeypatch.setattr(
         pool_mod,
         "create_engine",
-        lambda url, **kwargs: captured.setdefault("calls", []).append((url, kwargs))
-        or SimpleNamespace(dispose=lambda: None),
+        lambda url, **kwargs: (
+            captured.setdefault("calls", []).append((url, kwargs))
+            or SimpleNamespace(dispose=lambda: None)
+        ),
     )
     pool_mod._create_engine(
         pool_mod.URL.create("postgresql+psycopg2", username="tapdb", host="db"),
@@ -433,8 +522,16 @@ def test_db_pool_helpers_cover_engine_build_session_scope_and_dispose(monkeypatc
     assert captured["calls"][0][1]["pool_size"] == 8
 
     listeners = {}
-    monkeypatch.setattr(pool_mod.event, "listen", lambda _engine, name, fn, **_kwargs: listeners.setdefault(name, fn))
-    monkeypatch.setattr(pool_mod.AuroraConnectionBuilder, "get_iam_auth_token", lambda **_kwargs: "iam-token")
+    monkeypatch.setattr(
+        pool_mod.event,
+        "listen",
+        lambda _engine, name, fn, **_kwargs: listeners.setdefault(name, fn),
+    )
+    monkeypatch.setattr(
+        pool_mod.AuroraConnectionBuilder,
+        "get_iam_auth_token",
+        lambda **_kwargs: "iam-token",
+    )
     pool_mod._attach_aurora_password_provider(
         SimpleNamespace(),
         region="us-west-2",
@@ -452,8 +549,10 @@ def test_db_pool_helpers_cover_engine_build_session_scope_and_dispose(monkeypatc
     monkeypatch.setattr(
         pool_mod,
         "_create_engine",
-        lambda url, *, echo_sql, env_name: captured.setdefault("built", []).append((url, echo_sql, env_name))
-        or SimpleNamespace(dispose=lambda: None),
+        lambda url, *, echo_sql, env_name: (
+            captured.setdefault("built", []).append((url, echo_sql, env_name))
+            or SimpleNamespace(dispose=lambda: None)
+        ),
     )
     monkeypatch.setattr(
         pool_mod.AuroraConnectionBuilder,
@@ -494,15 +593,24 @@ def test_db_pool_helpers_cover_engine_build_session_scope_and_dispose(monkeypatc
             "password": "",
         },
     )
-    monkeypatch.setattr(pool_mod, "_build_engine_for_cfg", lambda cfg, *, env_name: sa_create_engine("sqlite://"))
-    monkeypatch.setattr("admin.db_metrics.maybe_install_engine_metrics", lambda engine, env_name: captured.setdefault("metrics", []).append(env_name))
+    monkeypatch.setattr(
+        pool_mod,
+        "_build_engine_for_cfg",
+        lambda cfg, *, env_name: sa_create_engine("sqlite://"),
+    )
+    monkeypatch.setattr(
+        "admin.db_metrics.maybe_install_engine_metrics",
+        lambda engine, env_name: captured.setdefault("metrics", []).append(env_name),
+    )
     pool_mod._clear_engine_cache_for_tests()
     bundle = pool_mod.get_engine_bundle("DEV")
     assert bundle.env_name == "dev"
     assert captured["metrics"] == ["dev"]
     assert isinstance(pool_mod.get_db_connection("dev"), pool_mod.AdminDBConnection)
 
-    bad_engine = SimpleNamespace(dispose=lambda: (_ for _ in ()).throw(RuntimeError("dispose failed")))
+    bad_engine = SimpleNamespace(
+        dispose=lambda: (_ for _ in ()).throw(RuntimeError("dispose failed"))
+    )
     pool_mod._bundles_by_env["bad"] = pool_mod.EngineBundle(
         env_name="bad",
         engine=bad_engine,
