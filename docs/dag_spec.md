@@ -1,5 +1,7 @@
 # TapDB DAG Contract
 
+This contract lives in the `tapdb-core` repository. The Python import package remains `daylily_tapdb`.
+
 This document defines `dag:v1`, the canonical cross-service DAG contract for
 TapDB-backed services and graph aggregators such as Kahlo.
 

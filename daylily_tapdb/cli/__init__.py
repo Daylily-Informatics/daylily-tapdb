@@ -1,6 +1,7 @@
 """CLI entry point for daylily-tapdb."""
 
 import importlib.util
+import inspect
 import json
 import os
 import secrets
@@ -1796,28 +1797,84 @@ except Exception:
     app = None
 
 
+def _default_command_policy():
+    try:
+        from cli_core_yo.spec import CommandPolicy
+    except ImportError:
+        return None
+    return CommandPolicy()
+
+
+def _registry_add_command(
+    *, registry, group_path, name, callback, help_text: str
+) -> None:
+    kwargs = {
+        "group_path": group_path,
+        "name": name,
+        "callback": callback,
+        "help_text": help_text,
+    }
+    try:
+        add_command_params = inspect.signature(registry.add_command).parameters
+    except (TypeError, ValueError):
+        add_command_params = {}
+    if "policy" in add_command_params:
+        policy = _default_command_policy()
+        if policy is not None:
+            kwargs["policy"] = policy
+    registry.add_command(**kwargs)
+
+
+def _register_typer_group(registry, group, *, parent_path: str | None = None) -> None:
+    group_name = group.name or group.typer_instance.info.name
+    if parent_path is None and group_name == "config":
+        group_name = "db-config"
+    group_help = group.help or group.typer_instance.info.help or ""
+    group_path = group_name if parent_path is None else f"{parent_path}/{group_name}"
+
+    if parent_path is None and hasattr(registry, "add_group"):
+        registry.add_group(group_name, help_text=group_help)
+
+    for cmd in getattr(group.typer_instance, "registered_commands", []):
+        cmd_name = cmd.name or cmd.callback.__name__.replace("_", "-")
+        _registry_add_command(
+            registry=registry,
+            group_path=group_path,
+            name=cmd_name,
+            callback=cmd.callback,
+            help_text=cmd.help or "",
+        )
+
+    for nested_group in getattr(group.typer_instance, "registered_groups", []):
+        _register_typer_group(registry, nested_group, parent_path=group_path)
+
+
 def register(registry, spec) -> None:
     cli_app = app or build_app()
     for cmd in getattr(cli_app, "registered_commands", []):
         cmd_name = cmd.name or cmd.callback.__name__.replace("_", "-")
         if cmd_name in ("version", "info", "config"):
             continue
-        registry.add_command(
+        _registry_add_command(
+            registry=registry,
             group_path=None,
             name=cmd_name,
             callback=cmd.callback,
             help_text=cmd.help or "",
         )
     for group in getattr(cli_app, "registered_groups", []):
-        group_name = group.name or group.typer_instance.info.name
-        if group_name == "config":
-            group_name = "db-config"
-        registry.add_typer_app(
-            group_path=None,
-            typer_app=group.typer_instance,
-            name=group_name,
-            help_text=group.help or group.typer_instance.info.help or "",
-        )
+        if hasattr(registry, "add_typer_app"):
+            group_name = group.name or group.typer_instance.info.name
+            if group_name == "config":
+                group_name = "db-config"
+            registry.add_typer_app(
+                group_path=None,
+                typer_app=group.typer_instance,
+                name=group_name,
+                help_text=group.help or group.typer_instance.info.help or "",
+            )
+            continue
+        _register_typer_group(registry, group)
 
 
 def main():
