@@ -4,7 +4,6 @@ import base64
 import json
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -262,10 +261,10 @@ def test_auth_database_and_cognito_helpers_cover_error_paths(monkeypatch):
 
         def session_scope(self, commit=False):
             class _Scope:
-                def __enter__(self_inner):
+                def __enter__(self):
                     return SimpleNamespace()
 
-                def __exit__(self_inner, exc_type, exc, tb):
+                def __exit__(self, exc_type, exc, tb):
                     return False
 
             return _Scope()
@@ -297,13 +296,17 @@ def test_auth_database_and_cognito_helpers_cover_error_paths(monkeypatch):
 
     calls = []
 
-    class _Cognito:
-        class exceptions:
-            class UsernameExistsException(Exception):
-                pass
+    class UsernameExistsError(Exception):
+        pass
 
-            class InvalidPasswordException(Exception):
-                pass
+    class InvalidPasswordError(Exception):
+        pass
+
+    class _Cognito:
+        exceptions = SimpleNamespace(
+            UsernameExistsException=UsernameExistsError,
+            InvalidPasswordException=InvalidPasswordError,
+        )
 
         def __init__(self):
             self.calls = calls

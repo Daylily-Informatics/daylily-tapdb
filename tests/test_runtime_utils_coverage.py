@@ -16,9 +16,9 @@ import daylily_tapdb.cli.admin_server as admin_server_mod
 import daylily_tapdb.outbox.inbox as inbox_mod
 import daylily_tapdb.outbox.queries as outbox_queries_mod
 import daylily_tapdb.stats as stats_mod
+import daylily_tapdb.web as web_mod
 import daylily_tapdb.web.factory as web_factory_mod
 import daylily_tapdb.web.runtime as runtime_mod
-import daylily_tapdb.web as web_mod
 from daylily_tapdb.web.bridge import TapdbHostBridge
 
 

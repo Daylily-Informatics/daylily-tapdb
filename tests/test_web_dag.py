@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
-
 from daylily_tapdb.web.dag import (
     CONTRACT_VERSION,
     build_dag_capability_advertisement,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from daylily_tapdb.cli.context import resolve_context
@@ -16,6 +18,7 @@ from daylily_tapdb.services.graph_payloads import (
     build_object_detail_payload,
 )
 from daylily_tapdb.services.object_lookup import find_object_by_euid
+
 from . import runtime as dag_runtime
 
 CONTRACT_VERSION = "dag:v1"

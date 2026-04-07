@@ -32,10 +32,10 @@ class _FakeConn:
         self.sessions.append(session)
 
         class _Scope:
-            def __enter__(self_inner):
+            def __enter__(self):
                 return session
 
-            def __exit__(self_inner, exc_type, exc, tb):
+            def __exit__(self, exc_type, exc, tb):
                 return False
 
         return _Scope()

@@ -72,12 +72,16 @@ from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.services.external_refs import (
     external_ref_payloads as _shared_external_ref_payloads,
+)
+from daylily_tapdb.services.external_refs import (
     fetch_remote_graph,
     fetch_remote_object_detail,
     get_external_ref_by_index,
     namespace_external_graph,
 )
-from daylily_tapdb.services.object_lookup import find_object_by_euid as _shared_find_object_by_euid
+from daylily_tapdb.services.object_lookup import (
+    find_object_by_euid as _shared_find_object_by_euid,
+)
 from daylily_tapdb.web.bridge import resolve_host_context, resolve_host_shell
 
 # Logging setup

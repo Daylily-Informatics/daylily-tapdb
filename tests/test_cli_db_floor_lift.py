@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,12 +38,13 @@ class _FakeConn:
 
     def session_scope(self, commit: bool = False):
         _ = commit
+        session = self.session
 
         class _Scope:
-            def __enter__(self_inner):
-                return self.session
+            def __enter__(self):
+                return session
 
-            def __exit__(self_inner, exc_type, exc, tb):
+            def __exit__(self, exc_type, exc, tb):
                 return False
 
         return _Scope()
@@ -650,7 +650,7 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         db_mod.db_validate_config(config_path=None, strict=True, json_output=False)
     assert exc.value.exit_code == 1
 
-    Issue = SimpleNamespace
+    issue_type = SimpleNamespace
     monkeypatch.setattr(db_mod, "_resolve_seed_config_dirs", lambda _path: [tmp_path])
     monkeypatch.setattr(
         db_mod,
@@ -658,8 +658,8 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         lambda *_args, **_kwargs: (
             [],
             [
-                Issue(level="error", message="bad template", source_file="a.json", template_code="generic/a"),
-                Issue(level="warning", message="warn template", source_file="b.json", template_code="generic/b"),
+                issue_type(level="error", message="bad template", source_file="a.json", template_code="generic/a"),
+                issue_type(level="warning", message="warn template", source_file="b.json", template_code="generic/b"),
             ],
         ),
     )
@@ -724,13 +724,13 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         db_mod.db_seed(db_mod.Environment.dev, config_path=None, include_workflow=False, skip_existing=True, dry_run=False)
     assert exc.value.exit_code == 1
 
-    Issue = SimpleNamespace
+    issue_type = SimpleNamespace
     monkeypatch.setattr(
         db_mod,
         "_validate_template_configs",
         lambda *_args, **_kwargs: (
             [],
-            [Issue(level="error", message="bad template", source_file="a.json", template_code="generic/a")],
+            [issue_type(level="error", message="bad template", source_file="a.json", template_code="generic/a")],
         ),
     )
     monkeypatch.setattr(db_mod, "_schema_exists", lambda _env: True)

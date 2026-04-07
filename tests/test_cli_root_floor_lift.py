@@ -505,7 +505,7 @@ def test_ui_mkcert_stop_logs_restart_and_bootstrap(
     assert "No log file found" in _strip(result.output)
 
     fresh_app = cli_mod.build_app()
-    ctx = cli_mod._require_context(env_name="dev")
+    cli_mod._require_context(env_name="dev")
     _, log_file, _ = cli_mod._ui_runtime_paths("dev")
     log_file.parent.mkdir(parents=True, exist_ok=True)
     log_file.write_text("line-1\nline-2\n", encoding="utf-8")
