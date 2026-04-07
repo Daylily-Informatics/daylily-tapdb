@@ -8,7 +8,10 @@ from fastapi.testclient import TestClient
 from jinja2 import Environment, FileSystemLoader
 
 from daylily_tapdb.web.bridge import TapdbHostBridge, TapdbHostNavLink
-from daylily_tapdb.web.factory import TapdbHostBridgeMount, _configure_template_environment
+from daylily_tapdb.web.factory import (
+    TapdbHostBridgeMount,
+    _configure_template_environment,
+)
 
 
 def test_configure_template_environment_prefers_host_overrides(tmp_path: Path) -> None:
