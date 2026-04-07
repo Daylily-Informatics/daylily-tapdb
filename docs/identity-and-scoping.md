@@ -1,7 +1,7 @@
 # TAPDB Identity and Scoping
 
 TAPDB has five different identity or scope concepts that often get conflated:
-`uid`, `euid`, `domain_code`, `issuer_app_code`, and `tenant_id`.
+`uid`, `euid`, `domain_code`, `issuer_app_code`, `machine_uuid`, and `tenant_id`.
 
 The short version is:
 
@@ -9,6 +9,7 @@ The short version is:
 - `euid` is the external Meridian identifier used for labels, URLs, and human-facing references.
 - `domain_code` scopes data and issuance to a Meridian domain namespace.
 - `issuer_app_code` scopes issuance and row-level filtering to the application that minted or handled the row.
+- `machine_uuid` is a `uuidv7` identifer for use in non-human parsing/communicating domains.
 - `tenant_id` scopes data to a tenant and is independent from Meridian identity.
 
 TAPDB is intentionally built so that the external identifier is opaque. The
