@@ -19,12 +19,32 @@ function tapdbUrl(path) {
 }
 
 let cy = null;
+window.cy = null;
 let keyboardHandlersInstalled = false;
+let controlsBound = false;
 let pendingLineageChildId = null;
+let neighborhoodAnchorId = null;
+let neighborhoodDepth = 1;
+let currentGraphMeta = {};
 const tapTracker = new Map();
+const STORAGE_KEY = 'tapdb_graph_controls_v1';
 const keyState = {
     d: false,
     l: false,
+    n: false,
+};
+const DEFAULT_CONTROL_STATE = {
+    layout: 'dagre',
+    edgeThreshold: 1,
+    distance: 0,
+    searchQuery: '',
+    hiddenTypes: {},
+    mutedSubtypes: {},
+};
+let controlState = {
+    ...DEFAULT_CONTROL_STATE,
+    hiddenTypes: {},
+    mutedSubtypes: {},
 };
 
 const TAP_SEQUENCE_MS = 700;
@@ -52,8 +72,9 @@ const cytoscapeStyle = [
             'shadow-color': '#000',
             'shadow-opacity': 0.25,
             'shadow-blur': 4,
-            'transition-property': 'background-color, border-color, border-width, shadow-color, shadow-opacity, shadow-blur',
+            'transition-property': 'background-color, border-color, border-width, shadow-color, shadow-opacity, shadow-blur, opacity',
             'transition-duration': '420ms',
+            'opacity': 1,
         }
     },
     {
@@ -97,6 +118,38 @@ const cytoscapeStyle = [
         }
     },
     {
+        selector: 'node.neighborhood-glow',
+        style: {
+            'border-color': '#f7c948',
+            'border-width': '5px',
+            'shadow-color': '#f7c948',
+            'shadow-opacity': 0.9,
+            'shadow-blur': 20,
+        }
+    },
+    {
+        selector: 'node.search-match',
+        style: {
+            'border-color': '#8be9fd',
+            'border-width': '5px',
+            'shadow-color': '#8be9fd',
+            'shadow-opacity': 0.8,
+            'shadow-blur': 16,
+        }
+    },
+    {
+        selector: 'node.transparent, edge.transparent',
+        style: {
+            'opacity': 0.14,
+        }
+    },
+    {
+        selector: 'node.subtype-muted, edge.subtype-muted',
+        style: {
+            'opacity': 0.24,
+        }
+    },
+    {
         selector: 'node[is_external]',
         style: {
             'border-style': 'dashed',
@@ -120,6 +173,7 @@ const cytoscapeStyle = [
             'target-endpoint': 'outside-to-node',
             'target-distance-from-node': 6,
             'arrow-scale': 1.6,
+            'opacity': 1,
         }
     },
     {
@@ -161,6 +215,163 @@ function setStatus(message, level = '') {
     }
 }
 
+function getNodeType(node) {
+    return node.data('type') || node.data('obj_type') || 'unknown';
+}
+
+function getNodeSubtype(node) {
+    return node.data('subtype') || 'unknown';
+}
+
+function loadPersistedControls() {
+    try {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (!raw) {
+            return;
+        }
+        const parsed = JSON.parse(raw);
+        controlState = {
+            ...DEFAULT_CONTROL_STATE,
+            ...parsed,
+            hiddenTypes: { ...(parsed.hiddenTypes || {}) },
+            mutedSubtypes: { ...(parsed.mutedSubtypes || {}) },
+        };
+    } catch (_err) {
+        controlState = {
+            ...DEFAULT_CONTROL_STATE,
+            hiddenTypes: {},
+            mutedSubtypes: {},
+        };
+    }
+}
+
+function persistControls() {
+    try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(controlState));
+    } catch (_err) {
+        // Best effort only.
+    }
+}
+
+function applyControlStateToUI() {
+    const layoutEl = document.getElementById('layout-select');
+    const transparencyEl = document.getElementById('transparency-slider');
+    const distanceEl = document.getElementById('distance-slider');
+    const searchEl = document.getElementById('search-query');
+    const transparencyDisplay = document.getElementById('transparency-display');
+    const distanceDisplay = document.getElementById('distance-display');
+
+    if (layoutEl) {
+        layoutEl.value = controlState.layout || DEFAULT_CONTROL_STATE.layout;
+    }
+    if (transparencyEl) {
+        transparencyEl.value = String(controlState.edgeThreshold ?? DEFAULT_CONTROL_STATE.edgeThreshold);
+    }
+    if (distanceEl) {
+        distanceEl.value = String(controlState.distance ?? DEFAULT_CONTROL_STATE.distance);
+    }
+    if (searchEl) {
+        searchEl.value = controlState.searchQuery || '';
+    }
+    if (transparencyDisplay) {
+        transparencyDisplay.textContent = String(controlState.edgeThreshold ?? DEFAULT_CONTROL_STATE.edgeThreshold);
+    }
+    if (distanceDisplay) {
+        distanceDisplay.textContent = String(controlState.distance ?? DEFAULT_CONTROL_STATE.distance);
+    }
+}
+
+function syncControlStateFromUI() {
+    const layoutEl = document.getElementById('layout-select');
+    const transparencyEl = document.getElementById('transparency-slider');
+    const distanceEl = document.getElementById('distance-slider');
+    const searchEl = document.getElementById('search-query');
+
+    if (layoutEl) {
+        controlState.layout = layoutEl.value || DEFAULT_CONTROL_STATE.layout;
+    }
+    if (transparencyEl) {
+        controlState.edgeThreshold = Number.parseInt(transparencyEl.value, 10) || 0;
+    }
+    if (distanceEl) {
+        controlState.distance = Number.parseInt(distanceEl.value, 10) || 0;
+    }
+    if (searchEl) {
+        controlState.searchQuery = searchEl.value || '';
+    }
+}
+
+function bindControlEvents() {
+    if (controlsBound) {
+        return;
+    }
+    controlsBound = true;
+
+    const transparencyEl = document.getElementById('transparency-slider');
+    const distanceEl = document.getElementById('distance-slider');
+    const searchEl = document.getElementById('search-query');
+    const findEl = document.getElementById('find-euid');
+    const startEl = document.getElementById('start-euid');
+    const depthEl = document.getElementById('depth');
+    const saveBtn = document.getElementById('graph-save');
+
+    if (transparencyEl) {
+        transparencyEl.addEventListener('input', () => {
+            syncControlStateFromUI();
+            applyFiltersAndStyles({ centerSearch: false });
+            persistControls();
+        });
+    }
+
+    if (distanceEl) {
+        distanceEl.addEventListener('input', () => {
+            syncControlStateFromUI();
+            applyFiltersAndStyles({ centerSearch: false });
+            persistControls();
+        });
+    }
+
+    if (searchEl) {
+        searchEl.addEventListener('input', () => {
+            syncControlStateFromUI();
+            applySearch(false);
+            persistControls();
+        });
+        searchEl.addEventListener('keydown', (evt) => {
+            if (evt.key === 'Enter') {
+                evt.preventDefault();
+                applySearch(true);
+            }
+        });
+    }
+
+    if (findEl) {
+        findEl.addEventListener('keydown', (evt) => {
+            if (evt.key === 'Enter') {
+                evt.preventDefault();
+                findAndCenterByEuid();
+            }
+        });
+    }
+
+    [startEl, depthEl].forEach((input) => {
+        if (!input) {
+            return;
+        }
+        input.addEventListener('keydown', (evt) => {
+            if (evt.key !== 'Enter') {
+                return;
+            }
+            evt.preventDefault();
+            void loadGraph();
+        });
+    });
+
+    if (saveBtn) {
+        saveBtn.addEventListener('click', saveDag);
+    }
+}
+
 function installKeyboardHandlers() {
     if (keyboardHandlersInstalled) {
         return;
@@ -178,6 +389,9 @@ function installKeyboardHandlers() {
                 setStatus('Link mode: hold L and click a child node.', 'warn');
             }
         }
+        if (key === 'n') {
+            keyState.n = true;
+        }
         if (key === 'escape') {
             clearPendingLineageSelection();
             setStatus('Cleared selection.', 'warn');
@@ -191,6 +405,9 @@ function installKeyboardHandlers() {
         }
         if (key === 'l') {
             keyState.l = false;
+        }
+        if (key === 'n') {
+            keyState.n = false;
         }
     });
 }
@@ -291,6 +508,32 @@ function runWaveFromNode(startNode, direction) {
     });
 }
 
+function runNeighborhoodFromNode(node) {
+    if (!cy || !node) {
+        return;
+    }
+
+    if (neighborhoodAnchorId === node.id()) {
+        neighborhoodDepth += 1;
+    } else {
+        neighborhoodAnchorId = node.id();
+        neighborhoodDepth = 1;
+    }
+
+    let neighborhood = node.closedNeighborhood();
+    for (let i = 1; i < neighborhoodDepth; i += 1) {
+        neighborhood = neighborhood.union(neighborhood.closedNeighborhood());
+    }
+
+    const nodeOnly = neighborhood.nodes();
+    nodeOnly.addClass('neighborhood-glow');
+    window.setTimeout(() => {
+        nodeOnly.removeClass('neighborhood-glow');
+    }, 900);
+
+    setStatus(`Neighborhood depth ${neighborhoodDepth} from ${node.id()}.`, 'ok');
+}
+
 async function deleteGraphObject(ele) {
     const objectId = ele.data('id');
     const typeLabel = ele.isNode() ? 'node' : 'edge';
@@ -324,6 +567,8 @@ async function deleteGraphObject(ele) {
         }
 
         refreshLegendFromCurrentGraph();
+        applyFiltersAndStyles({ centerSearch: false });
+        renderMermaidSource();
         setStatus(`Deleted ${typeLabel} ${objectId}.`, 'ok');
     } catch (error) {
         console.error('Delete failed:', error);
@@ -414,6 +659,8 @@ async function createLineageEdge(childId, parentId, relationshipType) {
     });
 
     refreshLegendFromCurrentGraph();
+    applyFiltersAndStyles({ centerSearch: false });
+    renderMermaidSource();
     setStatus(`Created edge ${childId} -> ${parentId} (${relationshipType || 'generic'}).`, 'ok');
 }
 
@@ -433,6 +680,242 @@ function refreshLegendFromCurrentGraph() {
     updateLegend(typesInGraph);
 }
 
+function resetDynamicFilterControls() {
+    const typeContainer = document.getElementById('type-checkboxes');
+    const subtypeContainer = document.getElementById('subtype-buttons');
+    if (typeContainer) {
+        typeContainer.innerHTML =
+            '<span style="color: var(--text-muted); font-size: 0.78rem;">Load graph to populate.</span>';
+    }
+    if (subtypeContainer) {
+        subtypeContainer.innerHTML =
+            '<span style="color: var(--text-muted); font-size: 0.78rem;">Load graph to populate.</span>';
+    }
+}
+
+function buildTypeAndSubtypeControls() {
+    const typeContainer = document.getElementById('type-checkboxes');
+    const subtypeContainer = document.getElementById('subtype-buttons');
+
+    if (!cy || !typeContainer || !subtypeContainer) {
+        return;
+    }
+
+    const types = Array.from(new Set(cy.nodes().map((node) => getNodeType(node)).filter(Boolean))).sort(
+        (a, b) => a.localeCompare(b)
+    );
+    const subtypes = Array.from(
+        new Set(cy.nodes().map((node) => getNodeSubtype(node)).filter(Boolean))
+    ).sort((a, b) => a.localeCompare(b));
+
+    if (types.length === 0) {
+        typeContainer.innerHTML =
+            '<span style="color: var(--text-muted); font-size: 0.78rem;">No types in graph.</span>';
+    } else {
+        typeContainer.innerHTML = '';
+        types.forEach((type) => {
+            if (typeof controlState.hiddenTypes[type] === 'undefined') {
+                controlState.hiddenTypes[type] = false;
+            }
+            const item = document.createElement('label');
+            item.className = 'type-filter-item';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = !controlState.hiddenTypes[type];
+            checkbox.addEventListener('change', () => {
+                controlState.hiddenTypes[type] = !checkbox.checked;
+                persistControls();
+                applyFiltersAndStyles({ centerSearch: false });
+            });
+            item.appendChild(checkbox);
+            item.appendChild(document.createTextNode(type));
+            typeContainer.appendChild(item);
+        });
+    }
+
+    if (subtypes.length === 0) {
+        subtypeContainer.innerHTML =
+            '<span style="color: var(--text-muted); font-size: 0.78rem;">No subtypes in graph.</span>';
+    } else {
+        subtypeContainer.innerHTML = '';
+        subtypes.forEach((subtype) => {
+            if (typeof controlState.mutedSubtypes[subtype] === 'undefined') {
+                controlState.mutedSubtypes[subtype] = false;
+            }
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'subtype-chip';
+            btn.textContent = subtype;
+            btn.classList.toggle('active', controlState.mutedSubtypes[subtype]);
+            btn.addEventListener('click', () => {
+                controlState.mutedSubtypes[subtype] = !controlState.mutedSubtypes[subtype];
+                btn.classList.toggle('active', controlState.mutedSubtypes[subtype]);
+                persistControls();
+                applyFiltersAndStyles({ centerSearch: false });
+            });
+            subtypeContainer.appendChild(btn);
+        });
+    }
+
+    persistControls();
+}
+
+function nodeMatchesQuery(node, query) {
+    if (!query) {
+        return false;
+    }
+    const normalized = query.toLowerCase();
+    const values = [
+        node.id(),
+        node.data('name'),
+        node.data('euid'),
+        node.data('type'),
+        node.data('category'),
+        node.data('subtype'),
+    ];
+    return values.some((value) => String(value || '').toLowerCase().includes(normalized));
+}
+
+function getDistanceVisibleNodeIds(distance) {
+    if (!cy || distance <= 0) {
+        return null;
+    }
+
+    let centerNode = cy.$('node:selected').first();
+    if (!centerNode || centerNode.length === 0 || centerNode.style('display') === 'none') {
+        const startEuid = (document.getElementById('start-euid')?.value || '').trim();
+        if (startEuid) {
+            centerNode = cy.getElementById(startEuid);
+        }
+    }
+    if (!centerNode || centerNode.length === 0 || centerNode.style('display') === 'none') {
+        centerNode = cy.nodes().filter((node) => node.style('display') !== 'none').first();
+    }
+    if (!centerNode || centerNode.length === 0) {
+        return null;
+    }
+
+    const visible = new Set([centerNode.id()]);
+    cy.elements().bfs({
+        roots: centerNode,
+        directed: false,
+        visit: (v, _e, _u, _i, depth) => {
+            if (depth <= distance && v.isNode()) {
+                visible.add(v.id());
+            }
+        },
+    });
+    return visible;
+}
+
+function applyFiltersAndStyles(options = {}) {
+    const { centerSearch = false } = options;
+    if (!cy) {
+        return [];
+    }
+
+    syncControlStateFromUI();
+
+    const edgeThreshold = Math.max(0, Number.parseInt(controlState.edgeThreshold, 10) || 0);
+    const distance = Math.max(0, Number.parseInt(controlState.distance, 10) || 0);
+    const searchQuery = String(controlState.searchQuery || '').trim();
+    const transparencyDisplay = document.getElementById('transparency-display');
+    const distanceDisplay = document.getElementById('distance-display');
+
+    if (transparencyDisplay) {
+        transparencyDisplay.textContent = String(edgeThreshold);
+    }
+    if (distanceDisplay) {
+        distanceDisplay.textContent = String(distance);
+    }
+
+    const distanceVisible = getDistanceVisibleNodeIds(distance);
+    const visibleNodeIds = new Set();
+
+    cy.batch(() => {
+        cy.nodes().forEach((node) => {
+            const type = getNodeType(node);
+            const passType = !controlState.hiddenTypes[type];
+            const passDistance = !distanceVisible || distanceVisible.has(node.id());
+            const visible = passType && passDistance;
+            node.style('display', visible ? 'element' : 'none');
+            node.removeClass('transparent');
+            node.removeClass('subtype-muted');
+            node.removeClass('search-match');
+            if (visible) {
+                visibleNodeIds.add(node.id());
+            }
+        });
+
+        cy.edges().forEach((edge) => {
+            const sourceVisible = visibleNodeIds.has(edge.source().id());
+            const targetVisible = visibleNodeIds.has(edge.target().id());
+            const visible = sourceVisible && targetVisible;
+            edge.style('display', visible ? 'element' : 'none');
+            edge.removeClass('transparent');
+            edge.removeClass('subtype-muted');
+        });
+
+        cy.nodes().forEach((node) => {
+            if (node.style('display') === 'none') {
+                return;
+            }
+            const subtype = getNodeSubtype(node);
+            if (controlState.mutedSubtypes[subtype]) {
+                node.addClass('subtype-muted');
+            }
+        });
+
+        cy.edges().forEach((edge) => {
+            if (edge.style('display') === 'none') {
+                return;
+            }
+            if (edge.source().hasClass('subtype-muted') || edge.target().hasClass('subtype-muted')) {
+                edge.addClass('subtype-muted');
+            }
+        });
+
+        cy.nodes().forEach((node) => {
+            if (node.style('display') === 'none') {
+                return;
+            }
+            const visibleEdges = node.connectedEdges().filter((edge) => edge.style('display') !== 'none');
+            if (visibleEdges.length <= edgeThreshold) {
+                node.addClass('transparent');
+                visibleEdges.forEach((edge) => edge.addClass('transparent'));
+            }
+        });
+    });
+
+    const matches = [];
+    if (searchQuery) {
+        cy.nodes().forEach((node) => {
+            if (node.style('display') === 'none') {
+                return;
+            }
+            if (nodeMatchesQuery(node, searchQuery)) {
+                node.addClass('search-match');
+                matches.push(node);
+            }
+        });
+    }
+
+    if (centerSearch) {
+        if (searchQuery && matches.length > 0) {
+            const firstMatch = matches[0];
+            cy.animate({
+                center: { eles: firstMatch },
+                zoom: Math.max(cy.zoom(), 1.2),
+            }, { duration: 280 });
+            setStatus(`Search matched ${matches.length} node(s).`, 'ok');
+        } else if (searchQuery) {
+            setStatus(`No nodes matched search: ${searchQuery}`, 'warn');
+        }
+    }
+
+    return matches;
+}
+
 function initCytoscape(container, elements) {
     if (cy) {
         cy.destroy();
@@ -441,9 +924,9 @@ function initCytoscape(container, elements) {
     installKeyboardHandlers();
     clearPendingLineageSelection();
 
-    container.addEventListener('contextmenu', (evt) => {
+    container.oncontextmenu = (evt) => {
         evt.preventDefault();
-    });
+    };
 
     cy = cytoscape({
         container: container,
@@ -455,11 +938,12 @@ function initCytoscape(container, elements) {
         maxZoom: 3,
         wheelSensitivity: 0.3,
     });
+    window.cy = cy;
 
     // Left click on node.
     cy.on('tap', 'node', async function(evt) {
         const node = evt.target;
-        showNodeInfo(node.data());
+        await showNodeInfo(node.data());
 
         if (node.data('is_external')) {
             return;
@@ -495,6 +979,11 @@ function initCytoscape(container, elements) {
 
         if (keyState.l) {
             setPendingLineageChild(node);
+            return;
+        }
+
+        if (keyState.n) {
+            runNeighborhoodFromNode(node);
             return;
         }
 
@@ -543,7 +1032,7 @@ function initCytoscape(container, elements) {
             return;
         }
         const euid = evt.target.data('id');
-        window.location.href = '/object/' + euid;
+        window.location.href = tapdbUrl(`/object/${encodeURIComponent(euid)}`);
     });
 
     setStatus('Ready.', '');
@@ -583,6 +1072,222 @@ function currentDepth() {
     const raw = document.getElementById('depth')?.value || '4';
     const parsed = Number.parseInt(raw, 10);
     return Number.isFinite(parsed) ? parsed : 4;
+}
+
+function currentStartEuid() {
+    return (document.getElementById('start-euid')?.value || '').trim();
+}
+
+function updateHistoryState() {
+    const params = new URLSearchParams();
+    const startEuid = currentStartEuid();
+    params.set('depth', String(currentDepth()));
+    if (startEuid) {
+        params.set('start_euid', startEuid);
+    }
+    if (pendingAutoMergeRef !== null) {
+        params.set('merge_ref', String(pendingAutoMergeRef));
+    }
+    window.history.replaceState({}, '', `${tapdbUrl('/graph')}?${params.toString()}`);
+}
+
+function snapshotElements() {
+    if (!cy) {
+        return { nodes: [], edges: [] };
+    }
+    return {
+        nodes: cy.nodes().map((node) => ({ data: { ...node.data() } })),
+        edges: cy.edges().map((edge) => ({ data: { ...edge.data() } })),
+    };
+}
+
+function escapeMermaidText(value) {
+    return String(value || '')
+        .replaceAll('\\', '\\\\')
+        .replaceAll('"', '\\"')
+        .replaceAll('\r', ' ')
+        .replaceAll('\n', ' ');
+}
+
+function mermaidNodeLabel(data) {
+    const id = String(data.id || '').trim();
+    const display = String(data.display_label || data.name || '').trim();
+    if (display && display !== id) {
+        return `${id} | ${display}`;
+    }
+    return id || display || 'node';
+}
+
+function buildMermaidSource(elements) {
+    const nodes = Array.isArray(elements.nodes) ? [...elements.nodes] : [];
+    const edges = Array.isArray(elements.edges) ? [...elements.edges] : [];
+    if (nodes.length === 0) {
+        return 'flowchart TD\n  empty["No visible graph data"]';
+    }
+
+    nodes.sort((left, right) => String((left.data || {}).id || '').localeCompare(String((right.data || {}).id || '')));
+    edges.sort((left, right) => String((left.data || {}).id || '').localeCompare(String((right.data || {}).id || '')));
+
+    const nodeIdMap = new Map();
+    const lines = ['flowchart TD'];
+
+    nodes.forEach((node, index) => {
+        const data = node.data || {};
+        const originalId = String(data.id || '').trim();
+        if (!originalId) {
+            return;
+        }
+        const mermaidId = `N${index + 1}`;
+        nodeIdMap.set(originalId, mermaidId);
+        lines.push(`  ${mermaidId}["${escapeMermaidText(mermaidNodeLabel(data))}"]`);
+    });
+
+    edges.forEach((edge) => {
+        const data = edge.data || {};
+        const source = nodeIdMap.get(String(data.source || '').trim());
+        const target = nodeIdMap.get(String(data.target || '').trim());
+        if (!source || !target) {
+            return;
+        }
+        const relationship = escapeMermaidText(data.relationship_type || 'related_to');
+        lines.push(`  ${source} -->|${relationship}| ${target}`);
+    });
+
+    return lines.join('\n');
+}
+
+function renderMermaidSource() {
+    const el = document.getElementById('graph-mermaid-source');
+    const saveBtn = document.getElementById('graph-save');
+    if (!el) {
+        return;
+    }
+    const elements = snapshotElements();
+    const hasGraph = elements.nodes.length > 0;
+    el.textContent = hasGraph ? buildMermaidSource(elements) : 'Load a graph to generate Mermaid.';
+    if (saveBtn) {
+        saveBtn.disabled = !hasGraph;
+    }
+}
+
+function downloadText(content, filename, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+}
+
+function dagFilenamePrefix() {
+    return (currentStartEuid() || 'graph')
+        .replaceAll(/[^A-Za-z0-9._-]+/g, '-')
+        .replaceAll(/^-+|-+$/g, '') || 'graph';
+}
+
+function saveDag() {
+    const elements = snapshotElements();
+    if (elements.nodes.length === 0) {
+        setStatus('Load a graph before saving DAG data.', 'warn');
+        return;
+    }
+
+    const payload = {
+        generated_at: new Date().toISOString(),
+        request: {
+            graph_page_path: tapdbUrl('/graph'),
+            start_euid: currentStartEuid() || null,
+            depth: currentDepth(),
+        },
+        meta: {
+            ...currentGraphMeta,
+            node_count: elements.nodes.length,
+            edge_count: elements.edges.length,
+            visualized: true,
+        },
+        elements,
+        mermaid: buildMermaidSource(elements),
+    };
+    const timestamp = new Date().toISOString().replaceAll(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+    downloadText(
+        JSON.stringify(payload, null, 2),
+        `tapdb-dag-${dagFilenamePrefix()}-${timestamp}.json`,
+        'application/json'
+    );
+    setStatus('Saved DAG data.', 'ok');
+}
+
+function renderNoData(message) {
+    const container = document.getElementById('cy');
+    const detail = document.getElementById('node-info-content');
+    if (!container) {
+        return;
+    }
+    if (cy) {
+        cy.destroy();
+        cy = null;
+        window.cy = null;
+    }
+    container.innerHTML = `<div class="loading">${escapeHtml(message)}</div>`;
+    currentGraphMeta = {};
+    resetDynamicFilterControls();
+    updateLegend({});
+    renderMermaidSource();
+    if (detail) {
+        detail.innerHTML = '<p style="color: var(--text-muted);">Click a node or edge to see details</p>';
+    }
+}
+
+function chooseFocusNode(preferredId = '', matches = []) {
+    if (!cy) {
+        return null;
+    }
+
+    const preferred = preferredId ? cy.getElementById(preferredId) : null;
+    if (preferred && preferred.length > 0 && preferred.style('display') !== 'none') {
+        return preferred;
+    }
+
+    const selected = cy.$('node:selected').filter((node) => node.style('display') !== 'none').first();
+    if (selected && selected.length > 0) {
+        return selected;
+    }
+
+    const firstMatch = Array.isArray(matches) && matches.length > 0 ? matches[0] : null;
+    if (firstMatch && firstMatch.id) {
+        const firstMatchCollection = cy.getElementById(firstMatch.id());
+        if (firstMatchCollection && firstMatchCollection.length > 0 && firstMatchCollection.style('display') !== 'none') {
+            return firstMatchCollection;
+        }
+    }
+
+    const visibleNodes = cy.nodes().filter((node) => node.style('display') !== 'none');
+    if (!visibleNodes || visibleNodes.length === 0) {
+        return null;
+    }
+
+    const randomIndex = Math.floor(Math.random() * visibleNodes.length);
+    return visibleNodes.eq(randomIndex);
+}
+
+async function ensureGraphSelection(options = {}) {
+    const { preferredId = '', matches = [] } = options;
+    const node = chooseFocusNode(preferredId, matches);
+    if (!node || node.length === 0) {
+        return null;
+    }
+
+    cy.nodes().unselect();
+    node.select();
+    cy.animate({
+        center: { eles: node },
+        zoom: Math.max(cy.zoom(), 1.2),
+    }, { duration: 280 });
+    await showNodeInfo(node.data());
+    return node;
 }
 
 function buildExternalGraphUrl(sourceEuid, refIndex) {
@@ -681,6 +1386,7 @@ function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
     const sourceEuid = graphData && graphData.external_source_euid ? graphData.external_source_euid : euid;
     const externalRefSection = renderExternalRefs(externalRefs, sourceEuid, canRenderExternalRefs);
     const canViewLocalDetail = !(graphData && graphData.is_external);
+    const graphNodeId = graphData && graphData.id ? graphData.id : euid;
 
     const actions = `
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem;">
@@ -691,7 +1397,7 @@ function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
             }
             ${
                 isNode
-                    ? `<button onclick="centerOnNode('${escapeHtml(euid)}')" class="btn">Center on Node</button>`
+                    ? `<button onclick="centerOnNode('${escapeHtml(graphNodeId)}')" class="btn">Center on Node</button>`
                     : ''
             }
         </div>
@@ -776,8 +1482,17 @@ async function mergeExternalRef(sourceEuid, refIndex) {
         }
 
         cy.add(additions);
-        applyLayout();
+        applyLayout(false);
         refreshLegendFromCurrentGraph();
+        buildTypeAndSubtypeControls();
+        const matches = applyFiltersAndStyles({ centerSearch: false });
+        currentGraphMeta = {
+            ...currentGraphMeta,
+            node_count: cy.nodes().length,
+            edge_count: cy.edges().length,
+        };
+        renderMermaidSource();
+        await ensureGraphSelection({ preferredId: currentStartEuid(), matches });
         setStatus(`Merged external graph for ${sourceEuid}.`, 'ok');
     } catch (error) {
         console.error('Failed to merge external graph:', error);
@@ -851,17 +1566,22 @@ async function showEdgeInfo(data) {
 }
 
 function centerOnNode(nodeId) {
-    const node = cy.getElementById(nodeId);
-    if (node.length > 0) {
-        cy.animate({
-            center: { eles: node },
-            zoom: 1.5
-        }, { duration: 300 });
-        node.select();
+    if (!cy) {
+        return false;
     }
+    const node = cy.getElementById(nodeId);
+    if (!node || node.length === 0 || node.style('display') === 'none') {
+        return false;
+    }
+    cy.animate({
+        center: { eles: node },
+        zoom: Math.max(cy.zoom(), 1.45),
+    }, { duration: 300 });
+    node.select();
+    return true;
 }
 
-function applyLayout() {
+function applyLayout(shouldPersist = true) {
     if (!cy) {
         return;
     }
@@ -875,45 +1595,90 @@ function applyLayout() {
         grid: { name: 'grid' },
     };
 
+    controlState.layout = layoutName;
+    if (shouldPersist) {
+        persistControls();
+    }
     cy.layout(layoutOptions[layoutName] || { name: layoutName }).run();
 }
 
+function applySearch(center = true) {
+    syncControlStateFromUI();
+    persistControls();
+    return applyFiltersAndStyles({ centerSearch: center });
+}
+
+function findAndCenterByEuid(explicitEuid = '') {
+    if (!cy) {
+        return false;
+    }
+    const inputEl = document.getElementById('find-euid');
+    const value = (explicitEuid || inputEl?.value || '').trim();
+    if (!value) {
+        setStatus('Enter an EUID to find.', 'warn');
+        return false;
+    }
+
+    const node = cy.getElementById(value);
+    if (!node || node.length === 0 || node.style('display') === 'none') {
+        setStatus(`EUID not found in current graph view: ${value}`, 'warn');
+        return false;
+    }
+
+    centerOnNode(value);
+    void showNodeInfo(node.data());
+    setStatus(`Centered on ${value}.`, 'ok');
+    return true;
+}
+
 async function loadGraph() {
-    const startEuid = document.getElementById('start-euid').value;
-    const depth = document.getElementById('depth').value;
+    syncControlStateFromUI();
+    persistControls();
+
+    const startEuid = currentStartEuid();
+    const depth = String(currentDepth());
 
     const container = document.getElementById('cy');
     if (!startEuid) {
-        container.innerHTML = '<div class="loading">Enter an exact EUID to load the native DAG root.</div>';
-        updateLegend({});
+        renderNoData('Enter an exact EUID to load the native DAG root.');
         setStatus('Enter an exact EUID to load a DAG root.', 'warn');
         return;
     }
 
-    container.innerHTML = '<div class="loading">Loading graph data...</div>';
+    renderNoData('Loading graph data...');
 
     try {
-        let url = tapdbUrl('/api/dag/data') + '?depth=' + depth;
+        let url = `${tapdbUrl('/api/dag/data')}?depth=${encodeURIComponent(depth)}`;
         if (startEuid) {
             url += '&start_euid=' + encodeURIComponent(startEuid);
         }
 
-        const response = await fetch(url);
+        const response = await fetch(url, {
+            headers: { Accept: 'application/json' },
+        });
         const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.detail || `Failed to load graph data (${response.status})`);
+        }
 
-        if (data.elements.nodes.length === 0) {
-            container.innerHTML = '<div class="loading">No data found. Try a different EUID or leave empty for all.</div>';
-            updateLegend({});
+        const elements = data.elements || { nodes: [], edges: [] };
+        const nodes = Array.isArray(elements.nodes) ? elements.nodes : [];
+        const edges = Array.isArray(elements.edges) ? elements.edges : [];
+        currentGraphMeta = { ...(data.meta || {}) };
+
+        if (nodes.length === 0) {
+            renderNoData('No graph data found for this query.');
             setStatus('No graph data found for this query.', 'warn');
+            updateHistoryState();
             return;
         }
 
         container.innerHTML = '';
-        initCytoscape(container, data.elements);
+        initCytoscape(container, { nodes, edges });
 
         // Build dynamic legend from node categories in the graph.
         const typesInGraph = {};
-        data.elements.nodes.forEach((node) => {
+        nodes.forEach((node) => {
             const category = node.data.category;
             const color = node.data.color;
             if (category && !typesInGraph[category]) {
@@ -921,20 +1686,35 @@ async function loadGraph() {
             }
         });
         updateLegend(typesInGraph);
+        buildTypeAndSubtypeControls();
+        applyControlStateToUI();
+        applyLayout(false);
+        const matches = applyFiltersAndStyles({ centerSearch: !!controlState.searchQuery });
+        await ensureGraphSelection({ preferredId: startEuid, matches });
+        renderMermaidSource();
 
-        // Update URL without reload.
-        const newUrl = tapdbUrl('/graph') + '?start_euid=' + encodeURIComponent(startEuid) + '&depth=' + depth;
-        window.history.replaceState({}, '', newUrl);
+        updateHistoryState();
         if (pendingAutoMergeRef !== null && startEuid) {
             const mergeRef = pendingAutoMergeRef;
             pendingAutoMergeRef = null;
             await mergeExternalRef(startEuid, mergeRef);
         }
+        const meta = data.meta || {};
+        if (meta.truncated) {
+            setStatus(
+                `Loaded ${meta.node_count || nodes.length} nodes and ${meta.edge_count || edges.length} edges (truncated).`,
+                'warn'
+            );
+        } else {
+            setStatus(
+                `Loaded ${meta.node_count || nodes.length} nodes and ${meta.edge_count || edges.length} edges.`,
+                'ok'
+            );
+        }
 
     } catch (error) {
         console.error('Error loading graph:', error);
-        container.innerHTML = '<div class="loading">Error loading graph: ' + error.message + '</div>';
-        updateLegend({});
+        renderNoData(`Error loading graph: ${error.message}`);
         setStatus(`Load failed: ${error.message}`, 'error');
     }
 }
@@ -960,9 +1740,25 @@ function updateLegend(typesInGraph) {
     legendContainer.innerHTML = staticItems.join('') + sortedTypes.map((type) => `
         <div class="legend-item">
             <div class="legend-color" style="background:${typesInGraph[type]}"></div>
-            ${type}
+            ${escapeHtml(type)}
         </div>
     `).join('');
 }
 
+function initGraphPage() {
+    loadPersistedControls();
+    applyControlStateToUI();
+    bindControlEvents();
+    resetDynamicFilterControls();
+    renderMermaidSource();
+    void loadGraph();
+}
+
+window.initGraphPage = initGraphPage;
+window.loadGraph = loadGraph;
+window.applyLayout = applyLayout;
+window.applySearch = applySearch;
+window.findAndCenterByEuid = findAndCenterByEuid;
+window.centerOnNode = centerOnNode;
 window.mergeExternalRef = mergeExternalRef;
+window.saveDag = saveDag;

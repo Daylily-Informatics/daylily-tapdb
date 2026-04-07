@@ -66,6 +66,62 @@
         background: var(--bg-color);
         color: var(--text-color);
     }
+    .btn-row {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .btn-row .btn {
+        flex: 1 1 auto;
+    }
+    .range-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.5rem;
+        align-items: center;
+    }
+    .range-row span {
+        color: var(--text-muted);
+        font-size: 0.85rem;
+        min-width: 2rem;
+        text-align: right;
+    }
+    .type-filter-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.35rem 0.5rem;
+        max-height: 160px;
+        overflow-y: auto;
+    }
+    .type-filter-item {
+        font-size: 0.78rem;
+        color: var(--text-color);
+        display: flex;
+        gap: 0.35rem;
+        align-items: center;
+        white-space: nowrap;
+    }
+    .subtype-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        max-height: 180px;
+        overflow-y: auto;
+    }
+    .subtype-chip {
+        border: 1px solid var(--border-color);
+        border-radius: 999px;
+        background: var(--bg-color);
+        color: var(--text-color);
+        font-size: 0.72rem;
+        padding: 0.2rem 0.55rem;
+        cursor: pointer;
+    }
+    .subtype-chip.active {
+        background: var(--secondary-color);
+        color: #fff;
+        border-color: var(--secondary-color);
+    }
     #node-info {
         background: var(--card-bg);
         padding: 1rem;
@@ -202,6 +258,11 @@
         height: 100%;
         color: var(--text-muted);
     }
+    .graph-mermaid-source {
+        min-height: 220px;
+        max-height: 260px;
+        white-space: pre;
+    }
     @media (max-width: 980px) {
         #cy-container {
             flex-direction: column;
@@ -225,6 +286,9 @@
         .details-grid {
             grid-template-columns: 1fr;
         }
+        .type-filter-grid {
+            grid-template-columns: 1fr;
+        }
     }
 </style>
 {% endblock %}
@@ -239,20 +303,69 @@
             <div class="control-panel">
                 <h3>🔍 Navigation</h3>
                 <div class="control-group">
-                    <label>Start EUID</label>
+                    <label for="start-euid">Start EUID</label>
                     <input type="text" id="start-euid" value="{{ start_euid }}" placeholder="e.g., GX123">
                 </div>
                 <div class="control-group">
-                    <label>Depth</label>
+                    <label for="depth">Depth</label>
                     <input type="number" id="depth" value="{{ depth }}" min="1" max="10">
                 </div>
-                <button class="btn" onclick="loadGraph()" style="width: 100%;">Load Graph</button>
+                <div class="btn-row">
+                    <button class="btn" type="button" onclick="loadGraph()">Load Graph</button>
+                    <button class="btn" type="button" onclick="cy && cy.fit()">Fit</button>
+                </div>
+            </div>
+
+            <div class="control-panel">
+                <h3>🔎 Search & Find</h3>
+                <div class="control-group">
+                    <label for="search-query">Fuzzy Search</label>
+                    <input type="text" id="search-query" placeholder="Match id, name, type, subtype">
+                </div>
+                <div class="control-group">
+                    <label for="find-euid">Find Exact EUID</label>
+                    <input type="text" id="find-euid" placeholder="Exact EUID in current graph">
+                </div>
+                <div class="btn-row">
+                    <button class="btn" type="button" onclick="applySearch(true)">Apply Search</button>
+                    <button class="btn" type="button" onclick="findAndCenterByEuid()">Find</button>
+                </div>
+            </div>
+
+            <div class="control-panel">
+                <h3>🧰 Filters</h3>
+                <div class="control-group">
+                    <label for="transparency-slider">Connected Edge Count ≤</label>
+                    <div class="range-row">
+                        <input type="range" id="transparency-slider" min="0" max="20" value="1">
+                        <span id="transparency-display">1</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="distance-slider">Relative Distance (0 = all)</label>
+                    <div class="range-row">
+                        <input type="range" id="distance-slider" min="0" max="15" value="0">
+                        <span id="distance-display">0</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>Type Visibility</label>
+                    <div id="type-checkboxes" class="type-filter-grid">
+                        <span style="color: var(--text-muted); font-size: 0.78rem;">Load graph to populate.</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>Subtype Muting</label>
+                    <div id="subtype-buttons" class="subtype-buttons">
+                        <span style="color: var(--text-muted); font-size: 0.78rem;">Load graph to populate.</span>
+                    </div>
+                </div>
             </div>
 
             <div class="control-panel">
                 <h3>⚙️ Layout</h3>
                 <div class="control-group">
-                    <label>Layout Type</label>
+                    <label for="layout-select">Layout Type</label>
                     <select id="layout-select" onchange="applyLayout()">
                         <option value="dagre">Dagre (Hierarchical)</option>
                         <option value="cose">CoSE (Force-directed)</option>
@@ -261,7 +374,6 @@
                         <option value="grid">Grid</option>
                     </select>
                 </div>
-                <button class="btn" onclick="cy.fit()" style="width: 100%;">Fit to View</button>
             </div>
 
             <div class="control-panel">
@@ -271,6 +383,7 @@
                     <div><strong>3x left click node</strong>: child-wave glow (pink)</div>
                     <div><strong>3x right click node</strong>: parent-wave glow (aqua)</div>
                     <div><strong>L + left click node</strong>: pick child, then click parent to create edge</div>
+                    <div><strong>N + left click node</strong>: neighborhood highlight</div>
                 </div>
                 <div id="graph-mode-status">Ready.</div>
             </div>
@@ -280,6 +393,15 @@
                 <div class="legend" id="legend-items">
                     <span style="color: var(--text-muted); font-size: 0.85rem;">Loading...</span>
                 </div>
+            </div>
+
+            <div class="control-panel">
+                <h3>💾 Export</h3>
+                <div class="btn-row" style="margin-bottom: 0.75rem;">
+                    <button id="graph-save" class="btn" type="button">Save DAG</button>
+                </div>
+                <div class="details-section-title" style="margin-top: 0;">Mermaid</div>
+                <pre id="graph-mermaid-source" class="json-block graph-mermaid-source">Load a graph to generate Mermaid.</pre>
             </div>
         </div>
     </div>
@@ -322,7 +444,7 @@
 <script src="{{ tapdb_url(request, '/static/js/graph.js') }}"></script>
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        loadGraph();
+        initGraphPage();
     });
 </script>
 {% endblock %}
