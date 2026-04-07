@@ -1,5 +1,7 @@
 # tapdb (Templated Abstract Polymorphic Database)
 
+> An important mental shift is that templates describe shape, not business truth. Application repos own domain semantics and _TAPDB stores the substrate that those semantics sit on_.
+
 `tapdb-core` is the repository for TAPDB, a reusable PostgreSQL-backed substrate for typed, versioned, auditable entities. The Python import package remains `daylily_tapdb` for now.
 
 It is intentionally not a domain application. TAPDB provides the generic persistence and runtime mechanics that higher-level repos use to model their own business objects. Bloom is a motivating example of the kind of system TAPDB supports, but Bloom-specific workflow semantics do not belong in TAPDB itself.
