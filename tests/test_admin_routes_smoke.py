@@ -910,6 +910,48 @@ def test_info_page_hides_inventory_for_non_admin(
     assert ctx["db_inventory_tables"] == []
 
 
+def test_graph_page_includes_shared_viewer_controls(
+    route_client, monkeypatch: pytest.MonkeyPatch
+):
+    client, state = route_client
+
+    async def _admin_auth_user(_request):
+        return _admin_user()
+
+    monkeypatch.setattr(auth_mod, "get_current_user", _admin_auth_user)
+
+    resp = client.get("/graph?start_euid=GX11&depth=3")
+    assert resp.status_code == 200
+    assert resp.text == "TEMPLATE:graph.html"
+    ctx = _last_render_context(state, "graph.html")
+    assert ctx["start_euid"] == "GX11"
+    assert ctx["depth"] == 3
+
+    text = (admin_main.TEMPLATES_DIR / "graph.html").read_text(encoding="utf-8")
+    assert 'id="search-query"' in text
+    assert 'id="find-euid"' in text
+    assert 'id="transparency-slider"' in text
+    assert 'id="distance-slider"' in text
+    assert 'id="type-checkboxes"' in text
+    assert 'id="subtype-buttons"' in text
+    assert 'id="graph-save"' in text
+    assert 'id="graph-mermaid-source"' in text
+    assert "initGraphPage()" in text
+
+
+def test_graph_javascript_includes_focus_filter_and_export_helpers(route_client):
+    client, _state = route_client
+
+    resp = client.get("/static/js/graph.js")
+    assert resp.status_code == 200
+    text = resp.text
+    assert "function chooseFocusNode" in text
+    assert "Math.floor(Math.random() * visibleNodes.length)" in text
+    assert "function applyFiltersAndStyles" in text
+    assert "function buildMermaidSource" in text
+    assert "window.applySearch = applySearch;" in text
+
+
 def test_static_assets_and_openapi_are_served(route_client):
     client, _state = route_client
 
