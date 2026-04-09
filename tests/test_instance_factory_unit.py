@@ -4,6 +4,15 @@ from types import SimpleNamespace
 import pytest
 
 
+class _ScopeResult:
+    def __init__(self, domain_code="A", issuer_app_code="APP"):
+        self._domain_code = domain_code
+        self._issuer_app_code = issuer_app_code
+
+    def one(self):
+        return self._domain_code, self._issuer_app_code
+
+
 class _FakeSession:
     def __init__(self):
         self.added = []
@@ -14,6 +23,9 @@ class _FakeSession:
 
     def flush(self):
         self.flushed += 1
+
+    def execute(self, _stmt):
+        return _ScopeResult()
 
 
 def test_materialize_actions_skips_missing_action_templates():

@@ -396,7 +396,14 @@ BEGIN
           AND conrelid = 'generic_template'::regclass
     ) THEN
         ALTER TABLE generic_template ADD CONSTRAINT unique_template_code
-            UNIQUE (category, type, subtype, version);
+            UNIQUE (
+                domain_code,
+                issuer_app_code,
+                category,
+                type,
+                subtype,
+                version
+            );
     END IF;
 END $$;
 

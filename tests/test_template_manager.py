@@ -6,16 +6,29 @@ input validation paths without a database.
 
 from dataclasses import dataclass
 
+import pytest
+
 
 @dataclass
 class _FakeTemplate:
     uid: str
     euid: str
     is_deleted: bool
+    domain_code: str = "A"
+    issuer_app_code: str = "APP"
     category: str = "generic"
     type: str = "generic"
     subtype: str = "generic"
     version: str = "1.0"
+
+
+class _ScopeResult:
+    def __init__(self, domain_code: str, issuer_app_code: str):
+        self._domain_code = domain_code
+        self._issuer_app_code = issuer_app_code
+
+    def one(self):
+        return self._domain_code, self._issuer_app_code
 
 
 class _FakeQuery:
@@ -36,15 +49,28 @@ class _FakeQuery:
 
 
 class _FakeSession:
-    def __init__(self, get_map=None, query_first=None, query_all=None):
+    def __init__(
+        self,
+        get_map=None,
+        query_first=None,
+        query_all=None,
+        *,
+        domain_code: str = "A",
+        issuer_app_code: str = "APP",
+    ):
         self._get_map = get_map or {}
         self._query_first = query_first
         self._query_all = query_all or []
+        self._domain_code = domain_code
+        self._issuer_app_code = issuer_app_code
         self.query_called = 0
         self.last_query = None
 
     def get(self, _cls, uid):
         return self._get_map.get(uid)
+
+    def execute(self, _stmt):
+        return _ScopeResult(self._domain_code, self._issuer_app_code)
 
     def query(self, _cls):
         self.query_called += 1
@@ -70,7 +96,7 @@ def test_get_template_uses_uuid_cache():
     tm = TemplateManager()
     tmpl = _FakeTemplate(uid="u1", euid="GT1", is_deleted=False)
     code = "generic/generic/generic/1.0/"
-    cache_key = f"::{code}"
+    cache_key = f"A:APP:{code}"
     tm._template_uid_cache[cache_key] = "u1"
 
     sess = _FakeSession(get_map={"u1": tmpl})
@@ -91,7 +117,7 @@ def test_get_template_query_populates_caches():
     got = tm.get_template(sess, code)
 
     assert got is tmpl
-    cache_key = f"::{code}"
+    cache_key = f"A:APP:{code}"
     assert tm._template_uid_cache[cache_key] == "u2"
     assert tm._template_euid_cache["GT2"] == "u2"
 
@@ -104,7 +130,7 @@ def test_get_template_cache_hit_deleted_falls_back_to_query():
 
     deleted = _FakeTemplate(uid="ud", euid="GTd", is_deleted=True)
     fresh = _FakeTemplate(uid="uf", euid="GTf", is_deleted=False)
-    cache_key = f"::{code}"
+    cache_key = f"A:APP:{code}"
     tm._template_uid_cache[cache_key] = "ud"
 
     sess = _FakeSession(get_map={"ud": deleted}, query_first=fresh)
@@ -159,6 +185,23 @@ def test_get_template_by_euid_cache_hit_deleted_falls_back_to_query():
     assert tm._template_euid_cache["GTf"] == "uf"
 
 
+def test_get_template_rejects_scope_override_that_differs_from_session():
+    from daylily_tapdb.templates.manager import TemplateManager
+
+    tm = TemplateManager()
+    sess = _FakeSession(domain_code="A", issuer_app_code="APP")
+
+    with pytest.raises(ValueError, match="domain_code override"):
+        tm.get_template(sess, "generic/generic/generic/1.0/", domain_code="B")
+
+    with pytest.raises(ValueError, match="issuer_app_code override"):
+        tm.get_template(
+            sess,
+            "generic/generic/generic/1.0/",
+            issuer_app_code="OTHER",
+        )
+
+
 def test_clear_cache_empties_caches():
     from daylily_tapdb.templates.manager import TemplateManager
 
@@ -181,9 +224,9 @@ def test_list_templates_applies_filters_and_returns_all():
     got = tm.list_templates(sess, category="a", type_="t", include_deleted=False)
 
     assert got == [t1, t2]
-    # include_deleted=False + category + type => 3 filter calls
+    # include_deleted=False + category + type + scope filters => 5 filter calls
     assert sess.last_query is not None
-    assert len(sess.last_query.filters) == 3
+    assert len(sess.last_query.filters) == 5
 
 
 def test_template_code_from_template_formats_code():

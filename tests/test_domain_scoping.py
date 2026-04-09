@@ -123,21 +123,39 @@ class TestTemplateCacheIsolation:
         from daylily_tapdb.templates.manager import TemplateManager
 
         tm = TemplateManager()
-        mock_session = mock.MagicMock()
-        # Template code must be 4-part: category/type/subtype/version
+        session_a = mock.MagicMock()
+        session_b = mock.MagicMock()
         code = "cat/typ/sub/1.0"
 
-        # session.query(...).filter(...).first() returns None (no hit)
-        mock_session.query.return_value.filter.return_value.filter.return_value.first.return_value = None
-        mock_session.query.return_value.filter.return_value.first.return_value = None
+        scope_a = mock.MagicMock()
+        scope_a.one.return_value = ("A", "APP")
+        scope_b = mock.MagicMock()
+        scope_b.one.return_value = ("B", "APP")
 
-        result_a = tm.get_template(mock_session, code, domain_code="A")
-        result_b = tm.get_template(mock_session, code, domain_code="B")
+        session_a.execute.return_value = scope_a
+        session_b.execute.return_value = scope_b
+        session_a.query.return_value.filter.return_value.first.return_value = None
+        session_b.query.return_value.filter.return_value.first.return_value = None
 
-        # Both should have queried (different cache keys prevent bleed)
-        assert mock_session.query.call_count >= 2
+        result_a = tm.get_template(session_a, code)
+        result_b = tm.get_template(session_b, code)
+
+        assert session_a.query.call_count == 1
+        assert session_b.query.call_count == 1
         assert result_a is None
         assert result_b is None
+
+    def test_get_template_rejects_scope_override_that_differs_from_session(self):
+        from daylily_tapdb.templates.manager import TemplateManager
+
+        tm = TemplateManager()
+        session = mock.MagicMock()
+        scope = mock.MagicMock()
+        scope.one.return_value = ("A", "APP")
+        session.execute.return_value = scope
+
+        with pytest.raises(ValueError, match="domain_code override"):
+            tm.get_template(session, "cat/typ/sub/1.0", domain_code="B")
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +164,7 @@ class TestTemplateCacheIsolation:
 
 
 class TestFactoryDomainScoping:
-    """InstanceFactory passes domain/app through to get_template."""
+    """InstanceFactory treats constructor scope as a session invariant."""
 
     def test_factory_passes_scope_kwargs(self):
         from daylily_tapdb.factory.instance import InstanceFactory
@@ -163,3 +181,15 @@ class TestFactoryDomainScoping:
         factory = InstanceFactory(mock_tm)
 
         assert factory._scope_kwargs == {}
+
+    def test_factory_rejects_session_scope_mismatch(self):
+        from daylily_tapdb.factory.instance import InstanceFactory
+
+        factory = InstanceFactory(mock.MagicMock(), domain_code="X", issuer_app_code="APP1")
+        session = mock.MagicMock()
+        scope = mock.MagicMock()
+        scope.one.return_value = ("Y", "APP1")
+        session.execute.return_value = scope
+
+        with pytest.raises(ValueError, match="domain_code override"):
+            factory.create_instance(session, "cat/typ/sub/1.0", "x")

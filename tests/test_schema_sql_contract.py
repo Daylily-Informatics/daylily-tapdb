@@ -33,6 +33,17 @@ def test_core_timestamps_are_db_managed_timestamptz():
     assert "NEW.modified_dt = CURRENT_TIMESTAMP;" in schema_sql
 
 
+def test_template_uniqueness_is_scope_aware_in_schema_sql():
+    schema_path = Path(__file__).resolve().parents[1] / "schema" / "tapdb_schema.sql"
+    schema_sql = schema_path.read_text()
+
+    assert (
+        "UNIQUE (domain_code, issuer_app_code, category, type, subtype, version)"
+        in schema_sql
+    )
+    assert "UNIQUE (category, type, subtype, version);" not in schema_sql
+
+
 def test_orm_core_timestamps_are_timezone_aware():
     created_dt = tapdb_core.created_dt
     modified_dt = tapdb_core.modified_dt

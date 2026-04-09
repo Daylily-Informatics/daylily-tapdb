@@ -17,6 +17,7 @@ from daylily_tapdb.sequences import (
     _normalize_instance_prefix,
     ensure_instance_prefix_sequence,
 )
+from daylily_tapdb.templates.manager import _resolve_template_scope
 from daylily_tapdb.templates.mutation import allow_template_mutations
 from daylily_tapdb.validation.instantiation_layouts import (
     format_validation_error,
@@ -626,10 +627,13 @@ def _upsert_template(
     *,
     overwrite: bool,
 ) -> tuple[str, generic_template]:
+    resolved_domain_code, resolved_issuer_app_code = _resolve_template_scope(session)
     category, type_name, subtype, version = _template_key(template)
     stmt = (
         select(generic_template)
         .where(
+            generic_template.domain_code == resolved_domain_code,
+            generic_template.issuer_app_code == resolved_issuer_app_code,
             generic_template.category == category,
             generic_template.type == type_name,
             generic_template.subtype == subtype,
@@ -648,6 +652,8 @@ def _upsert_template(
             polymorphic_discriminator=str(
                 template.get("polymorphic_discriminator") or "generic_template"
             ),
+            domain_code=resolved_domain_code,
+            issuer_app_code=resolved_issuer_app_code,
             category=category,
             type=type_name,
             subtype=subtype,

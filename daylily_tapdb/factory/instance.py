@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
+from daylily_tapdb.templates.manager import _resolve_template_scope
 from daylily_tapdb.validation.instantiation_layouts import (
     format_validation_error,
     normalize_template_code_str,
@@ -71,14 +72,12 @@ def materialize_actions(
     for action_key, template_code in template.json_addl.get(
         "action_imports", {}
     ).items():
-        scope_kwargs: Dict[str, str] = {}
-        if domain_code is not None:
-            scope_kwargs["domain_code"] = domain_code
-        if issuer_app_code is not None:
-            scope_kwargs["issuer_app_code"] = issuer_app_code
-        action_tmpl = template_manager.get_template(
-            session, template_code, **scope_kwargs
+        _resolve_template_scope(
+            session,
+            domain_code=domain_code,
+            issuer_app_code=issuer_app_code,
         )
+        action_tmpl = template_manager.get_template(session, template_code)
         if action_tmpl is None:
             continue
 
@@ -148,7 +147,7 @@ class InstanceFactory:
 
     @property
     def _scope_kwargs(self) -> Dict[str, str]:
-        """Domain/app scope kwargs for get_template calls."""
+        """Expected domain/app scope for the active TapDB session."""
         kw: Dict[str, str] = {}
         if self.domain_code is not None:
             kw["domain_code"] = self.domain_code
@@ -211,9 +210,8 @@ class InstanceFactory:
         _visited.add(template_code)
 
         # Get template (scoped by domain/app if configured)
-        template = self.template_manager.get_template(
-            session, template_code, **self._scope_kwargs
-        )
+        _resolve_template_scope(session, **self._scope_kwargs)
+        template = self.template_manager.get_template(session, template_code)
         if not template:
             raise ValueError(f"Template not found: {template_code}")
 
@@ -443,8 +441,13 @@ class InstanceFactory:
             raise ValueError(f"Invalid child template pattern: {template_code!r}")
 
         category, type_name, subtype, version = parts
+        resolved_domain_code, resolved_issuer_app_code = _resolve_template_scope(
+            session, **self._scope_kwargs
+        )
         query = session.query(generic_template).filter(
-            generic_template.is_deleted.is_(False)
+            generic_template.is_deleted.is_(False),
+            generic_template.domain_code == resolved_domain_code,
+            generic_template.issuer_app_code == resolved_issuer_app_code,
         )
         if category != "*":
             query = query.filter(generic_template.category == category)

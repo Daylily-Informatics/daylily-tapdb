@@ -14,15 +14,28 @@ class _ScalarResult:
         return self._value
 
 
+class _ScopeResult:
+    def __init__(self, domain_code, issuer_app_code):
+        self._domain_code = domain_code
+        self._issuer_app_code = issuer_app_code
+
+    def one(self):
+        return self._domain_code, self._issuer_app_code
+
+
 class _FakeUpsertSession:
-    def __init__(self, existing=None):
+    def __init__(self, existing=None, *, domain_code="A", issuer_app_code="APP"):
         self.existing = existing
+        self.domain_code = domain_code
+        self.issuer_app_code = issuer_app_code
         self.added: list[object] = []
         self.flush_count = 0
         self.statements: list[object] = []
 
     def execute(self, stmt):
         self.statements.append(stmt)
+        if "tapdb_current_domain_code()" in str(stmt):
+            return _ScopeResult(self.domain_code, self.issuer_app_code)
         return _ScalarResult(self.existing)
 
     def add(self, obj):
@@ -70,11 +83,15 @@ def test_upsert_template_inserts_when_missing(monkeypatch):
     assert outcome == "inserted"
     assert created in session.added
     assert created.instance_prefix == "AGX"
+    assert created.domain_code == "A"
+    assert created.issuer_app_code == "APP"
     assert created.category == "generic"
     assert created.type == "tube"
     assert created.subtype == "micro"
     assert created.version == "1.0"
     assert session.flush_count == 1
+    assert "generic_template.domain_code" in str(session.statements[-1])
+    assert "generic_template.issuer_app_code" in str(session.statements[-1])
 
 
 def test_upsert_template_overwrite_false_skips_existing():
@@ -145,6 +162,33 @@ def test_upsert_template_overwrite_true_updates_existing():
     assert existing.bstatus == "active"
     assert existing.is_deleted is False
     assert session.flush_count == 1
+
+
+def test_upsert_template_respects_session_scope_in_lookup(monkeypatch):
+    import daylily_tapdb.templates.loader as m
+
+    session = _FakeUpsertSession(existing=None, domain_code="Z", issuer_app_code="ATLS")
+
+    class _FakeTemplate:
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    monkeypatch.setattr(
+        m, "_template_model_for_discriminator", lambda _disc: _FakeTemplate
+    )
+    outcome, created = m._upsert_template(
+        session,
+        template=_template_payload(),
+        overwrite=True,
+    )
+
+    assert outcome == "inserted"
+    assert created.domain_code == "Z"
+    assert created.issuer_app_code == "ATLS"
+    lookup_sql = str(session.statements[-1])
+    assert "generic_template.domain_code" in lookup_sql
+    assert "generic_template.issuer_app_code" in lookup_sql
 
 
 def test_db_migrate_idempotent_when_all_migrations_already_applied(

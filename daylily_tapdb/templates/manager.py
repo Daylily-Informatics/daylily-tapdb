@@ -10,11 +10,54 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from daylily_tapdb.models.template import generic_template
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_template_scope(
+    session: Session,
+    *,
+    domain_code: Optional[str] = None,
+    issuer_app_code: Optional[str] = None,
+) -> tuple[str, str]:
+    """Resolve the effective template scope from the active TapDB session.
+
+    Runtime template identity is session-scoped. Explicit scope kwargs are
+    accepted only as invariant checks; they may not override the session scope.
+    """
+    resolved_domain_code, resolved_issuer_app_code = session.execute(
+        text(
+            "SELECT tapdb_current_domain_code() AS domain_code, "
+            "tapdb_current_app_code() AS issuer_app_code"
+        )
+    ).one()
+
+    session_domain_code = str(resolved_domain_code or "").strip()
+    session_issuer_app_code = str(resolved_issuer_app_code or "").strip()
+
+    if not session_domain_code or not session_issuer_app_code:
+        raise ValueError(
+            "TapDB session scope is not initialized; domain_code and "
+            "issuer_app_code must be set on the session before template access."
+        )
+
+    if domain_code is not None and str(domain_code).strip() != session_domain_code:
+        raise ValueError(
+            "domain_code override does not match the active TapDB session scope"
+        )
+    if (
+        issuer_app_code is not None
+        and str(issuer_app_code).strip() != session_issuer_app_code
+    ):
+        raise ValueError(
+            "issuer_app_code override does not match the active TapDB session scope"
+        )
+
+    return session_domain_code, session_issuer_app_code
 
 
 class TemplateManager:
@@ -56,13 +99,19 @@ class TemplateManager:
 
         Args:
             template_code: Template code string.
-            domain_code: Filter by domain code (narrows lookup).
-            issuer_app_code: Filter by issuer app code (narrows lookup).
+            domain_code: Optional invariant check against the active session scope.
+            issuer_app_code: Optional invariant check against the active session
+                scope.
 
         Returns:
             The template object, or None if not found.
         """
-        cache_key = f"{domain_code or ''}:{issuer_app_code or ''}:{template_code}"
+        resolved_domain_code, resolved_issuer_app_code = _resolve_template_scope(
+            session,
+            domain_code=domain_code,
+            issuer_app_code=issuer_app_code,
+        )
+        cache_key = f"{resolved_domain_code}:{resolved_issuer_app_code}:{template_code}"
         cached_uid = self._template_uid_cache.get(cache_key)
         if cached_uid is not None:
             tmpl = session.get(generic_template, cached_uid)
@@ -82,12 +131,10 @@ class TemplateManager:
             generic_template.type == type_,
             generic_template.subtype == subtype,
             generic_template.version == version,
+            generic_template.domain_code == resolved_domain_code,
+            generic_template.issuer_app_code == resolved_issuer_app_code,
             generic_template.is_deleted.is_(False),
         )
-        if domain_code is not None:
-            query = query.filter(generic_template.domain_code == domain_code)
-        if issuer_app_code is not None:
-            query = query.filter(generic_template.issuer_app_code == issuer_app_code)
 
         template = query.first()
 
@@ -109,16 +156,26 @@ class TemplateManager:
         Returns:
             The template object, or None if not found.
         """
+        resolved_domain_code, resolved_issuer_app_code = _resolve_template_scope(
+            session
+        )
         cached_uuid = self._template_euid_cache.get(euid)
         if cached_uuid is not None:
             tmpl = session.get(generic_template, cached_uuid)
-            if tmpl is not None and tmpl.is_deleted is False:
+            if (
+                tmpl is not None
+                and tmpl.is_deleted is False
+                and str(tmpl.domain_code) == resolved_domain_code
+                and str(tmpl.issuer_app_code) == resolved_issuer_app_code
+            ):
                 return tmpl
 
         tmpl = (
             session.query(generic_template)
             .filter(
                 generic_template.euid == euid,
+                generic_template.domain_code == resolved_domain_code,
+                generic_template.issuer_app_code == resolved_issuer_app_code,
                 generic_template.is_deleted.is_(False),
             )
             .first()
@@ -148,12 +205,18 @@ class TemplateManager:
             category: Filter by category.
             type_: Filter by type.
             include_deleted: Include soft-deleted templates.
-            domain_code: Filter by domain code.
-            issuer_app_code: Filter by issuer app code.
+            domain_code: Optional invariant check against the active session scope.
+            issuer_app_code: Optional invariant check against the active session
+                scope.
 
         Returns:
             List of matching templates.
         """
+        resolved_domain_code, resolved_issuer_app_code = _resolve_template_scope(
+            session,
+            domain_code=domain_code,
+            issuer_app_code=issuer_app_code,
+        )
         query = session.query(generic_template)
 
         if not include_deleted:
@@ -162,10 +225,10 @@ class TemplateManager:
             query = query.filter(generic_template.category == category)
         if type_:
             query = query.filter(generic_template.type == type_)
-        if domain_code is not None:
-            query = query.filter(generic_template.domain_code == domain_code)
-        if issuer_app_code is not None:
-            query = query.filter(generic_template.issuer_app_code == issuer_app_code)
+        query = query.filter(generic_template.domain_code == resolved_domain_code)
+        query = query.filter(
+            generic_template.issuer_app_code == resolved_issuer_app_code
+        )
 
         return query.all()
 
