@@ -33,9 +33,7 @@ dependencies = [
     "rich",
     "uuid6>=2024.1.12",
     "cli-core-yo==2.0.0",
-    # meridian-euid >= 0.3.0pre (lsmc-bio/meridian-euid)
-    # Not pip-installable; vendored via daylily_tapdb/euid.py.
-    # EUID spec: domain_code (1-4 chars), issuer_app_code (1-4 chars).
+    "meridian-euid>=0.4.1",
 ]
 
 [project.optional-dependencies]

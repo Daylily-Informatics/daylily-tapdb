@@ -19,6 +19,26 @@ def _config_path(tmp_path: Path) -> Path:
     return tmp_path / ".config" / "tapdb" / "local" / "tapdb" / "tapdb-config.yaml"
 
 
+def _write_test_registries(tmp_path: Path) -> tuple[Path, Path]:
+    domain_registry = tmp_path / "domain_code_registry.json"
+    prefix_registry = tmp_path / "prefix_ownership_registry.json"
+    domain_registry.write_text(
+        '{"version":"0.4.0","domains":{"Z":{"name":"test-localhost"}}}\n',
+        encoding="utf-8",
+    )
+    prefix_registry.write_text(
+        (
+            '{"version":"0.4.0","ownership":{"Z":{"TPX":{"issuer_app_code":"daylily-tapdb"},'
+            '"EDG":{"issuer_app_code":"daylily-tapdb"},'
+            '"ADT":{"issuer_app_code":"daylily-tapdb"},'
+            '"SYS":{"issuer_app_code":"daylily-tapdb"},'
+            '"MSG":{"issuer_app_code":"daylily-tapdb"}}}}\n'
+        ),
+        encoding="utf-8",
+    )
+    return domain_registry, prefix_registry
+
+
 @pytest.fixture(autouse=True)
 def _clear_cli_context_fixture() -> None:
     clear_cli_context()
@@ -30,6 +50,7 @@ def test_resolve_tapdb_pool_config_from_tapdb_yaml(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     cfg_path = _config_path(tmp_path)
+    domain_registry, prefix_registry = _write_test_registries(tmp_path)
 
     _write(
         cfg_path,
@@ -37,15 +58,17 @@ def test_resolve_tapdb_pool_config_from_tapdb_yaml(
         "  config_version: 3\n"
         "  client_id: local\n"
         "  database_name: tapdb\n"
-        "  euid_client_code: C\n"
+        "  owner_repo_name: daylily-tapdb\n"
+        f"  domain_registry_path: {domain_registry}\n"
+        f"  prefix_ownership_registry_path: {prefix_registry}\n"
         "environments:\n"
         "  dev:\n"
         "    host: localhost\n"
         "    port: 5432\n"
         "    ui_port: 8911\n"
+        "    domain_code: Z\n"
         "    user: test\n"
         "    database: tapdb_dev\n"
-        "    audit_log_euid_prefix: CGX\n"
         "    cognito_user_pool_id: us-east-1_TESTPOOL\n"
         "    cognito_app_client_id: client123\n"
         "    cognito_client_name: tapdb\n"
@@ -69,6 +92,7 @@ def test_resolve_tapdb_pool_config_requires_pool_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     cfg_path = _config_path(tmp_path)
+    domain_registry, prefix_registry = _write_test_registries(tmp_path)
 
     _write(
         cfg_path,
@@ -76,15 +100,17 @@ def test_resolve_tapdb_pool_config_requires_pool_id(
         "  config_version: 3\n"
         "  client_id: local\n"
         "  database_name: tapdb\n"
-        "  euid_client_code: C\n"
+        "  owner_repo_name: daylily-tapdb\n"
+        f"  domain_registry_path: {domain_registry}\n"
+        f"  prefix_ownership_registry_path: {prefix_registry}\n"
         "environments:\n"
         "  dev:\n"
         "    host: localhost\n"
         "    port: 5432\n"
         "    ui_port: 8911\n"
+        "    domain_code: Z\n"
         "    user: test\n"
-        "    database: tapdb_dev\n"
-        "    audit_log_euid_prefix: CGX\n",
+        "    database: tapdb_dev\n",
     )
 
     set_cli_context(config_path=cfg_path, env_name="dev")
@@ -96,6 +122,7 @@ def test_resolve_tapdb_pool_config_requires_client_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     cfg_path = _config_path(tmp_path)
+    domain_registry, prefix_registry = _write_test_registries(tmp_path)
 
     _write(
         cfg_path,
@@ -103,15 +130,17 @@ def test_resolve_tapdb_pool_config_requires_client_id(
         "  config_version: 3\n"
         "  client_id: local\n"
         "  database_name: tapdb\n"
-        "  euid_client_code: C\n"
+        "  owner_repo_name: daylily-tapdb\n"
+        f"  domain_registry_path: {domain_registry}\n"
+        f"  prefix_ownership_registry_path: {prefix_registry}\n"
         "environments:\n"
         "  dev:\n"
         "    host: localhost\n"
         "    port: 5432\n"
         "    ui_port: 8911\n"
+        "    domain_code: Z\n"
         "    user: test\n"
         "    database: tapdb_dev\n"
-        "    audit_log_euid_prefix: CGX\n"
         "    cognito_user_pool_id: us-east-1_TESTPOOL\n"
         "    cognito_client_name: tapdb\n"
         "    cognito_region: us-east-1\n",
@@ -126,6 +155,7 @@ def test_resolve_tapdb_pool_config_requires_tapdb_client_name(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     cfg_path = _config_path(tmp_path)
+    domain_registry, prefix_registry = _write_test_registries(tmp_path)
 
     _write(
         cfg_path,
@@ -133,15 +163,17 @@ def test_resolve_tapdb_pool_config_requires_tapdb_client_name(
         "  config_version: 3\n"
         "  client_id: local\n"
         "  database_name: tapdb\n"
-        "  euid_client_code: C\n"
+        "  owner_repo_name: daylily-tapdb\n"
+        f"  domain_registry_path: {domain_registry}\n"
+        f"  prefix_ownership_registry_path: {prefix_registry}\n"
         "environments:\n"
         "  dev:\n"
         "    host: localhost\n"
         "    port: 5432\n"
         "    ui_port: 8911\n"
+        "    domain_code: Z\n"
         "    user: test\n"
         "    database: tapdb_dev\n"
-        "    audit_log_euid_prefix: CGX\n"
         "    cognito_user_pool_id: us-east-1_TESTPOOL\n"
         "    cognito_app_client_id: client123\n"
         "    cognito_client_name: wrong-client\n"

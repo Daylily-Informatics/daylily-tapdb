@@ -13,7 +13,7 @@ import re
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-_INSTANCE_PREFIX_RE = re.compile(r"[A-HJ-KMNP-TV-Z]{2,3}")
+_INSTANCE_PREFIX_RE = re.compile(r"[0-9A-HJ-KMNP-TV-Z]{1,4}")
 
 
 def _normalize_instance_prefix(prefix: str) -> str:

@@ -82,7 +82,11 @@ def _update_config_file(
             "config_version": 3,
             "client_id": ctx.client_id,
             "database_name": ctx.database_name,
-            "euid_client_code": str((meta or {}).get("euid_client_code") or ""),
+            "owner_repo_name": str((meta or {}).get("owner_repo_name") or ""),
+            "domain_registry_path": str((meta or {}).get("domain_registry_path") or ""),
+            "prefix_ownership_registry_path": str(
+                (meta or {}).get("prefix_ownership_registry_path") or ""
+            ),
         }
 
     env_cfg = existing["environments"].get(env, {}) or {}

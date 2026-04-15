@@ -47,6 +47,35 @@ def _strip_ansi(s: str) -> str:
     return _ANSI_ESCAPE_RE.sub("", s)
 
 
+def _write_test_registries(base_dir: Path) -> tuple[Path, Path]:
+    domain_registry = base_dir / "domain_code_registry.json"
+    prefix_registry = base_dir / "prefix_ownership_registry.json"
+    domain_registry.write_text(
+        json.dumps({"version": "0.4.0", "domains": {"Z": {"name": "test-localhost"}}})
+        + "\n",
+        encoding="utf-8",
+    )
+    prefix_registry.write_text(
+        json.dumps(
+            {
+                "version": "0.4.0",
+                "ownership": {
+                    "Z": {
+                        "TPX": {"issuer_app_code": "daylily-tapdb"},
+                        "EDG": {"issuer_app_code": "daylily-tapdb"},
+                        "ADT": {"issuer_app_code": "daylily-tapdb"},
+                        "SYS": {"issuer_app_code": "daylily-tapdb"},
+                        "MSG": {"issuer_app_code": "daylily-tapdb"},
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return domain_registry, prefix_registry
+
+
 @pytest.fixture(autouse=True)
 def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Keep CLI tests hermetic.
@@ -59,40 +88,43 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         tmp_path / ".config" / "tapdb" / "testclient" / "testdb" / "tapdb-config.yaml"
     )
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    domain_registry, prefix_registry = _write_test_registries(tmp_path)
     cfg_path.write_text(
         "meta:\n"
         "  config_version: 3\n"
         "  client_id: testclient\n"
         "  database_name: testdb\n"
-        "  euid_client_code: C\n"
+        "  owner_repo_name: daylily-tapdb\n"
+        f"  domain_registry_path: {domain_registry}\n"
+        f"  prefix_ownership_registry_path: {prefix_registry}\n"
         "environments:\n"
         "  dev:\n"
         "    engine_type: local\n"
         "    host: localhost\n"
         "    port: 5533\n"
         "    ui_port: 8911\n"
+        "    domain_code: Z\n"
         "    user: test\n"
         '    password: ""\n'
         "    database: tapdb_dev\n"
-        '    audit_log_euid_prefix: "CGX"\n'
         "  test:\n"
         "    engine_type: local\n"
         "    host: localhost\n"
         "    port: 5534\n"
         "    ui_port: 8912\n"
+        "    domain_code: Z\n"
         "    user: test\n"
         '    password: ""\n'
         "    database: tapdb_test\n"
-        '    audit_log_euid_prefix: "CGX"\n'
         "  prod:\n"
         "    engine_type: local\n"
         "    host: localhost\n"
         "    port: 5535\n"
         "    ui_port: 8913\n"
+        "    domain_code: Z\n"
         "    user: test\n"
         '    password: ""\n'
-        "    database: tapdb_prod\n"
-        '    audit_log_euid_prefix: "CGX"\n',
+        "    database: tapdb_prod\n",
         encoding="utf-8",
     )
     os.chmod(cfg_path, 0o600)
@@ -377,18 +409,22 @@ class TestCLICognito:
 
     def test_cognito_bind_writes_pool_id(self, tmp_path, monkeypatch):
         cfg_path = tmp_path / "tapdb-config.yaml"
+        domain_registry, prefix_registry = _write_test_registries(tmp_path)
         cfg_path.write_text(
             "meta:\n"
             "  config_version: 3\n"
             "  client_id: testclient\n"
             "  database_name: testdb\n"
-            "  euid_client_code: C\n"
+            "  owner_repo_name: daylily-tapdb\n"
+            f"  domain_registry_path: {domain_registry}\n"
+            f"  prefix_ownership_registry_path: {prefix_registry}\n"
             "environments:\n"
             "  dev:\n"
             "    engine_type: local\n"
             "    host: localhost\n"
             "    port: 5432\n"
             "    ui_port: 8911\n"
+            "    domain_code: Z\n"
             "    user: test\n"
             "    database: tapdb_dev\n",
             encoding="utf-8",
@@ -795,6 +831,8 @@ class TestCLICognito:
                 "user": "test",
                 "password": "",
                 "database": "tapdb_dev",
+                "domain_code": "Z",
+                "owner_repo_name": "daylily-tapdb",
             },
         )
         monkeypatch.setattr(
@@ -1410,11 +1448,11 @@ class TestCLIDBSeed:
                         {
                             "name": "Create Note",
                             "polymorphic_discriminator": "action_template",
-                            "category": "action",
+                            "category": "ACT",
                             "type": "core",
                             "subtype": "create-note",
                             "version": "1.0",
-                            "instance_prefix": "XX",
+                            "instance_prefix": "ACT",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {},
@@ -1432,7 +1470,7 @@ class TestCLIDBSeed:
                         {
                             "name": "Generic Object",
                             "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
+                            "category": "AGX",
                             "type": "generic",
                             "subtype": "client-generic-valid-minimal",
                             "version": "1.0",
@@ -1441,7 +1479,7 @@ class TestCLIDBSeed:
                             "bstatus": "active",
                             "json_addl": {
                                 "action_imports": {
-                                    "create_note": "action/core/create-note/1.0"
+                                    "create_note": "ACT/core/create-note/1.0"
                                 },
                                 "expected_inputs": [],
                                 "expected_outputs": [],
@@ -1473,11 +1511,11 @@ class TestCLIDBSeed:
                         {
                             "name": "Create Note",
                             "polymorphic_discriminator": "action_template",
-                            "category": "action",
+                            "category": "ACT",
                             "type": "core",
                             "subtype": "create-note",
                             "version": "1.0",
-                            "instance_prefix": "XX",
+                            "instance_prefix": "ACT",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {},
@@ -1495,7 +1533,7 @@ class TestCLIDBSeed:
                         {
                             "name": "Generic Object",
                             "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
+                            "category": "AGX",
                             "type": "generic",
                             "subtype": "client-generic-valid-layouts",
                             "version": "1.0",
@@ -1508,7 +1546,7 @@ class TestCLIDBSeed:
                                         "relationship_type": "contains",
                                         "child_templates": [
                                             {
-                                                "template_code": "action/core/create-note/1.0",  # noqa: E501
+                                                "template_code": "ACT/core/create-note/1.0",  # noqa: E501
                                                 "count": 2,
                                                 "name_pattern": "{parent_name}_child_{index}",  # noqa: E501
                                             }
@@ -1540,7 +1578,7 @@ class TestCLIDBSeed:
                         {
                             "name": "Generic Object",
                             "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
+                            "category": "AGX",
                             "type": "generic",
                             "subtype": "client-generic-missing-ref-layouts",
                             "version": "1.0",
@@ -1552,7 +1590,7 @@ class TestCLIDBSeed:
                                     {
                                         "child_templates": [
                                             {
-                                                "template_code": "action/core/create-note/1.0"  # noqa: E501
+                                                "template_code": "ACT/core/create-note/1.0"  # noqa: E501
                                             }
                                         ]
                                     }
@@ -1585,11 +1623,11 @@ class TestCLIDBSeed:
                         {
                             "name": "Create Note",
                             "polymorphic_discriminator": "action_template",
-                            "category": "action",
+                            "category": "ACT",
                             "type": "core",
                             "subtype": "create-note",
                             "version": "1.0",
-                            "instance_prefix": "XX",
+                            "instance_prefix": "ACT",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {},
@@ -1607,7 +1645,7 @@ class TestCLIDBSeed:
                         {
                             "name": "Generic Object",
                             "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
+                            "category": "AGX",
                             "type": "generic",
                             "subtype": "client-generic-invalid-count",
                             "version": "1.0",
@@ -1619,7 +1657,7 @@ class TestCLIDBSeed:
                                     {
                                         "child_templates": [
                                             {
-                                                "template_code": "action/core/create-note/1.0",  # noqa: E501
+                                                "template_code": "ACT/core/create-note/1.0",  # noqa: E501
                                                 "count": 0,
                                             }
                                         ]
@@ -1653,7 +1691,7 @@ class TestCLIDBSeed:
                         {
                             "name": "Generic Object",
                             "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
+                            "category": "AGX",
                             "type": "generic",
                             "subtype": "client-generic-missing-template-code",
                             "version": "1.0",
@@ -1689,7 +1727,7 @@ class TestCLIDBSeed:
                         {
                             "name": "Generic Object",
                             "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
+                            "category": "AGX",
                             "type": "generic",
                             "subtype": "client-generic-missing-ref-strict",
                             "version": "1.0",
@@ -1698,7 +1736,7 @@ class TestCLIDBSeed:
                             "bstatus": "active",
                             "json_addl": {
                                 "action_imports": {
-                                    "create_note": "action/core/create-note/1.0"
+                                    "create_note": "ACT/core/create-note/1.0"
                                 }
                             },
                         }
@@ -1726,7 +1764,7 @@ class TestCLIDBSeed:
                         {
                             "name": "Generic Object",
                             "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
+                            "category": "AGX",
                             "type": "generic",
                             "subtype": "client-generic-missing-ref-nonstrict",
                             "version": "1.0",
@@ -1735,7 +1773,7 @@ class TestCLIDBSeed:
                             "bstatus": "active",
                             "json_addl": {
                                 "action_imports": {
-                                    "create_note": "action/core/create-note/1.0"
+                                    "create_note": "ACT/core/create-note/1.0"
                                 }
                             },
                         }
@@ -1761,7 +1799,7 @@ class TestCLIDBSeed:
                         {
                             "name": "Generic Object",
                             "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
+                            "category": "LS",
                             "type": "generic",
                             "subtype": "client-generic-invalid-prefix",
                             "version": "1.0",
@@ -1792,7 +1830,7 @@ class TestCLIDBSeed:
                         {
                             "name": "Client Probe",
                             "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
+                            "category": "AGX",
                             "type": "generic",
                             "subtype": "client-probe",
                             "version": "1.0",
@@ -1801,7 +1839,7 @@ class TestCLIDBSeed:
                             "bstatus": "active",
                             "json_addl": {
                                 "action_imports": {
-                                    "uses_core_actor": "generic/actor/system_user/1.0"
+                                    "uses_core_actor": "SYS/actor/system_user/1.0"
                                 }
                             },
                         }
@@ -1833,7 +1871,7 @@ class TestCLIDBSeed:
                         {
                             "name": "Custom Generic",
                             "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
+                            "category": "AGX",
                             "type": "generic",
                             "subtype": "custom-generic",
                             "version": "1.0",
@@ -1865,20 +1903,20 @@ class TestCLIDBSeed:
         self, tmp_path: Path
     ):
         """Validation should hard-fail on duplicate template keys across sources."""
-        (tmp_path / "generic").mkdir()
-        client_file = tmp_path / "generic" / "generic.json"
+        (tmp_path / "actor").mkdir()
+        client_file = tmp_path / "actor" / "actor.json"
         client_file.write_text(
             json.dumps(
                 {
                     "templates": [
                         {
-                            "name": "Client Duplicate Generic",
-                            "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
-                            "type": "generic",
-                            "subtype": "generic",
+                            "name": "Client Duplicate System User",
+                            "polymorphic_discriminator": "actor_template",
+                            "category": "SYS",
+                            "type": "actor",
+                            "subtype": "system_user",
                             "version": "1.0",
-                            "instance_prefix": "AGX",
+                            "instance_prefix": "SYS",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {},
@@ -1899,7 +1937,7 @@ class TestCLIDBSeed:
         assert dup_errors
         # The duplicate error message references the first definition (core file)
         core_generic = str(
-            _find_tapdb_core_config_dir().resolve() / "generic" / "generic.json"
+            _find_tapdb_core_config_dir().resolve() / "actor" / "actor.json"
         ).lower()
         all_messages = " ".join(i.message.lower() for i in dup_errors)
         assert core_generic in all_messages
@@ -1963,8 +2001,7 @@ class TestCLIDBSeed:
         templates = _load_template_configs(config_dir)
         categories = {t["category"] for t in templates}
 
-        # Should have at least generic and container categories
-        assert "generic" in categories or "container" in categories
+        assert categories == {"SYS", "MSG"}
 
     def test_find_duplicate_template_keys(self):
         """Duplicate template keys should be detected as hard errors."""
@@ -1990,20 +2027,20 @@ class TestCLIDBSeed:
 
     def test_db_seed_dry_run_fails_on_duplicate_template_keys(self, tmp_path: Path):
         """db data seed should hard-fail when merged config sources clash."""
-        custom_generic_dir = tmp_path / "generic"
+        custom_generic_dir = tmp_path / "actor"
         custom_generic_dir.mkdir(parents=True)
-        (custom_generic_dir / "generic.json").write_text(
+        (custom_generic_dir / "actor.json").write_text(
             json.dumps(
                 {
                     "templates": [
                         {
-                            "name": "Duplicate Generic Object",
-                            "polymorphic_discriminator": "generic_template",
-                            "category": "generic",
-                            "type": "generic",
-                            "subtype": "generic",
+                            "name": "Duplicate System User Actor",
+                            "polymorphic_discriminator": "actor_template",
+                            "category": "SYS",
+                            "type": "actor",
+                            "subtype": "system_user",
                             "version": "1.0",
-                            "instance_prefix": "AGX",
+                            "instance_prefix": "SYS",
                             "is_singleton": False,
                             "bstatus": "active",
                             "json_addl": {},
@@ -2033,7 +2070,7 @@ class TestCLIDBSeed:
 
         assert result.exit_code != 0
         output = _strip_ansi(result.output).lower()
-        assert "generic/generic.json" in output or "duplicate template" in output
+        assert "actor/actor.json" in output or "duplicate template" in output
 
     def test_db_seed_dry_run(self):
         """Test db seed --dry-run shows templates without inserting."""

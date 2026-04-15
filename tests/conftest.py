@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import time
+import json
 from pathlib import Path
 from urllib.parse import quote
 
@@ -13,10 +14,10 @@ import pytest
 import yaml
 
 # ---------------------------------------------------------------------------
-# Global domain/app code defaults — every test session uses T / TAPD
+# Global domain/owner defaults — every test session uses Z / daylily-tapdb
 # ---------------------------------------------------------------------------
-os.environ.setdefault("MERIDIAN_DOMAIN_CODE", "T")
-os.environ.setdefault("TAPDB_APP_CODE", "TAPD")
+os.environ.setdefault("MERIDIAN_DOMAIN_CODE", "Z")
+os.environ.setdefault("TAPDB_OWNER_REPO", "daylily-tapdb")
 
 # ---------------------------------------------------------------------------
 # Port used by the ephemeral PostgreSQL test instance
@@ -162,12 +163,47 @@ def pg_instance(tmp_path_factory):
     cfg_dir = base / ".config" / "tapdb" / "testclient" / "testdb"
     cfg_dir.mkdir(parents=True)
     cfg_path = cfg_dir / "tapdb-config.yaml"
+    domain_registry_path = base / "domain_code_registry.json"
+    prefix_registry_path = base / "prefix_ownership_registry.json"
+    domain_registry_path.write_text(
+        json.dumps(
+            {
+                "version": "0.4.0",
+                "domains": {"Z": {"name": "test-localhost"}},
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    prefix_registry_path.write_text(
+        json.dumps(
+            {
+                "version": "0.4.0",
+                "ownership": {
+                    "Z": {
+                        "TPX": {"issuer_app_code": "daylily-tapdb"},
+                        "EDG": {"issuer_app_code": "daylily-tapdb"},
+                        "ADT": {"issuer_app_code": "daylily-tapdb"},
+                        "SYS": {"issuer_app_code": "daylily-tapdb"},
+                        "MSG": {"issuer_app_code": "daylily-tapdb"},
+                    }
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
     cfg_data = {
         "meta": {
             "config_version": 3,
             "client_id": "testclient",
             "database_name": "testdb",
-            "euid_client_code": "C",
+            "owner_repo_name": "daylily-tapdb",
+            "domain_registry_path": str(domain_registry_path),
+            "prefix_ownership_registry_path": str(prefix_registry_path),
         },
         "environments": {
             "dev": {
@@ -175,10 +211,10 @@ def pg_instance(tmp_path_factory):
                 "host": "localhost",
                 "port": port,
                 "ui_port": 18911,
+                "domain_code": "Z",
                 "user": user,
                 "password": "",
                 "database": database,
-                "audit_log_euid_prefix": "CGX",
             },
         },
     }

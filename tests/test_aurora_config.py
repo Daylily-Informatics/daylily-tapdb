@@ -113,35 +113,56 @@ class TestAuroraConfigFromDict:
 def _yaml_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Write a temp config with both local and aurora envs."""
     cfg_file = tmp_path / "tapdb-config.yaml"
+    domain_registry = tmp_path / "domain_code_registry.json"
+    prefix_registry = tmp_path / "prefix_ownership_registry.json"
+    domain_registry.write_text(
+        '{"version":"0.4.0","domains":{"Z":{"name":"test-localhost"}}}\n',
+        encoding="utf-8",
+    )
+    prefix_registry.write_text(
+        (
+            '{"version":"0.4.0","ownership":{"Z":{"TPX":{"issuer_app_code":"daylily-tapdb"},'
+            '"EDG":{"issuer_app_code":"daylily-tapdb"},'
+            '"ADT":{"issuer_app_code":"daylily-tapdb"},'
+            '"SYS":{"issuer_app_code":"daylily-tapdb"},'
+            '"MSG":{"issuer_app_code":"daylily-tapdb"}}}}\n'
+        ),
+        encoding="utf-8",
+    )
     cfg_file.write_text(
         textwrap.dedent("""\
         meta:
           config_version: 3
           client_id: clientx
           database_name: dbx
-          euid_client_code: C
+          owner_repo_name: daylily-tapdb
+          domain_registry_path: {domain_registry}
+          prefix_ownership_registry_path: {prefix_registry}
         environments:
           dev:
             host: localhost
             port: 5432
             ui_port: 8911
+            domain_code: Z
             user: daylily
             password: ""
             database: tapdb_dev
-            audit_log_euid_prefix: CGX
           aurora_dev:
             engine_type: aurora
             host: my-cluster.us-west-2.rds.amazonaws.com
             port: 5432
+            domain_code: Z
             user: tapdb_admin
             password: ""
             database: tapdb_dev
-            audit_log_euid_prefix: CGX
             region: us-west-2
             cluster_identifier: my-cluster
             iam_auth: true
             ssl: true
-        """)
+        """).format(
+            domain_registry=domain_registry,
+            prefix_registry=prefix_registry,
+        )
     )
     set_cli_context(config_path=cfg_file)
     return cfg_file
@@ -198,23 +219,44 @@ class TestGetDbConfigEngineType:
         from daylily_tapdb.cli.db_config import get_db_config_for_env
 
         cfg_file = tmp_path / "tapdb-config.yaml"
+        domain_registry = tmp_path / "domain_code_registry.json"
+        prefix_registry = tmp_path / "prefix_ownership_registry.json"
+        domain_registry.write_text(
+            '{"version":"0.4.0","domains":{"Z":{"name":"test-localhost"}}}\n',
+            encoding="utf-8",
+        )
+        prefix_registry.write_text(
+            (
+                '{"version":"0.4.0","ownership":{"Z":{"TPX":{"issuer_app_code":"daylily-tapdb"},'
+                '"EDG":{"issuer_app_code":"daylily-tapdb"},'
+                '"ADT":{"issuer_app_code":"daylily-tapdb"},'
+                '"SYS":{"issuer_app_code":"daylily-tapdb"},'
+                '"MSG":{"issuer_app_code":"daylily-tapdb"}}}}\n'
+            ),
+            encoding="utf-8",
+        )
         cfg_file.write_text(
             textwrap.dedent("""\
             meta:
               config_version: 3
               client_id: clientx
               database_name: dbx
-              euid_client_code: C
+              owner_repo_name: daylily-tapdb
+              domain_registry_path: {domain_registry}
+              prefix_ownership_registry_path: {prefix_registry}
             environments:
               dev:
                 host: localhost
                 port: 5432
                 ui_port: 8911
+                domain_code: Z
                 user: daylily
                 password: ""
                 database: tapdb_dev
-                audit_log_euid_prefix: CGX
-            """)
+            """).format(
+                domain_registry=domain_registry,
+                prefix_registry=prefix_registry,
+            )
         )
         monkeypatch.setenv("HOME", str(tmp_path))
         set_cli_context(config_path=cfg_file)
@@ -231,24 +273,45 @@ class TestGetDbConfigEngineType:
         from daylily_tapdb.cli.db_config import get_db_config_for_env
 
         cfg_file = tmp_path / "tapdb-config.yaml"
+        domain_registry = tmp_path / "domain_code_registry.json"
+        prefix_registry = tmp_path / "prefix_ownership_registry.json"
+        domain_registry.write_text(
+            '{"version":"0.4.0","domains":{"Z":{"name":"test-localhost"}}}\n',
+            encoding="utf-8",
+        )
+        prefix_registry.write_text(
+            (
+                '{"version":"0.4.0","ownership":{"Z":{"TPX":{"issuer_app_code":"daylily-tapdb"},'
+                '"EDG":{"issuer_app_code":"daylily-tapdb"},'
+                '"ADT":{"issuer_app_code":"daylily-tapdb"},'
+                '"SYS":{"issuer_app_code":"daylily-tapdb"},'
+                '"MSG":{"issuer_app_code":"daylily-tapdb"}}}}\n'
+            ),
+            encoding="utf-8",
+        )
         cfg_file.write_text(
             textwrap.dedent("""\
             meta:
               config_version: 3
               client_id: clientx
               database_name: dbx
-              euid_client_code: C
+              owner_repo_name: daylily-tapdb
+              domain_registry_path: {domain_registry}
+              prefix_ownership_registry_path: {prefix_registry}
             environments:
               dev:
                 host: localhost
                 port: 5432
                 ui_port: 8911
+                domain_code: Z
                 user: daylily
                 password: ""
                 database: tapdb_dev
                 unix_socket_dir: /tmp/from-config
-                audit_log_euid_prefix: CGX
-            """)
+            """).format(
+                domain_registry=domain_registry,
+                prefix_registry=prefix_registry,
+            )
         )
         set_cli_context(config_path=cfg_file)
 

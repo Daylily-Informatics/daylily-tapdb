@@ -10,7 +10,9 @@ meta:
   config_version: 3
   client_id: local
   database_name: tapdb
-  euid_client_code: C
+  owner_repo_name: daylily-tapdb
+  domain_registry_path: ~/.config/tapdb/domain_code_registry.json
+  prefix_ownership_registry_path: ~/.config/tapdb/prefix_ownership_registry.json
 
 admin:
   footer:
@@ -48,7 +50,7 @@ environments:
     user: daylily
     password: ""
     database: tapdb_dev
-    audit_log_euid_prefix: CGX
+    domain_code: Z
     support_email: support@example.com
     cognito_user_pool_id: us-east-1_xxxxxxxxx
     cognito_app_client_id: client123
@@ -66,7 +68,7 @@ environments:
     user: daylily
     password: ""
     database: tapdb_test
-    audit_log_euid_prefix: CGX
+    domain_code: Z
     support_email: support@example.com
 
   prod:
@@ -75,7 +77,7 @@ environments:
     user: tapdb_admin
     password: CHANGEME
     database: tapdb_prod
-    audit_log_euid_prefix: CGX
+    domain_code: Z
     support_email: support@example.com
 
   aurora_dev:
@@ -85,7 +87,7 @@ environments:
     user: tapdb_admin
     password: ""
     database: tapdb_dev
-    audit_log_euid_prefix: CGX
+    domain_code: Z
     support_email: support@example.com
     region: us-west-2
     cluster_identifier: tapdb-dev-cluster

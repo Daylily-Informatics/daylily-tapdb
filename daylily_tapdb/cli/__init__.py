@@ -28,15 +28,16 @@ from daylily_tapdb.cli.context import (
 )
 from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.cli.spec import spec
-from daylily_tapdb.euid import (
-    normalize_euid_client_code,
-    resolve_client_scoped_core_prefix,
+from daylily_tapdb.governance import (
+    DEFAULT_DOMAIN_REGISTRY_PATH,
+    DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH,
+    normalize_owner_repo_name,
 )
 
 DEFAULT_UI_PORT = 8911
 DEFAULT_UI_HOST = "localhost"
 DEFAULT_UI_SCHEME = "https"
-# Legacy module globals retained for compatibility with older tests/tools.
+# UI runtime paths are derived from the active TapDB namespace context.
 PID_FILE = Path.home() / ".tapdb" / "ui.pid"
 LOG_FILE = Path.home() / ".tapdb" / "ui.log"
 
@@ -949,13 +950,61 @@ def build_app():
             f"Set via --db-port {env_name}=<port> or --ui-port {env_name}=<port>."
         )
 
+    def _parse_env_text_pairs(values: list[str], *, flag: str) -> dict[str, str]:
+        parsed: dict[str, str] = {}
+        for raw in values:
+            text = str(raw).strip()
+            if not text:
+                continue
+            if "=" not in text:
+                raise RuntimeError(
+                    f"{flag} must be provided as ENV=VALUE (got {raw!r})"
+                )
+            env_name, value = text.split("=", 1)
+            env_name = env_name.strip().lower()
+            value = value.strip()
+            if not env_name:
+                raise RuntimeError(f"{flag} missing environment in {raw!r}")
+            if not value:
+                raise RuntimeError(f"{flag} missing value in {raw!r}")
+            parsed[env_name] = value
+        return parsed
+
+    def _resolve_required_text(
+        *,
+        env_name: str,
+        field: str,
+        explicit_map: dict[str, str],
+        existing_env_cfg: dict,
+        flag: str,
+    ) -> str:
+        if env_name in explicit_map:
+            return explicit_map[env_name]
+
+        existing_raw = str(existing_env_cfg.get(field) or "").strip()
+        if existing_raw:
+            return existing_raw
+
+        if sys.stdin.isatty():
+            while True:
+                entered = typer.prompt(f"Enter {field} for {env_name}")
+                if entered.strip():
+                    return entered.strip()
+                ccyo_out.error(f"Invalid {field} for {env_name}")
+
+        raise RuntimeError(
+            f"Missing required {field} for env {env_name}. "
+            f"Set via {flag} {env_name}=<value>."
+        )
+
     def _require_explicit_config_flag() -> Path:
         config_path = active_context_overrides().get("config_path")
         if not config_path:
             raise RuntimeError(
                 "TapDB config commands require --config. "
                 "Example: tapdb --config ~/.config/tapdb/atlas/app/tapdb-config.yaml "
-                "config init --client-id atlas --database-name app --euid-client-code A"
+                "config init --client-id atlas --database-name app "
+                "--owner-repo-name lsmc-atlas --domain-code dev=Z"
             )
         return Path(config_path)
 
@@ -1005,10 +1054,25 @@ def build_app():
         database_name: str = typer.Option(
             ..., "--database-name", help="Database namespace key"
         ),
-        euid_client_code: str = typer.Option(
+        owner_repo_name: str = typer.Option(
             ...,
-            "--euid-client-code",
-            help="Single-letter client code used to derive the namespace TapDB core prefix",
+            "--owner-repo-name",
+            help="Repo-name token used for Meridian prefix ownership validation",
+        ),
+        domain_code: list[str] = typer.Option(
+            [],
+            "--domain-code",
+            help="Per-env domain code mapping (ENV=CODE, repeatable)",
+        ),
+        domain_registry_path: str = typer.Option(
+            str(DEFAULT_DOMAIN_REGISTRY_PATH),
+            "--domain-registry-path",
+            help="Path to the shared Meridian domain registry JSON",
+        ),
+        prefix_ownership_registry_path: str = typer.Option(
+            str(DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH),
+            "--prefix-ownership-registry-path",
+            help="Path to the shared Meridian prefix ownership registry JSON",
         ),
         env: list[str] = typer.Option(
             ["dev"],
@@ -1041,8 +1105,7 @@ def build_app():
         env_names = sorted({e.strip().lower() for e in env if str(e).strip()})
         if not env_names:
             raise RuntimeError("At least one --env must be provided")
-        normalized_client_code = normalize_euid_client_code(euid_client_code)
-        core_euid_prefix = resolve_client_scoped_core_prefix(normalized_client_code)
+        normalized_owner_repo_name = normalize_owner_repo_name(owner_repo_name)
 
         existing = _read_yaml_or_json_file(config_path)
         existing_meta = existing.get("meta") if isinstance(existing, dict) else None
@@ -1058,13 +1121,18 @@ def build_app():
 
         db_ports = _parse_env_port_pairs(db_port, flag="--db-port")
         ui_ports = _parse_env_port_pairs(ui_port, flag="--ui-port")
+        domain_codes = _parse_env_text_pairs(domain_code, flag="--domain-code")
 
         root = existing if isinstance(existing, dict) else {}
         root["meta"] = {
             "config_version": 3,
             "client_id": client_id,
             "database_name": database_name,
-            "euid_client_code": normalized_client_code,
+            "owner_repo_name": normalized_owner_repo_name,
+            "domain_registry_path": str(Path(domain_registry_path).expanduser()),
+            "prefix_ownership_registry_path": str(
+                Path(prefix_ownership_registry_path).expanduser()
+            ),
         }
         admin_root = root.get("admin")
         if not isinstance(admin_root, dict) or force:
@@ -1100,19 +1168,26 @@ def build_app():
                 explicit_map=ui_ports,
                 existing_env_cfg=prior,
             )
+            resolved_domain_code = _resolve_required_text(
+                env_name=env_name,
+                field="domain_code",
+                explicit_map=domain_codes,
+                existing_env_cfg=prior,
+                flag="--domain-code",
+            )
             envs[env_name] = {
                 **prior,
                 "engine_type": str(prior.get("engine_type") or "local"),
                 "host": "localhost",
                 "port": str(resolved_db_port),
                 "ui_port": str(resolved_ui_port),
+                "domain_code": resolved_domain_code,
                 "user": str(prior.get("user") or os.environ.get("USER", "postgres")),
                 "password": str(prior.get("password") or ""),
                 "database": str(
                     prior.get("database") or f"tapdb_{database_name}_{env_name}"
                 ),
                 "cognito_user_pool_id": str(prior.get("cognito_user_pool_id") or ""),
-                "audit_log_euid_prefix": core_euid_prefix,
                 "support_email": str(prior.get("support_email") or ""),
             }
 
@@ -1166,8 +1241,21 @@ def build_app():
         cognito_logout_url: Optional[str] = typer.Option(
             None, "--cognito-logout-url", help="Bound Cognito logout URL"
         ),
-        audit_log_euid_prefix: Optional[str] = typer.Option(
-            None, "--audit-log-euid-prefix", help="Audit-log EUID prefix"
+        domain_code: Optional[str] = typer.Option(
+            None, "--domain-code", help="Meridian domain code for this environment"
+        ),
+        owner_repo_name: Optional[str] = typer.Option(
+            None,
+            "--owner-repo-name",
+            help="Repo-name token used for Meridian prefix ownership validation",
+        ),
+        domain_registry_path: Optional[str] = typer.Option(
+            None, "--domain-registry-path", help="Shared Meridian domain registry path"
+        ),
+        prefix_ownership_registry_path: Optional[str] = typer.Option(
+            None,
+            "--prefix-ownership-registry-path",
+            help="Shared Meridian prefix ownership registry path",
         ),
         support_email: Optional[str] = typer.Option(
             None, "--support-email", help="Support email address"
@@ -1262,7 +1350,7 @@ def build_app():
             "cognito_domain",
             "cognito_callback_url",
             "cognito_logout_url",
-            "audit_log_euid_prefix",
+            "domain_code",
             "support_email",
         }
         clear_fields = {str(item).strip() for item in clear if str(item).strip()}
@@ -1340,10 +1428,18 @@ def build_app():
             updates["cognito_callback_url"] = str(cognito_callback_url).strip()
         if cognito_logout_url is not None:
             updates["cognito_logout_url"] = str(cognito_logout_url).strip()
-        if audit_log_euid_prefix is not None:
-            updates["audit_log_euid_prefix"] = str(audit_log_euid_prefix).strip()
+        if domain_code is not None:
+            updates["domain_code"] = str(domain_code).strip()
         if support_email is not None:
             updates["support_email"] = str(support_email).strip()
+        if owner_repo_name is not None:
+            meta["owner_repo_name"] = normalize_owner_repo_name(owner_repo_name)
+        if domain_registry_path is not None:
+            meta["domain_registry_path"] = str(Path(domain_registry_path).expanduser())
+        if prefix_ownership_registry_path is not None:
+            meta["prefix_ownership_registry_path"] = str(
+                Path(prefix_ownership_registry_path).expanduser()
+            )
 
         admin_changed = False
         if admin_repo_url is not None:

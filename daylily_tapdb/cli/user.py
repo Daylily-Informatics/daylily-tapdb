@@ -51,6 +51,8 @@ def _open_connection(env: Environment, *, app_username: str) -> TAPDBConnection:
         region=region,
         iam_auth=iam_auth,
         app_username=app_username,
+        domain_code=str(cfg["domain_code"]),
+        owner_repo_name=str(cfg["owner_repo_name"]),
     )
 
 

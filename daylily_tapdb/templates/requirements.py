@@ -27,6 +27,7 @@ def require_seeded_template(
     session: Session,
     template_code: str,
     *,
+    domain_code: str | None = None,
     expected_prefix: str | None = None,
     app_name: str | None = None,
     template_manager: TemplateManager | None = None,
@@ -34,7 +35,7 @@ def require_seeded_template(
     """Return a seeded template or raise a clear runtime error."""
 
     manager = template_manager or TemplateManager()
-    template = manager.get_template(session, template_code)
+    template = manager.get_template(session, template_code, domain_code=domain_code)
     if template is None:
         raise MissingSeededTemplateError(
             f"Missing seeded TapDB template {template_code!r}. {_runtime_hint(app_name=app_name)}"
@@ -56,6 +57,7 @@ def require_seeded_templates(
     session: Session,
     requirements: Iterable[tuple[str, str | None]],
     *,
+    domain_code: str | None = None,
     app_name: str | None = None,
     template_manager: TemplateManager | None = None,
 ) -> list[generic_template]:
@@ -66,6 +68,7 @@ def require_seeded_templates(
         require_seeded_template(
             session,
             template_code,
+            domain_code=domain_code,
             expected_prefix=expected_prefix,
             app_name=app_name,
             template_manager=manager,

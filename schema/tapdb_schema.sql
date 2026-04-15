@@ -17,30 +17,30 @@ CREATE SEQUENCE IF NOT EXISTS msg_instance_seq;  -- MSG (system messages)
 -- SESSION CONTEXT HELPERS
 --------------------------------------------------------------------------------
 
--- Validate domain code (1-4 uppercase Crockford Base32 letters, no I/L/O/U)
+-- Validate domain code (1-4 uppercase Crockford Base32 chars, no I/L/O/U)
 CREATE OR REPLACE FUNCTION tapdb_validate_domain_code(code TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
     norm TEXT := upper(trim(code));
 BEGIN
-    IF norm !~ '^[A-HJ-KMNP-TV-Z]{1,4}$' THEN
+    IF norm !~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$' THEN
         RAISE EXCEPTION
-            'Invalid domain code "%" (must be 1-4 Crockford Base32 letters)',
+            'Invalid domain code "%" (must be 1-4 Crockford Base32 chars)',
             code;
     END IF;
     RETURN norm;
 END;
 $$;
 
--- Validate app code (1-4 uppercase Crockford Base32 letters, no I/L/O/U)
-CREATE OR REPLACE FUNCTION tapdb_validate_app_code(code TEXT)
+-- Validate owner repo name against Meridian registry issuer token rules.
+CREATE OR REPLACE FUNCTION tapdb_validate_owner_repo_name(code TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
-    norm TEXT := upper(trim(code));
+    norm TEXT := lower(trim(code));
 BEGIN
-    IF norm !~ '^[A-HJ-KMNP-TV-Z]{1,4}$' THEN
+    IF norm !~ '^[a-z0-9]+([._-][a-z0-9]+)*$' THEN
         RAISE EXCEPTION
-            'Invalid app code "%" (must be 1-4 Crockford Base32 letters)',
+            'Invalid owner repo name "%" (must match Meridian issuer token rules)',
             code;
     END IF;
     RETURN norm;
@@ -72,28 +72,28 @@ BEGIN
 END;
 $$;
 
--- Resolve runtime app code from Postgres session state.
+-- Resolve runtime owner repo name from Postgres session state.
 -- Missing session state is rejected.
-CREATE OR REPLACE FUNCTION tapdb_current_app_code()
+CREATE OR REPLACE FUNCTION tapdb_current_owner_repo_name()
 RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
 DECLARE
     raw_code TEXT;
 BEGIN
-    raw_code := current_setting('session.current_app_code', true);
+    raw_code := current_setting('session.current_owner_repo_name', true);
     IF raw_code IS NULL THEN
         RAISE EXCEPTION
-            'session.current_app_code is required. '
-            'Set it to a valid 1-4 char Crockford Base32 app code.';
+            'session.current_owner_repo_name is required. '
+            'Set it to the repo-name that owns this TapDB runtime.';
     END IF;
 
     raw_code := trim(raw_code);
     IF raw_code = '' THEN
         RAISE EXCEPTION
-            'session.current_app_code is set to empty string. '
-            'A valid 1-4 char Crockford Base32 app code is required.';
+            'session.current_owner_repo_name is set to empty string. '
+            'A valid repo-name is required.';
     END IF;
 
-    RETURN tapdb_validate_app_code(raw_code);
+    RETURN tapdb_validate_owner_repo_name(raw_code);
 END;
 $$;
 
@@ -101,12 +101,12 @@ $$;
 -- TABLES
 --------------------------------------------------------------------------------
 
--- Prefix configuration for identity tables whose EUID prefixes are env-configured
--- Scoped by domain_code + issuer_app_code for shared-DB safety
+-- Prefix configuration for TapDB-managed identity tables.
+-- Scoped by domain_code + owner repo name for shared-DB safety.
 CREATE TABLE IF NOT EXISTS tapdb_identity_prefix_config (
     entity TEXT NOT NULL,
-    domain_code TEXT NOT NULL DEFAULT '',
-    issuer_app_code TEXT NOT NULL DEFAULT '',
+    domain_code TEXT NOT NULL,
+    issuer_app_code TEXT NOT NULL,
     prefix TEXT NOT NULL,
     updated_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (entity, domain_code, issuer_app_code)
@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS generic_template (
     subtype TEXT NOT NULL,
     version TEXT NOT NULL,
 
-    CONSTRAINT unique_template_code UNIQUE (domain_code, issuer_app_code, category, type, subtype, version),
+    CONSTRAINT unique_template_code UNIQUE (domain_code, category, type, subtype, version),
 
     -- Instance configuration
     instance_prefix TEXT NOT NULL,
@@ -281,7 +281,7 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     -- Scoping — denormalized from the message for direct filtering
     tenant_id UUID,
     domain_code TEXT NOT NULL DEFAULT tapdb_current_domain_code(),
-    issuer_app_code TEXT NOT NULL DEFAULT tapdb_current_app_code(),
+    issuer_app_code TEXT NOT NULL DEFAULT tapdb_current_owner_repo_name(),
     destination TEXT NOT NULL,
     dedupe_key TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
@@ -332,7 +332,7 @@ CREATE TABLE IF NOT EXISTS outbox_event_attempt (
     outbox_event_id BIGINT NOT NULL REFERENCES outbox_event(id),
     tenant_id UUID,
     domain_code TEXT NOT NULL DEFAULT tapdb_current_domain_code(),
-    issuer_app_code TEXT NOT NULL DEFAULT tapdb_current_app_code(),
+    issuer_app_code TEXT NOT NULL DEFAULT tapdb_current_owner_repo_name(),
     attempt_no INT NOT NULL,
     worker_id TEXT,
     claim_token UUID,
@@ -363,7 +363,7 @@ CREATE TABLE IF NOT EXISTS inbox_message (
     receipt_machine_uuid UUID UNIQUE NOT NULL,
     tenant_id UUID,
     domain_code TEXT NOT NULL DEFAULT tapdb_current_domain_code(),
-    issuer_app_code TEXT NOT NULL DEFAULT tapdb_current_app_code(),
+    issuer_app_code TEXT NOT NULL DEFAULT tapdb_current_owner_repo_name(),
     source_domain_code TEXT NOT NULL DEFAULT '',
     source_issuer_app_code TEXT NOT NULL DEFAULT '',
     source_destination TEXT,
@@ -396,7 +396,7 @@ BEGIN
           AND conrelid = 'generic_template'::regclass
     ) THEN
         ALTER TABLE generic_template ADD CONSTRAINT unique_template_code
-            UNIQUE (category, type, subtype, version);
+            UNIQUE (domain_code, category, type, subtype, version);
     END IF;
 END $$;
 
@@ -597,56 +597,45 @@ BEGIN
 END;
 $$;
 
--- Validate Meridian prefix (2-3 uppercase letters, no I/L/O/U)
+-- Validate Meridian prefix (1-4 Crockford Base32 chars, no I/L/O/U)
 CREATE OR REPLACE FUNCTION tapdb_validate_meridian_prefix(prefix TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
     norm TEXT := upper(trim(prefix));
 BEGIN
-    IF norm !~ '^[A-HJ-KMNP-TV-Z]{2,3}$' THEN
+    IF norm !~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$' THEN
         RAISE EXCEPTION
-            'Invalid Meridian prefix "%" (must match ^[A-HJ-KMNP-TV-Z]{2,3}$)',
+            'Invalid Meridian prefix "%" (must match ^[0-9A-HJ-KMNP-TV-Z]{1,4}$)',
             prefix;
     END IF;
     RETURN norm;
 END;
 $$;
 
--- Extract domain code from EUID string (e.g. T:GX-1AB -> T, TEST:GX-1AB -> TEST)
+-- Extract domain code from canonical EUID string (e.g. Z-AGX-1AB -> Z).
 CREATE OR REPLACE FUNCTION meridian_euid_domain_code(euid TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
-    colon_pos INT;
     code TEXT;
 BEGIN
-    colon_pos := position(':' IN euid);
-    IF colon_pos = 0 THEN
-        RETURN NULL;
+    IF position('-' IN euid) = 0 THEN
+        RAISE EXCEPTION 'Invalid EUID format (missing domain code): %', euid;
     END IF;
-
-    code := substr(euid, 1, colon_pos - 1);
+    code := split_part(euid, '-', 1);
     RETURN tapdb_validate_domain_code(code);
 END;
 $$;
 
--- Extract category prefix from EUID string (e.g. GX-1AB -> GX, T:GX-1AB -> GX)
+-- Extract prefix token from canonical EUID string (e.g. Z-AGX-1AB -> AGX).
 CREATE OR REPLACE FUNCTION meridian_euid_prefix(euid TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
-    colon_pos INT;
-    dash_pos INT;
-    prefix_start INT := 1;
     prefix TEXT;
 BEGIN
-    colon_pos := position(':' IN euid);
-    IF colon_pos > 0 THEN
-        prefix_start := colon_pos + 1;
-    END IF;
-    dash_pos := position('-' IN euid);
-    IF dash_pos <= prefix_start THEN
+    IF length(euid) - length(replace(euid, '-', '')) <> 2 THEN
         RAISE EXCEPTION 'Invalid EUID format (missing prefix): %', euid;
     END IF;
-    prefix := substr(euid, prefix_start, dash_pos - prefix_start);
+    prefix := split_part(euid, '-', 2);
     RETURN tapdb_validate_meridian_prefix(prefix);
 END;
 $$;
@@ -655,16 +644,13 @@ $$;
 CREATE OR REPLACE FUNCTION meridian_euid_seq_from_euid(euid TEXT)
 RETURNS BIGINT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
-    dash_pos INT;
     body_plus_check TEXT;
     body TEXT;
 BEGIN
-    dash_pos := position('-' IN euid);
-    IF dash_pos < 2 THEN
+    IF length(euid) - length(replace(euid, '-', '')) <> 2 THEN
         RAISE EXCEPTION 'Invalid EUID format: %', euid;
     END IF;
-
-    body_plus_check := substr(euid, dash_pos + 1);
+    body_plus_check := split_part(euid, '-', 3);
     IF length(body_plus_check) < 2 THEN
         RAISE EXCEPTION 'Invalid EUID body/checksum segment: %', euid;
     END IF;
@@ -698,7 +684,7 @@ BEGIN
 END;
 $$;
 
--- Meridian EUID: Generate full EUID string (PREFIX-BODYCHECK or DC:PREFIX-BODYCHECK)
+-- Meridian EUID: Generate canonical DOMAIN-PREFIX-BODYCHECK string.
 CREATE OR REPLACE FUNCTION meridian_generate_euid(prefix TEXT, seq_val BIGINT, domain_code TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
@@ -709,19 +695,15 @@ DECLARE
     check_char CHAR;
 BEGIN
     normalized_prefix := tapdb_validate_meridian_prefix(prefix);
-    normalized_dc := CASE
-        WHEN domain_code IS NULL OR trim(domain_code) = '' THEN NULL
-        ELSE tapdb_validate_domain_code(domain_code)
-    END;
+    IF domain_code IS NULL OR trim(domain_code) = '' THEN
+        RAISE EXCEPTION 'domain_code is required for Meridian v0.4.1 EUID generation';
+    END IF;
+    normalized_dc := tapdb_validate_domain_code(domain_code);
 
     body := crockford_base32_encode(seq_val);
-    payload := COALESCE(normalized_dc, '') || normalized_prefix || body;
+    payload := normalized_dc || normalized_prefix || body;
     check_char := meridian_luhn_mod32_check(payload);
-
-    IF normalized_dc IS NULL THEN
-        RETURN normalized_prefix || '-' || body || check_char;
-    END IF;
-    RETURN normalized_dc || ':' || normalized_prefix || '-' || body || check_char;
+    RETURN normalized_dc || '-' || normalized_prefix || '-' || body || check_char;
 END;
 $$;
 
@@ -732,38 +714,27 @@ BEGIN
 END;
 $$;
 
--- Resolve configured EUID prefix for identity table.
--- Scoped by session domain_code + issuer_app_code, falling back to global ('','') if not found.
+-- Resolve configured EUID prefix for TapDB-owned identity tables.
 CREATE OR REPLACE FUNCTION tapdb_get_identity_prefix(entity_name TEXT)
 RETURNS TEXT LANGUAGE plpgsql STABLE STRICT AS $$
 DECLARE
     prefix TEXT;
     dc TEXT;
-    ac TEXT;
+    owner_repo_name TEXT;
 BEGIN
-    dc := coalesce(tapdb_current_domain_code(), '');
-    ac := coalesce(tapdb_current_app_code(), '');
+    dc := tapdb_current_domain_code();
+    owner_repo_name := tapdb_current_owner_repo_name();
 
-    -- Try domain/app-scoped lookup first
     SELECT p.prefix INTO prefix
     FROM tapdb_identity_prefix_config p
     WHERE p.entity = entity_name
       AND p.domain_code = dc
-      AND p.issuer_app_code = ac;
-
-    -- Fallback to global (empty domain/app) if not found
-    IF prefix IS NULL AND (dc <> '' OR ac <> '') THEN
-        SELECT p.prefix INTO prefix
-        FROM tapdb_identity_prefix_config p
-        WHERE p.entity = entity_name
-          AND p.domain_code = ''
-          AND p.issuer_app_code = '';
-    END IF;
+      AND p.issuer_app_code = owner_repo_name;
 
     IF prefix IS NULL THEN
         RAISE EXCEPTION
-            'Missing EUID prefix configuration for entity "%" (domain=%, app=%) in tapdb_identity_prefix_config',
-            entity_name, dc, ac;
+            'Missing EUID prefix configuration for entity "%" (domain=%, owner_repo=%) in tapdb_identity_prefix_config',
+            entity_name, dc, owner_repo_name;
     END IF;
 
     prefix := tapdb_validate_meridian_prefix(prefix);
@@ -789,7 +760,7 @@ DECLARE
 BEGIN
     -- Populate domain_code and issuer_app_code from session context
     NEW.domain_code := tapdb_current_domain_code();
-    NEW.issuer_app_code := tapdb_current_app_code();
+    NEW.issuer_app_code := tapdb_current_owner_repo_name();
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('generic_template');
@@ -831,23 +802,11 @@ DECLARE
 BEGIN
     -- Populate domain_code and issuer_app_code from session context
     NEW.domain_code := tapdb_current_domain_code();
-    NEW.issuer_app_code := tapdb_current_app_code();
+    NEW.issuer_app_code := tapdb_current_owner_repo_name();
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
-        -- Get prefix from template
-        SELECT instance_prefix INTO prefix FROM generic_template WHERE uid = NEW.template_uid;
-
-        IF prefix IS NULL THEN
-            RAISE EXCEPTION
-                'Missing template instance_prefix for template_uid % while inserting generic_instance',
-                NEW.template_uid;
-        END IF;
+        prefix := tapdb_validate_meridian_prefix(NEW.category);
         prefix := tapdb_validate_meridian_prefix(prefix);
-        IF prefix IN ('GX', 'TGX') THEN
-            RAISE EXCEPTION
-                'Unresolved/reserved instance_prefix % cannot be persisted in generic_instance',
-                prefix;
-        END IF;
         seq_name := lower(prefix) || '_instance_seq';
 
         BEGIN
@@ -888,7 +847,7 @@ DECLARE
 BEGIN
     -- Populate domain_code and issuer_app_code from session context
     NEW.domain_code := tapdb_current_domain_code();
-    NEW.issuer_app_code := tapdb_current_app_code();
+    NEW.issuer_app_code := tapdb_current_owner_repo_name();
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('generic_instance_lineage');
@@ -930,7 +889,7 @@ DECLARE
 BEGIN
     -- Populate domain_code and issuer_app_code from session context
     NEW.domain_code := tapdb_current_domain_code();
-    NEW.issuer_app_code := tapdb_current_app_code();
+    NEW.issuer_app_code := tapdb_current_owner_repo_name();
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('audit_log');

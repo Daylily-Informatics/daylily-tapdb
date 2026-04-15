@@ -28,6 +28,26 @@ def _strip(s: str) -> str:
     return _ANSI_RE.sub("", s)
 
 
+def _write_test_registries(base_dir: Path) -> tuple[Path, Path]:
+    domain_registry = base_dir / "domain_code_registry.json"
+    prefix_registry = base_dir / "prefix_ownership_registry.json"
+    domain_registry.write_text(
+        '{"version":"0.4.0","domains":{"Z":{"name":"test-localhost"}}}\n',
+        encoding="utf-8",
+    )
+    prefix_registry.write_text(
+        (
+            '{"version":"0.4.0","ownership":{"Z":{"TPX":{"issuer_app_code":"daylily-tapdb"},'
+            '"EDG":{"issuer_app_code":"daylily-tapdb"},'
+            '"ADT":{"issuer_app_code":"daylily-tapdb"},'
+            '"SYS":{"issuer_app_code":"daylily-tapdb"},'
+            '"MSG":{"issuer_app_code":"daylily-tapdb"}}}}\n'
+        ),
+        encoding="utf-8",
+    )
+    return domain_registry, prefix_registry
+
+
 @pytest.fixture(autouse=True)
 def _isolate_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Hermetic CLI environment matching test_cli.py pattern."""
@@ -36,22 +56,25 @@ def _isolate_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         tmp_path / ".config" / "tapdb" / "testclient" / "testdb" / "tapdb-config.yaml"
     )
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    domain_registry, prefix_registry = _write_test_registries(tmp_path)
     cfg_path.write_text(
         "meta:\n"
         "  config_version: 3\n"
         "  client_id: testclient\n"
         "  database_name: testdb\n"
-        "  euid_client_code: C\n"
+        "  owner_repo_name: daylily-tapdb\n"
+        f"  domain_registry_path: {domain_registry}\n"
+        f"  prefix_ownership_registry_path: {prefix_registry}\n"
         "environments:\n"
         "  dev:\n"
         "    engine_type: local\n"
         "    host: localhost\n"
         "    port: 5533\n"
         "    ui_port: 8911\n"
+        "    domain_code: Z\n"
         "    user: test\n"
         '    password: ""\n'
-        "    database: tapdb_dev\n"
-        '    audit_log_euid_prefix: "CGX"\n',
+        "    database: tapdb_dev\n",
         encoding="utf-8",
     )
     os.chmod(cfg_path, 0o600)

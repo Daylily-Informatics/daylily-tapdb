@@ -32,12 +32,39 @@ def cli_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         tmp_path / ".config" / "tapdb" / "testclient" / "testdb" / "tapdb-config.yaml"
     )
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    domain_registry = tmp_path / "domain_code_registry.json"
+    prefix_registry = tmp_path / "prefix_ownership_registry.json"
+    domain_registry.write_text(
+        json.dumps({"version": "0.4.0", "domains": {"Z": {"name": "test-localhost"}}})
+        + "\n",
+        encoding="utf-8",
+    )
+    prefix_registry.write_text(
+        json.dumps(
+            {
+                "version": "0.4.0",
+                "ownership": {
+                    "Z": {
+                        "TPX": {"issuer_app_code": "daylily-tapdb"},
+                        "EDG": {"issuer_app_code": "daylily-tapdb"},
+                        "ADT": {"issuer_app_code": "daylily-tapdb"},
+                        "SYS": {"issuer_app_code": "daylily-tapdb"},
+                        "MSG": {"issuer_app_code": "daylily-tapdb"},
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     cfg_path.write_text(
         "meta:\n"
         "  config_version: 3\n"
         "  client_id: testclient\n"
         "  database_name: testdb\n"
-        "  euid_client_code: C\n"
+        "  owner_repo_name: daylily-tapdb\n"
+        f"  domain_registry_path: {domain_registry}\n"
+        f"  prefix_ownership_registry_path: {prefix_registry}\n"
         "admin:\n"
         "  footer:\n"
         "    repo_url: https://github.com/example/tapdb\n"
@@ -72,19 +99,19 @@ def cli_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "    host: localhost\n"
         "    port: 5533\n"
         "    ui_port: 8911\n"
+        "    domain_code: Z\n"
         "    user: tapdb\n"
         "    password: ''\n"
         "    database: tapdb_dev\n"
-        "    audit_log_euid_prefix: CGX\n"
         "  prod:\n"
         "    engine_type: local\n"
         "    host: localhost\n"
         "    port: 5535\n"
         "    ui_port: 9443\n"
+        "    domain_code: Z\n"
         "    user: tapdb\n"
         "    password: ''\n"
-        "    database: tapdb_prod\n"
-        "    audit_log_euid_prefix: CGX\n",
+        "    database: tapdb_prod\n",
         encoding="utf-8",
     )
     os.chmod(cfg_path, stat.S_IRUSR | stat.S_IWUSR)
@@ -665,12 +692,16 @@ def test_config_init_update_and_info_commands(
             "atlas",
             "--database-name",
             "app",
-            "--euid-client-code",
-            "A",
+            "--owner-repo-name",
+            "lsmc-atlas",
             "--env",
             "dev",
             "--env",
             "test",
+            "--domain-code",
+            "dev=Z",
+            "--domain-code",
+            "test=Z",
             "--db-port",
             "dev=5533",
             "--db-port",
@@ -698,8 +729,10 @@ def test_config_init_update_and_info_commands(
             "other",
             "--database-name",
             "app",
-            "--euid-client-code",
-            "B",
+            "--owner-repo-name",
+            "other-repo",
+            "--domain-code",
+            "dev=Z",
             "--db-port",
             "dev=5533",
             "--ui-port",

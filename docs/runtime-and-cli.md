@@ -88,8 +88,9 @@ The CLI surfaces for that flow are already present and exercised in tests:
 tapdb --config <path> db-config init \
   --client-id <client-id> \
   --database-name <database-name> \
-  --euid-client-code <client-code> \
+  --owner-repo-name <repo-name> \
   --env dev \
+  --domain-code dev=<domain-code> \
   --db-port dev=5533 \
   --ui-port dev=8911
 

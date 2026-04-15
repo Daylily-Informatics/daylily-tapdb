@@ -6,6 +6,8 @@ input validation paths without a database.
 
 from dataclasses import dataclass
 
+import pytest
+
 
 @dataclass
 class _FakeTemplate:
@@ -59,7 +61,7 @@ def test_get_template_invalid_code_warns_and_returns_none(caplog):
     tm = TemplateManager()
     sess = _FakeSession()
 
-    got = tm.get_template(sess, "bad/format")
+    got = tm.get_template(sess, "bad/format", domain_code="T")
     assert got is None
     assert any("Invalid template code format" in r.message for r in caplog.records)
 
@@ -69,12 +71,12 @@ def test_get_template_uses_uuid_cache():
 
     tm = TemplateManager()
     tmpl = _FakeTemplate(uid="u1", euid="GT1", is_deleted=False)
-    code = "generic/generic/generic/1.0/"
-    cache_key = f"::{code}"
+    code = "SYS/actor/system_user/1.0/"
+    cache_key = f"T:{code}"
     tm._template_uid_cache[cache_key] = "u1"
 
     sess = _FakeSession(get_map={"u1": tmpl})
-    got = tm.get_template(sess, code)
+    got = tm.get_template(sess, code, domain_code="t")
 
     assert got is tmpl
     assert sess.query_called == 0
@@ -85,35 +87,44 @@ def test_get_template_query_populates_caches():
 
     tm = TemplateManager()
     tmpl = _FakeTemplate(uid="u2", euid="GT2", is_deleted=False)
-    code = "generic/generic/generic/1.0/"
+    code = "SYS/actor/system_user/1.0/"
 
     sess = _FakeSession(query_first=tmpl)
-    got = tm.get_template(sess, code)
+    got = tm.get_template(sess, code, domain_code="t")
 
     assert got is tmpl
-    cache_key = f"::{code}"
+    cache_key = f"T:{code}"
     assert tm._template_uid_cache[cache_key] == "u2"
-    assert tm._template_euid_cache["GT2"] == "u2"
+    assert tm._template_euid_cache["T:GT2"] == "u2"
 
 
 def test_get_template_cache_hit_deleted_falls_back_to_query():
     from daylily_tapdb.templates.manager import TemplateManager
 
     tm = TemplateManager()
-    code = "generic/generic/generic/1.0/"
+    code = "SYS/actor/system_user/1.0/"
 
     deleted = _FakeTemplate(uid="ud", euid="GTd", is_deleted=True)
     fresh = _FakeTemplate(uid="uf", euid="GTf", is_deleted=False)
-    cache_key = f"::{code}"
+    cache_key = f"T:{code}"
     tm._template_uid_cache[cache_key] = "ud"
 
     sess = _FakeSession(get_map={"ud": deleted}, query_first=fresh)
-    got = tm.get_template(sess, code)
+    got = tm.get_template(sess, code, domain_code="T")
 
     assert got is fresh
     assert sess.query_called == 1
     assert tm._template_uid_cache[cache_key] == "uf"
-    assert tm._template_euid_cache["GTf"] == "uf"
+    assert tm._template_euid_cache["T:GTf"] == "uf"
+
+
+def test_get_template_missing_domain_raises():
+    from daylily_tapdb.templates.manager import TemplateManager
+
+    tm = TemplateManager()
+
+    with pytest.raises(ValueError, match="domain_code is required"):
+        tm.get_template(_FakeSession(), "SYS/actor/system_user/1.0/")
 
 
 def test_get_template_by_euid_uses_cache():
@@ -121,10 +132,10 @@ def test_get_template_by_euid_uses_cache():
 
     tm = TemplateManager()
     tmpl = _FakeTemplate(uid="u3", euid="GT3", is_deleted=False)
-    tm._template_euid_cache["GT3"] = "u3"
+    tm._template_euid_cache["T:GT3"] = "u3"
 
     sess = _FakeSession(get_map={"u3": tmpl})
-    got = tm.get_template_by_euid(sess, "GT3")
+    got = tm.get_template_by_euid(sess, "GT3", domain_code="T")
     assert got is tmpl
     assert sess.query_called == 0
 
@@ -136,10 +147,10 @@ def test_get_template_by_euid_query_populates_cache():
     tmpl = _FakeTemplate(uid="u4", euid="GT4", is_deleted=False)
 
     sess = _FakeSession(query_first=tmpl)
-    got = tm.get_template_by_euid(sess, "GT4")
+    got = tm.get_template_by_euid(sess, "GT4", domain_code="T")
 
     assert got is tmpl
-    assert tm._template_euid_cache["GT4"] == "u4"
+    assert tm._template_euid_cache["T:GT4"] == "u4"
     assert sess.query_called == 1
 
 
@@ -149,22 +160,22 @@ def test_get_template_by_euid_cache_hit_deleted_falls_back_to_query():
     tm = TemplateManager()
     deleted = _FakeTemplate(uid="ud", euid="GTd", is_deleted=True)
     fresh = _FakeTemplate(uid="uf", euid="GTf", is_deleted=False)
-    tm._template_euid_cache["GTf"] = "ud"
+    tm._template_euid_cache["T:GTf"] = "ud"
 
     sess = _FakeSession(get_map={"ud": deleted}, query_first=fresh)
-    got = tm.get_template_by_euid(sess, "GTf")
+    got = tm.get_template_by_euid(sess, "GTf", domain_code="T")
 
     assert got is fresh
     assert sess.query_called == 1
-    assert tm._template_euid_cache["GTf"] == "uf"
+    assert tm._template_euid_cache["T:GTf"] == "uf"
 
 
 def test_clear_cache_empties_caches():
     from daylily_tapdb.templates.manager import TemplateManager
 
     tm = TemplateManager()
-    tm._template_uid_cache["a/b/c/d/"] = "u1"
-    tm._template_euid_cache["GT1"] = "u1"
+    tm._template_uid_cache["T:a/b/c/d/"] = "u1"
+    tm._template_euid_cache["T:GT1"] = "u1"
     tm.clear_cache()
     assert tm._template_uid_cache == {}
     assert tm._template_euid_cache == {}
@@ -178,12 +189,14 @@ def test_list_templates_applies_filters_and_returns_all():
     t2 = _FakeTemplate(uid="u2", euid="GT2", is_deleted=True, category="a", type="t")
 
     sess = _FakeSession(query_all=[t1, t2])
-    got = tm.list_templates(sess, category="a", type_="t", include_deleted=False)
+    got = tm.list_templates(
+        sess, category="a", type_="t", include_deleted=False, domain_code="T"
+    )
 
     assert got == [t1, t2]
-    # include_deleted=False + category + type => 3 filter calls
+    # include_deleted=False + domain + category + type => 4 filter calls
     assert sess.last_query is not None
-    assert len(sess.last_query.filters) == 3
+    assert len(sess.last_query.filters) == 4
 
 
 def test_template_code_from_template_formats_code():

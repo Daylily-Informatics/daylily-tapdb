@@ -36,7 +36,7 @@ def _template_payload():
     return {
         "name": "x",
         "polymorphic_discriminator": "generic_template",
-        "category": "generic",
+        "category": "AGX",
         "type": "tube",
         "subtype": "micro",
         "version": "1.0",
@@ -64,13 +64,15 @@ def test_upsert_template_inserts_when_missing(monkeypatch):
             **_template_payload(),
             "instance_prefix": "agx",
         },
+        domain_code="Z",
         overwrite=True,
     )
 
     assert outcome == "inserted"
     assert created in session.added
     assert created.instance_prefix == "AGX"
-    assert created.category == "generic"
+    assert created.category == "AGX"
+    assert created.domain_code == "Z"
     assert created.type == "tube"
     assert created.subtype == "micro"
     assert created.version == "1.0"
@@ -83,7 +85,8 @@ def test_upsert_template_overwrite_false_skips_existing():
     existing = SimpleNamespace(
         name="existing",
         polymorphic_discriminator="generic_template",
-        category="generic",
+        domain_code="Z",
+        category="AGX",
         type="tube",
         subtype="micro",
         version="1.0",
@@ -98,7 +101,7 @@ def test_upsert_template_overwrite_false_skips_existing():
     session = _FakeUpsertSession(existing=existing)
 
     outcome, returned = m._upsert_template(
-        session, template=_template_payload(), overwrite=False
+        session, template=_template_payload(), domain_code="Z", overwrite=False
     )
 
     assert outcome == "skipped"
@@ -113,7 +116,8 @@ def test_upsert_template_overwrite_true_updates_existing():
     existing = SimpleNamespace(
         name="existing",
         polymorphic_discriminator="generic_template",
-        category="generic",
+        domain_code="Z",
+        category="AGX",
         type="tube",
         subtype="micro",
         version="1.0",
@@ -135,6 +139,7 @@ def test_upsert_template_overwrite_true_updates_existing():
             "json_addl": {"k": "new"},
             "bstatus": "active",
         },
+        domain_code="Z",
         overwrite=True,
     )
 
@@ -268,7 +273,7 @@ def test_db_nuke_drops_outbox_and_inbox_tables_before_scope_functions(monkeypatc
     inbox_drop = "DROP TABLE IF EXISTS inbox_message CASCADE;"
     migrations_drop = "DROP TABLE IF EXISTS _tapdb_migrations CASCADE;"
     domain_fn_drop = "DROP FUNCTION IF EXISTS tapdb_current_domain_code();"
-    app_fn_drop = "DROP FUNCTION IF EXISTS tapdb_current_app_code();"
+    app_fn_drop = "DROP FUNCTION IF EXISTS tapdb_current_owner_repo_name();"
 
     assert outbox_attempt_drop in sql
     assert outbox_drop in sql
@@ -283,23 +288,25 @@ def test_db_nuke_drops_outbox_and_inbox_tables_before_scope_functions(monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# M5: _ensure_instance_prefix_sequence rejects non-alpha prefixes
+# M5: _ensure_instance_prefix_sequence rejects non-Meridian prefixes
 # ---------------------------------------------------------------------------
 
 
-def test_ensure_instance_prefix_sequence_rejects_non_alpha():
+def test_ensure_instance_prefix_sequence_rejects_invalid_prefix():
     import pytest
 
     import daylily_tapdb.cli.db as m
 
-    with pytest.raises(ValueError, match="letters only"):
-        m._ensure_instance_prefix_sequence(m.Environment.dev, "AB123")
+    with pytest.raises(ValueError, match="must match"):
+        m._ensure_instance_prefix_sequence(m.Environment.dev, "ABCDE")
 
     with pytest.raises(ValueError, match="cannot be empty"):
         m._ensure_instance_prefix_sequence(m.Environment.dev, "")
 
     with pytest.raises(ValueError, match="cannot be empty"):
         m._ensure_instance_prefix_sequence(m.Environment.dev, "   ")
+
+    m._normalize_instance_prefix("A1")
 
 
 def test_ensure_instance_prefix_sequence_quotes_sql(monkeypatch):
@@ -319,36 +326,39 @@ def test_ensure_instance_prefix_sequence_quotes_sql(monkeypatch):
     assert '"agx_instance_seq"' in sql
 
 
-def test_prepare_seed_templates_rewrites_core_placeholder(tmp_path: Path):
+def test_prepare_seed_templates_accepts_core_operational_templates(tmp_path: Path):
     import daylily_tapdb.templates.loader as m
 
     core_dir = tmp_path / "core"
     client_dir = tmp_path / "client"
-    core_file = core_dir / "generic" / "generic.json"
-    client_file = client_dir / "generic" / "client.json"
+    core_file = core_dir / "system" / "system.json"
+    client_file = client_dir / "atlas" / "atlas.json"
     core_file.parent.mkdir(parents=True)
     client_file.parent.mkdir(parents=True)
 
     prepared = m._prepare_seed_templates(
         [
             {
-                **_template_payload(),
-                "instance_prefix": "GX",
+                "name": "System User",
+                "polymorphic_discriminator": "generic_template",
+                "category": "SYS",
+                "type": "actor",
+                "subtype": "system_user",
+                "version": "1.0",
+                "instance_prefix": "SYS",
                 "_source_file": str(core_file),
             },
             {
                 **_template_payload(),
                 "subtype": "client",
-                "instance_prefix": "QGX",
                 "_source_file": str(client_file),
             },
         ],
         core_config_dir=core_dir,
-        core_instance_prefix="AGX",
     )
 
-    assert prepared[0]["instance_prefix"] == "AGX"
-    assert prepared[1]["instance_prefix"] == "QGX"
+    assert prepared[0]["instance_prefix"] == "SYS"
+    assert prepared[1]["instance_prefix"] == "AGX"
 
 
 def test_prepare_seed_templates_rejects_client_reserved_prefix(tmp_path: Path):
@@ -358,15 +368,15 @@ def test_prepare_seed_templates_rejects_client_reserved_prefix(tmp_path: Path):
     client_file = client_dir / "generic" / "client.json"
     client_file.parent.mkdir(parents=True)
 
-    with pytest.raises(ValueError, match="cannot persist reserved TapDB core"):
+    with pytest.raises(ValueError, match="cannot persist reserved TapDB operational"):
         m._prepare_seed_templates(
             [
                 {
                     **_template_payload(),
-                    "instance_prefix": "GX",
+                    "category": "SYS",
+                    "instance_prefix": "SYS",
                     "_source_file": str(client_file),
                 }
             ],
             core_config_dir=tmp_path / "core",
-            core_instance_prefix="AGX",
         )

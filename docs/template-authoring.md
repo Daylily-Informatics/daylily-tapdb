@@ -5,20 +5,22 @@ created from templates, and lineage is where authoritative relationships live.
 
 The practical rule is simple:
 
-- templates describe what may exist,
-- instances describe what does exist,
-- lineage describes how objects are related.
+- templates describe what may exist
+- instances describe what does exist
+- lineage describes how objects are related
 
 ## Pack Ownership
 
-TAPDB ships a minimal built-in core pack. Client or domain-specific template
-packs live outside the repository and are seeded explicitly.
+TapDB ships only a minimal built-in operational core pack. Domain or product
+templates live outside this repository and are seeded explicitly.
 
-Current core pack directories are packaged under
-[`daylily_tapdb/core_config`](../daylily_tapdb/core_config).
+Current built-in core templates are:
 
-The built-in core pack is intentionally small and substrate-oriented. It exists
-to support the shared runtime, not to encode client business semantics.
+- `SYS/actor/system_user/1.0`
+- `MSG/message/webhook_event/1.0`
+
+There is no passive inheritance of generic client-usable prefixes from TapDB
+core.
 
 ## JSON Pack Shape
 
@@ -30,19 +32,19 @@ Minimal shape:
 {
   "templates": [
     {
-      "name": "Generic Object",
-      "polymorphic_discriminator": "generic_template",
-      "category": "generic",
-      "type": "generic",
-      "subtype": "generic",
+      "name": "System User",
+      "polymorphic_discriminator": "actor_template",
+      "category": "SYS",
+      "type": "actor",
+      "subtype": "system_user",
       "version": "1.0",
-      "instance_prefix": "GX",
+      "instance_prefix": "SYS",
       "bstatus": "active",
       "is_singleton": false,
       "json_addl": {
-        "description": "Base generic object template",
+        "description": "TapDB system user template",
         "properties": {
-          "name": "Generic Object"
+          "name": "System User"
         },
         "action_imports": {},
         "instantiation_layouts": []
@@ -58,21 +60,11 @@ The loader validates:
 - JSON schema shape
 - template code uniqueness
 - cross-references in action imports and instantiation layouts
-- reserved prefix rules for core versus client packs
-
-Common optional fields you should expect to see in packs:
-
-- `json_addl_schema`: optional JSON Schema for instance payload validation.
-- `instance_polymorphic_identity`: optional override for the instance-side
-  SQLAlchemy discriminator.
-- `bstatus`: business status for the template, usually `active`.
-- `is_singleton`: whether only one instance should exist for the template.
-
-See [`daylily_tapdb/templates/loader.py`](../daylily_tapdb/templates/loader.py).
+- governance-backed prefix ownership
 
 ## Template Codes
 
-Template identity is the four-part code:
+Template taxonomy remains:
 
 ```text
 category/type/subtype/version/
@@ -80,13 +72,19 @@ category/type/subtype/version/
 
 Examples:
 
-- `generic/generic/generic/1.0/`
-- `generic/actor/system_user/1.0/`
-- `system/message/webhook_event/1.0/`
+- `SYS/actor/system_user/1.0/`
+- `MSG/message/webhook_event/1.0/`
+- `AGX/logistics/shipment/1.0/`
 
-That code is what the loader and `TemplateManager` use to resolve a template.
-The `polymorphic_discriminator` controls SQLAlchemy inheritance, while the
-template code is the stable human-readable authoring key.
+In TapDB, `category` is the Meridian prefix. Domain is separate and required.
+The effective template identity is:
+
+```text
+(domain_code, category, type, subtype, version)
+```
+
+There is no supported lookup path that resolves `category/type/subtype/version`
+without domain.
 
 ## `instance_prefix`
 
@@ -94,40 +92,38 @@ template code is the stable human-readable authoring key.
 
 Rules:
 
-- Bundled substrate templates use the placeholder prefix `GX` in JSON.
-- The bundled system message template keeps the reserved prefix `MSG`.
-- Client templates must not persist the reserved core prefixes `GX`, `TGX`, or `MSG`.
-- During seeding, bundled `GX` templates are rewritten to the namespace-scoped
-  prefix derived from `meta.euid_client_code`, such as `CGX`, while `MSG`
-  remains `MSG`.
+- It must be an approved Meridian prefix.
+- It must be registered for the active domain.
+- Its registered owner must match the calling repo name.
+- It should match the template `category` used for that template family.
 
-This keeps bundled core packs portable while still allowing each namespace to
-mint its own identifiers.
+There is no placeholder `GX` rewrite behavior and no client-scoped prefix
+derivation during seeding.
 
 ## Seeding And Validation
 
 Seeding is a loader operation, not ad hoc ORM mutation.
 
-The current flow is:
+The hard-cut flow is:
 
 1. load template JSON packs
 2. validate structure and references
-3. ensure prefixes and sequences exist
-4. seed core pack first
-5. seed client packs second
+3. require explicit `domain_code`
+4. require explicit `owner_repo_name`
+5. validate domain and prefix ownership against the shared registries
+6. seed TapDB operational templates first
+7. seed client/domain packs second
 
 The loader rejects:
 
 - invalid JSON
 - missing required fields
-- duplicate template keys
+- duplicate template keys within the same domain-scoped identity
 - invalid `action_imports` / `instantiation_layouts`
-- reserved prefix misuse
-- references to templates that are not present in the configured set when
-  strict validation is enabled
-
-This is the current contract in
-[`daylily_tapdb/templates/loader.py`](../daylily_tapdb/templates/loader.py).
+- unregistered domains
+- unregistered prefixes
+- prefixes claimed by another repo
+- domainless template operations
 
 ## Mutation Guard
 
@@ -143,9 +139,6 @@ Relevant pieces:
 - `allow_template_mutations()`
 - the `Session.before_flush` hook on `generic_template`
 
-In practice, that means template authoring happens through packs and loader
-code, not through application code that casually mutates the ORM.
-
 ## Action Imports
 
 Templates may import actions through `json_addl.action_imports`.
@@ -160,18 +153,9 @@ Example:
 }
 ```
 
-At runtime, `materialize_actions()` resolves each imported action template and
-expands it into an action group named `{type}_actions`.
-
-The resulting runtime action payload includes:
-
-- `action_template_uid`
-- `action_template_euid`
-- `action_template_code`
-- the action definition from the imported template
-
-The important point is that imports are declarative template references. They
-do not create authoritative relationships by themselves.
+At runtime, `materialize_actions()` resolves each imported action template in
+the active domain and expands it into an action group named
+`{type}_actions`.
 
 ## Instantiation Layouts
 
@@ -201,14 +185,9 @@ input.
 
 ## Lineage Is Authoritative
 
-This is one of the most important TAPDB rules:
-
-- copied JSON references are lookup metadata,
-- `generic_instance_lineage` rows are the source of truth for relationships,
-- traversal helpers read lineage, not template JSON.
-
-That separation keeps the object graph auditable and prevents the template pack
-from becoming a hidden database of relationships.
+- copied JSON references are lookup metadata
+- `generic_instance_lineage` rows are the source of truth for relationships
+- traversal helpers read lineage, not template JSON
 
 See [`daylily_tapdb/lineage.py`](../daylily_tapdb/lineage.py) and
 [`daylily_tapdb/factory/instance.py`](../daylily_tapdb/factory/instance.py).
@@ -229,9 +208,9 @@ flowchart LR
 
 ## Practical Authoring Rules
 
-- Keep the built-in core pack minimal and substrate-focused.
-- Put domain/business templates in client-owned packs, not in TAPDB core.
+- Keep the built-in core pack minimal and operational.
+- Put domain/business templates in repo-owned packs outside TapDB core.
 - Use `template_code` strings for declarative references.
-- Use `instance_prefix` carefully; it is part of the identifier contract.
+- Register prefixes by domain before seeding.
+- Pass domain explicitly in every template lookup and seeding operation.
 - Treat lineage as the authoritative relationship graph.
-- Do not rely on template JSON as the canonical source of object relationships.

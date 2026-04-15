@@ -15,12 +15,30 @@ from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 
 def _write_config(path: Path, *, queue_max: int) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    domain_registry = path.parent / "domain_code_registry.json"
+    prefix_registry = path.parent / "prefix_ownership_registry.json"
+    domain_registry.write_text(
+        '{"version":"0.4.0","domains":{"Z":{"name":"test-localhost"}}}\n',
+        encoding="utf-8",
+    )
+    prefix_registry.write_text(
+        (
+            '{"version":"0.4.0","ownership":{"Z":{"TPX":{"issuer_app_code":"daylily-tapdb"},'
+            '"EDG":{"issuer_app_code":"daylily-tapdb"},'
+            '"ADT":{"issuer_app_code":"daylily-tapdb"},'
+            '"SYS":{"issuer_app_code":"daylily-tapdb"},'
+            '"MSG":{"issuer_app_code":"daylily-tapdb"}}}}\n'
+        ),
+        encoding="utf-8",
+    )
     path.write_text(
         "meta:\n"
         "  config_version: 3\n"
         "  client_id: alpha\n"
         "  database_name: beta\n"
-        "  euid_client_code: A\n"
+        "  owner_repo_name: daylily-tapdb\n"
+        f"  domain_registry_path: {domain_registry}\n"
+        f"  prefix_ownership_registry_path: {prefix_registry}\n"
         "admin:\n"
         "  footer:\n"
         "    repo_url: https://example.com/tapdb\n"
@@ -55,10 +73,10 @@ def _write_config(path: Path, *, queue_max: int) -> Path:
         "    host: localhost\n"
         "    port: '5533'\n"
         "    ui_port: '8911'\n"
+        "    domain_code: Z\n"
         "    user: tapdb\n"
         "    password: ''\n"
-        "    database: tapdb_dev\n"
-        "    audit_log_euid_prefix: AGX\n",
+        "    database: tapdb_dev\n",
         encoding="utf-8",
     )
     return path

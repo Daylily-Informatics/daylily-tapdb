@@ -17,8 +17,10 @@ def _base_cfg(**overrides):
         "database": "tapdb_dev",
         "user": "tapdb",
         "password": "",
-        "core_euid_prefix": "AGX",
-        "audit_log_euid_prefix": "AGX",
+        "domain_code": "Z",
+        "owner_repo_name": "daylily-tapdb",
+        "domain_registry_path": "/tmp/domain_code_registry.json",
+        "prefix_ownership_registry_path": "/tmp/prefix_ownership_registry.json",
         "region": "us-west-2",
         "iam_auth": "true",
     }
@@ -59,16 +61,11 @@ def test_db_normalization_and_schema_lookup_branches(
     with pytest.raises(ValueError, match="cannot be None"):
         db_mod._normalize_meridian_prefix(None, "audit_log_euid_prefix")
 
-    monkeypatch.setattr(
-        db_mod,
-        "_get_db_config",
-        lambda _env: {
-            "core_euid_prefix": "AGX",
-            "audit_log_euid_prefix": "BGX",
-        },
-    )
-    with pytest.raises(ValueError, match="must match"):
-        db_mod._required_identity_prefixes(db_mod.Environment.dev)
+    assert db_mod._required_identity_prefixes(db_mod.Environment.dev) == {
+        "generic_template": "TPX",
+        "generic_instance_lineage": "EDG",
+        "audit_log": "ADT",
+    }
 
     monkeypatch.setattr(db_mod, "_schema_root_candidates", lambda: [])
     with pytest.raises(FileNotFoundError, match="Cannot find TAPDB schema root.$"):
@@ -81,8 +78,8 @@ def test_db_sequence_baseline_and_run_psql_branches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     real_run_psql = db_mod._run_psql
-    monkeypatch.setattr(db_mod, "_normalize_instance_prefix", lambda _prefix: "A1")
-    with pytest.raises(ValueError, match="alphabetic"):
+    monkeypatch.setattr(db_mod, "_normalize_instance_prefix", lambda _prefix: "ABCDE")
+    with pytest.raises(ValueError, match="Meridian-safe"):
         db_mod._ensure_instance_prefix_sequence(db_mod.Environment.dev, "A1")
 
     monkeypatch.setattr(

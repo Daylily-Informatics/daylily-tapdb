@@ -16,8 +16,17 @@ from daylily_tapdb.cli.context import (
     resolve_context,
 )
 from daylily_tapdb.euid import (
-    normalize_euid_client_code,
-    resolve_client_scoped_core_prefix,
+    AUDIT_LOG_PREFIX,
+    GENERIC_INSTANCE_LINEAGE_PREFIX,
+    GENERIC_TEMPLATE_PREFIX,
+    SYSTEM_MESSAGE_PREFIX,
+    SYSTEM_USER_PREFIX,
+)
+from daylily_tapdb.governance import (
+    DEFAULT_DOMAIN_REGISTRY_PATH,
+    DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH,
+    GovernanceContext,
+    normalize_owner_repo_name,
 )
 
 DEFAULT_CONFIG_FILENAME = CONFIG_FILENAME
@@ -149,7 +158,7 @@ def _validate_meta_for_context(root: dict[str, Any], ctx: TapdbContext) -> None:
     cfg_client = str(meta.get("client_id") or "").strip()
     cfg_db = str(meta.get("database_name") or "").strip()
     try:
-        normalize_euid_client_code(meta.get("euid_client_code"))
+        normalize_owner_repo_name(str(meta.get("owner_repo_name") or ""))
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     if cfg_client != ctx.client_id or cfg_db != ctx.database_name:
@@ -195,12 +204,20 @@ def get_db_config_for_env(
     if not isinstance(meta, dict):
         raise RuntimeError(f"Config metadata is required in {resolved_config_path}.")
     try:
-        euid_client_code = normalize_euid_client_code(meta.get("euid_client_code"))
+        owner_repo_name = normalize_owner_repo_name(str(meta.get("owner_repo_name") or ""))
     except ValueError as exc:
         raise RuntimeError(
-            f"Config {resolved_config_path} is missing valid meta.euid_client_code: {exc}"
+            f"Config {resolved_config_path} is missing valid meta.owner_repo_name: {exc}"
         ) from exc
-    core_euid_prefix = resolve_client_scoped_core_prefix(euid_client_code)
+    domain_registry_path = Path(
+        str(meta.get("domain_registry_path") or DEFAULT_DOMAIN_REGISTRY_PATH)
+    ).expanduser()
+    prefix_ownership_registry_path = Path(
+        str(
+            meta.get("prefix_ownership_registry_path")
+            or DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH
+        )
+    ).expanduser()
 
     file_cfg: dict[str, Any] = {}
     if "environments" in root and isinstance(root.get("environments"), dict):
@@ -238,16 +255,22 @@ def get_db_config_for_env(
         "cognito_domain": _file_str("cognito_domain") or "",
         "cognito_callback_url": _file_str("cognito_callback_url") or "",
         "cognito_logout_url": _file_str("cognito_logout_url") or "",
-        "audit_log_euid_prefix": _file_str("audit_log_euid_prefix") or "",
         "support_email": _file_str("support_email") or "",
         "aws_profile": _file_str("aws_profile") or "",
+        "domain_code": _file_str("domain_code") or "",
     }
 
     if ctx:
         cfg["client_id"] = ctx.client_id
         cfg["database_name"] = ctx.database_name
-    cfg["euid_client_code"] = euid_client_code
-    cfg["core_euid_prefix"] = core_euid_prefix
+    cfg["owner_repo_name"] = owner_repo_name
+    cfg["domain_registry_path"] = str(domain_registry_path)
+    cfg["prefix_ownership_registry_path"] = str(prefix_ownership_registry_path)
+    cfg["generic_template_euid_prefix"] = GENERIC_TEMPLATE_PREFIX
+    cfg["generic_instance_lineage_euid_prefix"] = GENERIC_INSTANCE_LINEAGE_PREFIX
+    cfg["audit_log_euid_prefix"] = AUDIT_LOG_PREFIX
+    cfg["system_user_euid_prefix"] = SYSTEM_USER_PREFIX
+    cfg["system_message_euid_prefix"] = SYSTEM_MESSAGE_PREFIX
     cfg["config_path"] = str(resolved_config_path)
 
     if engine_type == "aurora":
@@ -268,7 +291,7 @@ def get_db_config_for_env(
                 f"Invalid local host {cfg['host']!r} for env {env_key}. "
                 "Local TAPDB must use host 'localhost'."
             )
-        required_fields = ("port", "ui_port")
+        required_fields = ("port", "ui_port", "domain_code")
         missing_required = [
             field
             for field in required_fields
@@ -280,13 +303,13 @@ def get_db_config_for_env(
                 f"env {env_key}: {', '.join(missing_required)}"
             )
 
-    audit_prefix = str(cfg.get("audit_log_euid_prefix") or "").strip().upper()
-    if audit_prefix != core_euid_prefix:
-        raise RuntimeError(
-            f"Config {resolved_config_path} env {env_key!r} must set "
-            f"audit_log_euid_prefix={core_euid_prefix!r} to match "
-            "the namespace-scoped TapDB core prefix."
-        )
+    governance = GovernanceContext.load(
+        domain_code=str(cfg["domain_code"]),
+        owner_repo_name=owner_repo_name,
+        domain_registry_path=domain_registry_path,
+        prefix_ownership_registry_path=prefix_ownership_registry_path,
+    )
+    cfg["domain_code"] = governance.domain_code
 
     return cfg
 

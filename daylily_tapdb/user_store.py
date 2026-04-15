@@ -1,7 +1,7 @@
 """Actor-backed TAPDB auth user storage helpers.
 
 Auth users are stored as `generic_instance` rows using the dedicated
-`generic/actor/system_user/1.0` template.
+`SYS/actor/system_user/1.0` template.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from daylily_tapdb.timezone_utils import (
     utc_now_iso,
 )
 
-SYSTEM_USER_TEMPLATE_CATEGORY = "generic"
+SYSTEM_USER_TEMPLATE_CATEGORY = "SYS"
 SYSTEM_USER_TEMPLATE_TYPE = "actor"
 SYSTEM_USER_TEMPLATE_SUBTYPE = "system_user"
 SYSTEM_USER_TEMPLATE_VERSION = "1.0"
@@ -32,7 +32,7 @@ SYSTEM_USER_TEMPLATE_CODE = (
 _SYSTEM_USER_WHERE = """
     gi.is_deleted = FALSE
     AND gi.polymorphic_discriminator = 'actor_instance'
-    AND gi.category = 'generic'
+    AND gi.category = 'SYS'
     AND gi.type = 'actor'
     AND gi.subtype = 'system_user'
 """

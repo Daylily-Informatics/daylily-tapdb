@@ -140,10 +140,10 @@ def _seed_identity_prefixes(session, prefix: str = "AGX") -> None:
                 prefix
             )
             VALUES
-                ('generic_template', '', '', :prefix),
-                ('generic_instance', '', '', :prefix),
-                ('generic_instance_lineage', '', '', :prefix),
-                ('audit_log', '', '', :prefix)
+                ('generic_template', 'T', 'daylily-tapdb', :prefix),
+                ('generic_instance', 'T', 'daylily-tapdb', :prefix),
+                ('generic_instance_lineage', 'T', 'daylily-tapdb', :prefix),
+                ('audit_log', 'T', 'daylily-tapdb', :prefix)
             ON CONFLICT (entity, domain_code, issuer_app_code) DO UPDATE
               SET prefix = EXCLUDED.prefix, updated_dt = NOW();
             """
@@ -543,7 +543,7 @@ def test_postgres_restricted_role_schema_install_and_identity_triggers(pytestcon
                 psql.SQL("SET search_path TO {};").format(psql.Identifier(schema_name))
             )
             role_cur.execute("SET session.current_domain_code = 'T'")
-            role_cur.execute("SET session.current_app_code = 'TAPD'")
+            role_cur.execute("SET session.current_owner_repo_name = 'daylily-tapdb'")
             role_cur.execute(
                 """
                 INSERT INTO tapdb_identity_prefix_config(
@@ -553,10 +553,10 @@ def test_postgres_restricted_role_schema_install_and_identity_triggers(pytestcon
                     prefix
                 )
                 VALUES
-                    ('generic_template', '', '', 'AGX'),
-                    ('generic_instance', '', '', 'AGX'),
-                    ('generic_instance_lineage', '', '', 'AGX'),
-                    ('audit_log', '', '', 'AGX')
+                    ('generic_template', 'T', 'daylily-tapdb', 'AGX'),
+                    ('generic_instance', 'T', 'daylily-tapdb', 'AGX'),
+                    ('generic_instance_lineage', 'T', 'daylily-tapdb', 'AGX'),
+                    ('audit_log', 'T', 'daylily-tapdb', 'AGX')
                 ON CONFLICT (entity, domain_code, issuer_app_code) DO UPDATE
                   SET prefix = EXCLUDED.prefix, updated_dt = NOW();
                 """

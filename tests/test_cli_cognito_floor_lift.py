@@ -440,6 +440,8 @@ def test_cognito_bound_context_resolution_and_actor_user_row(
             "password": "",
             "database": "tapdb_dev",
             "engine_type": "local",
+            "domain_code": "Z",
+            "owner_repo_name": "daylily-tapdb",
         },
     )
     monkeypatch.setattr(

@@ -10,10 +10,12 @@ def test_session_scope_functions_precede_outbox_defaults():
     domain_fn = schema_sql.index(
         "CREATE OR REPLACE FUNCTION tapdb_current_domain_code()"
     )
-    app_fn = schema_sql.index("CREATE OR REPLACE FUNCTION tapdb_current_app_code()")
+    app_fn = schema_sql.index(
+        "CREATE OR REPLACE FUNCTION tapdb_current_owner_repo_name()"
+    )
 
     first_domain_default = schema_sql.index("DEFAULT tapdb_current_domain_code()")
-    first_app_default = schema_sql.index("DEFAULT tapdb_current_app_code()")
+    first_app_default = schema_sql.index("DEFAULT tapdb_current_owner_repo_name()")
 
     assert domain_fn < first_domain_default
     assert app_fn < first_app_default

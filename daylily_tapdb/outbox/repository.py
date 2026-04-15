@@ -24,7 +24,7 @@ from daylily_tapdb.models.outbox import outbox_event
 _OUTBOX_PENDING_STATUSES = ("pending", "failed", "delivering")
 
 # Template code for canonical webhook event messages
-MESSAGE_TEMPLATE_CODE = "system/message/webhook_event/1.0/"
+MESSAGE_TEMPLATE_CODE = "MSG/message/webhook_event/1.0/"
 
 
 def _build_enqueue_stmt(
@@ -67,6 +67,7 @@ def _create_message_instance(
     session: Session,
     *,
     tenant_id: uuid.UUID | None,
+    domain_code: str,
     event_type: str,
     aggregate_euid: str | None,
     payload: dict,
@@ -80,7 +81,11 @@ def _create_message_instance(
     from daylily_tapdb.templates.manager import TemplateManager
 
     tm = TemplateManager()
-    template = tm.get_template(session, MESSAGE_TEMPLATE_CODE)
+    template = tm.get_template(
+        session,
+        MESSAGE_TEMPLATE_CODE,
+        domain_code=domain_code,
+    )
     if template is None:
         raise ValueError(
             f"Message template not found: {MESSAGE_TEMPLATE_CODE}. "
@@ -154,7 +159,7 @@ def _resolve_session_scope(
     resolved_domain_code, resolved_issuer_app_code = session.execute(
         text(
             "SELECT tapdb_current_domain_code() AS domain_code, "
-            "tapdb_current_app_code() AS issuer_app_code"
+            "tapdb_current_owner_repo_name() AS issuer_app_code"
         )
     ).one()
     return (
@@ -227,6 +232,7 @@ def enqueue_event(
         msg = _create_message_instance(
             session,
             tenant_id=tenant_id,
+            domain_code=resolved_domain_code,
             event_type=event_type,
             aggregate_euid=aggregate_euid,
             payload=payload,
