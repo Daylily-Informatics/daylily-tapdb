@@ -62,8 +62,11 @@ tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml \
   db-config init \
   --client-id <client-id> \
   --database-name <database-name> \
-  --euid-client-code <client-code> \
+  --owner-repo-name <repo-name> \
   --env dev \
+  --domain-code dev=<domain-code> \
+  --domain-registry-path /abs/path/to/domain_code_registry.json \
+  --prefix-ownership-registry-path /abs/path/to/prefix_ownership_registry.json \
   --db-port dev=5533 \
   --ui-port dev=8911
 
@@ -77,6 +80,10 @@ tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml \
 ```
 
 `--json` is a root-global flag in the CLI v2 contract, so it belongs before the subcommand name.
+
+For a repo-local smoke path, this repo ships example registry fixtures under
+`daylily_tapdb/etc/`. Those files are suitable for single-repo local runs and
+for the README example scripts.
 
 If optional workflow packs are present in the config, add `--include-workflow` to the bootstrap command. If you want the generated scripts rather than inline commands, use the companion examples under `examples/readme/`:
 
@@ -111,7 +118,7 @@ TAPDB uses multiple identity layers on purpose:
 - `uid` is the internal BIGINT primary key
 - `euid` is the external Meridian identifier used on labels, links, APIs, and human-facing references
 - `domain_code` scopes a row or identifier to a Meridian domain
-- `issuer_app_code` records the issuing application and is not part of the EUID string
+- `issuer_app_code` stores the persisted repo-owner token and is not part of the EUID string
 - `tenant_id` is the database tenancy scope and is separate from Meridian domain scoping
 
 Do not infer business meaning from an EUID prefix. EUIDs are opaque by design. The string helps validation and transport; the real meaning lives in database lookup and application context.

@@ -1,0 +1,22 @@
+{
+  "version": "0.4.0",
+  "ownership": {
+    "Z": {
+      "TPX": {
+        "issuer_app_code": "daylily-tapdb"
+      },
+      "EDG": {
+        "issuer_app_code": "daylily-tapdb"
+      },
+      "ADT": {
+        "issuer_app_code": "daylily-tapdb"
+      },
+      "SYS": {
+        "issuer_app_code": "daylily-tapdb"
+      },
+      "MSG": {
+        "issuer_app_code": "daylily-tapdb"
+      }
+    }
+  }
+}

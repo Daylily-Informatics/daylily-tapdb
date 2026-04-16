@@ -21,7 +21,7 @@ Primary goals:
 7. When a command needs machine-readable output, use the root-global `--json` flag before the subcommand name.
 
 ## Required Context (Strict Namespace)
-TAPDB is namespace-isolated. For commands that touch config/runtime/db/ui/cognito/user/aurora/info, require both:
+TAPDB is namespace-isolated. For commands that touch config/runtime/db/ui/cognito/users/aurora/info, require both:
 - `client-id`
 - `database-name`
 
@@ -29,7 +29,7 @@ Provide runtime context explicitly:
 - CLI: `--config <path> --env <name>`
 
 Use `--client-id` and `--database-name` only for config creation commands such
-as `tapdb --config <path> config init`.
+as `tapdb --config <path> db-config init`.
 
 Resolution precedence:
 1. explicit `--config`
@@ -58,6 +58,10 @@ Never use shared global runtime files like `~/.tapdb/ui.pid` or `~/.tapdb/ui.log
 ## Canonical Command Groups (No Overlap)
 Use these functional groups only:
 
+0. `tapdb config`
+- Generic config file operations.
+- Does not replace namespace-aware `db-config init`.
+
 1. `tapdb bootstrap`
 - Orchestration command.
 - Handles create/start/schema/seed and optionally GUI startup.
@@ -79,7 +83,10 @@ Use these functional groups only:
 - Admin UI process lifecycle only.
 - start/stop/status/logs/restart, plus HTTPS cert helpers.
 
-6. `tapdb cognito`
+6. `tapdb users`
+- Actor-backed auth user lifecycle commands.
+
+7. `tapdb cognito`
 - Cognito lifecycle and validation flows.
 - Integrates TAPDB config with `daylily-auth-cognito` (`daycog`) config files.
 
@@ -87,9 +94,13 @@ Use these functional groups only:
 Preferred setup path:
 
 ```sh
-tapdb --config ~/.config/tapdb/<client>/<database>/tapdb-config.yaml config init \
+tapdb --config ~/.config/tapdb/<client>/<database>/tapdb-config.yaml db-config init \
   --client-id <client> \
   --database-name <database> \
+  --owner-repo-name <repo-name> \
+  --domain-code dev=<domain-code> \
+  --domain-registry-path /abs/path/to/domain_code_registry.json \
+  --prefix-ownership-registry-path /abs/path/to/prefix_ownership_registry.json \
   --env dev
 
 # Local runtime + logical setup + optional GUI
@@ -104,16 +115,16 @@ Use `--no-gui` when you need headless setup.
 
 ## Core Template Policy
 Bundled TAPDB core templates are intentionally minimal:
-1. `generic/generic/generic/1.0`
-2. `generic/generic/external_object_link/1.0`
-3. `generic/actor/generic/1.0`
-4. `generic/actor/system_user/1.0`
+1. `SYS/actor/system_user/1.0`
+2. `MSG/message/webhook_event/1.0`
 
 Operational rules:
 1. Treat these as TAPDB-native baseline templates.
 2. Do not add client-domain workflow/action/content packs to TAPDB core repo.
 3. If domain packs are needed, provide them via client repos or external config
    directories and seed them explicitly.
+4. Example registry fixtures for isolated TAPDB-only runs live under
+   `daylily_tapdb/etc/`.
 
 Template loading precedence (seed + validate):
 1. TAPDB core config always loads first.
@@ -129,6 +140,9 @@ meta:
   config_version: 3
   client_id: <client-id>
   database_name: <database-name>
+  owner_repo_name: <repo-name>
+  domain_registry_path: </abs/path/to/domain_code_registry.json>
+  prefix_ownership_registry_path: </abs/path/to/prefix_ownership_registry.json>
 admin:
   auth:
     mode: tapdb|shared_host|disabled
@@ -140,11 +154,11 @@ environments:
     host: localhost|<aurora-endpoint>
     port: "<db-port>"
     ui_port: "<https-port>"
+    domain_code: <meridian-domain>
     user: <db-user>
     password: <db-password>
     database: <db-name>
     cognito_user_pool_id: <pool-id>
-    audit_log_euid_prefix: <2-3-char meridian prefix>
     support_email: <optional support contact>
 ```
 
@@ -152,7 +166,8 @@ Rules:
 - local engine must use `host: localhost`.
 - `port` and `ui_port` must be explicit per environment.
 - port conflicts are hard errors (no silent auto-reassignment).
-- `audit_log_euid_prefix` must be configured for schema/bootstrap flows.
+- `domain_code` must be explicit per environment.
+- registry paths and `owner_repo_name` must be present in `meta`.
 
 ## Native Tenant Policy
 1. TAPDB stores tenant scope in native nullable `tenant_id` (`UUID`) columns on:
@@ -181,10 +196,12 @@ conn = TAPDBConnection(
     db_user=cfg["user"],
     db_pass=cfg["password"],
     db_name=cfg["database"],
+    domain_code=cfg["domain_code"],
+    owner_repo_name=cfg["owner_repo_name"],
 )
 
 templates = TemplateManager()
-factory = InstanceFactory(templates)
+factory = InstanceFactory(templates, domain_code=cfg["domain_code"])
 ```
 
 Guidance:
@@ -198,11 +215,11 @@ TAPDB auth users are actor-backed objects, not a dedicated user table.
 Required model:
 1. Store auth users as `generic_instance` rows with:
    - `polymorphic_discriminator='actor_instance'`
-   - `category='generic'`
+   - `category='SYS'`
    - `type='actor'`
    - `subtype='system_user'`
    - `version='1.0'`
-2. Use template code: `generic/actor/system_user/1.0`.
+2. Use template code: `SYS/actor/system_user/1.0`.
 3. Keep canonical login identity in `json_addl.login_identifier` (lowercased).
 4. Keep role/active/password metadata in `json_addl` fields.
 

@@ -32,7 +32,13 @@ mkdir -p "$HOME/.config/tapdb/tapdb/tapdb"
 tapdb --config "$HOME/.config/tapdb/tapdb/tapdb/tapdb-config.yaml" db-config init \
   --client-id tapdb \
   --database-name tapdb \
-  --euid-client-code T
+  --owner-repo-name daylily-tapdb \
+  --env dev \
+  --domain-code dev=Z \
+  --domain-registry-path "$PWD/daylily_tapdb/etc/domain_code_registry.json" \
+  --prefix-ownership-registry-path "$PWD/daylily_tapdb/etc/prefix_ownership_registry.json" \
+  --db-port dev=5533 \
+  --ui-port dev=8911
 tapdb --config "$HOME/.config/tapdb/tapdb/tapdb/tapdb-config.yaml" --env dev bootstrap local --no-gui
 ```
 
@@ -66,8 +72,9 @@ python tools/db_loadtest/generate_synthetic_data.py \
 Notes:
 
 - `--truncate-first` issues `DELETE` for prior loadtest rows. In TAPDB this becomes soft-delete (`is_deleted=true`) because of triggers.
+- The generator inserts its own synthetic `generic/generic/loadtest_node/1.0` template row directly for benchmark purposes.
 - Generator stores tenant markers in `json_addl.tenant_id` for compatibility; it does not currently populate native `tenant_id` UUID columns.
-- Generator prints `template_uuid`, `tenant_count`, `min_instance_uuid`, `max_instance_uuid` for use with `pgbench -D`.
+- Generator prints `template_uid`, `tenant_count`, `min_instance_uid`, `max_instance_uid` for use with `pgbench -D`.
 - If you see many sequence-exists `NOTICE` lines from audit triggers, run with `PGOPTIONS='-c client_min_messages=warning'`.
 
 ## 2) Run Focused pgbench Workloads
@@ -82,10 +89,10 @@ Common variable block:
 
 ```bash
 VARS=(
-  -D template_uuid="$template_uuid"
+  -D template_uid="$template_uid"
   -D tenant_count="$tenant_count"
-  -D min_instance_uuid="$min_instance_uuid"
-  -D max_instance_uuid="$max_instance_uuid"
+  -D min_instance_uid="$min_instance_uid"
+  -D max_instance_uid="$max_instance_uid"
   -D max_depth="${max_depth:-4}"
   -D latest_limit="${latest_limit:-50}"
 )
@@ -143,10 +150,10 @@ DB_HOST=localhost \
 DB_PORT=5533 \
 DB_NAME=tapdb_tapdb_dev \
 DB_USER="$USER" \
-TEMPLATE_UUID="$template_uuid" \
+TEMPLATE_UID="$template_uid" \
 TENANT_COUNT="$tenant_count" \
-MIN_INSTANCE_UUID="$min_instance_uuid" \
-MAX_INSTANCE_UUID="$max_instance_uuid" \
+MIN_INSTANCE_UID="$min_instance_uid" \
+MAX_INSTANCE_UID="$max_instance_uid" \
 MAX_DEPTH="${max_depth:-4}" \
 LATEST_LIMIT="${latest_limit:-50}" \
 CLIENTS=16 JOBS=4 DURATION=120 \

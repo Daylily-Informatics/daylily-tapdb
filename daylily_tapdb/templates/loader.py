@@ -73,19 +73,6 @@ def _normalize_domain_scope(domain_code: str | None) -> str:
     return normalized
 
 
-def _runtime_domain_code() -> str:
-    return _normalize_domain_scope(
-        os.environ.get("MERIDIAN_DOMAIN_CODE") or os.environ.get("TAPDB_DOMAIN_CODE")
-    )
-
-
-def _runtime_owner_repo_name() -> str:
-    owner_repo_name = str(os.environ.get("TAPDB_OWNER_REPO") or "").strip()
-    if not owner_repo_name:
-        raise ValueError("TAPDB_OWNER_REPO is required for template seeding")
-    return owner_repo_name
-
-
 def _apply_seed_session_scope(
     session: Session,
     *,
@@ -916,18 +903,18 @@ def seed_templates(
     *,
     overwrite: bool,
     core_config_dir: Path,
-    domain_code: str | None = None,
-    owner_repo_name: str | None = None,
-    domain_registry_path: Path | None = None,
-    prefix_registry_path: Path | None = None,
+    domain_code: str,
+    owner_repo_name: str,
+    domain_registry_path: Path,
+    prefix_registry_path: Path,
 ) -> SeedSummary:
     """Seed validated template definitions into a TapDB session."""
-    resolved_domain = _normalize_domain_scope(domain_code or _runtime_domain_code())
-    resolved_owner = str(owner_repo_name or _runtime_owner_repo_name()).strip()
-    domain_registry = Path(domain_registry_path or _DEFAULT_DOMAIN_REGISTRY_PATH)
-    prefix_registry = Path(
-        prefix_registry_path or _DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH
-    )
+    resolved_domain = _normalize_domain_scope(domain_code)
+    resolved_owner = str(owner_repo_name or "").strip()
+    if not resolved_owner:
+        raise ValueError("owner_repo_name is required for template seeding")
+    domain_registry = Path(domain_registry_path)
+    prefix_registry = Path(prefix_registry_path)
 
     prepared_templates = _prepare_seed_templates(
         templates,

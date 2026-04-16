@@ -63,7 +63,8 @@ def docs_local_runtime(tmp_path_factory: pytest.TempPathFactory) -> dict[str, ob
     env["TAPDB_DOCS_WORKDIR"] = str(workdir)
     env["TAPDB_DOCS_CLIENT_ID"] = "docs"
     env["TAPDB_DOCS_DATABASE_NAME"] = "demo"
-    env["TAPDB_DOCS_EUID_CLIENT_CODE"] = "C"
+    env["TAPDB_DOCS_OWNER_REPO_NAME"] = "daylily-tapdb"
+    env["TAPDB_DOCS_DOMAIN_CODE"] = "Z"
     env["TAPDB_DOCS_DB_PORT"] = str(_free_port())
     env["TAPDB_DOCS_UI_PORT"] = str(_free_port())
 
@@ -124,7 +125,8 @@ def test_readme_python_api_example_runs(docs_local_runtime: dict[str, object]) -
     assert result.returncode == 0, result.stderr or result.stdout
 
     payload = json.loads(result.stdout)
-    assert payload["template_code"] == "generic/generic/generic/1.0/"
+    assert payload["template_code"] == "MSG/message/webhook_event/1.0/"
     assert payload["instance_euid"]
-    assert payload["domain_code"]
-    assert payload["issuer_app_code"]
+    assert payload["domain_code"] == "Z"
+    assert payload["owner_repo_name"] == "daylily-tapdb"
+    assert payload["issuer_app_code"] == "daylily-tapdb"

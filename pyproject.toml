@@ -101,6 +101,7 @@ include = ["daylily_tapdb*", "admin*"]
 daylily_tapdb = [
     "core_config/_metadata.json",
     "core_config/*/*.json",
+    "etc/*.json",
     "templates/schema/*.json",
 ]
 # Admin UI ships HTML templates + static assets.

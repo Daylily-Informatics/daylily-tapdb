@@ -207,7 +207,7 @@ if [ ! -x "${_tapdb_tapdb}" ] || ! _tapdb_distribution_is_editable_from_repo "${
     fi
 fi
 
-_tapdb_cli_core_yo_version="2.0.0"
+_tapdb_cli_core_yo_version="2.1.0"
 if ! _tapdb_distribution_is_published "cli-core-yo" "${_tapdb_cli_core_yo_version}"; then
     if [ "${_tapdb_smoke}" = "1" ]; then
         printf "${_tapdb_yellow}⚠${_tapdb_reset} cli-core-yo must be installed as published %s.\n" "${_tapdb_cli_core_yo_version}"

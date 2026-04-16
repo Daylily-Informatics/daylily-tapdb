@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Dict, Mapping, Optional
 
-from meridian_euid import encode as meridian_encode
-from meridian_euid import parse as meridian_parse
-from meridian_euid import validate as meridian_validate
-from meridian_euid import validate_domain_code as meridian_validate_domain_code
-from meridian_euid import validate_prefix as meridian_validate_prefix
+from meridian_euid import compute_check_character
 
 from daylily_tapdb.governance import normalize_owner_repo_name
 
@@ -24,25 +21,62 @@ AUDIT_LOG_PREFIX = "ADT"
 SYSTEM_USER_PREFIX = "SYS"
 SYSTEM_MESSAGE_PREFIX = "MSG"
 
+_ALPHABET_32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+_VALUE_32 = {char: index for index, char in enumerate(_ALPHABET_32)}
+_TOKEN_RE = re.compile(r"^[0-9A-HJ-KMNP-TV-Z]{1,4}$")
+_BODY_RE = re.compile(r"^[1-9A-HJ-KMNP-TV-Z][0-9A-HJ-KMNP-TV-Z]*$")
+_CANONICAL_EUID_RE = re.compile(
+    r"^(?P<domain>[0-9A-HJ-KMNP-TV-Z]{1,4})-"
+    r"(?P<prefix>[0-9A-HJ-KMNP-TV-Z]{1,4})-"
+    r"(?P<body>[1-9A-HJ-KMNP-TV-Z][0-9A-HJ-KMNP-TV-Z]*)(?P<checksum>[0-9A-HJ-KMNP-TV-Z])$"
+)
+
+
+def _normalize_token(value: str | None, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().upper()
+    if not normalized:
+        return None
+    if not _TOKEN_RE.fullmatch(normalized):
+        raise ValueError(f"Invalid Meridian {field_name}: {value!r}")
+    return normalized
+
+
+def _int_to_base32(integer: int) -> str:
+    if not isinstance(integer, int) or isinstance(integer, bool) or integer <= 0:
+        raise ValueError("seq_val must be a positive int")
+
+    encoded: list[str] = []
+    remaining = integer
+    while remaining > 0:
+        encoded.append(_ALPHABET_32[remaining % 32])
+        remaining //= 32
+    return "".join(reversed(encoded))
+
+
+def _canonical_euid_parts(euid: str) -> tuple[str, str, str, str] | None:
+    if not isinstance(euid, str):
+        return None
+    match = _CANONICAL_EUID_RE.fullmatch(euid)
+    if match is None:
+        return None
+    return (
+        match.group("domain"),
+        match.group("prefix"),
+        match.group("body"),
+        match.group("checksum"),
+    )
+
 
 def normalize_domain_code(code: str | None) -> str | None:
     """Normalize and validate a Meridian domain code."""
-    if code is None:
-        return None
-    normalized = str(code).strip().upper()
-    if not normalized:
-        return None
-    return meridian_validate_domain_code(normalized)
+    return _normalize_token(code, field_name="domain code")
 
 
 def normalize_prefix(prefix: str | None) -> str | None:
     """Normalize and validate a Meridian prefix token."""
-    if prefix is None:
-        return None
-    normalized = str(prefix).strip().upper()
-    if not normalized:
-        return None
-    return meridian_validate_prefix(normalized)
+    return _normalize_token(prefix, field_name="prefix")
 
 
 def resolve_runtime_domain_code(
@@ -105,7 +139,11 @@ def format_euid(
     normalized_prefix = normalize_prefix(prefix)
     if normalized_prefix is None:
         raise ValueError("prefix is required for canonical Meridian EUIDs")
-    return meridian_encode(seq_val, normalized_prefix, domain_code=normalized_domain_code)
+    body = _int_to_base32(seq_val)
+    checksum = compute_check_character(
+        f"{normalized_domain_code}{normalized_prefix}{body}"
+    )
+    return f"{normalized_domain_code}-{normalized_prefix}-{body}{checksum}"
 
 
 def validate_euid(
@@ -115,20 +153,22 @@ def validate_euid(
     allowed_domain_codes: list[str] | None = None,
 ) -> bool:
     """Return True when *euid* is a valid canonical Meridian EUID."""
-    try:
-        canonical = meridian_validate(euid)
-    except Exception:
-        return False
     if environment not in {"canonical", "production", "domain"}:
         raise ValueError(f"Unsupported EUID validation environment: {environment!r}")
+    parsed = _canonical_euid_parts(euid)
+    if parsed is None:
+        return False
+    domain_code, prefix, body, checksum = parsed
+    expected = compute_check_character(f"{domain_code}{prefix}{body}")
+    if checksum != expected:
+        return False
     if allowed_domain_codes:
         allowed = {
-            meridian_validate_domain_code(str(code).strip().upper())
+            normalized
             for code in allowed_domain_codes
-            if str(code).strip()
+            if (normalized := normalize_domain_code(str(code).strip())) is not None
         }
-        parsed = meridian_parse(canonical)
-        return str(parsed["domain_code"]) in allowed
+        return domain_code in allowed
     return True
 
 

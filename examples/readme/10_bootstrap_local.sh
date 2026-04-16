@@ -23,18 +23,73 @@ done
 WORKDIR="${TAPDB_DOCS_WORKDIR:-$HOME/.tapdb-docs}"
 CLIENT_ID="${TAPDB_DOCS_CLIENT_ID:-docs}"
 DATABASE_NAME="${TAPDB_DOCS_DATABASE_NAME:-demo}"
-EUID_CLIENT_CODE="${TAPDB_DOCS_EUID_CLIENT_CODE:-C}"
+OWNER_REPO_NAME="${TAPDB_DOCS_OWNER_REPO_NAME:-daylily-tapdb}"
+DOMAIN_CODE="${TAPDB_DOCS_DOMAIN_CODE:-Z}"
 DB_PORT="${TAPDB_DOCS_DB_PORT:-15533}"
 UI_PORT="${TAPDB_DOCS_UI_PORT:-18911}"
 CONFIG_PATH="${TAPDB_DOCS_CONFIG:-$WORKDIR/.config/tapdb/$CLIENT_ID/$DATABASE_NAME/tapdb-config.yaml}"
+DOMAIN_REGISTRY_PATH="${TAPDB_DOCS_DOMAIN_REGISTRY_PATH:-$WORKDIR/.config/tapdb/domain_code_registry.json}"
+PREFIX_OWNERSHIP_REGISTRY_PATH="${TAPDB_DOCS_PREFIX_OWNERSHIP_REGISTRY_PATH:-$WORKDIR/.config/tapdb/prefix_ownership_registry.json}"
 
-mkdir -p "$(dirname "$CONFIG_PATH")"
+mkdir -p "$(dirname "$CONFIG_PATH")" "$(dirname "$DOMAIN_REGISTRY_PATH")" "$(dirname "$PREFIX_OWNERSHIP_REGISTRY_PATH")"
+
+export TAPDB_DOCS_DOMAIN_CODE_EFFECTIVE="$DOMAIN_CODE"
+export TAPDB_DOCS_OWNER_REPO_NAME_EFFECTIVE="$OWNER_REPO_NAME"
+export TAPDB_DOCS_DOMAIN_REGISTRY_PATH_EFFECTIVE="$DOMAIN_REGISTRY_PATH"
+export TAPDB_DOCS_PREFIX_OWNERSHIP_REGISTRY_PATH_EFFECTIVE="$PREFIX_OWNERSHIP_REGISTRY_PATH"
+
+python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+domain_code = os.environ["TAPDB_DOCS_DOMAIN_CODE_EFFECTIVE"]
+owner_repo_name = os.environ["TAPDB_DOCS_OWNER_REPO_NAME_EFFECTIVE"]
+domain_registry_path = Path(os.environ["TAPDB_DOCS_DOMAIN_REGISTRY_PATH_EFFECTIVE"])
+prefix_registry_path = Path(
+    os.environ["TAPDB_DOCS_PREFIX_OWNERSHIP_REGISTRY_PATH_EFFECTIVE"]
+)
+
+domain_registry_path.write_text(
+    json.dumps(
+        {
+            "version": "0.4.0",
+            "domains": {domain_code: {"name": "tapdb-readme-local"}},
+        },
+        indent=2,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+prefix_registry_path.write_text(
+    json.dumps(
+        {
+            "version": "0.4.0",
+            "ownership": {
+                domain_code: {
+                    "TPX": {"issuer_app_code": owner_repo_name},
+                    "EDG": {"issuer_app_code": owner_repo_name},
+                    "ADT": {"issuer_app_code": owner_repo_name},
+                    "SYS": {"issuer_app_code": owner_repo_name},
+                    "MSG": {"issuer_app_code": owner_repo_name},
+                }
+            },
+        },
+        indent=2,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
 
 tapdb --config "$CONFIG_PATH" db-config init \
     --client-id "$CLIENT_ID" \
     --database-name "$DATABASE_NAME" \
-    --euid-client-code "$EUID_CLIENT_CODE" \
+    --owner-repo-name "$OWNER_REPO_NAME" \
     --env dev \
+    --domain-code "dev=$DOMAIN_CODE" \
+    --domain-registry-path "$DOMAIN_REGISTRY_PATH" \
+    --prefix-ownership-registry-path "$PREFIX_OWNERSHIP_REGISTRY_PATH" \
     --db-port "dev=$DB_PORT" \
     --ui-port "dev=$UI_PORT" \
     --force

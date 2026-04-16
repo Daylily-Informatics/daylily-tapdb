@@ -10,6 +10,10 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _fixture_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "daylily_tapdb" / "etc"
+
+
 def test_core_bundle_only_seeds_operational_templates():
     from daylily_tapdb.templates.loader import (
         find_tapdb_core_config_dir,
@@ -27,6 +31,26 @@ def test_core_bundle_only_seeds_operational_templates():
         "SYS/actor/system_user/1.0",
         "MSG/message/webhook_event/1.0",
     }
+
+
+def test_packaged_registry_fixtures_match_core_prefix_ownership():
+    from daylily_tapdb.euid import EUIDConfig
+
+    fixture_dir = _fixture_dir()
+    domain_registry = json.loads(
+        (fixture_dir / "domain_code_registry.json").read_text(encoding="utf-8")
+    )
+    prefix_registry = json.loads(
+        (fixture_dir / "prefix_ownership_registry.json").read_text(encoding="utf-8")
+    )
+
+    assert set(domain_registry["domains"]) == {"Z"}
+    assert set(prefix_registry["ownership"]) == {"Z"}
+    assert {
+        prefix
+        for prefix, claim in prefix_registry["ownership"]["Z"].items()
+        if claim.get("issuer_app_code") == "daylily-tapdb"
+    } == set(EUIDConfig().get_all_prefixes().values())
 
 
 def test_prepare_seed_templates_rejects_gx_placeholder():
@@ -144,3 +168,18 @@ def test_validate_seed_ownership_requires_registered_domain_and_claim(tmp_path):
             domain_registry_path=domain_registry,
             prefix_registry_path=prefix_registry,
         )
+
+
+def test_validate_seed_ownership_accepts_packaged_combined_registry():
+    from daylily_tapdb.templates.loader import _validate_seed_ownership, load_template_configs
+
+    fixture_dir = _fixture_dir()
+    templates = load_template_configs(Path(__file__).resolve().parents[1] / "daylily_tapdb" / "core_config")
+
+    _validate_seed_ownership(
+        templates,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        domain_registry_path=fixture_dir / "domain_code_registry.json",
+        prefix_registry_path=fixture_dir / "prefix_ownership_registry.json",
+    )

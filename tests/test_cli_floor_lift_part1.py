@@ -394,6 +394,7 @@ def test_runtime_build_engine_for_cfg_local_and_aurora(
             "user": "tapdb",
             "aws_profile": "ambient",
             "iam_auth": True,
+            "secret_arn": None,
             "password": "",
         }
     ]

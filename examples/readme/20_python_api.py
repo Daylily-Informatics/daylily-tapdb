@@ -10,7 +10,7 @@ from pathlib import Path
 from daylily_tapdb import InstanceFactory, TAPDBConnection, TemplateManager
 from daylily_tapdb.cli.db_config import get_db_config_for_env
 
-TEMPLATE_CODE = "generic/generic/generic/1.0/"
+TEMPLATE_CODE = "MSG/message/webhook_event/1.0/"
 
 
 def _default_config_path() -> Path:
@@ -34,11 +34,9 @@ def _default_config_path() -> Path:
 def main() -> None:
     config_path = _default_config_path()
     env_name = os.environ.get("TAPDB_DOCS_ENV", "dev")
-    domain_code = os.environ.get("TAPDB_DOCS_DOMAIN_CODE", "T")
-    issuer_app_code = os.environ.get("TAPDB_DOCS_ISSUER_APP_CODE", "RDME")
     instance_name = os.environ.get(
         "TAPDB_DOCS_INSTANCE_NAME",
-        "README Generic Object",
+        "README Webhook Event",
     )
 
     if not config_path.exists():
@@ -48,6 +46,11 @@ def main() -> None:
         )
 
     cfg = get_db_config_for_env(env_name, config_path=config_path)
+    domain_code = os.environ.get("TAPDB_DOCS_DOMAIN_CODE", str(cfg["domain_code"]))
+    owner_repo_name = os.environ.get(
+        "TAPDB_DOCS_OWNER_REPO_NAME",
+        str(cfg["owner_repo_name"]),
+    )
     conn = TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_user=cfg["user"],
@@ -55,15 +58,19 @@ def main() -> None:
         db_name=cfg["database"],
         app_username="tapdb_readme_example",
         domain_code=domain_code,
-        issuer_app_code=issuer_app_code,
+        owner_repo_name=owner_repo_name,
     )
 
     template_manager = TemplateManager()
-    factory = InstanceFactory(template_manager)
+    factory = InstanceFactory(template_manager, domain_code=domain_code)
 
     with conn:
         with conn.session_scope(commit=True) as session:
-            template = template_manager.get_template(session, TEMPLATE_CODE)
+            template = template_manager.get_template(
+                session,
+                TEMPLATE_CODE,
+                domain_code=domain_code,
+            )
             if template is None:
                 raise SystemExit(f"Template not found: {TEMPLATE_CODE}")
 
@@ -72,7 +79,10 @@ def main() -> None:
                 template_code=TEMPLATE_CODE,
                 name=instance_name,
                 properties={
-                    "comments": "Created by the README Python API example.",
+                    "event_type": "docs.readme.example",
+                    "aggregate_euid": template.euid,
+                    "payload": {"source": "README Python API example"},
+                    "metadata": {"owner_repo_name": owner_repo_name},
                 },
                 create_children=False,
             )
@@ -86,6 +96,7 @@ def main() -> None:
                 "instance_euid": instance.euid,
                 "instance_name": instance.name,
                 "domain_code": instance.domain_code,
+                "owner_repo_name": owner_repo_name,
                 "issuer_app_code": instance.issuer_app_code,
             }
 
