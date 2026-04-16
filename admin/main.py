@@ -584,15 +584,14 @@ def _mask_sensitive_value(key: str, value: str) -> str:
 
 
 def _normalize_cognito_domain(raw_domain: str) -> str:
-    """Normalize configured Cognito domain to hostname-only form."""
+    """Require configured Cognito domain to be a bare host."""
     domain = (raw_domain or "").strip()
     if not domain:
         raise RuntimeError("COGNITO_DOMAIN is not configured")
-    probe = domain if "://" in domain else f"https://{domain}"
-    parts = urlsplit(probe)
-    if not parts.netloc:
+    parts = urlsplit(domain)
+    if parts.scheme or parts.netloc or "/" in domain or any(char.isspace() for char in domain):
         raise RuntimeError(f"Invalid COGNITO_DOMAIN value: {raw_domain!r}")
-    return parts.netloc
+    return domain
 
 
 def _resolve_cognito_oauth_runtime(env_name: str) -> Dict[str, str]:
