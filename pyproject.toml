@@ -32,13 +32,13 @@ dependencies = [
     "typer",
     "rich",
     "uuid6>=2024.1.12",
-    "cli-core-yo==2.0.0",
+    "cli-core-yo==2.1.0",
     "meridian-euid>=0.4.1,<0.4.3",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "cli-core-yo==2.0.0",
+    "cli-core-yo==2.1.0",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "black>=23.0",
@@ -77,7 +77,7 @@ admin = [
     "jinja2",
     "python-multipart",
     "itsdangerous",
-    "daylily-auth-cognito==2.0.3",
+    "daylily-auth-cognito==2.1.1",
     # passlib 1.7.x is not compatible with bcrypt>=4 (bcrypt enforces 72-byte
     # password max and passlib's backend self-test uses a longer sentinel).
     # Pin to bcrypt<4 to keep admin auth usable.
