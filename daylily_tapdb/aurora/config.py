@@ -41,6 +41,7 @@ class AuroraConfig:
     instance_class: str = "db.r6g.large"
     engine_version: str = "16.6"
     vpc_id: str = ""
+    cidr: str = "10.0.0.0/8"
     subnet_ids: list[str] = field(default_factory=list)
     security_group_ids: list[str] = field(default_factory=list)
     iam_auth: bool = True

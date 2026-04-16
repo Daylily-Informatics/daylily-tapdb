@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import warnings
 from pathlib import Path
@@ -46,6 +47,31 @@ DEFAULT_DB_POOL_SIZE = 5
 DEFAULT_DB_MAX_OVERFLOW = 10
 DEFAULT_DB_POOL_TIMEOUT = 30
 DEFAULT_DB_POOL_RECYCLE = 1800
+_POSTGRES_IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
+
+
+def normalize_postgres_identifier_component(value: str) -> str:
+    """Return a PostgreSQL-safe identifier component.
+
+    The full TAPDB database identifier is prefixed with ``tapdb_`` elsewhere, so
+    this helper only needs to normalize the namespace/environment fragments.
+    """
+
+    normalized = _POSTGRES_IDENTIFIER_RE.sub("_", str(value or "").strip().lower())
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not normalized:
+        raise RuntimeError("TapDB database namespace must yield a non-empty identifier")
+    return normalized
+
+
+def default_database_name_for_namespace(database_name: str, env_name: str) -> str:
+    """Build the default logical database name for a namespace/env pair."""
+
+    return (
+        "tapdb_"
+        f"{normalize_postgres_identifier_component(database_name)}_"
+        f"{normalize_postgres_identifier_component(env_name)}"
+    )
 
 
 def get_config_paths(
@@ -246,6 +272,7 @@ def get_db_config_for_env(
         "ui_port": _file_str("ui_port") or DEFAULT_UI_PORT,
         "user": _file_str("user") or "postgres",
         "password": _file_str("password") or "",
+        "secret_arn": _file_str("secret_arn") or "",
         "database": _file_str("database") or f"tapdb_{env_key}",
         "cognito_user_pool_id": _file_str("cognito_user_pool_id") or "",
         "cognito_app_client_id": _file_str("cognito_app_client_id") or "",
@@ -277,6 +304,7 @@ def get_db_config_for_env(
         cfg.setdefault("region", _file_str("region") or "us-west-2")
         cfg.setdefault("cluster_identifier", _file_str("cluster_identifier") or "")
         cfg.setdefault("iam_auth", _file_str("iam_auth") or "true")
+        cfg.setdefault("secret_arn", _file_str("secret_arn") or "")
         cfg.setdefault("ssl", _file_str("ssl") or "true")
     else:
         cfg.setdefault(

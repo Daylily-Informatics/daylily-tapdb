@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from daylily_tapdb.cli import build_app
+from daylily_tapdb.cli.aurora import _DEFAULT_PRIVATE_INGRESS_CIDR, _resolve_ingress_cidr
 
 runner = CliRunner()
 
@@ -114,6 +115,36 @@ class TestAuroraHelp:
 
 
 class TestAuroraCreate:
+    def test_resolve_ingress_cidr_uses_explicit_value(self):
+        assert (
+            _resolve_ingress_cidr(
+                "1.2.3.4/32",
+                True,
+                public_ip_resolver=lambda: "5.6.7.8",
+            )
+            == "1.2.3.4/32"
+        )
+
+    def test_resolve_ingress_cidr_uses_current_ip_for_public_access(self):
+        assert (
+            _resolve_ingress_cidr(
+                None,
+                True,
+                public_ip_resolver=lambda: "24.7.124.62",
+            )
+            == "24.7.124.62/32"
+        )
+
+    def test_resolve_ingress_cidr_defaults_private_range(self):
+        assert (
+            _resolve_ingress_cidr(
+                None,
+                False,
+                public_ip_resolver=lambda: "24.7.124.62",
+            )
+            == _DEFAULT_PRIVATE_INGRESS_CIDR
+        )
+
     @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
     def test_create_success(self, mock_mgr_cls, app, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
@@ -127,12 +158,49 @@ class TestAuroraCreate:
         out = _strip(result.output)
         assert "created" in out.lower() or "✓" in result.output
         mock_mgr.create_stack.assert_called_once()
+        config = mock_mgr.create_stack.call_args.args[0]
+        assert config.cidr == _DEFAULT_PRIVATE_INGRESS_CIDR
+
+    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+    def test_create_publicly_accessible_resolves_current_ip(
+        self, mock_mgr_cls, app, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.aurora._detect_caller_public_ip",
+            lambda: "24.7.124.62",
+        )
+        mock_mgr = _mock_stack_manager()
+        mock_mgr_cls.return_value = mock_mgr
+
+        result = runner.invoke(
+            app,
+            _namespaced(["aurora", "create", "dev", "--publicly-accessible"]),
+        )
+        assert result.exit_code == 0
+        config = mock_mgr.create_stack.call_args.args[0]
+        assert config.publicly_accessible is True
+        assert config.cidr == "24.7.124.62/32"
+        assert "24.7.124.62/32" in _strip(result.output)
 
     @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
     def test_create_failure(self, mock_mgr_cls, app):
         mock_mgr_cls.return_value.create_stack.side_effect = RuntimeError("boom")
         result = runner.invoke(app, _namespaced(["aurora", "create", "dev"]))
         assert result.exit_code == 1
+
+    def test_create_publicly_accessible_fails_when_ip_resolution_fails(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.aurora._detect_caller_public_ip",
+            lambda: (_ for _ in ()).throw(RuntimeError("resolve failed")),
+        )
+
+        result = runner.invoke(
+            app,
+            _namespaced(["aurora", "create", "dev", "--publicly-accessible"]),
+        )
+        assert result.exit_code == 1
+        assert "resolve failed" in _strip(result.output)
 
 
 # ── aurora delete ────────────────────────────────────────────────────

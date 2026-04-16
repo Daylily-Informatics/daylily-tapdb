@@ -947,6 +947,297 @@ class TestCLIBootstrap:
         assert result.exit_code != 0
         assert "--cluster" in result.output or "Missing option" in result.output
 
+    def test_bootstrap_aurora_creates_namespaced_config(self, tmp_path, monkeypatch):
+        domain_registry, prefix_registry = _write_test_registries(tmp_path)
+        cfg_path = (
+            tmp_path
+            / ".config"
+            / "tapdb"
+            / "daylily-tapdb"
+            / "auruse1-daylily-tapdb"
+            / "tapdb-config.yaml"
+        )
+
+        class _FakeAuroraStackManager:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_stack_status(self, stack_name):
+                return {
+                    "stack_name": stack_name,
+                    "status": "CREATE_COMPLETE",
+                    "outputs": {
+                        "ClusterEndpoint": "auruse1.cluster.us-east-1.rds.amazonaws.com",
+                        "ClusterPort": "5432",
+                        "SecretArn": "arn:aws:secretsmanager:us-east-1:123:secret:auruse1",
+                    },
+                }
+
+            def update_stack(self, config):
+                return self.get_stack_status(f"tapdb-{config.cluster_identifier}")
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr("daylily_tapdb.cli.aurora._ensure_boto3", lambda: None)
+        monkeypatch.setattr(
+            "daylily_tapdb.aurora.stack_manager.AuroraStackManager",
+            _FakeAuroraStackManager,
+        )
+        monkeypatch.setattr("daylily_tapdb.cli.db.create_database", lambda **_: None)
+        monkeypatch.setattr("daylily_tapdb.cli.db.apply_schema", lambda **_: None)
+        monkeypatch.setattr("daylily_tapdb.cli.db.run_migrations", lambda **_: None)
+        monkeypatch.setattr("daylily_tapdb.cli.db.seed_templates", lambda **_: None)
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.db._create_default_admin",
+            lambda **_: False,
+        )
+
+        clear_cli_context()
+        fresh_app = cli_mod.build_app()
+        result = runner.invoke(
+            fresh_app,
+            [
+                "--config",
+                str(cfg_path),
+                "--client-id",
+                "daylily-tapdb",
+                "--database-name",
+                "auruse1-daylily-tapdb",
+                "--env",
+                "dev",
+                "bootstrap",
+                "aurora",
+                "--cluster",
+                "auruse1",
+                "--region",
+                "us-east-1",
+                "--owner-repo-name",
+                "daylily-tapdb",
+                "--domain-code",
+                "dev=Z",
+                "--ui-port",
+                "dev=8910",
+                "--domain-registry-path",
+                str(domain_registry),
+                "--prefix-ownership-registry-path",
+                str(prefix_registry),
+                "--no-gui",
+            ],
+        )
+
+        assert result.exit_code == 0
+        payload = yaml.safe_load(cfg_path.read_text())
+        assert payload["meta"]["client_id"] == "daylily-tapdb"
+        assert payload["meta"]["database_name"] == "auruse1-daylily-tapdb"
+        assert payload["meta"]["owner_repo_name"] == "daylily-tapdb"
+        assert payload["environments"]["dev"]["engine_type"] == "aurora"
+        assert payload["environments"]["dev"]["database"] == (
+            "tapdb_auruse1_daylily_tapdb_dev"
+        )
+        assert payload["environments"]["dev"]["iam_auth"] == "false"
+        assert payload["environments"]["dev"]["secret_arn"].endswith(":secret:auruse1")
+        assert payload["environments"]["dev"]["ui_port"] == "8910"
+        assert (
+            payload["environments"]["dev"]["cluster_identifier"] == "auruse1"
+        )
+
+    def test_bootstrap_aurora_preserves_database_and_ui_port(
+        self, tmp_path, monkeypatch
+    ):
+        domain_registry, prefix_registry = _write_test_registries(tmp_path)
+        cfg_path = tmp_path / "tapdb-config.yaml"
+        cfg_path.write_text(
+            yaml.safe_dump(
+                {
+                    "meta": {
+                        "config_version": 3,
+                        "client_id": "daylily-tapdb",
+                        "database_name": "auruse1-daylily-tapdb",
+                        "owner_repo_name": "daylily-tapdb",
+                        "domain_registry_path": str(domain_registry),
+                        "prefix_ownership_registry_path": str(prefix_registry),
+                    },
+                    "environments": {
+                        "dev": {
+                            "engine_type": "local",
+                            "host": "localhost",
+                            "port": "5432",
+                            "ui_port": "8910",
+                            "domain_code": "Z",
+                            "user": "test",
+                            "password": "",
+                            "database": "tapdb_auruse1_daylily_tapdb_dev",
+                        }
+                    },
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        class _FakeAuroraStackManager:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_stack_status(self, stack_name):
+                return {
+                    "stack_name": stack_name,
+                    "status": "CREATE_COMPLETE",
+                    "outputs": {
+                        "ClusterEndpoint": "auruse1.cluster.us-east-1.rds.amazonaws.com",
+                        "ClusterPort": "5432",
+                        "SecretArn": "arn:aws:secretsmanager:us-east-1:123:secret:auruse1",
+                    },
+                }
+
+            def update_stack(self, config):
+                return self.get_stack_status(f"tapdb-{config.cluster_identifier}")
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr("daylily_tapdb.cli.aurora._ensure_boto3", lambda: None)
+        monkeypatch.setattr(
+            "daylily_tapdb.aurora.stack_manager.AuroraStackManager",
+            _FakeAuroraStackManager,
+        )
+        monkeypatch.setattr("daylily_tapdb.cli.db.create_database", lambda **_: None)
+        monkeypatch.setattr("daylily_tapdb.cli.db.apply_schema", lambda **_: None)
+        monkeypatch.setattr("daylily_tapdb.cli.db.run_migrations", lambda **_: None)
+        monkeypatch.setattr("daylily_tapdb.cli.db.seed_templates", lambda **_: None)
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.db._create_default_admin",
+            lambda **_: False,
+        )
+
+        clear_cli_context()
+        fresh_app = cli_mod.build_app()
+        result = runner.invoke(
+            fresh_app,
+            [
+                "--config",
+                str(cfg_path),
+                "--env",
+                "dev",
+                "bootstrap",
+                "aurora",
+                "--cluster",
+                "auruse1",
+                "--region",
+                "us-east-1",
+                "--no-gui",
+            ],
+        )
+
+        assert result.exit_code == 0
+        payload = yaml.safe_load(cfg_path.read_text())
+        assert payload["environments"]["dev"]["database"] == (
+            "tapdb_auruse1_daylily_tapdb_dev"
+        )
+        assert payload["environments"]["dev"]["ui_port"] == "8910"
+        assert payload["environments"]["dev"]["iam_auth"] == "false"
+        assert payload["environments"]["dev"]["host"] == (
+            "auruse1.cluster.us-east-1.rds.amazonaws.com"
+        )
+        assert payload["environments"]["dev"]["engine_type"] == "aurora"
+
+    def test_bootstrap_aurora_public_access_resolves_current_ip(
+        self, tmp_path, monkeypatch
+    ):
+        domain_registry, prefix_registry = _write_test_registries(tmp_path)
+        cfg_path = tmp_path / "tapdb-config.yaml"
+        cfg_path.write_text(
+            yaml.safe_dump(
+                {
+                    "meta": {
+                        "config_version": 3,
+                        "client_id": "daylily-tapdb",
+                        "database_name": "auruse1-daylily-tapdb",
+                        "owner_repo_name": "daylily-tapdb",
+                        "domain_registry_path": str(domain_registry),
+                        "prefix_ownership_registry_path": str(prefix_registry),
+                    },
+                    "environments": {
+                        "dev": {
+                            "engine_type": "local",
+                            "host": "localhost",
+                            "port": "5432",
+                            "ui_port": "8910",
+                            "domain_code": "Z",
+                            "user": "test",
+                            "password": "",
+                            "database": "tapdb_auruse1_daylily_tapdb_dev",
+                        }
+                    },
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        class _FakeAuroraStackManager:
+            last_config = None
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_stack_status(self, stack_name):
+                return {
+                    "stack_name": stack_name,
+                    "status": "CREATE_COMPLETE",
+                    "outputs": {
+                        "ClusterEndpoint": "auruse1.cluster.us-east-1.rds.amazonaws.com",
+                        "ClusterPort": "5432",
+                        "SecretArn": "arn:aws:secretsmanager:us-east-1:123:secret:auruse1",
+                    },
+                }
+
+            def update_stack(self, config):
+                _FakeAuroraStackManager.last_config = config
+                return self.get_stack_status(f"tapdb-{config.cluster_identifier}")
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr("daylily_tapdb.cli.aurora._ensure_boto3", lambda: None)
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.aurora._detect_caller_public_ip",
+            lambda: "24.7.124.62",
+        )
+        monkeypatch.setattr(
+            "daylily_tapdb.aurora.stack_manager.AuroraStackManager",
+            _FakeAuroraStackManager,
+        )
+        monkeypatch.setattr("daylily_tapdb.cli.db.create_database", lambda **_: None)
+        monkeypatch.setattr("daylily_tapdb.cli.db.apply_schema", lambda **_: None)
+        monkeypatch.setattr("daylily_tapdb.cli.db.run_migrations", lambda **_: None)
+        monkeypatch.setattr("daylily_tapdb.cli.db.seed_templates", lambda **_: None)
+        monkeypatch.setattr(
+            "daylily_tapdb.cli.db._create_default_admin",
+            lambda **_: False,
+        )
+
+        clear_cli_context()
+        fresh_app = cli_mod.build_app()
+        result = runner.invoke(
+            fresh_app,
+            [
+                "--config",
+                str(cfg_path),
+                "--env",
+                "dev",
+                "bootstrap",
+                "aurora",
+                "--cluster",
+                "auruse1",
+                "--region",
+                "us-east-1",
+                "--publicly-accessible",
+                "--no-gui",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert _FakeAuroraStackManager.last_config is not None
+        assert _FakeAuroraStackManager.last_config.cidr == "24.7.124.62/32"
+        assert _FakeAuroraStackManager.last_config.publicly_accessible is True
+        assert "Ingress CIDR: 24.7.124.62/32" in _strip_ansi(result.output)
+
 
 class TestCLIDB:
     """Tests for database management commands."""

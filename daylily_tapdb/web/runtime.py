@@ -125,6 +125,7 @@ def _attach_aurora_password_provider(
     user: str,
     aws_profile: Optional[str],
     iam_auth: bool,
+    secret_arn: Optional[str],
     password: str,
 ) -> None:
     """Ensure each new pooled Aurora connection gets a fresh credential."""
@@ -140,9 +141,15 @@ def _attach_aurora_password_provider(
                 profile=aws_profile,
             )
             return
+        if secret_arn:
+            cparams["password"] = AuroraConnectionBuilder.get_secret_password(
+                secret_arn=secret_arn,
+                region=region,
+            )
+            return
         if not password:
             raise ValueError(
-                "Aurora connection requires a password when iam_auth is disabled"
+                "Aurora connection requires a password or secret_arn when iam_auth is disabled"
             )
         cparams["password"] = password
 
@@ -163,6 +170,7 @@ def _build_engine_for_cfg(
     database = str(cfg["database"]).strip()
     user = str(cfg["user"]).strip()
     password = str(cfg.get("password") or "")
+    secret_arn = str(cfg.get("secret_arn") or "").strip() or None
 
     if engine_type == "aurora":
         region = str(cfg.get("region") or "us-west-2").strip()
@@ -196,6 +204,7 @@ def _build_engine_for_cfg(
             user=user,
             aws_profile=aws_profile,
             iam_auth=iam_auth,
+            secret_arn=secret_arn,
             password=password,
         )
         return engine

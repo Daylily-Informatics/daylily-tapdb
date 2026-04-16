@@ -954,12 +954,16 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
     monkeypatch.setattr(
         db_mod, "_loader_find_tapdb_core_config_dir", lambda: tmp_path / "core"
     )
+    seed_call: dict[str, object] = {}
+
+    def _fake_loader_seed_templates(*_args, **kwargs):
+        seed_call.update(kwargs)
+        return SimpleNamespace(inserted=2, updated=1, skipped=3, prefixes_ensured=4)
+
     monkeypatch.setattr(
         db_mod,
         "_loader_seed_templates",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            inserted=2, updated=1, skipped=3, prefixes_ensured=4
-        ),
+        _fake_loader_seed_templates,
     )
     db_mod.db_seed(
         db_mod.Environment.dev,
@@ -968,6 +972,7 @@ def test_db_nuke_migrate_backup_restore_validate_admin_seed_and_setup(
         skip_existing=False,
         dry_run=False,
     )
+    assert "prefix_registry_path" in seed_call
 
     db_calls: list[str] = []
     monkeypatch.setattr(

@@ -28,6 +28,7 @@ from daylily_tapdb.cli.context import (
 )
 from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.cli.spec import spec
+from daylily_tapdb.cli.db_config import default_database_name_for_namespace
 from daylily_tapdb.governance import (
     DEFAULT_DOMAIN_REGISTRY_PATH,
     DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH,
@@ -659,7 +660,14 @@ def build_app():
         """Restart the TAPDB Admin UI server."""
         ui_stop()
         time.sleep(1)
-        ui_start(port=port, host=host, reload=False, background=True)
+        ui_start(
+            port=port,
+            host=host,
+            reload=False,
+            background=True,
+            ssl_certfile=None,
+            ssl_keyfile=None,
+        )
 
     def _resolve_bootstrap_env() -> DbEnvironment:
         raw = str(active_context_overrides().get("env_name") or "").strip().lower()
@@ -691,6 +699,8 @@ def build_app():
                 host=DEFAULT_UI_HOST,
                 reload=False,
                 background=True,
+                ssl_certfile=None,
+                ssl_keyfile=None,
             )
         except Exception as e:
             ccyo_out.error(f"DB is ready, but UI start failed: {e}")
@@ -774,6 +784,21 @@ def build_app():
             help="Aurora cluster identifier to provision/reuse",
         ),
         region: str = typer.Option("us-west-2", "--region", "-r", help="AWS region"),
+        vpc_id: str = typer.Option("", "--vpc-id", help="VPC ID to deploy into"),
+        cidr: Optional[str] = typer.Option(
+            None,
+            "--cidr",
+            help=(
+                "Ingress CIDR for Aurora security group. Defaults to the current "
+                "public IP (/32) when --publicly-accessible is set, otherwise "
+                "10.0.0.0/8."
+            ),
+        ),
+        publicly_accessible: bool = typer.Option(
+            False,
+            "--publicly-accessible/--no-publicly-accessible",
+            help="Whether the Aurora writer instance is publicly accessible",
+        ),
         no_gui: bool = typer.Option(
             False, "--no-gui", help="Skip starting TAPDB Admin UI"
         ),
@@ -788,12 +813,38 @@ def build_app():
             "--insecure-dev-defaults",
             help="DEV ONLY: create default admin user (tapdb_admin/passw0rd)",
         ),
+        owner_repo_name: Optional[str] = typer.Option(
+            None,
+            "--owner-repo-name",
+            help="Repo-name token used for Meridian prefix ownership validation when bootstrap creates config",
+        ),
+        domain_code: list[str] = typer.Option(
+            [],
+            "--domain-code",
+            help="Per-env domain code mapping (ENV=CODE, repeatable) when bootstrap creates config",
+        ),
+        ui_port: list[str] = typer.Option(
+            [],
+            "--ui-port",
+            help="Per-env UI port mapping (ENV=PORT, repeatable) when bootstrap creates config",
+        ),
+        domain_registry_path: str = typer.Option(
+            str(DEFAULT_DOMAIN_REGISTRY_PATH),
+            "--domain-registry-path",
+            help="Path to the shared Meridian domain registry JSON",
+        ),
+        prefix_ownership_registry_path: str = typer.Option(
+            str(DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH),
+            "--prefix-ownership-registry-path",
+            help="Path to the shared Meridian prefix ownership registry JSON",
+        ),
     ):
         """Bootstrap Aurora TAPDB stack (infra + DB + schema + seed + optional UI)."""
         from daylily_tapdb.aurora.config import AuroraConfig
         from daylily_tapdb.aurora.stack_manager import AuroraStackManager
         from daylily_tapdb.cli.aurora import (
             _ensure_boto3,
+            _resolve_ingress_cidr,
             _stack_name_for_env,
             _update_config_file,
         )
@@ -807,27 +858,49 @@ def build_app():
             " ━━━[/bold cyan]"
         )
 
-        ccyo_out.print_text("\n[bold]Step 1/7: Ensure Aurora cluster[/bold]")
+        ccyo_out.print_text("\n[bold]Step 1/8: Ensure TapDB config[/bold]")
+        config_path = _ensure_bootstrap_config_for_aurora(
+            env_name=env.value,
+            owner_repo_name=owner_repo_name,
+            domain_code=domain_code,
+            ui_port=ui_port,
+            domain_registry_path=domain_registry_path,
+            prefix_ownership_registry_path=prefix_ownership_registry_path,
+        )
+        ccyo_out.success(f"  Config ready: {config_path}")
+
+        ccyo_out.print_text("\n[bold]Step 2/8: Ensure Aurora cluster[/bold]")
+        try:
+            resolved_cidr = _resolve_ingress_cidr(cidr, publicly_accessible)
+        except RuntimeError as exc:
+            ccyo_out.error(str(exc))
+            raise typer.Exit(1)
+        ccyo_out.print_text(f"  Ingress CIDR: {resolved_cidr}")
+        desired_stack = AuroraConfig(
+            region=region,
+            cluster_identifier=cluster,
+            instance_class="db.r6g.large",
+            engine_version="16.6",
+            vpc_id=vpc_id,
+            cidr=resolved_cidr,
+            iam_auth=True,
+            publicly_accessible=publicly_accessible,
+            deletion_protection=True,
+            tags={
+                "lsmc-cost-center": "global",
+                "lsmc-project": f"tapdb-{region}",
+            },
+        )
         mgr = AuroraStackManager(region=region)
         try:
-            info = mgr.get_stack_status(stack_name)
-            ccyo_out.success(f"  Reusing existing stack {stack_name}")
-        except RuntimeError:
-            config = AuroraConfig(
-                region=region,
-                cluster_identifier=cluster,
-                instance_class="db.r6g.large",
-                engine_version="16.6",
-                vpc_id="",
-                iam_auth=True,
-                publicly_accessible=False,
-                deletion_protection=True,
-                tags={
-                    "lsmc-cost-center": "global",
-                    "lsmc-project": f"tapdb-{region}",
-                },
-            )
-            info = mgr.create_stack(config)
+            mgr.get_stack_status(stack_name)
+            info = mgr.update_stack(desired_stack)
+            ccyo_out.success(f"  Reconciled existing stack {stack_name}")
+        except RuntimeError as exc:
+            if "not found" not in str(exc).lower():
+                ccyo_out.error(f"Aurora stack reconciliation failed: {exc}")
+                raise typer.Exit(1)
+            info = mgr.create_stack(desired_stack)
             ccyo_out.success(f"  Created Aurora stack {stack_name}")
 
         outputs = info.get("outputs", {})
@@ -842,25 +915,26 @@ def build_app():
             ccyo_out.error(f"Aurora endpoint not available for {stack_name}")
             raise typer.Exit(1)
 
-        ccyo_out.print_text("\n[bold]Step 2/7: Update TAPDB target config[/bold]")
+        ccyo_out.print_text("\n[bold]Step 3/8: Update TAPDB target config[/bold]")
         _update_config_file(
             env.value,
             endpoint,
             port,
             region,
             cluster_identifier=cluster,
+            secret_arn=outputs.get("SecretArn"),
         )
 
-        ccyo_out.print_text("\n[bold]Step 3/7: Ensure database exists[/bold]")
+        ccyo_out.print_text("\n[bold]Step 4/8: Ensure database exists[/bold]")
         create_database(env=env, owner=None)
 
-        ccyo_out.print_text("\n[bold]Step 4/7: Apply schema[/bold]")
+        ccyo_out.print_text("\n[bold]Step 5/8: Apply schema[/bold]")
         apply_schema(env=env, reinitialize=False)
 
-        ccyo_out.print_text("\n[bold]Step 5/7: Run migrations[/bold]")
+        ccyo_out.print_text("\n[bold]Step 6/8: Run migrations[/bold]")
         run_migrations(env=env, dry_run=False)
 
-        ccyo_out.print_text("\n[bold]Step 6/7: Seed templates[/bold]")
+        ccyo_out.print_text("\n[bold]Step 7/8: Seed templates[/bold]")
         seed_templates(
             env=env,
             config_path=None,
@@ -869,7 +943,7 @@ def build_app():
             dry_run=False,
         )
 
-        ccyo_out.print_text("\n[bold]Step 7/7: Ensure admin user[/bold]")
+        ccyo_out.print_text("\n[bold]Step 8/8: Ensure admin user[/bold]")
         _create_default_admin(env=env, insecure_dev_defaults=insecure_dev_defaults)
 
         ccyo_out.print_text("\n[bold]UI startup[/bold]")
@@ -1048,52 +1122,19 @@ def build_app():
             "db_pool_recycle": 1800,
         }
 
-    @config_root_app.command("init")
-    def config_init(
-        client_id: str = typer.Option(..., "--client-id", help="Client namespace key"),
-        database_name: str = typer.Option(
-            ..., "--database-name", help="Database namespace key"
-        ),
-        owner_repo_name: str = typer.Option(
-            ...,
-            "--owner-repo-name",
-            help="Repo-name token used for Meridian prefix ownership validation",
-        ),
-        domain_code: list[str] = typer.Option(
-            [],
-            "--domain-code",
-            help="Per-env domain code mapping (ENV=CODE, repeatable)",
-        ),
-        domain_registry_path: str = typer.Option(
-            str(DEFAULT_DOMAIN_REGISTRY_PATH),
-            "--domain-registry-path",
-            help="Path to the shared Meridian domain registry JSON",
-        ),
-        prefix_ownership_registry_path: str = typer.Option(
-            str(DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH),
-            "--prefix-ownership-registry-path",
-            help="Path to the shared Meridian prefix ownership registry JSON",
-        ),
-        env: list[str] = typer.Option(
-            ["dev"],
-            "--env",
-            help="Environment to configure (repeat for multiple)",
-        ),
-        db_port: list[str] = typer.Option(
-            [],
-            "--db-port",
-            help="Per-env DB port mapping (ENV=PORT, repeatable)",
-        ),
-        ui_port: list[str] = typer.Option(
-            [],
-            "--ui-port",
-            help="Per-env UI port mapping (ENV=PORT, repeatable)",
-        ),
-        force: bool = typer.Option(
-            False, "--force", help="Overwrite existing config metadata if needed"
-        ),
-    ) -> None:
-        """Initialize a namespaced TAPDB v3 config."""
+    def _initialize_namespaced_config(
+        *,
+        client_id: str,
+        database_name: str,
+        owner_repo_name: str,
+        domain_code: list[str],
+        domain_registry_path: str,
+        prefix_ownership_registry_path: str,
+        env: list[str],
+        db_port: list[str],
+        ui_port: list[str],
+        force: bool,
+    ) -> tuple[Path, dict]:
         current = active_context_overrides()
         set_cli_context(
             client_id=client_id,
@@ -1185,16 +1226,162 @@ def build_app():
                 "user": str(prior.get("user") or os.environ.get("USER", "postgres")),
                 "password": str(prior.get("password") or ""),
                 "database": str(
-                    prior.get("database") or f"tapdb_{database_name}_{env_name}"
+                    prior.get("database")
+                    or default_database_name_for_namespace(database_name, env_name)
                 ),
                 "cognito_user_pool_id": str(prior.get("cognito_user_pool_id") or ""),
                 "support_email": str(prior.get("support_email") or ""),
             }
 
         _write_yaml_or_json_file(config_path, root)
+        return config_path, root
+
+    def _ensure_bootstrap_config_for_aurora(
+        *,
+        env_name: str,
+        owner_repo_name: Optional[str],
+        domain_code: list[str],
+        ui_port: list[str],
+        domain_registry_path: str,
+        prefix_ownership_registry_path: str,
+    ) -> Path:
+        config_path = _require_explicit_config_flag()
+        root = _read_yaml_or_json_file(config_path)
+        envs = root.get("environments") if isinstance(root, dict) else None
+        if (
+            config_path.exists()
+            and isinstance(envs, dict)
+            and isinstance(envs.get(env_name), dict)
+        ):
+            return config_path
+
+        current = active_context_overrides()
+        client_id = str(current.get("client_id") or "").strip()
+        database_name = str(current.get("database_name") or "").strip()
+        if not client_id or not database_name:
+            raise RuntimeError(
+                "Aurora bootstrap needs --client-id and --database-name when the "
+                "TapDB config is missing or the target env is not configured."
+            )
+
+        meta = root.get("meta") if isinstance(root, dict) else None
+        resolved_owner_repo_name = str(owner_repo_name or "").strip()
+        if not resolved_owner_repo_name and isinstance(meta, dict):
+            resolved_owner_repo_name = str(meta.get("owner_repo_name") or "").strip()
+        if not resolved_owner_repo_name:
+            raise RuntimeError(
+                "Aurora bootstrap needs --owner-repo-name when it must create or "
+                "extend the TapDB config."
+            )
+
+        parsed_domain_codes = _parse_env_text_pairs(domain_code, flag="--domain-code")
+        parsed_ui_ports = _parse_env_port_pairs(ui_port, flag="--ui-port")
+        if not isinstance(envs, dict) or env_name not in envs:
+            if env_name not in parsed_domain_codes:
+                raise RuntimeError(
+                    "Aurora bootstrap needs --domain-code "
+                    f"{env_name}=<code> when it must create or extend the TapDB config."
+                )
+            if env_name not in parsed_ui_ports:
+                raise RuntimeError(
+                    "Aurora bootstrap needs --ui-port "
+                    f"{env_name}=<port> when it must create or extend the TapDB config."
+                )
+
+        resolved_domain_registry_path = domain_registry_path
+        resolved_prefix_registry_path = prefix_ownership_registry_path
+        if isinstance(meta, dict):
+            if (
+                not resolved_domain_registry_path
+                or resolved_domain_registry_path
+                == str(DEFAULT_DOMAIN_REGISTRY_PATH)
+            ) and str(meta.get("domain_registry_path") or "").strip():
+                resolved_domain_registry_path = str(meta["domain_registry_path"])
+            if (
+                not resolved_prefix_registry_path
+                or resolved_prefix_registry_path
+                == str(DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH)
+            ) and str(meta.get("prefix_ownership_registry_path") or "").strip():
+                resolved_prefix_registry_path = str(
+                    meta["prefix_ownership_registry_path"]
+                )
+
+        initialized_path, _ = _initialize_namespaced_config(
+            client_id=client_id,
+            database_name=database_name,
+            owner_repo_name=resolved_owner_repo_name,
+            domain_code=domain_code,
+            domain_registry_path=resolved_domain_registry_path,
+            prefix_ownership_registry_path=resolved_prefix_registry_path,
+            env=[env_name],
+            db_port=[f"{env_name}=5432"],
+            ui_port=ui_port,
+            force=False,
+        )
+        return initialized_path
+
+    @config_root_app.command("init")
+    def config_init(
+        client_id: str = typer.Option(..., "--client-id", help="Client namespace key"),
+        database_name: str = typer.Option(
+            ..., "--database-name", help="Database namespace key"
+        ),
+        owner_repo_name: str = typer.Option(
+            ...,
+            "--owner-repo-name",
+            help="Repo-name token used for Meridian prefix ownership validation",
+        ),
+        domain_code: list[str] = typer.Option(
+            [],
+            "--domain-code",
+            help="Per-env domain code mapping (ENV=CODE, repeatable)",
+        ),
+        domain_registry_path: str = typer.Option(
+            str(DEFAULT_DOMAIN_REGISTRY_PATH),
+            "--domain-registry-path",
+            help="Path to the shared Meridian domain registry JSON",
+        ),
+        prefix_ownership_registry_path: str = typer.Option(
+            str(DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH),
+            "--prefix-ownership-registry-path",
+            help="Path to the shared Meridian prefix ownership registry JSON",
+        ),
+        env: list[str] = typer.Option(
+            ["dev"],
+            "--env",
+            help="Environment to configure (repeat for multiple)",
+        ),
+        db_port: list[str] = typer.Option(
+            [],
+            "--db-port",
+            help="Per-env DB port mapping (ENV=PORT, repeatable)",
+        ),
+        ui_port: list[str] = typer.Option(
+            [],
+            "--ui-port",
+            help="Per-env UI port mapping (ENV=PORT, repeatable)",
+        ),
+        force: bool = typer.Option(
+            False, "--force", help="Overwrite existing config metadata if needed"
+        ),
+    ) -> None:
+        """Initialize a namespaced TAPDB v3 config."""
+        config_path, root = _initialize_namespaced_config(
+            client_id=client_id,
+            database_name=database_name,
+            owner_repo_name=owner_repo_name,
+            domain_code=domain_code,
+            domain_registry_path=domain_registry_path,
+            prefix_ownership_registry_path=prefix_ownership_registry_path,
+            env=env,
+            db_port=db_port,
+            ui_port=ui_port,
+            force=force,
+        )
         ccyo_out.success("TAPDB namespaced config initialized")
         ccyo_out.print_text(f"  Namespace: [bold]{client_id}/{database_name}[/bold]")
         ccyo_out.print_text(f"  Path:      [dim]{config_path}[/dim]")
+        env_names = sorted({e.strip().lower() for e in env if str(e).strip()})
         for env_name in env_names:
             env_cfg = root["environments"][env_name]
             ccyo_out.print_text(

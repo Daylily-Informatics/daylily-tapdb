@@ -70,6 +70,7 @@ def test_attach_aurora_password_provider_refreshes_iam_token(monkeypatch):
         user="tapdb_admin",
         aws_profile=None,
         iam_auth=True,
+        secret_arn=None,
         password="",
     )
     cparams = {}
@@ -87,8 +88,32 @@ def test_attach_aurora_password_provider_uses_static_password_when_iam_disabled(
         user="tapdb_admin",
         aws_profile=None,
         iam_auth=False,
+        secret_arn=None,
         password="pw123",
     )
     cparams = {}
     listener(None, None, None, cparams)
     assert cparams["password"] == "pw123"
+
+
+def test_attach_aurora_password_provider_uses_secret_arn(monkeypatch):
+    engine = sa_create_engine("sqlite:///:memory:")
+    monkeypatch.setattr(
+        pool_mod.AuroraConnectionBuilder,
+        "get_secret_password",
+        lambda **_k: "secret-from-arn",
+    )
+    listener = pool_mod._attach_aurora_password_provider(
+        engine,
+        region="us-west-2",
+        host="dev.cluster-abc.us-west-2.rds.amazonaws.com",
+        port=5432,
+        user="tapdb_admin",
+        aws_profile=None,
+        iam_auth=False,
+        secret_arn="arn:aws:secretsmanager:us-west-2:123:secret:db",
+        password="",
+    )
+    cparams = {}
+    listener(None, None, None, cparams)
+    assert cparams["password"] == "secret-from-arn"

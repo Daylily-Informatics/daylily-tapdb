@@ -5,7 +5,7 @@ Covers:
 - AuroraConfig.from_dict() construction
 - get_db_config_for_env() engine_type field for local and aurora envs
 - Aurora-specific fields in get_db_config_for_env()
-- Backward compatibility: existing local envs still return the same shape
+- namespaced database identifier normalization
 """
 
 from __future__ import annotations
@@ -347,3 +347,13 @@ class TestConfigPathScoping:
 
         with pytest.raises(RuntimeError, match="config path is required"):
             get_config_paths()
+
+
+class TestDatabaseNameNormalization:
+    def test_default_database_name_for_namespace_normalizes_hyphens(self):
+        from daylily_tapdb.cli.db_config import default_database_name_for_namespace
+
+        assert (
+            default_database_name_for_namespace("auruse1-daylily-tapdb", "dev")
+            == "tapdb_auruse1_daylily_tapdb_dev"
+        )

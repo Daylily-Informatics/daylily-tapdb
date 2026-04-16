@@ -286,7 +286,7 @@ def create_or_get(
         payload["cognito_username"] = normalized_email.lower()
 
     insert_sql = text(
-        """
+        f"""
         INSERT INTO generic_instance (
             name,
             polymorphic_discriminator,
@@ -303,10 +303,10 @@ def create_or_get(
         VALUES (
             :name,
             'actor_instance',
-            'generic',
-            'actor',
-            'system_user',
-            '1.0',
+            '{SYSTEM_USER_TEMPLATE_CATEGORY}',
+            '{SYSTEM_USER_TEMPLATE_TYPE}',
+            '{SYSTEM_USER_TEMPLATE_SUBTYPE}',
+            '{SYSTEM_USER_TEMPLATE_VERSION}',
             :template_uid,
             CAST(:json_addl AS jsonb),
             'active',
@@ -343,11 +343,11 @@ def set_last_login(session: Session, user_uid: int | str) -> None:
     last_login_dt = utc_now_iso()
     session.execute(
         text(
-            """
+            f"""
             UPDATE generic_instance gi
             SET json_addl = jsonb_set(
-                    COALESCE(gi.json_addl, '{}'::jsonb),
-                    '{last_login_dt}',
+                    COALESCE(gi.json_addl, '{{}}'::jsonb),
+                    '{{last_login_dt}}',
                     to_jsonb(CAST(:last_login_dt AS text)),
                     TRUE
                 ),
@@ -355,9 +355,9 @@ def set_last_login(session: Session, user_uid: int | str) -> None:
             WHERE gi.uid = :uid
               AND gi.is_deleted = FALSE
               AND gi.polymorphic_discriminator = 'actor_instance'
-              AND gi.category = 'generic'
-              AND gi.type = 'actor'
-              AND gi.subtype = 'system_user'
+              AND gi.category = '{SYSTEM_USER_TEMPLATE_CATEGORY}'
+              AND gi.type = '{SYSTEM_USER_TEMPLATE_TYPE}'
+              AND gi.subtype = '{SYSTEM_USER_TEMPLATE_SUBTYPE}'
             """
         ),
         {"uid": int(user_uid), "last_login_dt": last_login_dt},

@@ -387,6 +387,7 @@ def _run_psql(
             database=db,
             region=cfg.get("region", "us-west-2"),
             iam_auth=iam_auth,
+            secret_arn=cfg.get("secret_arn") or None,
             password=cfg.get("password") or None,
             sql=sql,
             file=file,
@@ -1558,10 +1559,12 @@ def _tapdb_connection_for_env(
     }
     region = (cfg.get("region") or "us-west-2").strip()
     db_pass = cfg.get("password") or None
+    secret_arn = cfg.get("secret_arn") or None
     return TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_user=cfg["user"],
         db_pass=db_pass,
+        secret_arn=secret_arn,
         db_name=cfg["database"],
         engine_type=engine_type,
         region=region,
@@ -1596,12 +1599,14 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
     )
     region = (cfg.get("region") or "us-west-2").strip()
     db_pass = cfg.get("password") or None
+    secret_arn = cfg.get("secret_arn") or None
 
     try:
         with TAPDBConnection(
             db_hostname=f"{cfg['host']}:{cfg['port']}",
             db_user=cfg["user"],
             db_pass=db_pass,
+            secret_arn=secret_arn,
             db_name=cfg["database"],
             engine_type=engine_type,
             region=region,
@@ -1773,7 +1778,7 @@ def db_seed(
                     domain_registry_path=str(
                         _get_db_config(env)["domain_registry_path"]
                     ),
-                    prefix_ownership_registry_path=str(
+                    prefix_registry_path=str(
                         _get_db_config(env)["prefix_ownership_registry_path"]
                     ),
                 )

@@ -2,27 +2,21 @@
 
 Provides ``AuroraStackManager`` — the Python layer that creates, monitors,
 and deletes CloudFormation stacks using the template from ``cfn_template.py``.
-Stack metadata is cached locally in ``~/.config/tapdb/aurora-stacks.json``.
+CloudFormation is the source of truth for stack state.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-import stat
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from daylily_tapdb.aurora.cfn_template import generate_template
 from daylily_tapdb.aurora.config import AuroraConfig
 
 logger = logging.getLogger(__name__)
-
-STACK_METADATA_PATH = Path.home() / ".config" / "tapdb" / "aurora-stacks.json"
 
 # Terminal CFN states
 _TERMINAL_STATES = {
@@ -37,20 +31,6 @@ _TERMINAL_STATES = {
     "UPDATE_ROLLBACK_COMPLETE",
     "UPDATE_ROLLBACK_FAILED",
 }
-
-
-def _load_metadata() -> dict[str, Any]:
-    """Load stack metadata from local cache."""
-    if STACK_METADATA_PATH.exists():
-        return json.loads(STACK_METADATA_PATH.read_text())
-    return {}
-
-
-def _save_metadata(data: dict[str, Any]) -> None:
-    """Persist stack metadata to local cache."""
-    STACK_METADATA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STACK_METADATA_PATH.write_text(json.dumps(data, indent=2, default=str) + "\n")
-    os.chmod(STACK_METADATA_PATH, stat.S_IRUSR | stat.S_IWUSR)  # 0600
 
 
 def _cfn_events_summary(cfn_client: Any, stack_name: str, limit: int = 10) -> str:
@@ -110,6 +90,40 @@ class AuroraStackManager:
     # create_stack
     # ------------------------------------------------------------------
 
+    def _stack_request(self, config: AuroraConfig) -> tuple[str, str, list[dict[str, str]], list[dict[str, str]], str]:
+        vpc_id, subnet_ids = self._resolve_vpc_and_subnets(config)
+        stack_name = f"tapdb-{config.cluster_identifier}"
+        template_body = json.dumps(generate_template())
+
+        tags = [{"Key": k, "Value": v} for k, v in config.tags.items()]
+        cost = config.tags.get("lsmc-cost-center", "global")
+        proj = config.tags.get("lsmc-project", "")
+        params = [
+            {
+                "ParameterKey": "ClusterIdentifier",
+                "ParameterValue": config.cluster_identifier,
+            },
+            {"ParameterKey": "InstanceClass", "ParameterValue": config.instance_class},
+            {"ParameterKey": "EngineVersion", "ParameterValue": config.engine_version},
+            {"ParameterKey": "VpcId", "ParameterValue": vpc_id},
+            {
+                "ParameterKey": "SubnetIds",
+                "ParameterValue": ",".join(subnet_ids),
+            },
+            {"ParameterKey": "IngressCIDR", "ParameterValue": config.cidr},
+            {"ParameterKey": "CostCenter", "ParameterValue": cost},
+            {"ParameterKey": "Project", "ParameterValue": proj},
+            {
+                "ParameterKey": "PubliclyAccessible",
+                "ParameterValue": "true" if config.publicly_accessible else "false",
+            },
+            {
+                "ParameterKey": "DeletionProtection",
+                "ParameterValue": "true" if config.deletion_protection else "false",
+            },
+        ]
+        return stack_name, template_body, tags, params, vpc_id
+
     def _resolve_vpc_and_subnets(self, config: AuroraConfig) -> tuple[str, list[str]]:
         """Resolve VPC ID and subnet IDs from config or auto-discovery.
 
@@ -160,37 +174,7 @@ class AuroraStackManager:
         Raises:
             RuntimeError: If VPC/subnets cannot be resolved.
         """
-        vpc_id, subnet_ids = self._resolve_vpc_and_subnets(config)
-
-        stack_name = f"tapdb-{config.cluster_identifier}"
-        template_body = json.dumps(generate_template())
-
-        tags = [{"Key": k, "Value": v} for k, v in config.tags.items()]
-        cost = config.tags.get("lsmc-cost-center", "global")
-        proj = config.tags.get("lsmc-project", "")
-        params = [
-            {
-                "ParameterKey": "ClusterIdentifier",
-                "ParameterValue": config.cluster_identifier,
-            },
-            {"ParameterKey": "InstanceClass", "ParameterValue": config.instance_class},
-            {"ParameterKey": "EngineVersion", "ParameterValue": config.engine_version},
-            {"ParameterKey": "VpcId", "ParameterValue": vpc_id},
-            {
-                "ParameterKey": "SubnetIds",
-                "ParameterValue": ",".join(subnet_ids),
-            },
-            {"ParameterKey": "CostCenter", "ParameterValue": cost},
-            {"ParameterKey": "Project", "ParameterValue": proj},
-            {
-                "ParameterKey": "PubliclyAccessible",
-                "ParameterValue": "true" if config.publicly_accessible else "false",
-            },
-            {
-                "ParameterKey": "DeletionProtection",
-                "ParameterValue": "true" if config.deletion_protection else "false",
-            },
-        ]
+        stack_name, template_body, tags, params, vpc_id = self._stack_request(config)
 
         logger.info(
             "Creating CloudFormation stack %s in %s ...",
@@ -242,19 +226,49 @@ class AuroraStackManager:
                 f"Recent events:\n{events}"
             )
 
-        meta = _load_metadata()
-        meta[stack_name] = {
-            "stack_id": stack_id,
-            "region": config.region,
-            "cluster_identifier": config.cluster_identifier,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "status": "CREATE_COMPLETE",
-        }
-        _save_metadata(meta)
-
         return {
             "stack_name": stack_name,
             "stack_id": stack_id,
+            "outputs": result.get("outputs", {}),
+        }
+
+    def update_stack(
+        self,
+        config: AuroraConfig,
+        callback: Callable[[str, float], None] | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing CloudFormation stack and wait for completion."""
+
+        stack_name, template_body, tags, params, _ = self._stack_request(config)
+        logger.info(
+            "Updating CloudFormation stack %s in %s ...",
+            stack_name,
+            config.region,
+        )
+        try:
+            self._cfn.update_stack(
+                StackName=stack_name,
+                TemplateBody=template_body,
+                Parameters=params,
+                Tags=tags,
+                Capabilities=["CAPABILITY_NAMED_IAM"],
+            )
+        except Exception as exc:
+            if "No updates are to be performed" in str(exc):
+                return self.get_stack_status(stack_name)
+            raise RuntimeError(f"Stack update failed: {exc}") from exc
+
+        result = self.wait_for_stack(stack_name, "UPDATE_COMPLETE", callback=callback)
+        if result["status"] != "UPDATE_COMPLETE":
+            events = _cfn_events_summary(self._cfn, stack_name)
+            raise RuntimeError(
+                f"Stack {stack_name} ended in {result['status']}.\n"
+                f"Recent events:\n{events}"
+            )
+
+        return {
+            "stack_name": stack_name,
+            "status": "UPDATE_COMPLETE",
             "outputs": result.get("outputs", {}),
         }
 
@@ -293,12 +307,6 @@ class AuroraStackManager:
             raise RuntimeError(
                 f"Stack deletion ended in {result['status']}.\nRecent events:\n{events}"
             )
-
-        meta = _load_metadata()
-        if stack_name in meta:
-            meta[stack_name]["status"] = "DELETE_COMPLETE"
-            meta[stack_name]["deleted_at"] = datetime.now(timezone.utc).isoformat()
-            _save_metadata(meta)
 
         return {"stack_name": stack_name, "status": "DELETE_COMPLETE"}
 
