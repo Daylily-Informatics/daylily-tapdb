@@ -684,6 +684,11 @@ def test_pg_init_start_local_and_stop_local_branches(
     assert exc.value.exit_code == 1
 
     (data_dir / "PG_VERSION").write_text("16\n", encoding="utf-8")
+    (data_dir / "postgresql.conf").write_text(
+        "#shared_memory_type = mmap\n"
+        "dynamic_shared_memory_type = posix\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(pg_mod.shutil, "which", lambda _name: None)
     with pytest.raises(typer.Exit) as exc:
         pg_mod.pg_start_local(Environment.dev, None)

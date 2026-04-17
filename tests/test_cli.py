@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -1622,6 +1623,11 @@ class TestCLIPG:
         data_dir = tmp_path / "pgdata"
         data_dir.mkdir()
         (data_dir / "PG_VERSION").write_text("16\n", encoding="utf-8")
+        (data_dir / "postgresql.conf").write_text(
+            "#shared_memory_type = mmap\n"
+            "dynamic_shared_memory_type = posix\n",
+            encoding="utf-8",
+        )
         log_file = tmp_path / "postgresql.log"
         lock_file = tmp_path / "instance.lock"
         socket_dir = tmp_path / "socket dir"
@@ -1664,6 +1670,62 @@ class TestCLIPG:
 
         lock_payload = json.loads(lock_file.read_text(encoding="utf-8"))
         assert lock_payload["socket_dir"] == str(socket_dir)
+
+    def test_pg_start_local_sets_linux_shared_memory_to_mmap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Test Linux local startup forces mmap shared-memory settings."""
+        import daylily_tapdb.cli.pg as pg_mod
+
+        data_dir = tmp_path / "pgdata"
+        data_dir.mkdir()
+        (data_dir / "PG_VERSION").write_text("16\n", encoding="utf-8")
+        conf_path = data_dir / "postgresql.conf"
+        conf_path.write_text(
+            "#shared_memory_type = mmap\n"
+            "dynamic_shared_memory_type = posix\n",
+            encoding="utf-8",
+        )
+        log_file = tmp_path / "postgresql.log"
+        lock_file = tmp_path / "instance.lock"
+        socket_dir = tmp_path / "socket-dir"
+
+        calls: list[list[str]] = []
+
+        def _fake_run(cmd, capture_output=True, text=True, timeout=30):
+            calls.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(pg_mod.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(pg_mod, "_get_postgres_data_dir", lambda _env: data_dir)
+        monkeypatch.setattr(pg_mod, "_get_postgres_log_file", lambda _env: log_file)
+        monkeypatch.setattr(pg_mod, "_get_instance_lock_file", lambda _env: lock_file)
+        monkeypatch.setattr(pg_mod, "_get_postgres_socket_dir", lambda _env: socket_dir)
+        monkeypatch.setattr(
+            pg_mod,
+            "get_db_config_for_env",
+            lambda _env: {
+                "port": "5533",
+                "host": "localhost",
+                "user": "test",
+                "unix_socket_dir": str(socket_dir),
+            },
+        )
+        monkeypatch.setattr(pg_mod, "_is_port_available", lambda _port: True)
+        monkeypatch.setattr(pg_mod.shutil, "which", lambda _name: "/usr/bin/pg_ctl")
+        monkeypatch.setattr(pg_mod.subprocess, "run", _fake_run)
+
+        result = runner.invoke(app, ["pg", "start-local", "dev"])
+
+        assert result.exit_code == 0
+        assert calls
+        opts = calls[0][calls[0].index("-o") + 1]
+        assert "-p 5533" in opts
+        assert "-h localhost" in opts
+        assert f"-k {shlex.quote(str(socket_dir))}" in opts
+        conf_text = conf_path.read_text(encoding="utf-8")
+        assert "shared_memory_type = mmap" in conf_text
+        assert "dynamic_shared_memory_type = mmap" in conf_text
 
     def test_pg_status_shows_effective_socket_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
