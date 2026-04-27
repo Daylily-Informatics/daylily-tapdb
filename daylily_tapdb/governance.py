@@ -8,12 +8,16 @@ from pathlib import Path
 from typing import Mapping
 
 try:
-    from meridian_euid import assert_registered_domain as meridian_assert_registered_domain
+    from meridian_euid import (
+        assert_registered_domain as meridian_assert_registered_domain,
+    )
     from meridian_euid import load_domain_registry as meridian_load_domain_registry
     from meridian_euid import (
         load_prefix_ownership_registry as meridian_load_prefix_ownership_registry,
     )
-    from meridian_euid import validate_issuer_app_code as meridian_validate_issuer_app_code
+    from meridian_euid import (
+        validate_issuer_app_code as meridian_validate_issuer_app_code,
+    )
     from meridian_euid import (
         validate_registries_consistent as meridian_validate_registries_consistent,
     )

@@ -26,9 +26,9 @@ from daylily_tapdb.cli.context import (
     resolve_context,
     set_cli_context,
 )
+from daylily_tapdb.cli.db_config import default_database_name_for_namespace
 from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.cli.spec import spec
-from daylily_tapdb.cli.db_config import default_database_name_for_namespace
 from daylily_tapdb.governance import (
     DEFAULT_DOMAIN_REGISTRY_PATH,
     DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH,

@@ -171,7 +171,10 @@ def test_validate_seed_ownership_requires_registered_domain_and_claim(tmp_path):
 
 
 def test_validate_seed_ownership_accepts_packaged_combined_registry():
-    from daylily_tapdb.templates.loader import _validate_seed_ownership, load_template_configs
+    from daylily_tapdb.templates.loader import (
+        _validate_seed_ownership,
+        load_template_configs,
+    )
 
     fixture_dir = _fixture_dir()
     templates = load_template_configs(Path(__file__).resolve().parents[1] / "daylily_tapdb" / "core_config")

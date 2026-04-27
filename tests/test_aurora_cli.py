@@ -8,7 +8,10 @@ import pytest
 from typer.testing import CliRunner
 
 from daylily_tapdb.cli import build_app
-from daylily_tapdb.cli.aurora import _DEFAULT_PRIVATE_INGRESS_CIDR, _resolve_ingress_cidr
+from daylily_tapdb.cli.aurora import (
+    _DEFAULT_PRIVATE_INGRESS_CIDR,
+    _resolve_ingress_cidr,
+)
 
 runner = CliRunner()
 

@@ -55,7 +55,7 @@ def _detect_caller_public_ip() -> str:
     """Return the caller's current public IPv4 address."""
     for url in _PUBLIC_IP_RESOLUTION_URLS:
         try:
-            with urllib.request.urlopen(url, timeout=5) as response:
+            with urllib.request.urlopen(url, timeout=5) as response:  # nosec B310
                 candidate = response.read().decode("utf-8").strip()
             parsed = ipaddress.ip_address(candidate)
             if parsed.version != 4:
