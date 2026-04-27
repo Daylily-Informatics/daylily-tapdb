@@ -10,10 +10,10 @@ import daylily_tapdb.templates.requirements as m
 class _FakeManager:
     def __init__(self, mapping: dict[str, object]):
         self._mapping = mapping
-        self.calls: list[tuple[object, str]] = []
+        self.calls: list[tuple[object, str, dict[str, object]]] = []
 
-    def get_template(self, session, template_code: str):
-        self.calls.append((session, template_code))
+    def get_template(self, session, template_code: str, **kwargs):
+        self.calls.append((session, template_code, kwargs))
         return self._mapping.get(template_code)
 
 
@@ -36,11 +36,14 @@ def test_require_seeded_template_raises_when_missing():
         m.require_seeded_template(
             session,
             "generic/actor/system_user/1.0",
+            domain_code="T",
             app_name="atlas",
             template_manager=manager,
         )
 
-    assert manager.calls == [(session, "generic/actor/system_user/1.0")]
+    assert manager.calls == [
+        (session, "generic/actor/system_user/1.0", {"domain_code": "T"})
+    ]
 
 
 def test_require_seeded_template_raises_on_prefix_mismatch():
@@ -54,6 +57,7 @@ def test_require_seeded_template_raises_on_prefix_mismatch():
         m.require_seeded_template(
             object(),
             "generic/item/foo/1.0",
+            domain_code="T",
             expected_prefix="wx",
             template_manager=manager,
         )
@@ -67,12 +71,13 @@ def test_require_seeded_template_returns_template_on_success():
     resolved = m.require_seeded_template(
         session,
         "generic/item/foo/1.0",
+        domain_code="T",
         expected_prefix="agx",
         template_manager=manager,
     )
 
     assert resolved is template
-    assert manager.calls == [(session, "generic/item/foo/1.0")]
+    assert manager.calls == [(session, "generic/item/foo/1.0", {"domain_code": "T"})]
 
 
 def test_require_seeded_template_blank_expected_prefix_raises_mismatch():
@@ -86,6 +91,7 @@ def test_require_seeded_template_blank_expected_prefix_raises_mismatch():
         m.require_seeded_template(
             object(),
             "generic/item/foo/1.0",
+            domain_code="T",
             expected_prefix="   ",
             template_manager=manager,
         )
@@ -108,12 +114,13 @@ def test_require_seeded_templates_resolves_all_in_order():
             ("generic/a/one/1.0", "AGX"),
             ("generic/b/two/1.0", "WX"),
         ],
+        domain_code="T",
         app_name="atlas",
         template_manager=manager,
     )
 
     assert resolved == [first, second]
     assert manager.calls == [
-        (session, "generic/a/one/1.0"),
-        (session, "generic/b/two/1.0"),
+        (session, "generic/a/one/1.0", {"domain_code": "T"}),
+        (session, "generic/b/two/1.0", {"domain_code": "T"}),
     ]

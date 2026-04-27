@@ -17,6 +17,15 @@ from daylily_tapdb.models.template import generic_template
 logger = logging.getLogger(__name__)
 
 
+def _normalize_domain_code(domain_code: str | None) -> str:
+    if domain_code is None:
+        raise ValueError("domain_code is required for template lookups")
+    normalized = str(domain_code).strip().upper()
+    if not normalized:
+        raise ValueError("domain_code is required for template lookups")
+    return normalized
+
+
 class TemplateManager:
     """
     Manages template loading and caching.
@@ -46,7 +55,6 @@ class TemplateManager:
         template_code: str,
         *,
         domain_code: Optional[str] = None,
-        issuer_app_code: Optional[str] = None,
     ) -> Optional[generic_template]:
         """
         Get a template by its code string.
@@ -56,13 +64,13 @@ class TemplateManager:
 
         Args:
             template_code: Template code string.
-            domain_code: Filter by domain code (narrows lookup).
-            issuer_app_code: Filter by issuer app code (narrows lookup).
+            domain_code: Required domain code for the effective identity.
 
         Returns:
             The template object, or None if not found.
         """
-        cache_key = f"{domain_code or ''}:{issuer_app_code or ''}:{template_code}"
+        normalized_domain = _normalize_domain_code(domain_code)
+        cache_key = f"{normalized_domain}:{template_code}"
         cached_uid = self._template_uid_cache.get(cache_key)
         if cached_uid is not None:
             tmpl = session.get(generic_template, cached_uid)
@@ -78,27 +86,30 @@ class TemplateManager:
         category, type_, subtype, version = parts
 
         query = session.query(generic_template).filter(
+            generic_template.domain_code == normalized_domain,
             generic_template.category == category,
             generic_template.type == type_,
             generic_template.subtype == subtype,
             generic_template.version == version,
             generic_template.is_deleted.is_(False),
         )
-        if domain_code is not None:
-            query = query.filter(generic_template.domain_code == domain_code)
-        if issuer_app_code is not None:
-            query = query.filter(generic_template.issuer_app_code == issuer_app_code)
 
         template = query.first()
 
         if template:
             self._template_uid_cache[cache_key] = template.uid
-            self._template_euid_cache[template.euid] = template.uid
+            self._template_euid_cache[f"{normalized_domain}:{template.euid}"] = (
+                template.uid
+            )
 
         return template
 
     def get_template_by_euid(
-        self, session: Session, euid: str
+        self,
+        session: Session,
+        euid: str,
+        *,
+        domain_code: Optional[str] = None,
     ) -> Optional[generic_template]:
         """
         Get a template by its EUID.
@@ -109,7 +120,9 @@ class TemplateManager:
         Returns:
             The template object, or None if not found.
         """
-        cached_uuid = self._template_euid_cache.get(euid)
+        normalized_domain = _normalize_domain_code(domain_code)
+        cache_key = f"{normalized_domain}:{euid}"
+        cached_uuid = self._template_euid_cache.get(cache_key)
         if cached_uuid is not None:
             tmpl = session.get(generic_template, cached_uuid)
             if tmpl is not None and tmpl.is_deleted is False:
@@ -118,13 +131,17 @@ class TemplateManager:
         tmpl = (
             session.query(generic_template)
             .filter(
+                generic_template.domain_code == normalized_domain,
                 generic_template.euid == euid,
                 generic_template.is_deleted.is_(False),
             )
             .first()
         )
         if tmpl is not None:
-            self._template_euid_cache[euid] = tmpl.uid
+            self._template_euid_cache[cache_key] = tmpl.uid
+            self._template_uid_cache[
+                f"{normalized_domain}:{tmpl.category}/{tmpl.type}/{tmpl.subtype}/{tmpl.version}/"
+            ] = tmpl.uid
         return tmpl
 
     def clear_cache(self):
@@ -139,7 +156,6 @@ class TemplateManager:
         type_: Optional[str] = None,
         include_deleted: bool = False,
         domain_code: Optional[str] = None,
-        issuer_app_code: Optional[str] = None,
     ) -> List[generic_template]:
         """
         List templates with optional filtering.
@@ -148,24 +164,21 @@ class TemplateManager:
             category: Filter by category.
             type_: Filter by type.
             include_deleted: Include soft-deleted templates.
-            domain_code: Filter by domain code.
-            issuer_app_code: Filter by issuer app code.
+            domain_code: Required domain code for the effective identity.
 
         Returns:
             List of matching templates.
         """
+        normalized_domain = _normalize_domain_code(domain_code)
         query = session.query(generic_template)
 
         if not include_deleted:
             query = query.filter(generic_template.is_deleted.is_(False))
+        query = query.filter(generic_template.domain_code == normalized_domain)
         if category:
             query = query.filter(generic_template.category == category)
         if type_:
             query = query.filter(generic_template.type == type_)
-        if domain_code is not None:
-            query = query.filter(generic_template.domain_code == domain_code)
-        if issuer_app_code is not None:
-            query = query.filter(generic_template.issuer_app_code == issuer_app_code)
 
         return query.all()
 

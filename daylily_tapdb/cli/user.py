@@ -46,11 +46,14 @@ def _open_connection(env: Environment, *, app_username: str) -> TAPDBConnection:
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_user=cfg["user"],
         db_pass=cfg.get("password") or None,
+        secret_arn=cfg.get("secret_arn") or None,
         db_name=cfg["database"],
         engine_type=engine_type,
         region=region,
         iam_auth=iam_auth,
         app_username=app_username,
+        domain_code=str(cfg["domain_code"]),
+        owner_repo_name=str(cfg["owner_repo_name"]),
     )
 
 

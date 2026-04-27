@@ -501,6 +501,7 @@ def test_auth_and_public_routes(route_client, monkeypatch: pytest.MonkeyPatch):
         return None
 
     monkeypatch.setattr(admin_main, "get_current_user", _anon_main)
+    monkeypatch.setattr(auth_mod, "get_current_user", _anon_main)
     resp = client.get("/login")
     assert resp.status_code == 200
     resp = client.get("/help")
@@ -778,7 +779,7 @@ def test_home_query_and_audit_panels_admin(
     assert ctx["user_audit_rows"]
 
     # Simple object query by text.
-    resp = client.get("/?q=TGX&scope=all")
+    resp = client.get("/?q=GX&scope=all")
     assert resp.status_code == 200
     ctx = _last_render_context(state, "index.html")
     assert any(row["euid"] == "GX11" for row in ctx["object_results"])
@@ -826,7 +827,7 @@ def test_complex_query_page_filters(route_client, monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(auth_mod, "get_current_user", _admin_auth_user)
 
-    resp = client.get("/query?kind=instance&euid_like=TGX")
+    resp = client.get("/query?kind=instance&euid_like=GX")
     assert resp.status_code == 200
     ctx = _last_render_context(state, "complex_query.html")
     assert ctx["query_params"]["kind"] == "instance"

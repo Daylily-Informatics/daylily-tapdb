@@ -1,12 +1,4 @@
-"""
-TAPDB EUID helpers.
-
-This module provides Meridian-format EUID validation/formatting utilities plus
-the canonical TapDB-managed prefix catalog used by the shared substrate.
-
-Application-specific issuing authority and business behavior do not live here.
-Calling code must treat EUIDs as opaque identifiers.
-"""
+"""TapDB EUID facade over the Meridian EUID reference implementation."""
 
 from __future__ import annotations
 
@@ -16,160 +8,122 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Dict, Mapping, Optional
 
-# ---------------------------------------------------------------------------
-# Meridian Crockford Base32 utilities
-# ---------------------------------------------------------------------------
+from meridian_euid import compute_check_character
 
-CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-_CROCKFORD_VALUE: dict[str, int] = {ch: i for i, ch in enumerate(CROCKFORD_ALPHABET)}
+from daylily_tapdb.governance import normalize_owner_repo_name
 
-# Canonical regex character classes from SPEC.md §6.4
-_ALNUM32 = r"[0-9A-HJ-KMNP-TV-Z]"
-_LETTERS32 = r"[A-HJ-KMNP-TV-Z]"
-
-# Production: CATEGORY(2-3 letters) - BODY(no leading 0) CHECKSUM
-_PRODUCTION_RE = re.compile(
-    rf"^{_LETTERS32}{{2,3}}-([1-9A-HJ-KMNP-TV-Z]{_ALNUM32}*){_ALNUM32}$"
-)
-# Domain-scoped: DOMAIN_CODE(1-4 letters) : CATEGORY - BODY CHECKSUM
-_DOMAIN_RE = re.compile(
-    rf"^{_LETTERS32}{{1,4}}:{_LETTERS32}{{2,3}}-([1-9A-HJ-KMNP-TV-Z]{_ALNUM32}*){_ALNUM32}$"
-)
-DEFAULT_DOMAIN_CODE = "T"
 MERIDIAN_DOMAIN_CODE_ENV = "MERIDIAN_DOMAIN_CODE"
-MERIDIAN_ENVIRONMENT_ENV = "MERIDIAN_ENVIRONMENT"
-LSMC_ENV_ENV = "LSMC_ENV"
-CORE_TEMPLATE_PLACEHOLDER_PREFIX = "GX"
-_EUID_CLIENT_CODE_RE = re.compile(rf"^{_LETTERS32}{{1,4}}$")
+TAPDB_OWNER_REPO_ENV = "TAPDB_OWNER_REPO"
+
+GENERIC_TEMPLATE_PREFIX = "TPX"
+GENERIC_INSTANCE_LINEAGE_PREFIX = "EDG"
+AUDIT_LOG_PREFIX = "ADT"
+SYSTEM_USER_PREFIX = "SYS"
+SYSTEM_MESSAGE_PREFIX = "MSG"
+
+_ALPHABET_32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+_VALUE_32 = {char: index for index, char in enumerate(_ALPHABET_32)}
+_TOKEN_RE = re.compile(r"^[0-9A-HJ-KMNP-TV-Z]{1,4}$")
+_BODY_RE = re.compile(r"^[1-9A-HJ-KMNP-TV-Z][0-9A-HJ-KMNP-TV-Z]*$")
+_CANONICAL_EUID_RE = re.compile(
+    r"^(?P<domain>[0-9A-HJ-KMNP-TV-Z]{1,4})-"
+    r"(?P<prefix>[0-9A-HJ-KMNP-TV-Z]{1,4})-"
+    r"(?P<body>[1-9A-HJ-KMNP-TV-Z][0-9A-HJ-KMNP-TV-Z]*)(?P<checksum>[0-9A-HJ-KMNP-TV-Z])$"
+)
+
+
+def _normalize_token(value: str | None, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().upper()
+    if not normalized:
+        return None
+    if not _TOKEN_RE.fullmatch(normalized):
+        raise ValueError(f"Invalid Meridian {field_name}: {value!r}")
+    return normalized
+
+
+def _int_to_base32(integer: int) -> str:
+    if not isinstance(integer, int) or isinstance(integer, bool) or integer <= 0:
+        raise ValueError("seq_val must be a positive int")
+
+    encoded: list[str] = []
+    remaining = integer
+    while remaining > 0:
+        encoded.append(_ALPHABET_32[remaining % 32])
+        remaining //= 32
+    return "".join(reversed(encoded))
+
+
+def _canonical_euid_parts(euid: str) -> tuple[str, str, str, str] | None:
+    if not isinstance(euid, str):
+        return None
+    match = _CANONICAL_EUID_RE.fullmatch(euid)
+    if match is None:
+        return None
+    return (
+        match.group("domain"),
+        match.group("prefix"),
+        match.group("body"),
+        match.group("checksum"),
+    )
 
 
 def normalize_domain_code(code: str | None) -> str | None:
-    """Normalize and validate a domain code (1-4 Crockford Base32 letters)."""
-    if code is None:
-        return None
-    normalized = code.strip().upper()
-    if not normalized:
-        return None
-    if not re.fullmatch(r"[A-HJ-KMNP-TV-Z]{1,4}", normalized):
-        raise ValueError(
-            f"Invalid domain code {code!r}; expected 1-4 Crockford Base32 letters"
-        )
-    return normalized
+    """Normalize and validate a Meridian domain code."""
+    return _normalize_token(code, field_name="domain code")
+
+
+def normalize_prefix(prefix: str | None) -> str | None:
+    """Normalize and validate a Meridian prefix token."""
+    return _normalize_token(prefix, field_name="prefix")
 
 
 def resolve_runtime_domain_code(
     environ: Mapping[str, str] | None = None,
 ) -> str:
-    """Resolve the runtime domain code.
-
-    Rules:
-    - missing env var => raises ValueError
-    - explicit empty string => raises ValueError (fail-fast)
-    - explicit non-empty value => validated 1-4 letter domain code
-    """
+    """Resolve the runtime domain code from the environment."""
     env = os.environ if environ is None else environ
     raw_code = env.get(MERIDIAN_DOMAIN_CODE_ENV)
     if raw_code is None:
         raise ValueError(
-            "MERIDIAN_DOMAIN_CODE is required. "
-            "Set it to a valid 1-4 char Crockford Base32 domain code."
+            "MERIDIAN_DOMAIN_CODE is required. Set it to a valid Meridian domain code."
         )
     normalized = normalize_domain_code(raw_code)
     if normalized is None:
         raise ValueError(
-            "MERIDIAN_DOMAIN_CODE is set to empty string. "
-            "A valid 1-4 char Crockford Base32 domain code is required."
+            "MERIDIAN_DOMAIN_CODE is set to empty string. A valid domain code is required."
         )
     return normalized
+
+
+def resolve_runtime_owner_repo_name(
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """Resolve the runtime repo ownership token from the environment."""
+    env = os.environ if environ is None else environ
+    raw_value = env.get(TAPDB_OWNER_REPO_ENV)
+    if raw_value is None:
+        raise ValueError(
+            "TAPDB_OWNER_REPO is required. Set it to the repo-name that owns this TapDB runtime."
+        )
+    normalized = str(raw_value).strip()
+    if not normalized:
+        raise ValueError(
+            "TAPDB_OWNER_REPO is set to empty string. A repo-name is required."
+        )
+    return normalize_owner_repo_name(normalized)
 
 
 def resolve_runtime_validation_context(
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    """Resolve EUID validation mode from runtime env vars."""
-    env = os.environ if environ is None else environ
-    raw_environment = (
-        str(env.get(MERIDIAN_ENVIRONMENT_ENV) or env.get(LSMC_ENV_ENV) or "")
-        .strip()
-        .lower()
-    )
-    if raw_environment == "domain":
-        domain_code = resolve_runtime_domain_code(env)
-        return {
-            "environment": "domain",
-            "allowed_domain_codes": [domain_code] if domain_code else [],
-        }
-    if raw_environment:
-        return {"environment": "production"}
-    if env.get(MERIDIAN_DOMAIN_CODE_ENV) is not None:
-        domain_code = resolve_runtime_domain_code(env)
-        return {
-            "environment": "domain",
-            "allowed_domain_codes": [domain_code],
-        }
-    return {"environment": "production"}
-
-
-def normalize_euid_client_code(code: str | None) -> str:
-    """Normalize and validate a 1-4 letter client code for TapDB core prefixes."""
-    normalized = str(code or "").strip().upper()
-    if not normalized:
-        raise ValueError("euid_client_code is required")
-    if not _EUID_CLIENT_CODE_RE.fullmatch(normalized):
-        raise ValueError(
-            "euid_client_code must be 1-4 Meridian-safe letters (A-Z, excluding I/L/O/U)"
-        )
-    if normalized == DEFAULT_DOMAIN_CODE:
-        raise ValueError(
-            f"euid_client_code {normalized!r} is reserved for TapDB domain/runtime use"
-        )
-    return normalized
-
-
-def resolve_client_scoped_core_prefix(code: str | None) -> str:
-    """Return the namespace-scoped concrete TapDB core prefix for a client code."""
-    return f"{normalize_euid_client_code(code)}{CORE_TEMPLATE_PLACEHOLDER_PREFIX}"
-
-
-def crockford_base32_encode(n: int) -> str:
-    """Encode a positive integer to Crockford Base32 (unpadded, no leading zeros).
-
-    Raises ValueError if *n* < 1.
-    """
-    if n < 1:
-        raise ValueError(f"EUID body must be a positive integer, got {n}")
-    result: list[str] = []
-    while n > 0:
-        n, remainder = divmod(n, 32)
-        result.append(CROCKFORD_ALPHABET[remainder])
-    return "".join(reversed(result))
-
-
-def meridian_checksum(payload: str) -> str:
-    """Compute the Meridian Luhn-style MOD 32 check character.
-
-    *payload* is CATEGORY + BODY (no delimiters). For domain-scoped EUIDs,
-    include the domain prefix character as well.
-
-    Implements SPEC.md §7.5 exactly.
-    """
-    if not payload:
-        raise ValueError("payload must be non-empty")
-    if not payload.isascii():
-        raise ValueError("payload must be ASCII")
-
-    s = 0
-    factor = 2
-    for ch in reversed(payload):
-        v = _CROCKFORD_VALUE.get(ch)
-        if v is None:
-            raise ValueError(f"invalid character in payload: {ch!r}")
-        p = v * factor
-        s += (p // 32) + (p % 32)
-        factor = 1 if factor == 2 else 2
-
-    check_value = (32 - (s % 32)) % 32
-    return CROCKFORD_ALPHABET[check_value]
+    """Return the canonical TapDB EUID validation context."""
+    domain_code = resolve_runtime_domain_code(environ)
+    return {
+        "environment": "canonical",
+        "allowed_domain_codes": [domain_code],
+    }
 
 
 def format_euid(
@@ -178,132 +132,83 @@ def format_euid(
     *,
     domain_code: str | None = None,
 ) -> str:
-    """Build a Meridian-conformant EUID string.
-
-    Args:
-        prefix: Category prefix (e.g. "TX", "AGX"). 2-3 uppercase Crockford letters.
-        seq_val: Positive integer from the sequence.
-        domain_code: Optional 1-4 letter domain code prefix.
-
-    Returns:
-        Formatted EUID, e.g. ``TX-1C`` or ``T:TX-1C``.
-    """
-    dc = domain_code
-    body = crockford_base32_encode(seq_val)
-    if dc:
-        payload = dc + prefix + body
-    else:
-        payload = prefix + body
-    check = meridian_checksum(payload)
-    if dc:
-        return f"{dc}:{prefix}-{body}{check}"
-    return f"{prefix}-{body}{check}"
+    """Build a canonical Meridian EUID."""
+    normalized_domain_code = normalize_domain_code(domain_code)
+    if normalized_domain_code is None:
+        raise ValueError("domain_code is required for canonical Meridian EUIDs")
+    normalized_prefix = normalize_prefix(prefix)
+    if normalized_prefix is None:
+        raise ValueError("prefix is required for canonical Meridian EUIDs")
+    body = _int_to_base32(seq_val)
+    checksum = compute_check_character(
+        f"{normalized_domain_code}{normalized_prefix}{body}"
+    )
+    return f"{normalized_domain_code}-{normalized_prefix}-{body}{checksum}"
 
 
 def validate_euid(
     euid: str,
     *,
-    environment: str = "production",
+    environment: str = "canonical",
     allowed_domain_codes: list[str] | None = None,
 ) -> bool:
-    """Validate an EUID string against Meridian spec.
-
-    Returns True if the EUID is syntactically valid and checksum-correct
-    for the given environment.
-    """
-    allowed = allowed_domain_codes
-    env = environment
-
-    # §8.1 — reject non-ASCII, whitespace, lowercase
-    if not euid.isascii():
+    """Return True when *euid* is a valid canonical Meridian EUID."""
+    if environment not in {"canonical", "production", "domain"}:
+        raise ValueError(f"Unsupported EUID validation environment: {environment!r}")
+    parsed = _canonical_euid_parts(euid)
+    if parsed is None:
         return False
-    if any(c.isspace() for c in euid):
+    domain_code, prefix, body, checksum = parsed
+    expected = compute_check_character(f"{domain_code}{prefix}{body}")
+    if checksum != expected:
         return False
-    if any(c.islower() for c in euid):
-        return False
-
-    has_colon = ":" in euid
-    if has_colon:
-        # Domain-scoped EUID
-        if env == "production":
-            return False
-        if not _DOMAIN_RE.match(euid):
-            return False
-        # Extract domain code (everything before ':')
-        dc = euid.split(":")[0]
-        if allowed is not None and dc not in allowed:
-            return False
-        # Checksum payload = domain_code + category + body (no delimiters)
-        stripped = euid.replace(":", "").replace("-", "")
-        payload = stripped[:-1]
-        presented_check = stripped[-1]
-    else:
-        # Production EUID
-        if env == "domain":
-            return False
-        if not _PRODUCTION_RE.match(euid):
-            return False
-        stripped = euid.replace("-", "")
-        payload = stripped[:-1]
-        presented_check = stripped[-1]
-
-    return meridian_checksum(payload) == presented_check
+    if allowed_domain_codes:
+        allowed = {
+            normalized
+            for code in allowed_domain_codes
+            if (normalized := normalize_domain_code(str(code).strip())) is not None
+        }
+        return domain_code in allowed
+    return True
 
 
 _CANONICAL_CORE_PREFIXES = MappingProxyType(
     {
-        "generic_template": CORE_TEMPLATE_PLACEHOLDER_PREFIX,
-        "generic_instance": CORE_TEMPLATE_PLACEHOLDER_PREFIX,
-        "generic_instance_lineage": CORE_TEMPLATE_PLACEHOLDER_PREFIX,
-    }
-)
-
-_CANONICAL_OPTIONAL_PREFIXES = MappingProxyType(
-    {
-        "workflow_instance": "WX",
-        "workflow_step_instance": "WSX",
-        "action_instance": "XX",
+        "generic_template": GENERIC_TEMPLATE_PREFIX,
+        "generic_instance_lineage": GENERIC_INSTANCE_LINEAGE_PREFIX,
+        "audit_log": AUDIT_LOG_PREFIX,
+        "system_user_instance": SYSTEM_USER_PREFIX,
+        "system_message_instance": SYSTEM_MESSAGE_PREFIX,
     }
 )
 
 
 @dataclass(frozen=True)
 class EUIDConfig:
-    """
-    Read-only catalog of TapDB-managed prefixes.
-
-    This shared module intentionally exposes only the canonical substrate
-    prefixes. Application-specific issuing authorities are governed outside of
-    TapDB and must not be added here through mutable registration APIs.
-    """
+    """Read-only catalog of TapDB-managed prefixes."""
 
     CORE_PREFIXES: Mapping[str, str] = field(
         default_factory=lambda: _CANONICAL_CORE_PREFIXES
     )
-    OPTIONAL_PREFIXES: Mapping[str, str] = field(
-        default_factory=lambda: _CANONICAL_OPTIONAL_PREFIXES
-    )
 
     def get_all_prefixes(self) -> Dict[str, str]:
-        """Return a copy of canonical discriminator-to-prefix mappings."""
-        result = dict(self.CORE_PREFIXES)
-        result.update(self.OPTIONAL_PREFIXES)
-        return result
+        return dict(self.CORE_PREFIXES)
 
     def get_discriminator_for_prefix(self, prefix: str) -> Optional[str]:
-        """Return the canonical discriminator for a uniquely owned prefix."""
+        normalized_prefix = normalize_prefix(prefix)
+        if normalized_prefix is None:
+            return None
         matches = [
             discriminator
-            for discriminator, owned_prefix in self.get_all_prefixes().items()
-            if owned_prefix == prefix
+            for discriminator, owned_prefix in self.CORE_PREFIXES.items()
+            if owned_prefix == normalized_prefix
         ]
         if len(matches) == 1:
             return matches[0]
         return None
 
     def is_canonical_prefix(self, prefix: str) -> bool:
-        """Return True when *prefix* is part of the TapDB-managed catalog."""
-        return (
-            prefix in self.CORE_PREFIXES.values()
-            or prefix in self.OPTIONAL_PREFIXES.values()
-        )
+        normalized_prefix = normalize_prefix(prefix)
+        if normalized_prefix is None:
+            return False
+        return normalized_prefix in self.CORE_PREFIXES.values()

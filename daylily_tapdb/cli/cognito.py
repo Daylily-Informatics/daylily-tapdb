@@ -348,7 +348,11 @@ def _write_pool_id_to_tapdb_config(env: Environment, pool_id: str) -> Path:
             "config_version": 3,
             "client_id": ctx.client_id,
             "database_name": ctx.database_name,
-            "euid_client_code": str((meta or {}).get("euid_client_code") or ""),
+            "owner_repo_name": str((meta or {}).get("owner_repo_name") or ""),
+            "domain_registry_path": str((meta or {}).get("domain_registry_path") or ""),
+            "prefix_ownership_registry_path": str(
+                (meta or {}).get("prefix_ownership_registry_path") or ""
+            ),
         }
 
     try:
@@ -589,11 +593,14 @@ def _ensure_actor_user_row(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_user=cfg["user"],
         db_pass=cfg.get("password") or None,
+        secret_arn=cfg.get("secret_arn") or None,
         db_name=cfg["database"],
         engine_type=engine_type,
         region=region,
         iam_auth=iam_auth,
         app_username=normalized_email,
+        domain_code=str(cfg["domain_code"]),
+        owner_repo_name=str(cfg["owner_repo_name"]),
     ) as conn:
         with conn.session_scope(commit=True) as session:
             user, _ = create_or_get(

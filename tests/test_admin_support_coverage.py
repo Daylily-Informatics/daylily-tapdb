@@ -540,6 +540,7 @@ def test_db_pool_helpers_cover_engine_build_session_scope_and_dispose(
         user="tapdb",
         aws_profile=None,
         iam_auth=True,
+        secret_arn=None,
         password="",
     )
     cparams = {}

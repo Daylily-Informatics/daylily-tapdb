@@ -3,6 +3,7 @@
 import json
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -81,6 +82,32 @@ def _build_pg_ctl_options(port: int, socket_dir: Path) -> str:
             "-h localhost",
         ]
     )
+
+
+def _set_postgresql_conf_value(text: str, key: str, value: str) -> str:
+    pattern = re.compile(rf"(?m)^[#\s]*{re.escape(key)}\s*=.*$")
+    replacement = f"{key} = {value}"
+    if pattern.search(text):
+        return pattern.sub(replacement, text, count=1)
+    stripped = text.rstrip()
+    if stripped:
+        stripped += "\n"
+    return (
+        stripped + "# TAPDB local Linux shared memory settings\n" + replacement + "\n"
+    )
+
+
+def _ensure_linux_local_postgres_conf(data_dir: Path) -> None:
+    if platform.system() != "Linux":
+        return
+    conf_path = data_dir / "postgresql.conf"
+    if not conf_path.is_file():
+        raise RuntimeError(f"postgresql.conf not found: {conf_path}")
+    text = conf_path.read_text(encoding="utf-8")
+    updated = _set_postgresql_conf_value(text, "shared_memory_type", "mmap")
+    updated = _set_postgresql_conf_value(updated, "dynamic_shared_memory_type", "mmap")
+    if updated != text:
+        conf_path.write_text(updated, encoding="utf-8")
 
 
 def _port_conflict_details(port: int) -> str:
@@ -615,6 +642,11 @@ def pg_start_local(
     log_file = _get_postgres_log_file(env)
     log_file.parent.mkdir(parents=True, exist_ok=True)
     postgres_opts = _build_pg_ctl_options(port, socket_dir)
+    try:
+        _ensure_linux_local_postgres_conf(data_dir)
+    except Exception as e:
+        ccyo_out.error(f"Error preparing PostgreSQL config: {e}")
+        raise typer.Exit(1)
 
     try:
         result = subprocess.run(

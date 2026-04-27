@@ -16,7 +16,7 @@ def test_ensure_instance_prefix_sequence_sql_uses_euid_seq_and_prefix():
     assert "euid like" not in sql
 
 
-@pytest.mark.parametrize("prefix", ["G-X", "GX1", "UQ", "", "   "])
+@pytest.mark.parametrize("prefix", ["G-X", "UQ", "", "   "])
 def test_normalize_instance_prefix_rejects_invalid(prefix: str):
     with pytest.raises(ValueError):
         _normalize_instance_prefix(prefix)

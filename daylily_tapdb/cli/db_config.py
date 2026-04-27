@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import warnings
 from pathlib import Path
@@ -16,8 +17,17 @@ from daylily_tapdb.cli.context import (
     resolve_context,
 )
 from daylily_tapdb.euid import (
-    normalize_euid_client_code,
-    resolve_client_scoped_core_prefix,
+    AUDIT_LOG_PREFIX,
+    GENERIC_INSTANCE_LINEAGE_PREFIX,
+    GENERIC_TEMPLATE_PREFIX,
+    SYSTEM_MESSAGE_PREFIX,
+    SYSTEM_USER_PREFIX,
+)
+from daylily_tapdb.governance import (
+    DEFAULT_DOMAIN_REGISTRY_PATH,
+    DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH,
+    GovernanceContext,
+    normalize_owner_repo_name,
 )
 
 DEFAULT_CONFIG_FILENAME = CONFIG_FILENAME
@@ -37,6 +47,31 @@ DEFAULT_DB_POOL_SIZE = 5
 DEFAULT_DB_MAX_OVERFLOW = 10
 DEFAULT_DB_POOL_TIMEOUT = 30
 DEFAULT_DB_POOL_RECYCLE = 1800
+_POSTGRES_IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
+
+
+def normalize_postgres_identifier_component(value: str) -> str:
+    """Return a PostgreSQL-safe identifier component.
+
+    The full TAPDB database identifier is prefixed with ``tapdb_`` elsewhere, so
+    this helper only needs to normalize the namespace/environment fragments.
+    """
+
+    normalized = _POSTGRES_IDENTIFIER_RE.sub("_", str(value or "").strip().lower())
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not normalized:
+        raise RuntimeError("TapDB database namespace must yield a non-empty identifier")
+    return normalized
+
+
+def default_database_name_for_namespace(database_name: str, env_name: str) -> str:
+    """Build the default logical database name for a namespace/env pair."""
+
+    return (
+        "tapdb_"
+        f"{normalize_postgres_identifier_component(database_name)}_"
+        f"{normalize_postgres_identifier_component(env_name)}"
+    )
 
 
 def get_config_paths(
@@ -149,7 +184,7 @@ def _validate_meta_for_context(root: dict[str, Any], ctx: TapdbContext) -> None:
     cfg_client = str(meta.get("client_id") or "").strip()
     cfg_db = str(meta.get("database_name") or "").strip()
     try:
-        normalize_euid_client_code(meta.get("euid_client_code"))
+        normalize_owner_repo_name(str(meta.get("owner_repo_name") or ""))
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     if cfg_client != ctx.client_id or cfg_db != ctx.database_name:
@@ -195,12 +230,22 @@ def get_db_config_for_env(
     if not isinstance(meta, dict):
         raise RuntimeError(f"Config metadata is required in {resolved_config_path}.")
     try:
-        euid_client_code = normalize_euid_client_code(meta.get("euid_client_code"))
+        owner_repo_name = normalize_owner_repo_name(
+            str(meta.get("owner_repo_name") or "")
+        )
     except ValueError as exc:
         raise RuntimeError(
-            f"Config {resolved_config_path} is missing valid meta.euid_client_code: {exc}"
+            f"Config {resolved_config_path} is missing valid meta.owner_repo_name: {exc}"
         ) from exc
-    core_euid_prefix = resolve_client_scoped_core_prefix(euid_client_code)
+    domain_registry_path = Path(
+        str(meta.get("domain_registry_path") or DEFAULT_DOMAIN_REGISTRY_PATH)
+    ).expanduser()
+    prefix_ownership_registry_path = Path(
+        str(
+            meta.get("prefix_ownership_registry_path")
+            or DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH
+        )
+    ).expanduser()
 
     file_cfg: dict[str, Any] = {}
     if "environments" in root and isinstance(root.get("environments"), dict):
@@ -229,6 +274,7 @@ def get_db_config_for_env(
         "ui_port": _file_str("ui_port") or DEFAULT_UI_PORT,
         "user": _file_str("user") or "postgres",
         "password": _file_str("password") or "",
+        "secret_arn": _file_str("secret_arn") or "",
         "database": _file_str("database") or f"tapdb_{env_key}",
         "cognito_user_pool_id": _file_str("cognito_user_pool_id") or "",
         "cognito_app_client_id": _file_str("cognito_app_client_id") or "",
@@ -238,22 +284,29 @@ def get_db_config_for_env(
         "cognito_domain": _file_str("cognito_domain") or "",
         "cognito_callback_url": _file_str("cognito_callback_url") or "",
         "cognito_logout_url": _file_str("cognito_logout_url") or "",
-        "audit_log_euid_prefix": _file_str("audit_log_euid_prefix") or "",
         "support_email": _file_str("support_email") or "",
         "aws_profile": _file_str("aws_profile") or "",
+        "domain_code": _file_str("domain_code") or "",
     }
 
     if ctx:
         cfg["client_id"] = ctx.client_id
         cfg["database_name"] = ctx.database_name
-    cfg["euid_client_code"] = euid_client_code
-    cfg["core_euid_prefix"] = core_euid_prefix
+    cfg["owner_repo_name"] = owner_repo_name
+    cfg["domain_registry_path"] = str(domain_registry_path)
+    cfg["prefix_ownership_registry_path"] = str(prefix_ownership_registry_path)
+    cfg["generic_template_euid_prefix"] = GENERIC_TEMPLATE_PREFIX
+    cfg["generic_instance_lineage_euid_prefix"] = GENERIC_INSTANCE_LINEAGE_PREFIX
+    cfg["audit_log_euid_prefix"] = AUDIT_LOG_PREFIX
+    cfg["system_user_euid_prefix"] = SYSTEM_USER_PREFIX
+    cfg["system_message_euid_prefix"] = SYSTEM_MESSAGE_PREFIX
     cfg["config_path"] = str(resolved_config_path)
 
     if engine_type == "aurora":
         cfg.setdefault("region", _file_str("region") or "us-west-2")
         cfg.setdefault("cluster_identifier", _file_str("cluster_identifier") or "")
         cfg.setdefault("iam_auth", _file_str("iam_auth") or "true")
+        cfg.setdefault("secret_arn", _file_str("secret_arn") or "")
         cfg.setdefault("ssl", _file_str("ssl") or "true")
     else:
         cfg.setdefault(
@@ -268,7 +321,7 @@ def get_db_config_for_env(
                 f"Invalid local host {cfg['host']!r} for env {env_key}. "
                 "Local TAPDB must use host 'localhost'."
             )
-        required_fields = ("port", "ui_port")
+        required_fields = ("port", "ui_port", "domain_code")
         missing_required = [
             field
             for field in required_fields
@@ -280,13 +333,13 @@ def get_db_config_for_env(
                 f"env {env_key}: {', '.join(missing_required)}"
             )
 
-    audit_prefix = str(cfg.get("audit_log_euid_prefix") or "").strip().upper()
-    if audit_prefix != core_euid_prefix:
-        raise RuntimeError(
-            f"Config {resolved_config_path} env {env_key!r} must set "
-            f"audit_log_euid_prefix={core_euid_prefix!r} to match "
-            "the namespace-scoped TapDB core prefix."
-        )
+    governance = GovernanceContext.load(
+        domain_code=str(cfg["domain_code"]),
+        owner_repo_name=owner_repo_name,
+        domain_registry_path=domain_registry_path,
+        prefix_ownership_registry_path=prefix_ownership_registry_path,
+    )
+    cfg["domain_code"] = governance.domain_code
 
     return cfg
 

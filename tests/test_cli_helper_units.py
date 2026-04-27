@@ -10,36 +10,24 @@ import daylily_tapdb.cli.db as db_mod
 import daylily_tapdb.cli.pg as pg_mod
 import daylily_tapdb.cli.user as user_mod
 from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
-from daylily_tapdb.euid import (
-    normalize_euid_client_code,
-    resolve_client_scoped_core_prefix,
-)
+from daylily_tapdb.euid import normalize_prefix
 
 
 def test_normalize_meridian_prefix_accepts_valid_uppercases():
-    assert db_mod._normalize_meridian_prefix("ab", "audit_log_euid_prefix") == "AB"
+    assert db_mod._normalize_meridian_prefix("a1", "instance_prefix") == "A1"
 
 
-@pytest.mark.parametrize("value", ["", "   ", "GX", "TGX", "I0", "A1", "ABCD"])
+@pytest.mark.parametrize("value", ["", "   ", "GX", "TGX", "I0", "ABCDE"])
 def test_normalize_meridian_prefix_rejects_invalid_values(value: str):
     with pytest.raises(ValueError):
-        db_mod._normalize_meridian_prefix(value, "audit_log_euid_prefix")
+        db_mod._normalize_meridian_prefix(value, "instance_prefix")
 
 
-def test_required_identity_prefixes_reads_and_validates_config(monkeypatch):
-    monkeypatch.setattr(
-        db_mod,
-        "_get_db_config",
-        lambda _env: {
-            "core_euid_prefix": "bcd",
-            "audit_log_euid_prefix": "bcd",
-        },
-    )
+def test_required_identity_prefixes_returns_reserved_tapdb_prefixes():
     assert db_mod._required_identity_prefixes(db_mod.Environment.dev) == {
-        "generic_template": "BCD",
-        "generic_instance": "BCD",
-        "generic_instance_lineage": "BCD",
-        "audit_log": "BCD",
+        "generic_template": "TPX",
+        "generic_instance_lineage": "EDG",
+        "audit_log": "ADT",
     }
 
 
@@ -50,10 +38,17 @@ def test_sync_identity_prefix_config_runs_expected_sql(monkeypatch):
         db_mod,
         "_required_identity_prefixes",
         lambda _env: {
-            "generic_template": "BCD",
-            "generic_instance": "BCD",
-            "generic_instance_lineage": "BCD",
-            "audit_log": "BCD",
+            "generic_template": "TPX",
+            "generic_instance_lineage": "EDG",
+            "audit_log": "ADT",
+        },
+    )
+    monkeypatch.setattr(
+        db_mod,
+        "_get_db_config",
+        lambda _env: {
+            "domain_code": "Z",
+            "owner_repo_name": "daylily-tapdb",
         },
     )
 
@@ -68,12 +63,13 @@ def test_sync_identity_prefix_config_runs_expected_sql(monkeypatch):
 
     sql = captured["sql"]
     assert "tapdb_identity_prefix_config" in sql
-    assert "('generic_template', '', '', 'BCD')" in sql
-    assert "('generic_instance', '', '', 'BCD')" in sql
-    assert "('generic_instance_lineage', '', '', 'BCD')" in sql
-    assert "('audit_log', '', '', 'BCD')" in sql
+    assert "('generic_template', 'Z', 'daylily-tapdb', 'TPX')" in sql
+    assert "('generic_instance_lineage', 'Z', 'daylily-tapdb', 'EDG')" in sql
+    assert "('audit_log', 'Z', 'daylily-tapdb', 'ADT')" in sql
     assert "ON CONFLICT (entity, domain_code, issuer_app_code)" in sql
-    assert 'CREATE SEQUENCE IF NOT EXISTS "bcd_instance_seq"' in sql
+    assert 'CREATE SEQUENCE IF NOT EXISTS "adt_instance_seq"' in sql
+    assert 'CREATE SEQUENCE IF NOT EXISTS "edg_instance_seq"' in sql
+    assert 'CREATE SEQUENCE IF NOT EXISTS "tpx_instance_seq"' in sql
 
 
 def test_sync_identity_prefix_config_raises_on_psql_failure(monkeypatch):
@@ -81,10 +77,17 @@ def test_sync_identity_prefix_config_raises_on_psql_failure(monkeypatch):
         db_mod,
         "_required_identity_prefixes",
         lambda _env: {
-            "generic_template": "BCD",
-            "generic_instance": "BCD",
-            "generic_instance_lineage": "BCD",
-            "audit_log": "BCD",
+            "generic_template": "TPX",
+            "generic_instance_lineage": "EDG",
+            "audit_log": "ADT",
+        },
+    )
+    monkeypatch.setattr(
+        db_mod,
+        "_get_db_config",
+        lambda _env: {
+            "domain_code": "Z",
+            "owner_repo_name": "daylily-tapdb",
         },
     )
     monkeypatch.setattr(
@@ -139,11 +142,10 @@ def test_db_schema_apply_reapplies_when_schema_table_already_exists(
     assert log_calls == [("dev", "SCHEMA_APPLY", f"Schema applied from {schema_file}")]
 
 
-def test_euid_client_code_helpers():
-    assert normalize_euid_client_code("a") == "A"
-    assert resolve_client_scoped_core_prefix("b") == "BGX"
+def test_prefix_normalizer_accepts_crockford_prefixes():
+    assert normalize_prefix("a1") == "A1"
     with pytest.raises(ValueError):
-        normalize_euid_client_code("T")
+        normalize_prefix("ABCDE")
 
 
 def test_get_connection_string_aurora_and_local(monkeypatch):
@@ -216,6 +218,8 @@ def test_tapdb_connection_for_env_uses_normalized_engine_flags(monkeypatch):
             "engine_type": "AURORA",
             "iam_auth": "yes",
             "region": "us-east-1",
+            "domain_code": "Z",
+            "owner_repo_name": "daylily-tapdb",
         },
     )
     captured: dict[str, object] = {}
@@ -234,11 +238,14 @@ def test_tapdb_connection_for_env_uses_normalized_engine_flags(monkeypatch):
         "db_hostname": "localhost:5432",
         "db_user": "tapdb",
         "db_pass": None,
+        "secret_arn": None,
         "db_name": "tapdb_dev",
         "engine_type": "aurora",
         "region": "us-east-1",
         "iam_auth": True,
         "app_username": "tester",
+        "domain_code": "Z",
+        "owner_repo_name": "daylily-tapdb",
     }
 
 
@@ -330,6 +337,8 @@ def test_user_open_connection_maps_config(monkeypatch):
             "engine_type": "LOCAL",
             "iam_auth": "on",
             "region": "us-west-1",
+            "domain_code": "Z",
+            "owner_repo_name": "daylily-tapdb",
         },
     )
     captured: dict[str, object] = {}
@@ -346,11 +355,14 @@ def test_user_open_connection_maps_config(monkeypatch):
         "db_hostname": "db.host:6000",
         "db_user": "usr",
         "db_pass": None,
+        "secret_arn": None,
         "db_name": "tapdb_test",
         "engine_type": "local",
         "region": "us-west-1",
         "iam_auth": True,
         "app_username": "alice",
+        "domain_code": "Z",
+        "owner_repo_name": "daylily-tapdb",
     }
 
 

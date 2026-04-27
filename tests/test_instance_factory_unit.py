@@ -37,12 +37,12 @@ def test_materialize_actions_skips_missing_action_templates():
     )
 
     class TM:
-        def get_template(self, session, template_code):
+        def get_template(self, session, template_code, **kwargs):
             if template_code.endswith("missing/1.0"):
                 return None
             return action_tmpl
 
-    groups = materialize_actions(sess, tmpl, TM())
+    groups = materialize_actions(sess, tmpl, TM(), domain_code="T")
 
     assert "core_actions" in groups
     assert "a" in groups["core_actions"]
@@ -66,10 +66,10 @@ def test_materialize_actions_skips_templates_without_action_definition(caplog):
     )
 
     class TM:
-        def get_template(self, session, template_code):
+        def get_template(self, session, template_code, **kwargs):
             return action_tmpl
 
-    groups = materialize_actions(sess, tmpl, TM())
+    groups = materialize_actions(sess, tmpl, TM(), domain_code="T")
 
     assert groups == {}
     assert any(
@@ -83,10 +83,10 @@ def test_create_instance_errors_depth_cycle_and_missing_template():
     sess = _FakeSession()
 
     class TMNone:
-        def get_template(self, session, template_code):
+        def get_template(self, session, template_code, **kwargs):
             return None
 
-    f = InstanceFactory(TMNone())
+    f = InstanceFactory(TMNone(), domain_code="T")
 
     with pytest.raises(ValueError, match="Maximum instantiation depth"):
         f.create_instance(sess, "a/b/c/1.0", "n", _depth=f.MAX_INSTANTIATION_DEPTH + 1)
@@ -117,13 +117,13 @@ def test_create_instance_builds_json_addl_and_merges_properties():
     )
 
     class TM:
-        def get_template(self, session, template_code):
+        def get_template(self, session, template_code, **kwargs):
             return tmpl
 
-    f = InstanceFactory(TM())
+    f = InstanceFactory(TM(), domain_code="T")
     inst = f.create_instance(
         sess,
-        template_code="generic/generic/generic/1.0",
+        template_code="SYS/actor/system_user/1.0",
         name="x",
         properties={"b": 2},
         create_children=False,
@@ -156,13 +156,13 @@ def test_create_instance_sets_tenant_id_column_and_json_when_provided():
     )
 
     class TM:
-        def get_template(self, session, template_code):
+        def get_template(self, session, template_code, **kwargs):
             return tmpl
 
-    f = InstanceFactory(TM())
+    f = InstanceFactory(TM(), domain_code="T")
     inst = f.create_instance(
         sess,
-        template_code="generic/generic/generic/1.0",
+        template_code="SYS/actor/system_user/1.0",
         name="x",
         properties={},
         create_children=False,
@@ -183,7 +183,7 @@ def test_create_instance_system_user_normalizes_login_identifier_and_top_level_k
         is_singleton=False,
         instance_polymorphic_identity=None,
         polymorphic_discriminator="actor_template",
-        category="generic",
+        category="SYS",
         type="actor",
         subtype="system_user",
         version="1.0",
@@ -204,13 +204,13 @@ def test_create_instance_system_user_normalizes_login_identifier_and_top_level_k
     )
 
     class TM:
-        def get_template(self, session, template_code):
+        def get_template(self, session, template_code, **kwargs):
             return tmpl
 
-    f = InstanceFactory(TM())
+    f = InstanceFactory(TM(), domain_code="T")
     inst = f.create_instance(
         sess,
-        template_code="generic/actor/system_user/1.0",
+        template_code="SYS/actor/system_user/1.0",
         name="",
         properties={"email": "John@Example.com"},
         create_children=False,
@@ -231,7 +231,7 @@ def test_create_instance_system_user_requires_non_empty_login_identifier():
         is_singleton=False,
         instance_polymorphic_identity=None,
         polymorphic_discriminator="actor_template",
-        category="generic",
+        category="SYS",
         type="actor",
         subtype="system_user",
         version="1.0",
@@ -252,16 +252,16 @@ def test_create_instance_system_user_requires_non_empty_login_identifier():
     )
 
     class TM:
-        def get_template(self, session, template_code):
+        def get_template(self, session, template_code, **kwargs):
             return tmpl
 
-    f = InstanceFactory(TM())
+    f = InstanceFactory(TM(), domain_code="T")
     with pytest.raises(
         ValueError, match="system_user requires a non-empty login_identifier"
     ):
         f.create_instance(
             sess,
-            template_code="generic/actor/system_user/1.0",
+            template_code="SYS/actor/system_user/1.0",
             name="",
             create_children=False,
         )
@@ -293,10 +293,10 @@ def test_create_instance_invalid_instantiation_layouts_raises_value_error():
     )
 
     class TM:
-        def get_template(self, session, template_code):
+        def get_template(self, session, template_code, **kwargs):
             return tmpl
 
-    f = InstanceFactory(TM())
+    f = InstanceFactory(TM(), domain_code="T")
     with pytest.raises(ValueError, match="Invalid instantiation_layouts"):
         f.create_instance(
             sess, "generic/generic/generic/1.0", "x", create_children=True
@@ -348,7 +348,13 @@ def test_create_children_handles_string_and_object_child_templates_and_creates_l
         )
 
     f = InstanceFactory(
-        template_manager=SimpleNamespace(get_template=lambda *a, **k: None)
+        template_manager=SimpleNamespace(get_template=lambda *a, **k: None),
+        domain_code="T",
+    )
+    monkeypatch.setattr(
+        f,
+        "_resolve_template_code_pattern",
+        lambda session, template_code: f"{template_code}/",
     )
     monkeypatch.setattr(f, "create_instance", fake_create_instance)
 
@@ -394,11 +400,11 @@ def test_get_or_create_singleton_instance_existing_is_returned_and_filters_is_de
     tmpl = SimpleNamespace(uid=uuid.uuid4(), is_singleton=True)
 
     class TM:
-        def get_template(self, session, template_code):
+        def get_template(self, session, template_code, **kwargs):
             return tmpl
 
-    f = InstanceFactory(TM())
+    f = InstanceFactory(TM(), domain_code="T")
     s = Sess()
-    got = f.get_or_create_singleton_instance(s, "generic/generic/single/1.0", "n")
+    got = f.get_or_create_singleton_instance(s, "SYS/generic/single/1.0", "n")
     assert got is existing
     assert any("is_deleted" in str(c) for c in s.q.filters)

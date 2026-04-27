@@ -5,7 +5,6 @@ All boto3 CloudFormation calls are mocked — no live AWS required.
 
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,8 +13,6 @@ from daylily_tapdb.aurora.config import AuroraConfig
 from daylily_tapdb.aurora.stack_manager import (
     AuroraStackManager,
     _cfn_events_summary,
-    _load_metadata,
-    _save_metadata,
 )
 
 # ---------------------------------------------------------------------------
@@ -61,16 +58,6 @@ def sample_config():
         cluster_identifier="test-cluster",
         vpc_id="vpc-abc123",
     )
-
-
-@pytest.fixture()
-def metadata_path(tmp_path, monkeypatch):
-    """Redirect stack metadata to a temp directory."""
-    meta_file = tmp_path / "aurora-stacks.json"
-    monkeypatch.setattr(
-        "daylily_tapdb.aurora.stack_manager.STACK_METADATA_PATH", meta_file
-    )
-    return meta_file
 
 
 # ---------------------------------------------------------------------------
@@ -179,8 +166,10 @@ class TestCreateStack:
         manager,
         mock_cfn,
         sample_config,
-        metadata_path,
+        tmp_path,
+        monkeypatch,
     ):
+        monkeypatch.setenv("HOME", str(tmp_path))
         mock_cfn.create_stack.return_value = {
             "StackId": _FAKE_STACK_ID,
         }
@@ -209,12 +198,7 @@ class TestCreateStack:
         assert result["stack_name"] == "tapdb-test-cluster"
         assert "arn:" in result["stack_id"]
         assert result["outputs"]["ClusterEndpoint"] == ep
-
-        # Verify metadata was saved
-        assert metadata_path.exists()
-        meta = json.loads(metadata_path.read_text())
-        assert "tapdb-test-cluster" in meta
-        assert meta["tapdb-test-cluster"]["status"] == "CREATE_COMPLETE"
+        assert list(tmp_path.rglob("aurora-stacks.json")) == []
 
     @patch("daylily_tapdb.aurora.stack_manager.time.sleep")
     def test_create_stack_failure_raises(
@@ -223,7 +207,6 @@ class TestCreateStack:
         manager,
         mock_cfn,
         sample_config,
-        metadata_path,
     ):
         mock_cfn.create_stack.return_value = {
             "StackId": _FAKE_SHORT_ID,
@@ -243,7 +226,6 @@ class TestCreateStack:
         manager,
         mock_cfn,
         sample_config,
-        metadata_path,
     ):
         mock_cfn.create_stack.return_value = {
             "StackId": _FAKE_SHORT_ID,
@@ -261,6 +243,7 @@ class TestCreateStack:
         assert "ClusterIdentifier" in param_keys
         assert "VpcId" in param_keys
         assert "SubnetIds" in param_keys
+        assert "IngressCIDR" in param_keys
         assert "PubliclyAccessible" in param_keys
         assert "DeletionProtection" in param_keys
 
@@ -286,6 +269,11 @@ class TestCreateStack:
             if p["ParameterKey"] == "DeletionProtection"
         )
         assert dp_param["ParameterValue"] == "true"
+
+        cidr_param = next(
+            p for p in call_kwargs["Parameters"] if p["ParameterKey"] == "IngressCIDR"
+        )
+        assert cidr_param["ParameterValue"] == "10.0.0.0/8"
 
 
 # ------------------------------------------------------------------
@@ -341,6 +329,56 @@ class TestInitiateCreateStack:
         mock_cfn.describe_stacks.assert_not_called()
 
 
+class TestUpdateStack:
+    @patch("daylily_tapdb.aurora.stack_manager.time.sleep")
+    def test_update_stack_success(self, mock_sleep, manager, mock_cfn, sample_config):
+        mock_cfn.update_stack.return_value = {"StackId": _FAKE_STACK_ID}
+        mock_cfn.describe_stacks.return_value = {
+            "Stacks": [
+                {
+                    "StackStatus": "UPDATE_COMPLETE",
+                    "Outputs": [
+                        {
+                            "OutputKey": "ClusterEndpoint",
+                            "OutputValue": "ep.rds.amazonaws.com",
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result = manager.update_stack(sample_config)
+
+        assert result["stack_name"] == "tapdb-test-cluster"
+        assert result["status"] == "UPDATE_COMPLETE"
+        call_kwargs = mock_cfn.update_stack.call_args[1]
+        param_keys = {p["ParameterKey"] for p in call_kwargs["Parameters"]}
+        assert "IngressCIDR" in param_keys
+
+    def test_update_stack_noop_returns_current_status(
+        self, manager, mock_cfn, sample_config
+    ):
+        mock_cfn.update_stack.side_effect = Exception("No updates are to be performed.")
+        mock_cfn.describe_stacks.return_value = {
+            "Stacks": [
+                {
+                    "StackStatus": "CREATE_COMPLETE",
+                    "Outputs": [
+                        {
+                            "OutputKey": "ClusterEndpoint",
+                            "OutputValue": "ep.rds.amazonaws.com",
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result = manager.update_stack(sample_config)
+
+        assert result["status"] == "CREATE_COMPLETE"
+        assert result["outputs"]["ClusterEndpoint"] == "ep.rds.amazonaws.com"
+
+
 # ------------------------------------------------------------------
 # delete_stack
 # ------------------------------------------------------------------
@@ -348,12 +386,7 @@ class TestInitiateCreateStack:
 
 class TestDeleteStack:
     @patch("daylily_tapdb.aurora.stack_manager.time.sleep")
-    def test_delete_with_retain_networking(
-        self, mock_sleep, manager, mock_cfn, metadata_path
-    ):
-        meta = {"tapdb-test": {"status": "CREATE_COMPLETE"}}
-        metadata_path.write_text(json.dumps(meta))
-
+    def test_delete_with_retain_networking(self, mock_sleep, manager, mock_cfn):
         mock_cfn.describe_stacks.side_effect = Exception("does not exist")
 
         result = manager.delete_stack("tapdb-test", retain_networking=True)
@@ -363,11 +396,8 @@ class TestDeleteStack:
         assert "RetainResources" in call_kwargs
         assert "ClusterSecurityGroup" in call_kwargs["RetainResources"]
 
-        meta = json.loads(metadata_path.read_text())
-        assert meta["tapdb-test"]["status"] == "DELETE_COMPLETE"
-
     @patch("daylily_tapdb.aurora.stack_manager.time.sleep")
-    def test_delete_without_retain(self, mock_sleep, manager, mock_cfn, metadata_path):
+    def test_delete_without_retain(self, mock_sleep, manager, mock_cfn):
         mock_cfn.describe_stacks.side_effect = Exception("does not exist")
 
         result = manager.delete_stack("tapdb-test", retain_networking=False)
@@ -419,30 +449,6 @@ class TestDetectExistingResources:
 
         result = manager.detect_existing_resources()
         assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# Metadata helpers
-# ---------------------------------------------------------------------------
-
-
-class TestMetadataHelpers:
-    def test_load_missing_file(self, metadata_path):
-        assert _load_metadata() == {}
-
-    def test_save_and_load(self, metadata_path):
-        data = {"tapdb-test": {"status": "CREATE_COMPLETE", "region": "us-west-2"}}
-        _save_metadata(data)
-        loaded = _load_metadata()
-        assert loaded == data
-
-    def test_creates_parent_dirs(self, tmp_path, monkeypatch):
-        deep = tmp_path / "a" / "b" / "c" / "stacks.json"
-        monkeypatch.setattr(
-            "daylily_tapdb.aurora.stack_manager.STACK_METADATA_PATH", deep
-        )
-        _save_metadata({"test": True})
-        assert deep.exists()
 
 
 # ---------------------------------------------------------------------------

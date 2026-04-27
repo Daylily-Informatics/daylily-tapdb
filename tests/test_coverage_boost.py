@@ -502,6 +502,7 @@ class TestOutboxRepository:
                 _create_message_instance(
                     mock_session,
                     tenant_id=uuid.uuid4(),
+                    domain_code="Z",
                     event_type="test.event",
                     aggregate_euid="GT-00001-BXKQ7",
                     payload={"key": "value"},
@@ -525,6 +526,7 @@ class TestOutboxRepository:
             _create_message_instance(
                 mock_session,
                 tenant_id=uuid.uuid4(),
+                domain_code="Z",
                 event_type="test.event",
                 aggregate_euid="GT-00001-BXKQ7",
                 payload={"key": "value"},

@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from daylily_tapdb.euid import normalize_domain_code
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.sequences import (
     _normalize_instance_prefix,
@@ -55,6 +56,111 @@ class SeedSummary:
 TEMPLATE_MODEL_BY_DISCRIMINATOR = {
     "generic_template": generic_template,
 }
+
+_CORE_TEMPLATE_PREFIXES = {"SYS", "MSG"}
+_DEFAULT_TAPDB_CONFIG_DIR = Path.home() / ".config" / "tapdb"
+_DEFAULT_DOMAIN_REGISTRY_PATH = _DEFAULT_TAPDB_CONFIG_DIR / "domain_code_registry.json"
+_DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH = (
+    _DEFAULT_TAPDB_CONFIG_DIR / "prefix_ownership_registry.json"
+)
+
+
+def _normalize_domain_scope(domain_code: str | None) -> str:
+    normalized = normalize_domain_code(domain_code or "")
+    if normalized is None:
+        raise ValueError("domain_code is required for template seeding")
+    return normalized
+
+
+def _apply_seed_session_scope(
+    session: Session,
+    *,
+    domain_code: str,
+    owner_repo_name: str,
+) -> None:
+    bind = getattr(session, "bind", None)
+    dialect = getattr(bind, "dialect", None)
+    dialect_name = str(getattr(dialect, "name", "") or "").strip().lower()
+    if dialect_name != "postgresql":
+        return
+    session.execute(
+        text("SET LOCAL session.current_domain_code = :code"),
+        {"code": domain_code},
+    )
+    session.execute(
+        text("SET LOCAL session.current_owner_repo_name = :owner"),
+        {"owner": owner_repo_name},
+    )
+
+
+def _load_json_file(path: Path) -> dict[str, Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Registry file must contain a JSON object: {path}")
+    return data
+
+
+def _load_domain_registry(path: Path) -> dict[str, Any]:
+    payload = _load_json_file(path)
+    domains = payload.get("domains")
+    if not isinstance(domains, dict):
+        raise ValueError(f"Domain registry must define an object 'domains': {path}")
+    return payload
+
+
+def _load_prefix_ownership_registry(path: Path) -> dict[str, Any]:
+    payload = _load_json_file(path)
+    ownership = payload.get("ownership")
+    if not isinstance(ownership, dict):
+        raise ValueError(f"Prefix registry must define an object 'ownership': {path}")
+    return payload
+
+
+def _assert_registered_domain(
+    domain_code: str, domain_registry: dict[str, Any], *, source: str
+) -> None:
+    domains = domain_registry.get("domains", {})
+    if domain_code not in domains:
+        raise ValueError(f"Domain {domain_code!r} is not registered in {source}")
+
+
+def _assert_prefix_claimed(
+    *,
+    domain_code: str,
+    prefix: str,
+    owner_repo_name: str,
+    prefix_registry: dict[str, Any],
+    source: str,
+) -> None:
+    ownership = prefix_registry.get("ownership", {})
+    domain_claims = ownership.get(domain_code)
+    if not isinstance(domain_claims, dict):
+        raise ValueError(
+            f"No prefix claims registered for domain {domain_code!r} in {source}"
+        )
+
+    claim = domain_claims.get(prefix)
+    if not isinstance(claim, dict):
+        raise ValueError(
+            f"Prefix {prefix!r} is not registered for domain {domain_code!r} in {source}"
+        )
+
+    registered_owner = str(
+        claim.get("issuer_app_code")
+        or claim.get("owner_repo_name")
+        or claim.get("repo_name")
+        or ""
+    ).strip()
+    if not registered_owner:
+        raise ValueError(
+            f"Prefix {prefix!r} registered for domain {domain_code!r} in {source} "
+            "is missing an owner claim"
+        )
+    if registered_owner != owner_repo_name:
+        raise ValueError(
+            f"Prefix {prefix!r} for domain {domain_code!r} is claimed by "
+            f"{registered_owner!r}, not {owner_repo_name!r}"
+        )
 
 
 def _get_project_root() -> Path:
@@ -106,12 +212,12 @@ def find_tapdb_core_config_dir() -> Path:
         if not candidate.exists() or not candidate.is_dir():
             continue
         if (candidate / "actor" / "actor.json").exists() and (
-            candidate / "generic" / "generic.json"
+            candidate / "system" / "system.json"
         ).exists():
             return candidate
 
     raise FileNotFoundError(
-        "Cannot find TAPDB core config directory with actor/generic templates."
+        "Cannot find TAPDB core config directory with actor/system templates."
     )
 
 
@@ -545,33 +651,51 @@ def validate_template_configs(
                 )
                 normalized_instance_prefix = ""
             if normalized_instance_prefix:
-                is_core_template = _is_source_under_dir(source_file, core_config_dir)
-                if is_core_template and normalized_instance_prefix not in {"GX", "MSG"}:
+                normalized_category = (
+                    str(template.get("category") or "").strip().upper()
+                )
+                if normalized_category != normalized_instance_prefix:
                     issues.append(
                         ConfigIssue(
                             level="error",
                             source_file=source_file,
                             template_code=code,
                             message=(
-                                "TapDB bundled core templates must use placeholder "
-                                "instance_prefix 'GX' or reserved system message "
-                                "prefix 'MSG'."
+                                "Template category must match instance_prefix "
+                                f"for Meridian template identity ({normalized_category!r} "
+                                f"!= {normalized_instance_prefix!r})."
                             ),
                         )
                     )
-                if not is_core_template and normalized_instance_prefix in {
-                    "GX",
-                    "TGX",
-                    "MSG",
-                }:
+
+                is_core_template = _is_source_under_dir(source_file, core_config_dir)
+                if (
+                    is_core_template
+                    and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES
+                ):
                     issues.append(
                         ConfigIssue(
                             level="error",
                             source_file=source_file,
                             template_code=code,
                             message=(
-                                f"Client templates cannot persist reserved "
-                                f"TapDB core instance_prefix {normalized_instance_prefix!r}."
+                                "TapDB bundled core templates must use reserved "
+                                f"operational prefixes {sorted(_CORE_TEMPLATE_PREFIXES)!r}."
+                            ),
+                        )
+                    )
+                if (
+                    not is_core_template
+                    and normalized_instance_prefix in _CORE_TEMPLATE_PREFIXES
+                ):
+                    issues.append(
+                        ConfigIssue(
+                            level="error",
+                            source_file=source_file,
+                            template_code=code,
+                            message=(
+                                f"Client templates cannot persist reserved TapDB "
+                                f"operational prefix {normalized_instance_prefix!r}."
                             ),
                         )
                     )
@@ -624,12 +748,14 @@ def _upsert_template(
     session: Session,
     template: dict[str, Any],
     *,
+    domain_code: str,
     overwrite: bool,
 ) -> tuple[str, generic_template]:
     category, type_name, subtype, version = _template_key(template)
     stmt = (
         select(generic_template)
         .where(
+            generic_template.domain_code == domain_code,
             generic_template.category == category,
             generic_template.type == type_name,
             generic_template.subtype == subtype,
@@ -648,6 +774,7 @@ def _upsert_template(
             polymorphic_discriminator=str(
                 template.get("polymorphic_discriminator") or "generic_template"
             ),
+            domain_code=domain_code,
             category=category,
             type=type_name,
             subtype=subtype,
@@ -676,6 +803,7 @@ def _upsert_template(
         "polymorphic_discriminator": str(
             template.get("polymorphic_discriminator") or "generic_template"
         ),
+        "domain_code": domain_code,
         "instance_prefix": str(template.get("instance_prefix") or "").strip().upper(),
         "instance_polymorphic_identity": str(
             template.get("instance_polymorphic_identity") or ""
@@ -702,37 +830,80 @@ def _prepare_seed_templates(
     templates: list[dict[str, Any]],
     *,
     core_config_dir: Path,
-    core_instance_prefix: str,
 ) -> list[dict[str, Any]]:
     prepared: list[dict[str, Any]] = []
-    normalized_core_prefix = _normalize_instance_prefix(core_instance_prefix)
 
     for template in templates:
         source_file = str(template.get("_source_file") or "") or None
         item = dict(template)
         instance_prefix = str(item.get("instance_prefix") or "").strip().upper()
+        category = str(item.get("category") or "").strip().upper()
         is_core_template = _is_source_under_dir(source_file, core_config_dir)
 
-        if is_core_template:
-            if instance_prefix == "GX":
-                item["instance_prefix"] = normalized_core_prefix
-            elif instance_prefix == "MSG":
-                item["instance_prefix"] = "MSG"
-            else:
-                raise ValueError(
-                    f"TapDB bundled core template {_template_code(item)!r} must "
-                    "use placeholder instance_prefix 'GX' or reserved system "
-                    "message prefix 'MSG'."
-                )
-        elif instance_prefix in {"GX", "TGX", "MSG"}:
+        if not instance_prefix:
+            raise ValueError(
+                f"Template {_template_code(item)!r} must declare an instance_prefix"
+            )
+
+        normalized_instance_prefix = _normalize_instance_prefix(instance_prefix)
+        if category != normalized_instance_prefix:
+            raise ValueError(
+                f"Template {_template_code(item)!r} must use the same Meridian "
+                f"prefix for category and instance_prefix ({category!r} != "
+                f"{normalized_instance_prefix!r})."
+            )
+
+        if (
+            is_core_template
+            and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES
+        ):
+            raise ValueError(
+                f"TapDB bundled core template {_template_code(item)!r} must use "
+                f"reserved prefixes {sorted(_CORE_TEMPLATE_PREFIXES)!r}."
+            )
+
+        if (
+            not is_core_template
+            and normalized_instance_prefix in _CORE_TEMPLATE_PREFIXES
+        ):
             raise ValueError(
                 f"Client template {_template_code(item)!r} cannot persist reserved "
-                f"TapDB core instance_prefix {instance_prefix!r}."
+                f"TapDB operational prefix {normalized_instance_prefix!r}."
             )
 
         prepared.append(item)
 
     return prepared
+
+
+def _validate_seed_ownership(
+    templates: list[dict[str, Any]],
+    *,
+    domain_code: str,
+    owner_repo_name: str,
+    domain_registry_path: Path = _DEFAULT_DOMAIN_REGISTRY_PATH,
+    prefix_registry_path: Path = _DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH,
+) -> None:
+    domain_registry = _load_domain_registry(domain_registry_path)
+    prefix_registry = _load_prefix_ownership_registry(prefix_registry_path)
+
+    _assert_registered_domain(
+        domain_code, domain_registry, source=str(domain_registry_path)
+    )
+
+    for template in templates:
+        prefix = str(template.get("instance_prefix") or "").strip().upper()
+        if not prefix:
+            raise ValueError(
+                f"Template {_template_code(template)!r} is missing an instance_prefix"
+            )
+        _assert_prefix_claimed(
+            domain_code=domain_code,
+            prefix=prefix,
+            owner_repo_name=owner_repo_name,
+            prefix_registry=prefix_registry,
+            source=str(prefix_registry_path),
+        )
 
 
 def seed_templates(
@@ -741,13 +912,29 @@ def seed_templates(
     *,
     overwrite: bool,
     core_config_dir: Path,
-    core_instance_prefix: str,
+    domain_code: str,
+    owner_repo_name: str,
+    domain_registry_path: Path,
+    prefix_registry_path: Path,
 ) -> SeedSummary:
     """Seed validated template definitions into a TapDB session."""
+    resolved_domain = _normalize_domain_scope(domain_code)
+    resolved_owner = str(owner_repo_name or "").strip()
+    if not resolved_owner:
+        raise ValueError("owner_repo_name is required for template seeding")
+    domain_registry = Path(domain_registry_path)
+    prefix_registry = Path(prefix_registry_path)
+
     prepared_templates = _prepare_seed_templates(
         templates,
         core_config_dir=core_config_dir,
-        core_instance_prefix=core_instance_prefix,
+    )
+    _validate_seed_ownership(
+        prepared_templates,
+        domain_code=resolved_domain,
+        owner_repo_name=resolved_owner,
+        domain_registry_path=domain_registry,
+        prefix_registry_path=prefix_registry,
     )
     prefixes = sorted(
         {
@@ -762,11 +949,21 @@ def seed_templates(
     skipped = 0
 
     with allow_template_mutations():
+        _apply_seed_session_scope(
+            session,
+            domain_code=resolved_domain,
+            owner_repo_name=resolved_owner,
+        )
         for prefix in prefixes:
             ensure_instance_prefix_sequence(session, prefix)
 
         for template in prepared_templates:
-            outcome, _ = _upsert_template(session, template, overwrite=overwrite)
+            outcome, _ = _upsert_template(
+                session,
+                template,
+                domain_code=resolved_domain,
+                overwrite=overwrite,
+            )
             if outcome == "inserted":
                 inserted += 1
             elif outcome == "updated":

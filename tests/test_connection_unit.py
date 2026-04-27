@@ -5,9 +5,9 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _preset_domain_env(monkeypatch):
-    """All connection tests default to T/TAPD domain/app codes."""
-    monkeypatch.setenv("MERIDIAN_DOMAIN_CODE", "T")
-    monkeypatch.setenv("TAPDB_APP_CODE", "TAPD")
+    """All connection tests default to Z/daylily-tapdb domain/owner values."""
+    monkeypatch.setenv("MERIDIAN_DOMAIN_CODE", "Z")
+    monkeypatch.setenv("TAPDB_OWNER_REPO", "daylily-tapdb")
 
 
 def test_connection_builds_default_url_and_creates_engine(monkeypatch):
@@ -65,8 +65,8 @@ def test_set_session_domain_code_executes_for_postgresql(monkeypatch):
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(
         db_url="sqlite:///:memory:",
-        domain_code="T",
-        issuer_app_code="TAPD",
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
     )
 
     stmts: list[str] = []
@@ -85,14 +85,14 @@ def test_set_session_domain_code_executes_for_postgresql(monkeypatch):
 
     conn._set_session_domain_code(Sess(), local=True)
     assert any("current_domain_code" in s for s in stmts)
-    assert any("current_app_code" in s for s in stmts)
+    assert any("current_owner_repo_name" in s for s in stmts)
 
 
 def test_missing_domain_env_raises(monkeypatch):
     from daylily_tapdb import connection as m
 
     monkeypatch.delenv("MERIDIAN_DOMAIN_CODE", raising=False)
-    monkeypatch.delenv("TAPDB_APP_CODE", raising=False)
+    monkeypatch.delenv("TAPDB_OWNER_REPO", raising=False)
     monkeypatch.setattr(
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )

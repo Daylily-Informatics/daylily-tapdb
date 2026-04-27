@@ -5,7 +5,7 @@ Moonshot Phase 2 policy:
 - Callers control transaction boundaries
 - Audit username is set per-transaction using `SET LOCAL session.current_username`
 - Domain code is set per-session using `session.current_domain_code`
-- Issuer app code is set per-session using `session.current_app_code`
+- Repo ownership is set per-session using `session.current_owner_repo_name`
 
 Recommended usage:
 
@@ -29,7 +29,10 @@ from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session, sessionmaker
 
-from daylily_tapdb.euid import resolve_runtime_domain_code
+from daylily_tapdb.euid import (
+    resolve_runtime_domain_code,
+    resolve_runtime_owner_repo_name,
+)
 
 logger = logging.getLogger(__name__)
 DEFAULT_TAPDB_POSTGRES_PORT = "5533"
@@ -71,7 +74,7 @@ class TAPDBConnection:
         iam_auth: bool = True,
         secret_arn: Optional[str] = None,
         domain_code: Optional[str] = None,
-        issuer_app_code: Optional[str] = None,
+        owner_repo_name: Optional[str] = None,
     ):
         """
         Initialize database connection.
@@ -95,7 +98,7 @@ class TAPDBConnection:
             iam_auth: Use IAM database authentication (Aurora only).
             secret_arn: Secrets Manager ARN for password (Aurora fallback).
             domain_code: Domain code for session scoping (1-4 chars). Required.
-            issuer_app_code: Issuer app code for session scoping (1-4 chars). Required.
+            owner_repo_name: Repo-name for session ownership scoping. Required.
         """
         self.logger = logging.getLogger(__name__ + ".TAPDBConnection")
 
@@ -105,18 +108,18 @@ class TAPDBConnection:
         self.domain_code = (
             domain_code if domain_code is not None else resolve_runtime_domain_code()
         )
-        self.issuer_app_code = (
-            issuer_app_code
-            if issuer_app_code is not None
-            else os.environ.get("TAPDB_APP_CODE")
+        self.owner_repo_name = (
+            owner_repo_name
+            if owner_repo_name is not None
+            else resolve_runtime_owner_repo_name()
         )
         if not self.domain_code:
             raise ValueError(
                 "domain_code is required. Set MERIDIAN_DOMAIN_CODE env var or pass domain_code= param."
             )
-        if not self.issuer_app_code:
+        if not self.owner_repo_name:
             raise ValueError(
-                "issuer_app_code is required. Set TAPDB_APP_CODE env var or pass issuer_app_code= param."
+                "owner_repo_name is required. Set TAPDB_OWNER_REPO env var or pass owner_repo_name= param."
             )
 
         if echo_sql is None:
@@ -242,7 +245,7 @@ class TAPDBConnection:
         )
 
     def _set_session_domain_code(self, session: Session, *, local: bool) -> None:
-        """Set the domain code and issuer app code seen by SQL triggers."""
+        """Set the domain code and owner repo name seen by SQL triggers."""
         if not self._is_postgresql_session(session):
             return
         dc_stmt = (
@@ -250,10 +253,10 @@ class TAPDBConnection:
             if local
             else "SET session.current_domain_code = :code"
         )
-        app_stmt = (
-            "SET LOCAL session.current_app_code = :code"
+        owner_stmt = (
+            "SET LOCAL session.current_owner_repo_name = :code"
             if local
-            else "SET session.current_app_code = :code"
+            else "SET session.current_owner_repo_name = :code"
         )
         self._execute_session_setting(
             session,
@@ -264,10 +267,10 @@ class TAPDBConnection:
         )
         self._execute_session_setting(
             session,
-            app_stmt,
-            {"code": self.issuer_app_code or ""},
+            owner_stmt,
+            {"code": self.owner_repo_name or ""},
             use_savepoint=local,
-            warning="Could not set session app code",
+            warning="Could not set session owner repo name",
         )
 
     def get_session(self) -> Session:

@@ -1,10 +1,10 @@
 {
-  "$comment": "TAPDB v2 Templates: System message objects",
+  "$comment": "TapDB reserved operational template for webhook event messages",
   "templates": [
     {
       "name": "Webhook Event Message",
       "polymorphic_discriminator": "generic_template",
-      "category": "system",
+      "category": "MSG",
       "type": "message",
       "subtype": "webhook_event",
       "version": "1.0",
@@ -12,7 +12,7 @@
       "is_singleton": false,
       "bstatus": "active",
       "json_addl": {
-        "description": "Canonical message object for webhook/outbox events. Payload, event_type, aggregate_euid, and metadata are stored in instance json_addl.",
+        "description": "Reserved TapDB operational message object for webhook/outbox events. Payload, event_type, aggregate_euid, and metadata are stored in instance json_addl.",
         "properties": {
           "name": "Webhook Event Message",
           "event_type": "",

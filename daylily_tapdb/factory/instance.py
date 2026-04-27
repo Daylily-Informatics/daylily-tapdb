@@ -19,7 +19,14 @@ from daylily_tapdb.validation.instantiation_layouts import (
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_USER_COORDS = ("generic", "actor", "system_user")
+_SYSTEM_USER_COORDS = ("SYS", "actor", "system_user")
+
+
+def _normalize_domain_code(domain_code: Any) -> Optional[str]:
+    if domain_code is None:
+        return None
+    text = str(domain_code).strip().upper()
+    return text or None
 
 
 def _norm_text(value: Any, *, lowercase: bool = False) -> Optional[str]:
@@ -50,7 +57,6 @@ def materialize_actions(
     template_manager,
     *,
     domain_code: Optional[str] = None,
-    issuer_app_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Materialize action_imports into action_groups for an instance.
@@ -66,18 +72,16 @@ def materialize_actions(
     Returns:
         Dictionary of action groups.
     """
+    normalized_domain = _normalize_domain_code(domain_code)
+    if normalized_domain is None:
+        raise ValueError("domain_code is required to materialize template actions")
     action_groups: Dict[str, Any] = {}
 
     for action_key, template_code in template.json_addl.get(
         "action_imports", {}
     ).items():
-        scope_kwargs: Dict[str, str] = {}
-        if domain_code is not None:
-            scope_kwargs["domain_code"] = domain_code
-        if issuer_app_code is not None:
-            scope_kwargs["issuer_app_code"] = issuer_app_code
         action_tmpl = template_manager.get_template(
-            session, template_code, **scope_kwargs
+            session, template_code, domain_code=normalized_domain
         )
         if action_tmpl is None:
             continue
@@ -132,28 +136,23 @@ class InstanceFactory:
         template_manager,
         *,
         domain_code: Optional[str] = None,
-        issuer_app_code: Optional[str] = None,
     ):
         """
         Initialize instance factory.
 
         Args:
             template_manager: TemplateManager for template resolution.
-            domain_code: Filter templates by domain code.
-            issuer_app_code: Filter templates by issuer app code.
+            domain_code: Required domain code for template resolution.
         """
         self.template_manager = template_manager
-        self.domain_code = domain_code
-        self.issuer_app_code = issuer_app_code
+        self.domain_code = _normalize_domain_code(domain_code)
 
     @property
     def _scope_kwargs(self) -> Dict[str, str]:
-        """Domain/app scope kwargs for get_template calls."""
+        """Domain scope kwargs for get_template calls."""
         kw: Dict[str, str] = {}
         if self.domain_code is not None:
             kw["domain_code"] = self.domain_code
-        if self.issuer_app_code is not None:
-            kw["issuer_app_code"] = self.issuer_app_code
         return kw
 
     def create_instance(
@@ -178,8 +177,7 @@ class InstanceFactory:
             _depth: Internal recursion depth tracker.
             _visited: Internal visited set for cycle detection.
             tenant_id: Optional tenant UUID; if provided, persists to the real column
-                and also to json_addl["properties"]["tenant_id"] for transition
-                compatibility.
+                and also to json_addl["properties"]["tenant_id"].
 
         Returns:
             The created instance.
@@ -438,13 +436,17 @@ class InstanceFactory:
         if "*" not in normalized:
             return f"{normalized}/"
 
+        if self.domain_code is None:
+            raise ValueError("domain_code is required to resolve template patterns")
+
         parts = [part for part in normalized.split("/") if part]
         if len(parts) != 4:
             raise ValueError(f"Invalid child template pattern: {template_code!r}")
 
         category, type_name, subtype, version = parts
         query = session.query(generic_template).filter(
-            generic_template.is_deleted.is_(False)
+            generic_template.is_deleted.is_(False),
+            generic_template.domain_code == self.domain_code,
         )
         if category != "*":
             query = query.filter(generic_template.category == category)

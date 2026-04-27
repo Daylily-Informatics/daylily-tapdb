@@ -6,9 +6,11 @@ clusters via CloudFormation.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import stat
+import urllib.request
 from typing import Optional
 
 import typer
@@ -17,11 +19,17 @@ from rich.console import Console
 from rich.table import Table
 
 from daylily_tapdb.cli.context import resolve_context
+from daylily_tapdb.cli.db_config import default_database_name_for_namespace
 from daylily_tapdb.cli.output import print_renderable
 
 console = Console()
 
 aurora_app = typer.Typer(help="Aurora PostgreSQL cluster management commands")
+_DEFAULT_PRIVATE_INGRESS_CIDR = "10.0.0.0/8"
+_PUBLIC_IP_RESOLUTION_URLS = (
+    "https://checkip.amazonaws.com",
+    "https://api.ipify.org",
+)
 
 
 def _ensure_boto3():
@@ -43,12 +51,48 @@ def _stack_name_for_env(env: str) -> str:
     return f"tapdb-{env}"
 
 
+def _detect_caller_public_ip() -> str:
+    """Return the caller's current public IPv4 address."""
+    for url in _PUBLIC_IP_RESOLUTION_URLS:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:  # nosec B310
+                candidate = response.read().decode("utf-8").strip()
+            parsed = ipaddress.ip_address(candidate)
+            if parsed.version != 4:
+                raise RuntimeError(
+                    "Aurora public ingress auto-resolution requires an IPv4 address."
+                )
+            return str(parsed)
+        except Exception:
+            continue
+    raise RuntimeError(
+        "Unable to resolve the current public IPv4 address for Aurora ingress. "
+        "Pass --cidr explicitly."
+    )
+
+
+def _resolve_ingress_cidr(
+    cidr: str | None,
+    publicly_accessible: bool,
+    *,
+    public_ip_resolver=None,
+) -> str:
+    """Return the effective ingress CIDR for the Aurora security group."""
+    if cidr:
+        return cidr
+    if publicly_accessible:
+        resolver = public_ip_resolver or _detect_caller_public_ip
+        return f"{resolver()}/32"
+    return _DEFAULT_PRIVATE_INGRESS_CIDR
+
+
 def _update_config_file(
     env: str,
     endpoint: str,
     port: str,
     region: str,
     cluster_identifier: str | None = None,
+    secret_arn: str | None = None,
 ) -> None:
     """Update TAPDB config file with Aurora endpoint info.
 
@@ -82,20 +126,28 @@ def _update_config_file(
             "config_version": 3,
             "client_id": ctx.client_id,
             "database_name": ctx.database_name,
-            "euid_client_code": str((meta or {}).get("euid_client_code") or ""),
+            "owner_repo_name": str((meta or {}).get("owner_repo_name") or ""),
+            "domain_registry_path": str((meta or {}).get("domain_registry_path") or ""),
+            "prefix_ownership_registry_path": str(
+                (meta or {}).get("prefix_ownership_registry_path") or ""
+            ),
         }
 
     env_cfg = existing["environments"].get(env, {}) or {}
+    database_name = str(env_cfg.get("database") or "").strip()
+    if not database_name and ctx:
+        database_name = default_database_name_for_namespace(ctx.database_name, env)
     existing["environments"][env] = {
         **env_cfg,
         "engine_type": "aurora",
         "host": endpoint,
         "port": port,
-        "database": f"tapdb_{env}",
+        "database": database_name or f"tapdb_{env}",
         "user": "tapdb_admin",
         "region": region,
         "cluster_identifier": cluster_identifier or env,
-        "iam_auth": "true",
+        "iam_auth": "false" if secret_arn else str(env_cfg.get("iam_auth") or "true"),
+        "secret_arn": secret_arn or str(env_cfg.get("secret_arn") or ""),
         "ssl": "true",
         "ui_port": str(env_cfg.get("ui_port") or "8911"),
     }
@@ -125,8 +177,13 @@ def aurora_create(
         "16.6", "--engine-version", help="Aurora PostgreSQL engine version"
     ),
     vpc_id: str = typer.Option("", "--vpc-id", help="VPC ID to deploy into"),
-    cidr: str = typer.Option(
-        "10.0.0.0/8", "--cidr", help="Ingress CIDR for security group"
+    cidr: Optional[str] = typer.Option(
+        None,
+        "--cidr",
+        help=(
+            "Ingress CIDR for security group. Defaults to the current public IP "
+            "(/32) when --publicly-accessible is set, otherwise 10.0.0.0/8."
+        ),
     ),
     cost_center: str = typer.Option(
         "global", "--cost-center", help="LSMC cost center tag"
@@ -152,7 +209,13 @@ def aurora_create(
     ),
 ):
     """Create an Aurora PostgreSQL cluster via CloudFormation."""
-    if cidr == "0.0.0.0/0" and publicly_accessible:
+    try:
+        resolved_cidr = _resolve_ingress_cidr(cidr, publicly_accessible)
+    except RuntimeError as exc:
+        ccyo_out.error(str(exc))
+        raise typer.Exit(1)
+
+    if resolved_cidr == "0.0.0.0/0" and publicly_accessible:
         ccyo_out.warning(
             "⚠️  WARNING: Creating publicly accessible cluster open to "
             "all IPs (0.0.0.0/0). Consider restricting --cidr to your IP.",
@@ -173,6 +236,7 @@ def aurora_create(
         instance_class=instance_class,
         engine_version=engine_version,
         vpc_id=vpc_id,
+        cidr=resolved_cidr,
         iam_auth=not no_iam_auth,
         publicly_accessible=publicly_accessible,
         deletion_protection=not no_deletion_protection,
@@ -187,6 +251,7 @@ def aurora_create(
     ccyo_out.print_text(f"  Engine:   PostgreSQL {engine_version}")
     ccyo_out.print_text(f"  IAM Auth: {config.iam_auth}")
     ccyo_out.print_text(f"  VPC:      {vpc_id or '(auto-discover default)'}")
+    ccyo_out.print_text(f"  Ingress:  {resolved_cidr}")
     ccyo_out.print_text("")
 
     try:
@@ -230,7 +295,13 @@ def aurora_create(
     if endpoint:
         ccyo_out.print_text(f"  Endpoint: [cyan]{endpoint}[/cyan]")
         ccyo_out.print_text(f"  Port:     {port}")
-        _update_config_file(env, endpoint, port, region)
+        _update_config_file(
+            env,
+            endpoint,
+            port,
+            region,
+            secret_arn=outputs.get("SecretArn"),
+        )
 
     if outputs.get("SecretArn"):
         ccyo_out.print_text(f"  Secret:   {outputs['SecretArn']}")

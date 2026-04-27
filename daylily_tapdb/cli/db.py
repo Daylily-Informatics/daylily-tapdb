@@ -20,6 +20,11 @@ from rich.table import Table
 
 from daylily_tapdb import TAPDBConnection
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+from daylily_tapdb.euid import (
+    AUDIT_LOG_PREFIX,
+    GENERIC_INSTANCE_LINEAGE_PREFIX,
+    GENERIC_TEMPLATE_PREFIX,
+)
 from daylily_tapdb.schema_inventory import (
     build_expected_schema_inventory,
     diff_schema_inventory,
@@ -56,8 +61,9 @@ from daylily_tapdb.timezone_utils import utc_now
 
 console = Console()
 
-_MERIDIAN_PREFIX_RE = re.compile(r"^[A-HJ-KMNP-TV-Z]{2,3}$")
+_MERIDIAN_PREFIX_RE = re.compile(r"^[0-9A-HJ-KMNP-TV-Z]{1,4}$")
 _RESERVED_PREFIXES = {"GX", "TGX", "WX", "WSX", "XX", "AY"}
+_TAPDB_CORE_OWNER_REPO_NAME = "daylily-tapdb"
 
 
 def _normalize_instance_prefix(prefix: str) -> str:
@@ -71,8 +77,10 @@ def _normalize_instance_prefix(prefix: str) -> str:
     normalized = str(prefix).strip().upper()
     if not normalized:
         raise ValueError("instance_prefix cannot be empty")
-    if not normalized.isalpha():
-        raise ValueError(f"instance_prefix must be letters only (A-Z), got: {prefix!r}")
+    if not _MERIDIAN_PREFIX_RE.fullmatch(normalized):
+        raise ValueError(
+            f"instance_prefix must match ^[0-9A-HJ-KMNP-TV-Z]{{1,4}}$, got: {prefix!r}"
+        )
     return normalized
 
 
@@ -85,7 +93,7 @@ def _normalize_meridian_prefix(prefix: str, field_name: str) -> str:
         raise ValueError(f"{field_name} cannot be empty")
     if not _MERIDIAN_PREFIX_RE.match(normalized):
         raise ValueError(
-            f"{field_name} must match ^[A-HJ-KMNP-TV-Z]{{2,3}}$, got: {prefix!r}"
+            f"{field_name} must match ^[0-9A-HJ-KMNP-TV-Z]{{1,4}}$, got: {prefix!r}"
         )
     if normalized in _RESERVED_PREFIXES:
         raise ValueError(
@@ -100,33 +108,21 @@ def _shared_sequence_name(prefix: str) -> str:
 
 def _required_identity_prefixes(env: "Environment") -> dict[str, str]:
     """Return validated TapDB-managed identity prefixes for the namespace."""
-    cfg = _get_db_config(env)
-    core_prefix = _normalize_meridian_prefix(
-        cfg.get("core_euid_prefix", ""),
-        "core_euid_prefix",
-    )
-    audit_prefix = _normalize_meridian_prefix(
-        cfg.get("audit_log_euid_prefix", ""),
-        "audit_log_euid_prefix",
-    )
-    if audit_prefix != core_prefix:
-        raise ValueError(
-            "audit_log_euid_prefix must match the namespace-scoped TapDB core "
-            f"prefix {core_prefix!r}"
-        )
     return {
-        "generic_template": core_prefix,
-        "generic_instance": core_prefix,
-        "generic_instance_lineage": core_prefix,
-        "audit_log": audit_prefix,
+        "generic_template": GENERIC_TEMPLATE_PREFIX,
+        "generic_instance_lineage": GENERIC_INSTANCE_LINEAGE_PREFIX,
+        "audit_log": AUDIT_LOG_PREFIX,
     }
 
 
 def _sync_identity_prefix_config(env: "Environment") -> None:
     """Persist required identity prefix config and ensure backing sequences."""
+    cfg = _get_db_config(env)
     prefixes = _required_identity_prefixes(env)
+    domain_code = str(cfg["domain_code"])
     values_sql = ",\n        ".join(
-        f"('{entity}', '', '', '{prefix}')" for entity, prefix in prefixes.items()
+        f"('{entity}', '{domain_code}', '{_TAPDB_CORE_OWNER_REPO_NAME}', '{prefix}')"
+        for entity, prefix in prefixes.items()
     )
     sequences_sql = "\n    ".join(
         f'CREATE SEQUENCE IF NOT EXISTS "{_shared_sequence_name(prefix)}";'
@@ -153,9 +149,9 @@ def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
     """
     prefix = _normalize_instance_prefix(prefix)
 
-    # Defense-in-depth: reject non-alpha prefixes before SQL interpolation
-    if not prefix or not prefix.isalpha():
-        raise ValueError(f"Instance prefix must be alphabetic, got: {prefix!r}")
+    # Defense-in-depth: reject anything that is not a validated Meridian prefix.
+    if not _MERIDIAN_PREFIX_RE.fullmatch(prefix):
+        raise ValueError(f"Instance prefix must be Meridian-safe, got: {prefix!r}")
 
     seq_name = _shared_sequence_name(prefix)
 
@@ -390,6 +386,7 @@ def _run_psql(
             database=db,
             region=cfg.get("region", "us-west-2"),
             iam_auth=iam_auth,
+            secret_arn=cfg.get("secret_arn") or None,
             password=cfg.get("password") or None,
             sql=sql,
             file=file,
@@ -1146,9 +1143,9 @@ def db_nuke(
     DROP FUNCTION IF EXISTS tapdb_get_identity_prefix(TEXT);
     DROP FUNCTION IF EXISTS tapdb_validate_meridian_prefix(TEXT);
     DROP FUNCTION IF EXISTS tapdb_validate_domain_code(TEXT);
-    DROP FUNCTION IF EXISTS tapdb_validate_app_code(TEXT);
+    DROP FUNCTION IF EXISTS tapdb_validate_owner_repo_name(TEXT);
     DROP FUNCTION IF EXISTS tapdb_current_domain_code();
-    DROP FUNCTION IF EXISTS tapdb_current_app_code();
+    DROP FUNCTION IF EXISTS tapdb_current_owner_repo_name();
     DROP FUNCTION IF EXISTS tapdb_validate_sandbox_prefix(TEXT);
     DROP FUNCTION IF EXISTS tapdb_current_sandbox_prefix();
     DROP FUNCTION IF EXISTS meridian_generate_euid(TEXT, BIGINT, TEXT);
@@ -1561,15 +1558,19 @@ def _tapdb_connection_for_env(
     }
     region = (cfg.get("region") or "us-west-2").strip()
     db_pass = cfg.get("password") or None
+    secret_arn = cfg.get("secret_arn") or None
     return TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_user=cfg["user"],
         db_pass=db_pass,
+        secret_arn=secret_arn,
         db_name=cfg["database"],
         engine_type=engine_type,
         region=region,
         iam_auth=iam_auth,
         app_username=app_username,
+        domain_code=str(cfg["domain_code"]),
+        owner_repo_name=str(cfg["owner_repo_name"]),
     )
 
 
@@ -1597,17 +1598,21 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
     )
     region = (cfg.get("region") or "us-west-2").strip()
     db_pass = cfg.get("password") or None
+    secret_arn = cfg.get("secret_arn") or None
 
     try:
         with TAPDBConnection(
             db_hostname=f"{cfg['host']}:{cfg['port']}",
             db_user=cfg["user"],
             db_pass=db_pass,
+            secret_arn=secret_arn,
             db_name=cfg["database"],
             engine_type=engine_type,
             region=region,
             iam_auth=iam_auth,
             app_username="tapdb_admin",
+            domain_code=str(cfg["domain_code"]),
+            owner_repo_name=str(cfg["owner_repo_name"]),
         ) as conn:
             with conn.session_scope(commit=True) as session:
                 user, created = create_or_get(
@@ -1767,7 +1772,14 @@ def db_seed(
                     templates,
                     overwrite=overwrite,
                     core_config_dir=_loader_find_tapdb_core_config_dir(),
-                    core_instance_prefix=str(_get_db_config(env)["core_euid_prefix"]),
+                    domain_code=str(_get_db_config(env)["domain_code"]),
+                    owner_repo_name=str(_get_db_config(env)["owner_repo_name"]),
+                    domain_registry_path=str(
+                        _get_db_config(env)["domain_registry_path"]
+                    ),
+                    prefix_registry_path=str(
+                        _get_db_config(env)["prefix_ownership_registry_path"]
+                    ),
                 )
     except Exception as exc:
         ccyo_out.error(f"Template seed failed: {exc}")

@@ -58,16 +58,19 @@ The root command is `tapdb`. The current help surface shows these top-level grou
 - `db-config`
 - `db`
 - `pg`
-- `user`
+- `users`
 - `cognito`
 - `aurora`
 
 That split is deliberate:
 
+- `config` manages generic config-file operations.
+- `db-config` initializes or updates the namespace-aware TAPDB config.
 - `pg` manages local or system PostgreSQL processes.
 - `db` manages database lifecycle, schema, migrations, backup, and data seeding.
 - `ui` manages the admin server process.
 - `bootstrap` is the one-command orchestration path.
+- `users` manages actor-backed TAPDB auth users.
 - `cognito` is the TAPDB-side bridge to `daylily-auth-cognito`.
 - `aurora` is optional cloud infrastructure support.
 
@@ -88,8 +91,11 @@ The CLI surfaces for that flow are already present and exercised in tests:
 tapdb --config <path> db-config init \
   --client-id <client-id> \
   --database-name <database-name> \
-  --euid-client-code <client-code> \
+  --owner-repo-name <repo-name> \
   --env dev \
+  --domain-code dev=<domain-code> \
+  --domain-registry-path /abs/path/to/domain_code_registry.json \
+  --prefix-ownership-registry-path /abs/path/to/prefix_ownership_registry.json \
   --db-port dev=5533 \
   --ui-port dev=8911
 
@@ -102,6 +108,10 @@ tapdb --config <path> --env dev bootstrap local --no-gui
 ```
 
 `tapdb bootstrap local` is the preferred orchestration entrypoint for local developer setup. It includes optional flags for `--no-gui`, `--include-workflow`, and `--insecure-dev-defaults` for dev-only bootstrap flows. The command is documented by the CLI help and covered by the CLI test suite in [`tests/test_cli.py`](../tests/test_cli.py) and [`tests/test_cli_coverage.py`](../tests/test_cli_coverage.py).
+
+For local single-repo runs, TAPDB also ships packaged example registry fixtures
+under [`daylily_tapdb/etc`](../daylily_tapdb/etc). They are useful for docs
+examples, tests, and isolated TapDB-only bootstrap flows.
 
 ### Schema and Seed Flow
 

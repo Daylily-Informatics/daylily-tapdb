@@ -556,6 +556,10 @@ def test_main_query_helpers_and_footer_metadata(route_client, monkeypatch):
     )
     with pytest.raises(RuntimeError, match="COGNITO_DOMAIN"):
         admin_main._normalize_cognito_domain("")
+    with pytest.raises(RuntimeError, match="Invalid COGNITO_DOMAIN"):
+        admin_main._normalize_cognito_domain(
+            "https://example.auth.us-west-2.amazoncognito.com"
+        )
     with pytest.raises(RuntimeError, match="https URL"):
         admin_main._require_https_url("http://not-secure", label="endpoint")
 

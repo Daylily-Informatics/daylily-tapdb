@@ -600,6 +600,7 @@ def test_runtime_engine_helpers_cover_auth_modes_and_cache(monkeypatch):
         user="tapdb",
         aws_profile="default",
         iam_auth=True,
+        secret_arn=None,
         password="",
     )
     cparams = {}
@@ -620,6 +621,7 @@ def test_runtime_engine_helpers_cover_auth_modes_and_cache(monkeypatch):
         user="tapdb",
         aws_profile=None,
         iam_auth=False,
+        secret_arn=None,
         password="secret",
     )
     cparams = {}
@@ -640,9 +642,10 @@ def test_runtime_engine_helpers_cover_auth_modes_and_cache(monkeypatch):
         user="tapdb",
         aws_profile=None,
         iam_auth=False,
+        secret_arn=None,
         password="",
     )
-    with pytest.raises(ValueError, match="requires a password"):
+    with pytest.raises(ValueError, match="requires a password or secret_arn"):
         listeners["do_connect"](None, None, None, {})
 
     created = []

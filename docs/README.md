@@ -27,6 +27,13 @@ The refactor review and the deeper doc set live in this directory as separate su
 
 Those files are the right place for detailed references, policy notes, and implementation guidance that would clutter the root README.
 
+Historical or planning material also lives here. Treat these as background, not
+as the current operator quickstart:
+
+- [tapdb_0600_refactor_overview_what_was_done.md](tapdb_0600_refactor_overview_what_was_done.md)
+- [tapdb_meridian_041_refactor.md](tapdb_meridian_041_refactor.md)
+- [specs_and_plans/](specs_and_plans/)
+
 ## Reading Order
 
 1. Read the root README for the framing and the top-level quickstart.
