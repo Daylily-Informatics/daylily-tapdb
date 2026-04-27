@@ -32,5 +32,5 @@ def test_activate_uses_published_cli_core_yo_metadata_check() -> None:
     assert "--smoke" in text
     assert 'python -m pip install -e ".[cli,admin,aurora,dev]"' in text
     assert '_tapdb_cli_core_yo_version="2.1.0"' in text
-    assert 'cli-core-yo==${_tapdb_cli_core_yo_version}' in text
+    assert "cli-core-yo==${_tapdb_cli_core_yo_version}" in text
     assert "cli-core-yo is not installed as published" in text

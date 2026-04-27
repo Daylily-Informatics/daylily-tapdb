@@ -685,8 +685,7 @@ def test_pg_init_start_local_and_stop_local_branches(
 
     (data_dir / "PG_VERSION").write_text("16\n", encoding="utf-8")
     (data_dir / "postgresql.conf").write_text(
-        "#shared_memory_type = mmap\n"
-        "dynamic_shared_memory_type = posix\n",
+        "#shared_memory_type = mmap\ndynamic_shared_memory_type = posix\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(pg_mod.shutil, "which", lambda _name: None)

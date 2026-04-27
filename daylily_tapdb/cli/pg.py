@@ -93,10 +93,7 @@ def _set_postgresql_conf_value(text: str, key: str, value: str) -> str:
     if stripped:
         stripped += "\n"
     return (
-        stripped
-        + "# TAPDB local Linux shared memory settings\n"
-        + replacement
-        + "\n"
+        stripped + "# TAPDB local Linux shared memory settings\n" + replacement + "\n"
     )
 
 
@@ -108,9 +105,7 @@ def _ensure_linux_local_postgres_conf(data_dir: Path) -> None:
         raise RuntimeError(f"postgresql.conf not found: {conf_path}")
     text = conf_path.read_text(encoding="utf-8")
     updated = _set_postgresql_conf_value(text, "shared_memory_type", "mmap")
-    updated = _set_postgresql_conf_value(
-        updated, "dynamic_shared_memory_type", "mmap"
-    )
+    updated = _set_postgresql_conf_value(updated, "dynamic_shared_memory_type", "mmap")
     if updated != text:
         conf_path.write_text(updated, encoding="utf-8")
 

@@ -589,7 +589,12 @@ def _normalize_cognito_domain(raw_domain: str) -> str:
     if not domain:
         raise RuntimeError("COGNITO_DOMAIN is not configured")
     parts = urlsplit(domain)
-    if parts.scheme or parts.netloc or "/" in domain or any(char.isspace() for char in domain):
+    if (
+        parts.scheme
+        or parts.netloc
+        or "/" in domain
+        or any(char.isspace() for char in domain)
+    ):
         raise RuntimeError(f"Invalid COGNITO_DOMAIN value: {raw_domain!r}")
     return domain
 

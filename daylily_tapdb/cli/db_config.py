@@ -230,7 +230,9 @@ def get_db_config_for_env(
     if not isinstance(meta, dict):
         raise RuntimeError(f"Config metadata is required in {resolved_config_path}.")
     try:
-        owner_repo_name = normalize_owner_repo_name(str(meta.get("owner_repo_name") or ""))
+        owner_repo_name = normalize_owner_repo_name(
+            str(meta.get("owner_repo_name") or "")
+        )
     except ValueError as exc:
         raise RuntimeError(
             f"Config {resolved_config_path} is missing valid meta.owner_repo_name: {exc}"

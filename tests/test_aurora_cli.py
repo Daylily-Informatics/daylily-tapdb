@@ -192,7 +192,9 @@ class TestAuroraCreate:
         result = runner.invoke(app, _namespaced(["aurora", "create", "dev"]))
         assert result.exit_code == 1
 
-    def test_create_publicly_accessible_fails_when_ip_resolution_fails(self, app, monkeypatch):
+    def test_create_publicly_accessible_fails_when_ip_resolution_fails(
+        self, app, monkeypatch
+    ):
         monkeypatch.setattr(
             "daylily_tapdb.cli.aurora._detect_caller_public_ip",
             lambda: (_ for _ in ()).throw(RuntimeError("resolve failed")),

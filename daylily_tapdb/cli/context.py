@@ -250,8 +250,15 @@ def resolve_context(
             field_name="database-name",
         )
 
-    if resolved_config_path is None and not require_keys and resolved_client and resolved_db:
-        resolved_env = (env_name or active_overrides["env_name"] or "").strip().lower() or None
+    if (
+        resolved_config_path is None
+        and not require_keys
+        and resolved_client
+        and resolved_db
+    ):
+        resolved_env = (
+            env_name or active_overrides["env_name"] or ""
+        ).strip().lower() or None
         return TapdbContext(
             client_id=resolved_client,
             database_name=resolved_db,

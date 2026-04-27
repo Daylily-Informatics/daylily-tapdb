@@ -79,8 +79,7 @@ def _normalize_instance_prefix(prefix: str) -> str:
         raise ValueError("instance_prefix cannot be empty")
     if not _MERIDIAN_PREFIX_RE.fullmatch(normalized):
         raise ValueError(
-            "instance_prefix must match ^[0-9A-HJ-KMNP-TV-Z]{1,4}$, "
-            f"got: {prefix!r}"
+            f"instance_prefix must match ^[0-9A-HJ-KMNP-TV-Z]{{1,4}}$, got: {prefix!r}"
         )
     return normalized
 

@@ -386,9 +386,7 @@ class TestUpdateStack:
 
 class TestDeleteStack:
     @patch("daylily_tapdb.aurora.stack_manager.time.sleep")
-    def test_delete_with_retain_networking(
-        self, mock_sleep, manager, mock_cfn
-    ):
+    def test_delete_with_retain_networking(self, mock_sleep, manager, mock_cfn):
         mock_cfn.describe_stacks.side_effect = Exception("does not exist")
 
         result = manager.delete_stack("tapdb-test", retain_networking=True)
@@ -451,6 +449,7 @@ class TestDetectExistingResources:
 
         result = manager.detect_existing_resources()
         assert result == {}
+
 
 # ---------------------------------------------------------------------------
 # CFN events summary

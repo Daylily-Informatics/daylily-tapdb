@@ -177,7 +177,9 @@ def test_validate_seed_ownership_accepts_packaged_combined_registry():
     )
 
     fixture_dir = _fixture_dir()
-    templates = load_template_configs(Path(__file__).resolve().parents[1] / "daylily_tapdb" / "core_config")
+    templates = load_template_configs(
+        Path(__file__).resolve().parents[1] / "daylily_tapdb" / "core_config"
+    )
 
     _validate_seed_ownership(
         templates,

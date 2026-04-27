@@ -112,9 +112,7 @@ def _load_prefix_ownership_registry(path: Path) -> dict[str, Any]:
     payload = _load_json_file(path)
     ownership = payload.get("ownership")
     if not isinstance(ownership, dict):
-        raise ValueError(
-            f"Prefix registry must define an object 'ownership': {path}"
-        )
+        raise ValueError(f"Prefix registry must define an object 'ownership': {path}")
     return payload
 
 
@@ -123,9 +121,7 @@ def _assert_registered_domain(
 ) -> None:
     domains = domain_registry.get("domains", {})
     if domain_code not in domains:
-        raise ValueError(
-            f"Domain {domain_code!r} is not registered in {source}"
-        )
+        raise ValueError(f"Domain {domain_code!r} is not registered in {source}")
 
 
 def _assert_prefix_claimed(
@@ -655,7 +651,9 @@ def validate_template_configs(
                 )
                 normalized_instance_prefix = ""
             if normalized_instance_prefix:
-                normalized_category = str(template.get("category") or "").strip().upper()
+                normalized_category = (
+                    str(template.get("category") or "").strip().upper()
+                )
                 if normalized_category != normalized_instance_prefix:
                     issues.append(
                         ConfigIssue(
@@ -671,7 +669,10 @@ def validate_template_configs(
                     )
 
                 is_core_template = _is_source_under_dir(source_file, core_config_dir)
-                if is_core_template and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES:
+                if (
+                    is_core_template
+                    and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES
+                ):
                     issues.append(
                         ConfigIssue(
                             level="error",
@@ -683,7 +684,10 @@ def validate_template_configs(
                             ),
                         )
                     )
-                if not is_core_template and normalized_instance_prefix in _CORE_TEMPLATE_PREFIXES:
+                if (
+                    not is_core_template
+                    and normalized_instance_prefix in _CORE_TEMPLATE_PREFIXES
+                ):
                     issues.append(
                         ConfigIssue(
                             level="error",
@@ -849,13 +853,19 @@ def _prepare_seed_templates(
                 f"{normalized_instance_prefix!r})."
             )
 
-        if is_core_template and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES:
+        if (
+            is_core_template
+            and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES
+        ):
             raise ValueError(
                 f"TapDB bundled core template {_template_code(item)!r} must use "
                 f"reserved prefixes {sorted(_CORE_TEMPLATE_PREFIXES)!r}."
             )
 
-        if not is_core_template and normalized_instance_prefix in _CORE_TEMPLATE_PREFIXES:
+        if (
+            not is_core_template
+            and normalized_instance_prefix in _CORE_TEMPLATE_PREFIXES
+        ):
             raise ValueError(
                 f"Client template {_template_code(item)!r} cannot persist reserved "
                 f"TapDB operational prefix {normalized_instance_prefix!r}."

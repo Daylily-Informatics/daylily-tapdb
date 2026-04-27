@@ -1037,9 +1037,7 @@ class TestCLIBootstrap:
         assert payload["environments"]["dev"]["iam_auth"] == "false"
         assert payload["environments"]["dev"]["secret_arn"].endswith(":secret:auruse1")
         assert payload["environments"]["dev"]["ui_port"] == "8910"
-        assert (
-            payload["environments"]["dev"]["cluster_identifier"] == "auruse1"
-        )
+        assert payload["environments"]["dev"]["cluster_identifier"] == "auruse1"
 
     def test_bootstrap_aurora_preserves_database_and_ui_port(
         self, tmp_path, monkeypatch
@@ -1624,8 +1622,7 @@ class TestCLIPG:
         data_dir.mkdir()
         (data_dir / "PG_VERSION").write_text("16\n", encoding="utf-8")
         (data_dir / "postgresql.conf").write_text(
-            "#shared_memory_type = mmap\n"
-            "dynamic_shared_memory_type = posix\n",
+            "#shared_memory_type = mmap\ndynamic_shared_memory_type = posix\n",
             encoding="utf-8",
         )
         log_file = tmp_path / "postgresql.log"
@@ -1682,8 +1679,7 @@ class TestCLIPG:
         (data_dir / "PG_VERSION").write_text("16\n", encoding="utf-8")
         conf_path = data_dir / "postgresql.conf"
         conf_path.write_text(
-            "#shared_memory_type = mmap\n"
-            "dynamic_shared_memory_type = posix\n",
+            "#shared_memory_type = mmap\ndynamic_shared_memory_type = posix\n",
             encoding="utf-8",
         )
         log_file = tmp_path / "postgresql.log"

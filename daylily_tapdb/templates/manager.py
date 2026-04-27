@@ -139,7 +139,9 @@ class TemplateManager:
         )
         if tmpl is not None:
             self._template_euid_cache[cache_key] = tmpl.uid
-            self._template_uid_cache[f"{normalized_domain}:{tmpl.category}/{tmpl.type}/{tmpl.subtype}/{tmpl.version}/"] = tmpl.uid
+            self._template_uid_cache[
+                f"{normalized_domain}:{tmpl.category}/{tmpl.type}/{tmpl.subtype}/{tmpl.version}/"
+            ] = tmpl.uid
         return tmpl
 
     def clear_cache(self):

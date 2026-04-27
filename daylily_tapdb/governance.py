@@ -106,7 +106,9 @@ def _load_prefix_ownership_registry_local(path: Path) -> dict[tuple[str, str], s
                     f"Prefix {normalized_prefix!r} for domain {normalized_domain_code!r} "
                     f"is missing an owner claim: {path}"
                 )
-            registry[(normalized_domain_code, normalized_prefix)] = _validate_owner_repo_name(owner)
+            registry[(normalized_domain_code, normalized_prefix)] = (
+                _validate_owner_repo_name(owner)
+            )
     return registry
 
 
@@ -116,7 +118,9 @@ def _validate_registries_consistent_local(
     prefix_ownership_registry_path: Path,
 ) -> None:
     registered_domains = _load_domain_registry_local(domain_registry_path)
-    prefix_ownership = _load_prefix_ownership_registry_local(prefix_ownership_registry_path)
+    prefix_ownership = _load_prefix_ownership_registry_local(
+        prefix_ownership_registry_path
+    )
     for domain_code, prefix in prefix_ownership:
         if domain_code not in registered_domains:
             raise ValueError(
@@ -154,7 +158,9 @@ def validate_registries_consistent(
     prefix_ownership_registry_path: str | Path,
 ) -> None:
     resolved_domain_registry_path = _resolved_path(domain_registry_path)
-    resolved_prefix_ownership_registry_path = _resolved_path(prefix_ownership_registry_path)
+    resolved_prefix_ownership_registry_path = _resolved_path(
+        prefix_ownership_registry_path
+    )
     if meridian_validate_registries_consistent is not None:
         meridian_validate_registries_consistent(
             domain_registry_path=resolved_domain_registry_path,
@@ -185,7 +191,9 @@ def assert_registered_domain(
             raise ValueError(f"Domain {normalized_domain_code!r} is not registered")
         return normalized_domain_code
     if meridian_assert_registered_domain is not None:
-        return meridian_assert_registered_domain(normalized_domain_code, registry=registry)
+        return meridian_assert_registered_domain(
+            normalized_domain_code, registry=registry
+        )
     if normalized_domain_code not in registry:
         raise ValueError(f"Domain {normalized_domain_code!r} is not registered")
     return normalized_domain_code
@@ -200,7 +208,9 @@ def resolve_prefix_owner_repo_name(
 ) -> str:
     normalized_domain_code = _validate_domain_code(domain_code)
     normalized_prefix = str(prefix or "").strip().upper()
-    ownership = registry if registry is not None else load_prefix_ownership_registry(path)
+    ownership = (
+        registry if registry is not None else load_prefix_ownership_registry(path)
+    )
     try:
         return ownership[(normalized_domain_code, normalized_prefix)]
     except KeyError as exc:

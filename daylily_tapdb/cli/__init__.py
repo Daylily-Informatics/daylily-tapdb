@@ -1293,8 +1293,7 @@ def build_app():
         if isinstance(meta, dict):
             if (
                 not resolved_domain_registry_path
-                or resolved_domain_registry_path
-                == str(DEFAULT_DOMAIN_REGISTRY_PATH)
+                or resolved_domain_registry_path == str(DEFAULT_DOMAIN_REGISTRY_PATH)
             ) and str(meta.get("domain_registry_path") or "").strip():
                 resolved_domain_registry_path = str(meta["domain_registry_path"])
             if (
@@ -2115,6 +2114,7 @@ def main():
 
     clear_cli_context()
     sys.exit(run(spec, sys.argv[1:]))
+
 
 try:
     framework_app = create_app(spec)
