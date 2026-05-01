@@ -18,6 +18,7 @@ from daylily_tapdb.services.graph_payloads import (
     build_object_detail_payload,
 )
 from daylily_tapdb.services.object_lookup import find_object_by_euid
+from daylily_tapdb.services.object_search import search_objects
 
 from . import runtime as dag_runtime
 
@@ -57,6 +58,11 @@ def build_dag_capability_advertisement(
                 "kind": "dag_native_graph",
             },
             {
+                "path": f"{normalized_base}/search",
+                "auth": auth,
+                "kind": "dag_object_search",
+            },
+            {
                 "path": f"{normalized_base}/external",
                 "auth": auth,
                 "kind": "dag_external_graph",
@@ -71,7 +77,12 @@ def build_dag_capability_advertisement(
         "capabilities": [
             "exact_lookup",
             "native_graph",
+            "object_search",
             "external_graph_expansion",
+        ],
+        "external_ref_models": [
+            "external_payload.tapdb_graph",
+            "typed_external_identifier",
         ],
         "contract_version": CONTRACT_VERSION,
     }
@@ -131,6 +142,39 @@ def create_tapdb_dag_router(
                     "depth": depth,
                     "owner_service": resolved_service_name,
                     "root_record_type": record_type,
+                    "contract_version": CONTRACT_VERSION,
+                }
+                return payload
+
+    @router.get("/api/dag/search")
+    async def dag_search(
+        q: str = "",
+        euid: str = "",
+        record_type: str = "all",
+        category: str = "",
+        type: str = "",
+        subtype: str = "",
+        tenant_id: str = "",
+        relationship_type: str = "",
+        limit: int = Query(25, ge=1, le=100),
+    ) -> dict[str, Any]:
+        with dag_runtime.get_db(resolved_config_path, resolved_env_name) as conn:
+            with conn.session_scope() as session:
+                payload = search_objects(
+                    session,
+                    service_name=resolved_service_name,
+                    q=q,
+                    euid=euid,
+                    record_type=record_type,
+                    category=category,
+                    type_name=type,
+                    subtype=subtype,
+                    tenant_id=tenant_id,
+                    relationship_type=relationship_type,
+                    limit=limit,
+                )
+                payload["meta"] = {
+                    "owner_service": resolved_service_name,
                     "contract_version": CONTRACT_VERSION,
                 }
                 return payload

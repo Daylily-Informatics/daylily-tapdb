@@ -125,6 +125,39 @@ def test_external_ref_payloads_exposes_public_dicts():
     ]
 
 
+def test_typed_external_identifier_object_exposes_public_ref():
+    obj = SimpleNamespace(
+        category="external_identifier",
+        type="tapdb",
+        subtype="object",
+        json_addl={
+            "properties": {
+                "external_identifier": {
+                    "system": "bloom",
+                    "target_euid": "BL-1",
+                    "tenant_id": "tenant-2",
+                }
+            }
+        },
+    )
+
+    assert eg.external_ref_payloads(obj) == [
+        {
+            "label": "bloom:BL-1",
+            "system": "bloom",
+            "root_euid": "BL-1",
+            "tenant_id": "tenant-2",
+            "href": None,
+            "graph_expandable": False,
+            "ref_index": 0,
+            "reason": (
+                "Missing required graph metadata: base_url, graph_data_path, "
+                "object_detail_path_template"
+            ),
+        }
+    ]
+
+
 def test_resolve_external_graph_refs_marks_missing_metadata():
     obj = SimpleNamespace(
         json_addl={

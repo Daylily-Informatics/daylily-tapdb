@@ -47,6 +47,9 @@ class _FakeQuery:
     def first(self):
         return self._rows[0] if self._rows else None
 
+    def all(self):
+        return list(self._rows)
+
 
 class _FakeSession:
     def __init__(self, rows_by_model):
@@ -170,10 +173,17 @@ def test_build_dag_capability_advertisement_has_canonical_paths() -> None:
     assert payload["capabilities"] == [
         "exact_lookup",
         "native_graph",
+        "object_search",
         "external_graph_expansion",
     ]
     assert payload["endpoints"][0]["path"] == "/api/dag/object/{euid}"
     assert payload["endpoints"][1]["path"] == "/api/dag/data"
+    assert payload["endpoints"][2]["path"] == "/api/dag/search"
+    assert payload["endpoints"][2]["kind"] == "dag_object_search"
+    assert payload["external_ref_models"] == [
+        "external_payload.tapdb_graph",
+        "typed_external_identifier",
+    ]
 
 
 def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(
@@ -249,6 +259,20 @@ def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(
     assert node_ids == {"GX1", "GX2"}
     assert graph_body["elements"]["edges"][0]["data"]["source"] == "GX2"
     assert graph_body["elements"]["edges"][0]["data"]["target"] == "GX1"
+    assert (
+        graph_body["elements"]["nodes"][0]["data"]["external_refs"][0]["root_euid"]
+        == "AT-1"
+    )
+
+    search_response = client.get(
+        "/api/dag/search",
+        params={"q": "root", "record_type": "instance", "category": "container"},
+    )
+    assert search_response.status_code == 200
+    search_body = search_response.json()
+    assert search_body["meta"]["owner_service"] == "dewey"
+    assert search_body["items"][0]["euid"] == "GX1"
+    assert search_body["items"][0]["record_type"] == "instance"
 
     external_graph_response = client.get(
         "/api/dag/external",

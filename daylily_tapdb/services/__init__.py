@@ -15,6 +15,7 @@ from daylily_tapdb.services.graph_payloads import (
     build_object_detail_payload,
 )
 from daylily_tapdb.services.object_lookup import find_object_by_euid
+from daylily_tapdb.services.object_search import search_objects
 
 __all__ = [
     "ALLOWED_AUTH_MODES",
@@ -28,4 +29,5 @@ __all__ = [
     "get_external_ref_by_index",
     "namespace_external_graph",
     "resolve_external_graph_refs",
+    "search_objects",
 ]
