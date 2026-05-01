@@ -78,6 +78,7 @@ def _node_payload(
             "subtype": getattr(obj, "subtype", None),
             "href": f"/object/{getattr(obj, 'euid', '')}",
             "color": _CATEGORY_COLORS.get(category, _CATEGORY_COLORS["generic"]),
+            "external_refs": external_ref_payloads(obj),
         }
     }
 
