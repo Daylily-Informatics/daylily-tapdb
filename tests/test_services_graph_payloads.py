@@ -35,8 +35,20 @@ def _build_instance_graph():
         subtype="sample",
         version="1.0",
         bstatus="active",
-        json_addl={"properties": {"external_payload": {"tapdb_graph": []}}},
+        json_addl={
+            "properties": {
+                "external_payload": {"tapdb_graph": []},
+                "graph": {
+                    "role": "root",
+                    "expected_fanout_max": 12,
+                    "collapse_by_default": True,
+                    "fanout_reason": "one source object can have many outputs",
+                    "unsafe_layout": "left",
+                },
+            }
+        },
         created_dt=datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        modified_dt=datetime(2024, 1, 3, 4, 5, 6, tzinfo=timezone.utc),
         is_deleted=False,
     )
     child = SimpleNamespace(
@@ -50,6 +62,7 @@ def _build_instance_graph():
         bstatus="active",
         json_addl={},
         created_dt=None,
+        modified_dt=None,
         is_deleted=False,
     )
     lineage = SimpleNamespace(
@@ -87,11 +100,15 @@ def test_build_object_detail_payload_includes_external_refs_and_iso_dates() -> N
                         "graph_data_path": "/api/graph/data",
                         "object_detail_path_template": "/api/object/{euid}",
                         "auth_mode": "none",
+                        "label": "Atlas patient record",
+                        "relationship_type": "represents",
+                        "source_field": "properties.patient_id",
                     }
                 }
             }
         },
         created_dt=datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        modified_dt=datetime(2024, 1, 3, 4, 5, 6, tzinfo=timezone.utc),
     )
 
     payload = build_object_detail_payload(
@@ -104,15 +121,18 @@ def test_build_object_detail_payload_includes_external_refs_and_iso_dates() -> N
     assert payload["system"] == "dewey"
     assert payload["display_label"] == "Root Tube"
     assert payload["created_dt"] == "2024-01-02T03:04:05+00:00"
+    assert payload["modified_dt"] == "2024-01-03T04:05:06+00:00"
     assert payload["external_refs"] == [
         {
-            "label": "atlas:AT-1",
+            "label": "Atlas patient record",
             "system": "atlas",
             "root_euid": "AT-1",
             "tenant_id": None,
             "href": "https://atlas.local/api/object/AT-1",
             "graph_expandable": True,
             "ref_index": 0,
+            "relationship_type": "represents",
+            "source_field": "properties.patient_id",
         }
     ]
 
@@ -131,7 +151,26 @@ def test_build_graph_payload_returns_instance_graph_and_singletons() -> None:
     assert node_ids == {"GX1", "GX2"}
     assert payload["elements"]["edges"][0]["data"]["source"] == "GX2"
     assert payload["elements"]["edges"][0]["data"]["target"] == "GX1"
-    assert payload["elements"]["nodes"][0]["data"]["color"] == "#8B00FF"
+    root_node = next(
+        node["data"]
+        for node in payload["elements"]["nodes"]
+        if node["data"]["id"] == "GX1"
+    )
+    child_node = next(
+        node["data"]
+        for node in payload["elements"]["nodes"]
+        if node["data"]["id"] == "GX2"
+    )
+    assert root_node["color"] == "#8B00FF"
+    assert root_node["created_dt"] == "2024-01-02T03:04:05+00:00"
+    assert root_node["modified_dt"] == "2024-01-03T04:05:06+00:00"
+    assert child_node["created_dt"] is None
+    assert child_node["modified_dt"] is None
+    assert root_node["role"] == "root"
+    assert root_node["expected_fanout_max"] == 12
+    assert root_node["collapse_by_default"] is True
+    assert root_node["fanout_reason"] == "one source object can have many outputs"
+    assert "unsafe_layout" not in root_node
 
     lineage_only = build_graph_payload(
         child.child_of_lineages._items[0],

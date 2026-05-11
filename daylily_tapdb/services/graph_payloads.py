@@ -23,6 +23,31 @@ _CATEGORY_COLORS = {
     "generic": "#888888",
 }
 
+_GRAPH_PRESENTATION_FIELDS = (
+    "role",
+    "expected_fanout_max",
+    "collapse_by_default",
+    "fanout_reason",
+)
+
+
+def _isoformat_attr(obj: Any, attr: str) -> str | None:
+    value = getattr(obj, attr, None)
+    return value.isoformat() if value is not None else None
+
+
+def _graph_presentation_payload(obj: Any) -> dict[str, Any]:
+    json_addl = getattr(obj, "json_addl", None)
+    if not isinstance(json_addl, dict):
+        return {}
+    properties = json_addl.get("properties")
+    if not isinstance(properties, dict):
+        return {}
+    graph = properties.get("graph")
+    if not isinstance(graph, dict):
+        return {}
+    return {key: graph[key] for key in _GRAPH_PRESENTATION_FIELDS if key in graph}
+
 
 def build_object_detail_payload(
     obj: Any,
@@ -47,11 +72,8 @@ def build_object_detail_payload(
         "bstatus": getattr(obj, "bstatus", None),
         "json_addl": json_addl,
         "href": f"/object/{getattr(obj, 'euid', '')}",
-        "created_dt": (
-            getattr(obj, "created_dt", None).isoformat()
-            if getattr(obj, "created_dt", None) is not None
-            else None
-        ),
+        "created_dt": _isoformat_attr(obj, "created_dt"),
+        "modified_dt": _isoformat_attr(obj, "modified_dt"),
         "external_refs": external_ref_payloads(obj),
     }
 
@@ -65,22 +87,24 @@ def _node_payload(
     category = (
         str(getattr(obj, "category", "") or "generic").strip().lower() or "generic"
     )
-    return {
-        "data": {
-            "id": getattr(obj, "euid", None),
-            "euid": getattr(obj, "euid", None),
-            "display_label": getattr(obj, "name", None) or getattr(obj, "euid", None),
-            "name": getattr(obj, "name", None) or getattr(obj, "euid", None),
-            "system": service_name,
-            "record_type": record_type,
-            "category": getattr(obj, "category", None),
-            "type": getattr(obj, "type", None),
-            "subtype": getattr(obj, "subtype", None),
-            "href": f"/object/{getattr(obj, 'euid', '')}",
-            "color": _CATEGORY_COLORS.get(category, _CATEGORY_COLORS["generic"]),
-            "external_refs": external_ref_payloads(obj),
-        }
+    data = {
+        "id": getattr(obj, "euid", None),
+        "euid": getattr(obj, "euid", None),
+        "display_label": getattr(obj, "name", None) or getattr(obj, "euid", None),
+        "name": getattr(obj, "name", None) or getattr(obj, "euid", None),
+        "system": service_name,
+        "record_type": record_type,
+        "category": getattr(obj, "category", None),
+        "type": getattr(obj, "type", None),
+        "subtype": getattr(obj, "subtype", None),
+        "href": f"/object/{getattr(obj, 'euid', '')}",
+        "color": _CATEGORY_COLORS.get(category, _CATEGORY_COLORS["generic"]),
+        "created_dt": _isoformat_attr(obj, "created_dt"),
+        "modified_dt": _isoformat_attr(obj, "modified_dt"),
+        "external_refs": external_ref_payloads(obj),
     }
+    data.update(_graph_presentation_payload(obj))
+    return {"data": data}
 
 
 def _lineage_edge_payload(lineage: Any, *, service_name: str) -> dict[str, Any] | None:
