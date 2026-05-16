@@ -1137,6 +1137,7 @@ def build_app():
         env: list[str],
         db_port: list[str],
         ui_port: list[str],
+        schema_name: list[str],
         force: bool,
     ) -> tuple[Path, dict]:
         current = active_context_overrides()
@@ -1166,6 +1167,7 @@ def build_app():
 
         db_ports = _parse_env_port_pairs(db_port, flag="--db-port")
         ui_ports = _parse_env_port_pairs(ui_port, flag="--ui-port")
+        schema_names = _parse_env_text_pairs(schema_name, flag="--schema-name")
         domain_codes = _parse_env_text_pairs(domain_code, flag="--domain-code")
 
         root = existing if isinstance(existing, dict) else {}
@@ -1235,7 +1237,8 @@ def build_app():
                 ),
                 "schema_name": validate_postgres_identifier_component(
                     str(
-                        prior.get("schema_name")
+                        schema_names.get(env_name)
+                        or prior.get("schema_name")
                         or default_schema_name_for_database(database_name, env_name)
                     ),
                     field_name=f"environments.{env_name}.schema_name",
@@ -1326,6 +1329,7 @@ def build_app():
             env=[env_name],
             db_port=[f"{env_name}=5432"],
             ui_port=ui_port,
+            schema_name=[],
             force=False,
         )
         return initialized_path
@@ -1371,6 +1375,11 @@ def build_app():
             "--ui-port",
             help="Per-env UI port mapping (ENV=PORT, repeatable)",
         ),
+        schema_name: list[str] = typer.Option(
+            [],
+            "--schema-name",
+            help="Per-env PostgreSQL schema mapping (ENV=SCHEMA, repeatable)",
+        ),
         force: bool = typer.Option(
             False, "--force", help="Overwrite existing config metadata if needed"
         ),
@@ -1386,6 +1395,7 @@ def build_app():
             env=env,
             db_port=db_port,
             ui_port=ui_port,
+            schema_name=schema_name,
             force=force,
         )
         ccyo_out.success("TAPDB namespaced config initialized")
