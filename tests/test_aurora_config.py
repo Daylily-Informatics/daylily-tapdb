@@ -147,6 +147,7 @@ def _yaml_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             user: daylily
             password: ""
             database: tapdb_dev
+            schema_name: tapdb_dbx_dev
           aurora_dev:
             engine_type: aurora
             host: my-cluster.us-west-2.rds.amazonaws.com
@@ -155,6 +156,7 @@ def _yaml_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             user: tapdb_admin
             password: ""
             database: tapdb_dev
+            schema_name: tapdb_dbx_aurora_dev
             region: us-west-2
             cluster_identifier: my-cluster
             iam_auth: true
@@ -175,6 +177,7 @@ class TestGetDbConfigEngineType:
 
         cfg = get_db_config_for_env("dev")
         assert cfg["engine_type"] == "local"
+        assert cfg["schema_name"] == "tapdb_dbx_dev"
 
     @pytest.mark.usefixtures("_yaml_config")
     def test_aurora_env_has_engine_type_aurora(self):
@@ -182,6 +185,7 @@ class TestGetDbConfigEngineType:
 
         cfg = get_db_config_for_env("aurora_dev")
         assert cfg["engine_type"] == "aurora"
+        assert cfg["schema_name"] == "tapdb_dbx_aurora_dev"
 
     @pytest.mark.usefixtures("_yaml_config")
     def test_aurora_env_has_aurora_fields(self):
@@ -253,6 +257,7 @@ class TestGetDbConfigEngineType:
                 user: daylily
                 password: ""
                 database: tapdb_dev
+                schema_name: tapdb_dbx_dev
             """).format(
                 domain_registry=domain_registry,
                 prefix_registry=prefix_registry,
@@ -307,6 +312,7 @@ class TestGetDbConfigEngineType:
                 user: daylily
                 password: ""
                 database: tapdb_dev
+                schema_name: tapdb_dbx_dev
                 unix_socket_dir: /tmp/from-config
             """).format(
                 domain_registry=domain_registry,
@@ -357,3 +363,67 @@ class TestDatabaseNameNormalization:
             default_database_name_for_namespace("auruse1-daylily-tapdb", "dev")
             == "tapdb_auruse1_daylily_tapdb_dev"
         )
+
+    def test_default_schema_name_for_database_normalizes_hyphens(self):
+        from daylily_tapdb.cli.db_config import default_schema_name_for_database
+
+        assert (
+            default_schema_name_for_database("auruse1-daylily-tapdb", "dev")
+            == "tapdb_auruse1_daylily_tapdb_dev"
+        )
+
+    @pytest.mark.parametrize(
+        "schema_name",
+        ["tapdb_app_dev", "_tapdb_app_dev", "tapdb_app_123"],
+    )
+    def test_validate_postgres_identifier_component_accepts_safe_values(
+        self, schema_name: str
+    ):
+        from daylily_tapdb.cli.db_config import validate_postgres_identifier_component
+
+        assert (
+            validate_postgres_identifier_component(
+                schema_name,
+                field_name="schema_name",
+            )
+            == schema_name
+        )
+
+    @pytest.mark.parametrize(
+        "schema_name",
+        ["", "TapDB_App", "tapdb-app", "1tapdb", "tapdb.app", "a" * 64],
+    )
+    def test_validate_postgres_identifier_component_rejects_unsafe_values(
+        self, schema_name: str
+    ):
+        from daylily_tapdb.cli.db_config import validate_postgres_identifier_component
+
+        with pytest.raises(RuntimeError, match="schema_name"):
+            validate_postgres_identifier_component(
+                schema_name,
+                field_name="schema_name",
+            )
+
+    def test_get_db_config_requires_explicit_schema_name(self, _yaml_config: Path):
+        import yaml
+
+        from daylily_tapdb.cli.db_config import get_db_config_for_env
+
+        payload = yaml.safe_load(_yaml_config.read_text(encoding="utf-8"))
+        del payload["environments"]["dev"]["schema_name"]
+        _yaml_config.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="environments.dev.schema_name"):
+            get_db_config_for_env("dev")
+
+    def test_get_db_config_rejects_unsafe_schema_name(self, _yaml_config: Path):
+        import yaml
+
+        from daylily_tapdb.cli.db_config import get_db_config_for_env
+
+        payload = yaml.safe_load(_yaml_config.read_text(encoding="utf-8"))
+        payload["environments"]["dev"]["schema_name"] = "tapdb-dev"
+        _yaml_config.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="environments.dev.schema_name"):
+            get_db_config_for_env("dev")

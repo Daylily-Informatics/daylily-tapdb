@@ -388,6 +388,9 @@ def _empty_db_inventory_context(*, error: Optional[str] = None) -> dict:
     return {
         "db_inventory_error": error,
         "db_inventory_db_name": None,
+        "db_inventory_physical_db_name": None,
+        "db_inventory_active_schema_name": None,
+        "db_inventory_search_path": [],
         "db_inventory_schema_names": [],
         "db_inventory_counts": {
             "schemas": 0,
@@ -419,6 +422,19 @@ def load_db_inventory_context() -> dict:
             with conn.session_scope() as session:
                 db_name = session.execute(text("SELECT current_database()")).scalar()
                 ctx["db_inventory_db_name"] = str(db_name or "")
+                ctx["db_inventory_physical_db_name"] = str(db_name or "")
+                active_schema = str(
+                    session.execute(text("SELECT current_schema()")).scalar() or ""
+                ).strip()
+                if not active_schema:
+                    raise RuntimeError("Active PostgreSQL schema is not configured.")
+                ctx["db_inventory_active_schema_name"] = active_schema
+                search_path = session.execute(
+                    text("SELECT current_schemas(false) AS schema_names")
+                ).scalar()
+                ctx["db_inventory_search_path"] = [
+                    str(item) for item in (search_path or [])
+                ]
 
                 schema_filter = """
                     nspname NOT IN ('pg_catalog', 'information_schema')
@@ -427,10 +443,7 @@ def load_db_inventory_context() -> dict:
                     AND nspname NOT LIKE 'pg_toast_temp_%'
                 """
                 schemaname_filter = """
-                    schemaname NOT IN ('pg_catalog', 'information_schema')
-                    AND schemaname NOT LIKE 'pg_toast%'
-                    AND schemaname NOT LIKE 'pg_temp_%'
-                    AND schemaname NOT LIKE 'pg_toast_temp_%'
+                    schemaname = :schema_name
                 """
 
                 schema_rows = session.execute(
@@ -456,7 +469,8 @@ def load_db_inventory_context() -> dict:
                             WHERE {schemaname_filter}
                             ORDER BY schemaname, tablename
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 views = [
@@ -469,7 +483,8 @@ def load_db_inventory_context() -> dict:
                             WHERE {schemaname_filter}
                             ORDER BY schemaname, viewname
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 materialized_views = [
@@ -482,7 +497,8 @@ def load_db_inventory_context() -> dict:
                             WHERE {schemaname_filter}
                             ORDER BY schemaname, matviewname
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 sequences = [
@@ -495,14 +511,15 @@ def load_db_inventory_context() -> dict:
                             WHERE {schemaname_filter}
                             ORDER BY schemaname, sequencename
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 triggers = [
                     dict(row)
                     for row in session.execute(
                         text(
-                            f"""
+                            """
                             SELECT
                                 ns.nspname AS schema_name,
                                 cls.relname AS table_name,
@@ -511,27 +528,29 @@ def load_db_inventory_context() -> dict:
                             JOIN pg_class cls ON cls.oid = tg.tgrelid
                             JOIN pg_namespace ns ON ns.oid = cls.relnamespace
                             WHERE NOT tg.tgisinternal
-                              AND {schema_filter}
+                              AND ns.nspname = :schema_name
                             ORDER BY ns.nspname, cls.relname, tg.tgname
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 functions = [
                     dict(row)
                     for row in session.execute(
                         text(
-                            f"""
+                            """
                             SELECT
                                 ns.nspname AS schema_name,
                                 p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
                                     AS function_signature
                             FROM pg_proc p
                             JOIN pg_namespace ns ON ns.oid = p.pronamespace
-                            WHERE {schema_filter}
+                            WHERE ns.nspname = :schema_name
                             ORDER BY ns.nspname, function_signature
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 indexes = [
@@ -547,7 +566,8 @@ def load_db_inventory_context() -> dict:
                             WHERE {schemaname_filter}
                             ORDER BY schemaname, tablename, indexname
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
 

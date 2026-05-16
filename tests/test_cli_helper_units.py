@@ -113,6 +113,7 @@ def test_db_schema_apply_reapplies_when_schema_table_already_exists(
             "host": "localhost",
             "port": "5432",
             "database": "tapdb_dev",
+            "schema_name": "tapdb_app",
             "user": "tapdb",
         },
     )
@@ -136,7 +137,10 @@ def test_db_schema_apply_reapplies_when_schema_table_already_exists(
 
     db_mod.db_schema_apply(db_mod.Environment.dev)
 
-    assert psql_calls == [(None, schema_file, None)]
+    assert psql_calls == [
+        ('CREATE SCHEMA IF NOT EXISTS "tapdb_app"', None, None),
+        (None, schema_file, None),
+    ]
     assert sync_calls == [db_mod.Environment.dev]
     assert baseline_calls == [db_mod.Environment.dev]
     assert log_calls == [("dev", "SCHEMA_APPLY", f"Schema applied from {schema_file}")]

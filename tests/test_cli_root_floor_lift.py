@@ -103,6 +103,7 @@ def cli_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "    user: tapdb\n"
         "    password: ''\n"
         "    database: tapdb_dev\n"
+        "    schema_name: tapdb_testdb_dev\n"
         "  prod:\n"
         "    engine_type: local\n"
         "    host: localhost\n"
@@ -111,7 +112,8 @@ def cli_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "    domain_code: Z\n"
         "    user: tapdb\n"
         "    password: ''\n"
-        "    database: tapdb_prod\n",
+        "    database: tapdb_prod\n"
+        "    schema_name: tapdb_testdb_prod\n",
         encoding="utf-8",
     )
     os.chmod(cfg_path, stat.S_IRUSR | stat.S_IWUSR)
@@ -716,7 +718,9 @@ def test_config_init_update_and_info_commands(
     init_payload = yaml.safe_load(init_path.read_text(encoding="utf-8"))
     assert init_payload["meta"]["client_id"] == "atlas"
     assert init_payload["environments"]["dev"]["ui_port"] == "8911"
+    assert init_payload["environments"]["dev"]["schema_name"] == "tapdb_app_dev"
     assert init_payload["environments"]["test"]["port"] == "5534"
+    assert init_payload["environments"]["test"]["schema_name"] == "tapdb_app_test"
 
     clear_cli_context()
     set_cli_context(config_path=init_path)
@@ -827,6 +831,8 @@ def test_config_init_update_and_info_commands(
             "dev",
             "--host",
             "db.internal",
+            "--schema-name",
+            "tapdb_testdb_dev_next",
             "--port",
             "6543",
             "--ui-port",
@@ -867,6 +873,7 @@ def test_config_init_update_and_info_commands(
     assert result.exit_code == 0
     updated = yaml.safe_load(cli_namespace.read_text(encoding="utf-8"))
     assert updated["environments"]["dev"]["host"] == "db.internal"
+    assert updated["environments"]["dev"]["schema_name"] == "tapdb_testdb_dev_next"
     assert (
         updated["admin"]["footer"]["repo_url"]
         == "https://github.com/example/tapdb-core"
@@ -899,6 +906,7 @@ def test_config_init_update_and_info_commands(
             "user": "tapdb",
             "password": "secret",
             "database": f"tapdb_{env_name}",
+            "schema_name": f"tapdb_testdb_{env_name}",
         },
     )
     result = runner.invoke(fresh_app, ["info", "--check-all-envs", "--json"])

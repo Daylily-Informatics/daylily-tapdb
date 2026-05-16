@@ -510,6 +510,7 @@ def test_runtime_db_connection_session_scope_commit_and_rollback():
         engine=create_engine("sqlite://"),
         SessionFactory=lambda: session,
         cfg={},
+        schema_name="tapdb_unit",
     )
     conn = runtime_mod.RuntimeDBConnection(bundle)
     conn.app_username = "tester"
@@ -529,6 +530,7 @@ def test_runtime_db_connection_session_scope_commit_and_rollback():
             engine=create_engine("sqlite://"),
             SessionFactory=lambda: session,
             cfg={},
+            schema_name="tapdb_unit",
         )
     )
     with conn.session_scope(commit=True):
@@ -544,12 +546,54 @@ def test_runtime_db_connection_session_scope_commit_and_rollback():
             engine=create_engine("sqlite://"),
             SessionFactory=lambda: session,
             cfg={},
+            schema_name="tapdb_unit",
         )
     )
     with pytest.raises(RuntimeError, match="boom"):
         with conn.session_scope(commit=True):
             raise RuntimeError("boom")
     assert session.trans.rollbacks == 1
+
+
+def test_runtime_db_connection_session_scope_sets_search_path():
+    class _Trans:
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    class _Session:
+        def __init__(self):
+            self.bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+            self.statements = []
+
+        def begin(self):
+            return _Trans()
+
+        def execute(self, stmt, params=None):
+            self.statements.append((str(stmt), params or {}))
+
+        def close(self):
+            return None
+
+    session = _Session()
+    conn = runtime_mod.RuntimeDBConnection(
+        runtime_mod.RuntimeBundle(
+            config_path="/tmp/tapdb.yaml",
+            env_name="dev",
+            engine=create_engine("sqlite://"),
+            SessionFactory=lambda: session,
+            cfg={"schema_name": "tapdb_dev"},
+            schema_name="tapdb_dev",
+        )
+    )
+
+    with conn.session_scope(commit=False):
+        pass
+
+    assert "set_config('search_path'" in session.statements[0][0]
+    assert session.statements[0][1]["schema_name"] == "tapdb_dev"
 
 
 def test_runtime_engine_helpers_cover_auth_modes_and_cache(monkeypatch):
@@ -658,6 +702,7 @@ def test_runtime_engine_helpers_cover_auth_modes_and_cache(monkeypatch):
             "host": "localhost",
             "port": "5432",
             "database": "tapdb_dev",
+            "schema_name": "tapdb_dev",
             "user": "tapdb",
             "password": "",
         },
@@ -679,6 +724,23 @@ def test_runtime_engine_helpers_cover_auth_modes_and_cache(monkeypatch):
 
     with pytest.raises(RuntimeError, match="env name is required"):
         runtime_mod.get_db("/tmp/tapdb.yaml", "")
+
+    monkeypatch.setattr(
+        runtime_mod,
+        "get_db_config_for_env",
+        lambda env, config_path: {
+            "config_path": "/resolved/tapdb.yaml",
+            "engine_type": "local",
+            "host": "localhost",
+            "port": "5432",
+            "database": "tapdb_dev",
+            "user": "tapdb",
+            "password": "",
+        },
+    )
+    runtime_mod._clear_runtime_cache_for_tests()
+    with pytest.raises(RuntimeError, match="schema_name"):
+        runtime_mod.get_db("/tmp/tapdb.yaml", "dev")
 
 
 @pytest.mark.anyio

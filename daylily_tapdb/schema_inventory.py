@@ -227,7 +227,14 @@ def load_live_schema_inventory(
 ) -> TapdbSchemaInventory:
     """Inspect the deployed TAPDB schema from PostgreSQL catalogs."""
 
-    resolved_schema = schema_name or discover_tapdb_schema_name(session)
+    if schema_name is None:
+        resolved_schema = discover_tapdb_schema_name(session)
+    else:
+        resolved_schema = str(schema_name).strip()
+        if not resolved_schema:
+            raise SchemaDriftOperationalError(
+                "Explicit TAPDB schema name must not be empty."
+            )
     inventory = TapdbSchemaInventory(schema_name=resolved_schema)
     if not resolved_schema:
         return inventory
