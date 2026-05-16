@@ -224,6 +224,7 @@ def test_tapdb_connection_for_env_uses_normalized_engine_flags(monkeypatch):
             "region": "us-east-1",
             "domain_code": "Z",
             "owner_repo_name": "daylily-tapdb",
+            "schema_name": "tapdb_dev",
         },
     )
     captured: dict[str, object] = {}
@@ -250,7 +251,62 @@ def test_tapdb_connection_for_env_uses_normalized_engine_flags(monkeypatch):
         "app_username": "tester",
         "domain_code": "Z",
         "owner_repo_name": "daylily-tapdb",
+        "schema_name": "tapdb_dev",
     }
+
+
+def test_create_default_admin_passes_configured_schema_name(monkeypatch):
+    monkeypatch.setattr(
+        db_mod,
+        "_get_db_config",
+        lambda _env: {
+            "host": "localhost",
+            "port": "5533",
+            "user": "tapdb",
+            "password": "",
+            "database": "tapdb_dev",
+            "engine_type": "local",
+            "iam_auth": "false",
+            "region": "us-west-2",
+            "domain_code": "Z",
+            "owner_repo_name": "daylily-tapdb",
+            "schema_name": "tapdb_dev",
+        },
+    )
+    captured: dict[str, object] = {}
+
+    class _FakeConn:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def session_scope(self, commit: bool = False):
+            class _Scope:
+                def __enter__(self):
+                    return object()
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            return _Scope()
+
+    monkeypatch.setattr(db_mod, "TAPDBConnection", _FakeConn)
+    monkeypatch.setattr(user_mod, "_hash_password", lambda _value: "hashed")
+    monkeypatch.setattr(
+        "daylily_tapdb.user_store.create_or_get",
+        lambda *_args, **_kwargs: (SimpleNamespace(username="tapdb_admin"), False),
+    )
+
+    assert (
+        db_mod._create_default_admin(db_mod.Environment.dev, insecure_dev_defaults=True)
+        is False
+    )
+    assert captured["schema_name"] == "tapdb_dev"
 
 
 def test_pg_build_pg_ctl_options_quotes_socket_path():
