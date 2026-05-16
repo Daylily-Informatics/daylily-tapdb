@@ -75,9 +75,10 @@ class TestSchemaApply:
                 conn.execute(
                     text(
                         "SELECT tablename FROM pg_tables "
-                        "WHERE schemaname = 'public' "
+                        "WHERE schemaname = :schema_name "
                         "ORDER BY tablename"
-                    )
+                    ),
+                    {"schema_name": pg_instance["schema_name"]},
                 )
                 .scalars()
                 .all()
@@ -137,7 +138,7 @@ class TestConnectionModule:
         from daylily_tapdb.connection import TAPDBConnection
 
         info = pg_instance
-        conn_obj = TAPDBConnection(db_url=info["dsn"])
+        conn_obj = TAPDBConnection(db_url=info["dsn"], schema_name=info["schema_name"])
         with conn_obj as c:
             with c.session_scope(commit=False) as session:
                 val = session.execute(text("SELECT current_database()")).scalar()
@@ -147,7 +148,10 @@ class TestConnectionModule:
         """Verify commit path works with SET LOCAL for audit logging."""
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn_obj = TAPDBConnection(db_url=pg_instance["dsn"])
+        conn_obj = TAPDBConnection(
+            db_url=pg_instance["dsn"],
+            schema_name=pg_instance["schema_name"],
+        )
         with conn_obj as c:
             with c.session_scope(commit=True) as session:
                 session.execute(text("SELECT 1"))
@@ -199,7 +203,12 @@ class TestDbCommands:
 
 class TestORMOperations:
     def _engine(self, pg_instance):
-        return create_engine(pg_instance["dsn"])
+        return create_engine(
+            pg_instance["dsn"],
+            connect_args={
+                "options": f"-csearch_path={pg_instance['schema_name']}",
+            },
+        )
 
     def test_query_templates(self, pg_instance):
         """Verify seeded templates are queryable."""
@@ -252,8 +261,9 @@ class TestORMOperations:
                 conn.execute(
                     text(
                         "SELECT sequencename FROM pg_sequences "
-                        "WHERE schemaname = 'public'"
-                    )
+                        "WHERE schemaname = :schema_name"
+                    ),
+                    {"schema_name": pg_instance["schema_name"]},
                 )
                 .scalars()
                 .all()

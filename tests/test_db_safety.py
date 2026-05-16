@@ -171,7 +171,11 @@ def test_db_migrate_idempotent_when_all_migrations_already_applied(
     migrations_dir.mkdir(parents=True)
     (migrations_dir / "001_test.sql").write_text("SELECT 1;\n")
 
-    monkeypatch.setattr(m, "_get_db_config", lambda env: {"database": "tapdb"})
+    monkeypatch.setattr(
+        m,
+        "_get_db_config",
+        lambda env: {"database": "tapdb", "schema_name": "tapdb_app"},
+    )
     monkeypatch.setattr(m, "_check_db_exists", lambda env, db: True)
     monkeypatch.setattr(m, "_schema_exists", lambda env: True)
 
@@ -208,7 +212,11 @@ def test_db_migrate_uses_installed_data_migrations(tmp_path, monkeypatch):
     migration_file.write_text("SELECT 1;\n")
 
     monkeypatch.setattr(m.sysconfig, "get_paths", lambda: {"data": str(data_root)})
-    monkeypatch.setattr(m, "_get_db_config", lambda env: {"database": "tapdb"})
+    monkeypatch.setattr(
+        m,
+        "_get_db_config",
+        lambda env: {"database": "tapdb", "schema_name": "tapdb_app"},
+    )
     monkeypatch.setattr(m, "_check_db_exists", lambda env, db: True)
     monkeypatch.setattr(m, "_schema_exists", lambda env: True)
 
@@ -239,6 +247,7 @@ def test_db_nuke_drops_outbox_and_inbox_tables_before_scope_functions(monkeypatc
             "host": "localhost",
             "port": "5533",
             "engine_type": "local",
+            "schema_name": "tapdb_dev",
         },
     )
     monkeypatch.setattr(m, "_check_db_exists", lambda _env, _db: True)
