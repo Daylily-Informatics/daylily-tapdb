@@ -720,7 +720,9 @@ def test_config_init_update_and_info_commands(
     init_payload = yaml.safe_load(init_path.read_text(encoding="utf-8"))
     assert init_payload["meta"]["client_id"] == "atlas"
     assert init_payload["environments"]["dev"]["ui_port"] == "8911"
-    assert init_payload["environments"]["dev"]["schema_name"] == "tapdb_atlas_unidbtst_dev"
+    assert (
+        init_payload["environments"]["dev"]["schema_name"] == "tapdb_atlas_unidbtst_dev"
+    )
     assert init_payload["environments"]["test"]["port"] == "5534"
     assert init_payload["environments"]["test"]["schema_name"] == "tapdb_app_test"
 
