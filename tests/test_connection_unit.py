@@ -67,6 +67,7 @@ def test_set_session_domain_code_executes_for_postgresql(monkeypatch):
         db_url="sqlite:///:memory:",
         domain_code="Z",
         owner_repo_name="daylily-tapdb",
+        schema_name="tapdb_unit",
     )
 
     stmts: list[str] = []
@@ -133,7 +134,11 @@ def test_session_scope_commit_true_commits(monkeypatch):
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:", app_username="pytest")
+    conn = m.TAPDBConnection(
+        db_url="sqlite:///:memory:",
+        app_username="pytest",
+        schema_name="tapdb_unit",
+    )
 
     class Trans:
         def __init__(self):
@@ -186,7 +191,11 @@ def test_session_scope_commit_false_rolls_back(monkeypatch):
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:", app_username="pytest")
+    conn = m.TAPDBConnection(
+        db_url="sqlite:///:memory:",
+        app_username="pytest",
+        schema_name="tapdb_unit",
+    )
 
     class Trans:
         def __init__(self):
@@ -235,7 +244,11 @@ def test_session_scope_exception_rolls_back_and_reraises(monkeypatch):
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:", app_username="pytest")
+    conn = m.TAPDBConnection(
+        db_url="sqlite:///:memory:",
+        app_username="pytest",
+        schema_name="tapdb_unit",
+    )
 
     class Trans:
         def __init__(self):
@@ -358,6 +371,53 @@ def test_set_session_timezone_utc_is_noop_for_postgresql(monkeypatch):
     assert calls["execute"] == 0
 
 
+def test_set_session_search_path_executes_for_postgresql(monkeypatch):
+    from daylily_tapdb import connection as m
+
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+    conn = m.TAPDBConnection(db_url="sqlite:///:memory:", schema_name="tapdb_unit")
+
+    calls = []
+
+    class Sess:
+        def __init__(self):
+            self.bind = types.SimpleNamespace(
+                dialect=types.SimpleNamespace(name="postgresql")
+            )
+
+        def begin_nested(self):
+            return types.SimpleNamespace(commit=lambda: None, rollback=lambda: None)
+
+        def execute(self, stmt, params=None):
+            calls.append((str(stmt), params))
+
+    conn._set_session_search_path(Sess(), local=True)
+    assert "set_config('search_path'" in calls[0][0]
+    assert calls[0][1]["schema_name"] == "tapdb_unit"
+
+
+def test_set_session_search_path_requires_schema_for_postgresql(monkeypatch):
+    from daylily_tapdb import connection as m
+
+    monkeypatch.setattr(
+        m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+    conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
+
+    class Sess:
+        def __init__(self):
+            self.bind = types.SimpleNamespace(
+                dialect=types.SimpleNamespace(name="postgresql")
+            )
+
+    with pytest.raises(ValueError, match="schema_name is required"):
+        conn._set_session_search_path(Sess(), local=True)
+
+
 def test_session_scope_domain_setup_failure_does_not_abort_outer_transaction(
     monkeypatch,
 ):
@@ -367,7 +427,11 @@ def test_session_scope_domain_setup_failure_does_not_abort_outer_transaction(
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:", app_username="pytest")
+    conn = m.TAPDBConnection(
+        db_url="sqlite:///:memory:",
+        app_username="pytest",
+        schema_name="tapdb_unit",
+    )
 
     class Trans:
         def __init__(self):

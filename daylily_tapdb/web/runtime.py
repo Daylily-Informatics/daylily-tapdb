@@ -48,6 +48,28 @@ def _set_audit_username(session: Session, username: Optional[str]) -> None:
         logger.warning("Could not set session audit username: %s", exc)
 
 
+def _require_schema_name(cfg: dict[str, str], *, env_name: str) -> str:
+    schema_name = str(cfg.get("schema_name") or "").strip()
+    if not schema_name:
+        raise RuntimeError(
+            f"Config for env {env_name!r} is missing required field: schema_name"
+        )
+    return schema_name
+
+
+def _set_search_path(session: Session, schema_name: str) -> None:
+    """Set per-transaction PostgreSQL search_path for runtime queries."""
+    bind = getattr(session, "bind", None)
+    dialect = getattr(bind, "dialect", None)
+    dialect_name = str(getattr(dialect, "name", "") or "").strip().lower()
+    if dialect_name != "postgresql":
+        return
+    session.execute(
+        text("SELECT set_config('search_path', :schema_name, true)"),
+        {"schema_name": schema_name},
+    )
+
+
 @dataclass(frozen=True)
 class RuntimeBundle:
     config_path: str
@@ -55,6 +77,7 @@ class RuntimeBundle:
     engine: Engine
     SessionFactory: sessionmaker
     cfg: dict[str, str]
+    schema_name: str
 
 
 class RuntimeDBConnection:
@@ -75,6 +98,7 @@ class RuntimeDBConnection:
         session = self._bundle.SessionFactory()
         trans = session.begin()
         try:
+            _set_search_path(session, self._bundle.schema_name)
             _set_audit_username(session, self.app_username)
             yield session
             if commit:
@@ -162,6 +186,7 @@ def _build_engine_for_cfg(
     config_path: str,
     env_name: str,
 ) -> Engine:
+    _require_schema_name(cfg, env_name=env_name)
     engine_type = (cfg.get("engine_type") or "local").strip().lower()
     echo_sql = _parse_bool(os.environ.get("ECHO_SQL"), default=False)
 
@@ -233,6 +258,7 @@ def get_db(config_path: str, env_name: str) -> RuntimeDBConnection:
         raise RuntimeError("TapDB env name is required.")
 
     cfg = get_db_config_for_env(env, config_path=config_path)
+    schema_name = _require_schema_name(cfg, env_name=env)
     resolved_config_path = str(cfg.get("config_path") or str(config_path)).strip()
     key = (resolved_config_path, env)
 
@@ -250,6 +276,7 @@ def get_db(config_path: str, env_name: str) -> RuntimeDBConnection:
                 engine=engine,
                 SessionFactory=sessionmaker(bind=engine),
                 cfg=cfg,
+                schema_name=schema_name,
             )
             _bundles[key] = bundle
 

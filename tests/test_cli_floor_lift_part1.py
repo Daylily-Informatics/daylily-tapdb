@@ -288,6 +288,7 @@ def test_runtime_db_connection_context_manager_commit_and_rollback(
         engine=object(),
         SessionFactory=_factory,
         cfg={},
+        schema_name="tapdb_dev",
     )
     conn = runtime_mod.RuntimeDBConnection(bundle)
     conn.app_username = "alice"
@@ -357,6 +358,7 @@ def test_runtime_build_engine_for_cfg_local_and_aurora(
             "host": "localhost",
             "port": "5432",
             "database": "tapdb_dev",
+            "schema_name": "tapdb_dev",
             "user": "tapdb",
             "password": "",
         },
@@ -369,6 +371,7 @@ def test_runtime_build_engine_for_cfg_local_and_aurora(
             "host": "aurora.local",
             "port": "6432",
             "database": "tapdb_prod",
+            "schema_name": "tapdb_prod",
             "user": "tapdb",
             "password": "",
             "iam_auth": "yes",
@@ -418,6 +421,7 @@ def test_runtime_clear_cache_logs_dispose_errors(
         engine=_Engine(),
         SessionFactory=lambda: None,
         cfg={},
+        schema_name="tapdb_dev",
     )
     runtime_mod._bundles[("/tmp/tapdb-config.yaml", "dev")] = bundle
 

@@ -293,6 +293,23 @@ def _get_db_config(env: Environment) -> dict:
     return get_db_config_for_env(env.value)
 
 
+def _configured_schema_name(env: Environment) -> Optional[str]:
+    cfg = _get_db_config(env)
+    raw_schema_name = cfg.get("schema_name")
+    if raw_schema_name is None:
+        return None
+    schema_name = str(raw_schema_name).strip()
+    return schema_name or None
+
+
+def _get_schema_name(env: Environment) -> str:
+    """Return the configured PostgreSQL schema name for TAPDB objects."""
+    schema_name = _configured_schema_name(env)
+    if schema_name is None:
+        raise ValueError("schema_name must be configured for TAPDB DB commands")
+    return schema_name
+
+
 def _get_connection_string(env: Environment, database: Optional[str] = None) -> str:
     """Build PostgreSQL connection string for display.
 
@@ -374,11 +391,23 @@ def _run_psql(
     """
     cfg = _get_db_config(env)
     db = database or cfg["database"]
+    schema_name = (
+        _configured_schema_name(env) if _uses_configured_database(database) else None
+    )
+    apply_search_path = schema_name is not None
 
     if cfg.get("engine_type") == "aurora":
         from daylily_tapdb.aurora.schema_deployer import AuroraSchemaDeployer
 
         iam_auth = cfg.get("iam_auth", "true").lower() in ("true", "1", "yes")
+        aurora_sql = sql
+        aurora_file = file
+        if apply_search_path:
+            if file:
+                aurora_sql = _read_file_with_schema_search_path(schema_name, file)
+                aurora_file = None
+            elif sql:
+                aurora_sql = _with_schema_search_path(schema_name, sql)
         return AuroraSchemaDeployer.run_psql(
             host=cfg["host"],
             port=int(cfg["port"]),
@@ -388,8 +417,8 @@ def _run_psql(
             iam_auth=iam_auth,
             secret_arn=cfg.get("secret_arn") or None,
             password=cfg.get("password") or None,
-            sql=sql,
-            file=file,
+            sql=aurora_sql,
+            file=aurora_file,
         )
 
     cmd = [
@@ -409,6 +438,9 @@ def _run_psql(
         "-v",
         "ON_ERROR_STOP=1",
     ]
+
+    if apply_search_path:
+        cmd.extend(["-c", _set_search_path_sql(schema_name)])
 
     if file:
         cmd.extend(["-f", str(file)])
@@ -441,6 +473,22 @@ def _quoted_sql_literal(value: str) -> str:
 
 def _quoted_sql_ident(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
+
+
+def _set_search_path_sql(schema_name: str) -> str:
+    return f"SET search_path TO {_quoted_sql_ident(schema_name)}"
+
+
+def _with_schema_search_path(schema_name: str, sql: str) -> str:
+    return f"{_set_search_path_sql(schema_name)};\n{sql}"
+
+
+def _read_file_with_schema_search_path(schema_name: str, file: Path) -> str:
+    return _with_schema_search_path(schema_name, file.read_text(encoding="utf-8"))
+
+
+def _uses_configured_database(database: Optional[str]) -> bool:
+    return database is None
 
 
 def _bootstrap_user_candidates(preferred_user: str) -> list[str]:
@@ -534,6 +582,7 @@ def _parse_single_int(output: str) -> int:
 
 def _get_table_counts(env: Environment) -> dict:
     """Get row counts for TAPDB tables."""
+    _get_schema_name(env)
     tables = [
         "generic_template",
         "generic_instance",
@@ -556,11 +605,13 @@ def _get_table_counts(env: Environment) -> dict:
 
 def _schema_exists(env: Environment) -> bool:
     """Check if TAPDB schema exists in database."""
+    schema_name = _get_schema_name(env)
     success, psql_out = _run_psql(
         env,
         sql=(
             "SELECT COUNT(*) FROM information_schema.tables"
-            " WHERE table_name = 'generic_template'"
+            f" WHERE table_schema = {_quoted_sql_literal(schema_name)}"
+            " AND table_name = 'generic_template'"
         ),
     )
     if not success:
@@ -571,6 +622,17 @@ def _schema_exists(env: Environment) -> bool:
         return False
 
 
+def _ensure_schema_exists(env: Environment) -> None:
+    """Create the configured PostgreSQL schema when it is absent."""
+    schema_name = _get_schema_name(env)
+    success, psql_out = _run_psql(
+        env,
+        sql=f"CREATE SCHEMA IF NOT EXISTS {_quoted_sql_ident(schema_name)}",
+    )
+    if not success:
+        raise RuntimeError(f"Failed to create schema {schema_name!r}: {psql_out}")
+
+
 def _run_schema_drift_check(
     env: Environment,
     *,
@@ -578,6 +640,7 @@ def _run_schema_drift_check(
 ) -> tuple[dict[str, Any], bool]:
     """Build drift payload for CLI output."""
     cfg = _get_db_config(env)
+    schema_name = _get_schema_name(env)
     schema_root = _find_schema_root(required_subpath=Path("tapdb_schema.sql"))
     asset_paths = schema_asset_files(schema_root)
     identity_prefixes = _required_identity_prefixes(env)
@@ -592,7 +655,7 @@ def _run_schema_drift_check(
         app_username="tapdb_schema_drift_check",
     ) as conn:
         with conn.session_scope(commit=False) as session:
-            live = load_live_schema_inventory(session)
+            live = load_live_schema_inventory(session, schema_name=schema_name)
 
     drift_result = diff_schema_inventory(
         expected,
@@ -777,6 +840,7 @@ def db_schema_apply(
     )
     ccyo_out.print_text(f"  Host:     {cfg['host']}:{cfg['port']}")
     ccyo_out.print_text(f"  Database: {cfg['database']}")
+    ccyo_out.print_text(f"  Schema:   {_get_schema_name(env)}")
     ccyo_out.print_text(f"  User:     {cfg['user']}")
     ccyo_out.print_text("")
 
@@ -789,6 +853,12 @@ def db_schema_apply(
         schema_file = _find_schema_file()
         ccyo_out.success(f"Schema file: {schema_file}")
     except FileNotFoundError as e:
+        ccyo_out.error(f"{e}")
+        raise typer.Exit(1)
+
+    try:
+        _ensure_schema_exists(env)
+    except RuntimeError as e:
         ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
@@ -853,6 +923,7 @@ def db_status(
         raise typer.Exit(1)
 
     ccyo_out.success(f"Database: {cfg['database']}")
+    ccyo_out.success(f"Schema: {_get_schema_name(env)}")
 
     # Check schema
     if not _schema_exists(env):
@@ -862,7 +933,7 @@ def db_status(
         )
         raise typer.Exit(1)
 
-    ccyo_out.success("Schema: installed")
+    ccyo_out.success("Schema objects: installed")
 
     # Get table counts
     counts = _get_table_counts(env)
@@ -919,7 +990,7 @@ def db_schema_drift_check(
                         "status": "error",
                         "env": env.value,
                         "database": cfg["database"],
-                        "schema_name": None,
+                        "schema_name": cfg["schema_name"],
                         "strict": strict,
                         "error": message,
                     },
@@ -942,7 +1013,7 @@ def db_schema_drift_check(
                         "status": "error",
                         "env": env.value,
                         "database": cfg["database"],
-                        "schema_name": None,
+                        "schema_name": cfg["schema_name"],
                         "strict": strict,
                         "error": message,
                     },
@@ -1026,6 +1097,7 @@ def db_nuke(
             f"[bold red]⚠️  DESTRUCTIVE OPERATION[/bold red]\n\n"
             f"Environment: [bold]{env.value.upper()}[/bold]\n"
             f"Database:    [bold]{cfg['database']}[/bold]\n"
+            f"Schema:      [bold]{_get_schema_name(env)}[/bold]\n"
             f"Host:        {cfg['host']}:{cfg['port']}\n"
             f"{aurora_warning}\n"
             f"[yellow]Data to be deleted:[/yellow]\n"

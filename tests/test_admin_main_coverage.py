@@ -687,6 +687,8 @@ def test_main_load_db_inventory_context_covers_success_and_error(monkeypatch):
     rows = iter(
         [
             SimpleNamespace(scalar=lambda: "tapdb_dev"),
+            SimpleNamespace(scalar=lambda: "public"),
+            SimpleNamespace(scalar=lambda: ["public"]),
             _InventoryMappings([{"schema_name": "public"}, {"schema_name": "app_ns"}]),
             _InventoryMappings(
                 [{"schema_name": "public", "table_name": "generic_instance"}]
@@ -728,7 +730,7 @@ def test_main_load_db_inventory_context_covers_success_and_error(monkeypatch):
     )
 
     class _InventorySession:
-        def execute(self, _stmt):
+        def execute(self, _stmt, _params=None):
             return next(rows)
 
     class _InventoryConn:
@@ -745,6 +747,9 @@ def test_main_load_db_inventory_context_covers_success_and_error(monkeypatch):
     monkeypatch.setattr(admin_main, "get_db", lambda: _InventoryConn())
     ctx = admin_main.load_db_inventory_context()
     assert ctx["db_inventory_db_name"] == "tapdb_dev"
+    assert ctx["db_inventory_physical_db_name"] == "tapdb_dev"
+    assert ctx["db_inventory_active_schema_name"] == "public"
+    assert ctx["db_inventory_search_path"] == ["public"]
     assert ctx["db_inventory_counts"]["schemas"] == 2
     assert ctx["db_inventory_tables"]
 

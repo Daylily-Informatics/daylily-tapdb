@@ -35,6 +35,8 @@ class ExternalGraphRef:
     graph_data_path: str | None
     object_detail_path_template: str | None
     auth_mode: str
+    relationship_type: str | None = None
+    source_field: str | None = None
 
     def to_public_dict(self, *, ref_index: int) -> dict[str, Any]:
         payload = {
@@ -46,6 +48,10 @@ class ExternalGraphRef:
             "graph_expandable": self.graph_expandable,
             "ref_index": ref_index,
         }
+        if self.relationship_type:
+            payload["relationship_type"] = self.relationship_type
+        if self.source_field:
+            payload["source_field"] = self.source_field
         if self.reason:
             payload["reason"] = self.reason
         return payload
@@ -101,6 +107,8 @@ def _external_ref_from_item(raw: Any) -> ExternalGraphRef:
         _clean(item.get("object_detail_path_template")) or None
     )
     auth_mode = _clean(item.get("auth_mode")) or "none"
+    relationship_type = _clean(item.get("relationship_type")) or None
+    source_field = _clean(item.get("source_field")) or None
     href = _clean(item.get("href")) or None
     if not href and base_url and object_detail_path_template and root_euid:
         href = _compose_object_href(
@@ -143,6 +151,8 @@ def _external_ref_from_item(raw: Any) -> ExternalGraphRef:
         graph_data_path=graph_data_path,
         object_detail_path_template=object_detail_path_template,
         auth_mode=auth_mode,
+        relationship_type=relationship_type,
+        source_field=source_field,
     )
 
 
@@ -328,21 +338,20 @@ def namespace_external_graph(
         namespaced_edges.append({"data": edge_data})
 
     bridge_id = f"bridge::{source_euid}::{ref.system}::{ref.tenant_id or 'global'}::{ref.root_euid}"
-    namespaced_edges.append(
-        {
-            "data": {
-                "id": bridge_id,
-                "source": source_euid,
-                "target": namespaced_id(ref.root_euid),
-                "relationship_type": "external_reference",
-                "is_external_bridge": True,
-                "external_system": ref.system,
-                "external_tenant_id": ref.tenant_id,
-                "source_ref_index": ref_index,
-                "external_source_euid": source_euid,
-            }
-        }
-    )
+    bridge_data = {
+        "id": bridge_id,
+        "source": source_euid,
+        "target": namespaced_id(ref.root_euid),
+        "relationship_type": ref.relationship_type or "external_reference",
+        "is_external_bridge": True,
+        "external_system": ref.system,
+        "external_tenant_id": ref.tenant_id,
+        "source_ref_index": ref_index,
+        "external_source_euid": source_euid,
+    }
+    if ref.source_field:
+        bridge_data["source_field"] = ref.source_field
+    namespaced_edges.append({"data": bridge_data})
 
     return {
         "elements": {"nodes": namespaced_nodes, "edges": namespaced_edges},

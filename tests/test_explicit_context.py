@@ -84,6 +84,7 @@ def _write_config(path: Path) -> Path:
         "    user: tapdb\n"
         "    password: filepw\n"
         "    database: tapdb_dev\n"
+        "    schema_name: tapdb_beta_dev\n"
         "  test:\n"
         "    engine_type: local\n"
         "    host: localhost\n"
@@ -92,7 +93,8 @@ def _write_config(path: Path) -> Path:
         "    domain_code: Z\n"
         "    user: tapdb\n"
         "    password: ''\n"
-        "    database: tapdb_test\n",
+        "    database: tapdb_test\n"
+        "    schema_name: tapdb_beta_test\n",
         encoding="utf-8",
     )
     os.chmod(path, 0o600)
@@ -140,6 +142,7 @@ def test_get_db_config_for_env_ignores_ambient_env_fallbacks(
     assert cfg["host"] == "localhost"
     assert cfg["port"] == "5533"
     assert cfg["password"] == "filepw"
+    assert cfg["schema_name"] == "tapdb_beta_dev"
     assert cfg["config_path"] == str(cfg_path)
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import create_engine as sa_create_engine
 
 import admin.auth as auth_mod
@@ -35,6 +36,7 @@ def test_admin_get_db_reuses_single_engine_bundle(monkeypatch):
             "user": "tapdb_admin",
             "password": "",
             "database": "tapdb_dev",
+            "schema_name": "tapdb_dev",
         },
     )
 
@@ -52,6 +54,76 @@ def test_admin_get_db_reuses_single_engine_bundle(monkeypatch):
     _ = main_mod.get_db()
 
     assert calls["count"] == 1
+
+
+def test_admin_get_engine_bundle_requires_schema_name(monkeypatch):
+    pool_mod._clear_engine_cache_for_tests()
+    monkeypatch.setattr(
+        pool_mod,
+        "get_db_config_for_env",
+        lambda _env: {
+            "engine_type": "local",
+            "host": "localhost",
+            "port": "5533",
+            "user": "tapdb_admin",
+            "password": "",
+            "database": "tapdb_dev",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="schema_name"):
+        pool_mod.get_engine_bundle("dev")
+
+
+def test_admin_session_scope_sets_search_path(monkeypatch):
+    pool_mod._clear_engine_cache_for_tests()
+
+    class _Trans:
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    class _Session:
+        def __init__(self):
+            self.bind = type(
+                "Bind", (), {"dialect": type("Dialect", (), {"name": "postgresql"})()}
+            )()
+            self.statements = []
+
+        def begin(self):
+            return _Trans()
+
+        def execute(self, stmt, params=None):
+            self.statements.append((str(stmt), params or {}))
+
+        def close(self):
+            return None
+
+    session = _Session()
+    bundle = pool_mod.EngineBundle(
+        env_name="dev",
+        engine=sa_create_engine("sqlite:///:memory:"),
+        SessionFactory=lambda: session,
+        cfg={"schema_name": "tapdb_dev"},
+        schema_name="tapdb_dev",
+    )
+    conn = pool_mod.AdminDBConnection(bundle)
+    monkeypatch.setattr(
+        "admin.db_metrics.db_username_var",
+        type(
+            "Var",
+            (),
+            {"set": lambda self, value: value, "reset": lambda self, token: None},
+        )(),
+    )
+
+    with conn.session_scope(commit=False):
+        pass
+
+    assert "set_config('search_path'" in session.statements[0][0]
+    assert session.statements[0][1]["schema_name"] == "tapdb_dev"
 
 
 def test_attach_aurora_password_provider_refreshes_iam_token(monkeypatch):

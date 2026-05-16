@@ -69,6 +69,7 @@ def test_resolve_tapdb_pool_config_from_tapdb_yaml(
         "    domain_code: Z\n"
         "    user: test\n"
         "    database: tapdb_dev\n"
+        "    schema_name: tapdb_tapdb_dev\n"
         "    cognito_user_pool_id: us-east-1_TESTPOOL\n"
         "    cognito_app_client_id: client123\n"
         "    cognito_client_name: tapdb\n"
@@ -110,7 +111,8 @@ def test_resolve_tapdb_pool_config_requires_pool_id(
         "    ui_port: 8911\n"
         "    domain_code: Z\n"
         "    user: test\n"
-        "    database: tapdb_dev\n",
+        "    database: tapdb_dev\n"
+        "    schema_name: tapdb_tapdb_dev\n",
     )
 
     set_cli_context(config_path=cfg_path, env_name="dev")
@@ -141,6 +143,7 @@ def test_resolve_tapdb_pool_config_requires_client_id(
         "    domain_code: Z\n"
         "    user: test\n"
         "    database: tapdb_dev\n"
+        "    schema_name: tapdb_tapdb_dev\n"
         "    cognito_user_pool_id: us-east-1_TESTPOOL\n"
         "    cognito_client_name: tapdb\n"
         "    cognito_region: us-east-1\n",
@@ -174,6 +177,7 @@ def test_resolve_tapdb_pool_config_requires_tapdb_client_name(
         "    domain_code: Z\n"
         "    user: test\n"
         "    database: tapdb_dev\n"
+        "    schema_name: tapdb_tapdb_dev\n"
         "    cognito_user_pool_id: us-east-1_TESTPOOL\n"
         "    cognito_app_client_id: client123\n"
         "    cognito_client_name: wrong-client\n"

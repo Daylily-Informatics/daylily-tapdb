@@ -33,7 +33,7 @@ dependencies = [
     "rich",
     "uuid6>=2024.1.12",
     "cli-core-yo==2.1.1",
-    "meridian-euid>=0.4.1,<0.4.3",
+    "meridian-euid==0.4.5",
 ]
 
 [project.optional-dependencies]

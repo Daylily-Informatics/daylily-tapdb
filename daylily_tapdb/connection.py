@@ -75,6 +75,7 @@ class TAPDBConnection:
         secret_arn: Optional[str] = None,
         domain_code: Optional[str] = None,
         owner_repo_name: Optional[str] = None,
+        schema_name: Optional[str] = None,
     ):
         """
         Initialize database connection.
@@ -99,6 +100,7 @@ class TAPDBConnection:
             secret_arn: Secrets Manager ARN for password (Aurora fallback).
             domain_code: Domain code for session scoping (1-4 chars). Required.
             owner_repo_name: Repo-name for session ownership scoping. Required.
+            schema_name: PostgreSQL schema to use as this session's search_path.
         """
         self.logger = logging.getLogger(__name__ + ".TAPDBConnection")
 
@@ -113,6 +115,7 @@ class TAPDBConnection:
             if owner_repo_name is not None
             else resolve_runtime_owner_repo_name()
         )
+        self.schema_name = (schema_name or "").strip() or None
         if not self.domain_code:
             raise ValueError(
                 "domain_code is required. Set MERIDIAN_DOMAIN_CODE env var or pass domain_code= param."
@@ -192,7 +195,7 @@ class TAPDBConnection:
         self,
         session: Session,
         statement: str,
-        params: Optional[dict[str, str]] = None,
+        params: Optional[dict[str, object]] = None,
         *,
         use_savepoint: bool,
         warning: str,
@@ -273,6 +276,20 @@ class TAPDBConnection:
             warning="Could not set session owner repo name",
         )
 
+    def _set_session_search_path(self, session: Session, *, local: bool) -> None:
+        """Set the PostgreSQL search_path for TAPDB runtime queries."""
+        if not self._is_postgresql_session(session):
+            return
+        if not self.schema_name:
+            raise ValueError("schema_name is required for PostgreSQL TAPDB sessions.")
+        self._execute_session_setting(
+            session,
+            "SELECT set_config('search_path', :schema_name, :is_local)",
+            {"schema_name": self.schema_name, "is_local": local},
+            use_savepoint=local,
+            warning="Could not set session search_path",
+        )
+
     def get_session(self) -> Session:
         """
         Get a new session.
@@ -285,6 +302,7 @@ class TAPDBConnection:
         """
         session = self._Session()
         self._set_session_timezone_utc(session, local=False)
+        self._set_session_search_path(session, local=False)
         self._set_session_domain_code(session, local=False)
         return session
 
@@ -309,6 +327,7 @@ class TAPDBConnection:
         try:
             # Must happen inside a transaction for SET LOCAL.
             self._set_session_timezone_utc(session, local=True)
+            self._set_session_search_path(session, local=True)
             self._set_session_domain_code(session, local=True)
             self._set_session_username(session)
             yield session

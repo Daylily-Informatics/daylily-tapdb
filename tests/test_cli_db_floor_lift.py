@@ -15,6 +15,7 @@ def _base_cfg(**overrides):
         "host": "localhost",
         "port": "5533",
         "database": "tapdb_dev",
+        "schema_name": "tapdb_app",
         "user": "tapdb",
         "password": "",
         "domain_code": "Z",
@@ -125,9 +126,11 @@ def test_db_sequence_baseline_and_run_psql_branches(
         db_mod, "_get_db_config", lambda _env: _base_cfg(password="secret")
     )
     captured_envs: list[dict[str, str]] = []
+    captured_cmds: list[list[str]] = []
 
     def _fake_run(cmd, capture_output=True, text=True, env=None):
         _ = (cmd, capture_output, text)
+        captured_cmds.append(cmd)
         captured_envs.append(env)
         return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
 
@@ -135,6 +138,8 @@ def test_db_sequence_baseline_and_run_psql_branches(
     ok, out = real_run_psql(db_mod.Environment.dev, sql="SELECT 1")
     assert ok is True
     assert captured_envs[-1]["PGPASSWORD"] == "secret"
+    assert "-c" in captured_cmds[-1]
+    assert 'SET search_path TO "tapdb_app"' in captured_cmds[-1]
 
     monkeypatch.setattr(
         db_mod.subprocess,
@@ -190,6 +195,18 @@ def test_db_role_counts_schema_and_drift_helpers(
     assert counts["generic_template"] == "?"
     assert counts["generic_instance"] is None
 
+    schema_sqls: list[str] = []
+    monkeypatch.setattr(
+        db_mod,
+        "_run_psql",
+        lambda _env, sql=None, **_kwargs: (
+            schema_sqls.append(sql or ""),
+            (True, ""),
+        )[1],
+    )
+    db_mod._ensure_schema_exists(db_mod.Environment.dev)
+    assert 'CREATE SCHEMA IF NOT EXISTS "tapdb_app"' in schema_sqls[-1]
+
     monkeypatch.setattr(db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "boom"))
     assert db_mod._schema_exists(db_mod.Environment.dev) is False
     monkeypatch.setattr(
@@ -218,10 +235,16 @@ def test_db_role_counts_schema_and_drift_helpers(
             "seq": dynamic_sequence_name,
         },
     )
+    live_inventory_calls: list[str | None] = []
+
+    def _fake_load_live_schema_inventory(session, schema_name=None):
+        live_inventory_calls.append(schema_name)
+        return {"live": True, "session": session, "schema_name": schema_name}
+
     monkeypatch.setattr(
         db_mod,
         "load_live_schema_inventory",
-        lambda session: {"live": True, "session": session},
+        _fake_load_live_schema_inventory,
     )
 
     class _Result:
@@ -266,6 +289,8 @@ def test_db_role_counts_schema_and_drift_helpers(
     assert has_drift is True
     assert payload["counts"]["expected"]["count"] == 1
     assert payload["counts"]["missing"]["count"] == 1
+    assert payload["schema_name"] == "public"
+    assert live_inventory_calls == ["tapdb_app"]
 
 
 def test_db_callback_create_and_delete_branches(
@@ -413,6 +438,10 @@ def test_db_schema_apply_status_and_drift_command_branches(
 
     monkeypatch.setattr(db_mod, "_find_schema_file", lambda: schema_file)
     monkeypatch.setattr(db_mod, "_schema_exists", lambda _env: True)
+    ensure_schema_calls: list[db_mod.Environment] = []
+    monkeypatch.setattr(
+        db_mod, "_ensure_schema_exists", lambda env: ensure_schema_calls.append(env)
+    )
     monkeypatch.setattr(
         db_mod, "_run_psql", lambda *_args, **_kwargs: (False, "schema apply failed")
     )
@@ -422,6 +451,7 @@ def test_db_schema_apply_status_and_drift_command_branches(
         db_mod.db_schema_apply(db_mod.Environment.dev, reinitialize=False)
     assert exc.value.exit_code == 1
     assert log_calls[-1][1] == "SCHEMA_APPLY_FAILED"
+    assert ensure_schema_calls == [db_mod.Environment.dev]
 
     monkeypatch.setattr(db_mod, "_run_psql", lambda *_args, **_kwargs: (True, ""))
     monkeypatch.setattr(

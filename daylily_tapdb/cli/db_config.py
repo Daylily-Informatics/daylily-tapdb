@@ -48,6 +48,7 @@ DEFAULT_DB_MAX_OVERFLOW = 10
 DEFAULT_DB_POOL_TIMEOUT = 30
 DEFAULT_DB_POOL_RECYCLE = 1800
 _POSTGRES_IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
+_SAFE_POSTGRES_IDENTIFIER_COMPONENT_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 
 def normalize_postgres_identifier_component(value: str) -> str:
@@ -72,6 +73,26 @@ def default_database_name_for_namespace(database_name: str, env_name: str) -> st
         f"{normalize_postgres_identifier_component(database_name)}_"
         f"{normalize_postgres_identifier_component(env_name)}"
     )
+
+
+def default_schema_name_for_database(database_name: str, env_name: str) -> str:
+    """Build the default schema name for a database namespace/env pair."""
+
+    return default_database_name_for_namespace(database_name, env_name)
+
+
+def validate_postgres_identifier_component(value: str, *, field_name: str) -> str:
+    """Validate an explicitly configured PostgreSQL identifier component."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        raise RuntimeError(f"{field_name} is required")
+    if not _SAFE_POSTGRES_IDENTIFIER_COMPONENT_RE.fullmatch(raw):
+        raise RuntimeError(
+            f"{field_name} must be a safe PostgreSQL identifier component "
+            "([a-z_][a-z0-9_]{0,62})"
+        )
+    return raw
 
 
 def get_config_paths(
@@ -266,6 +287,13 @@ def get_db_config_for_env(
         return str(val)
 
     engine_type = (_file_str("engine_type") or "local").strip().lower()
+    try:
+        schema_name = validate_postgres_identifier_component(
+            _file_str("schema_name") or "",
+            field_name=f"environments.{env_key}.schema_name",
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"Config {resolved_config_path}: {exc}") from exc
 
     cfg: dict[str, str] = {
         "engine_type": engine_type,
@@ -276,6 +304,7 @@ def get_db_config_for_env(
         "password": _file_str("password") or "",
         "secret_arn": _file_str("secret_arn") or "",
         "database": _file_str("database") or f"tapdb_{env_key}",
+        "schema_name": schema_name,
         "cognito_user_pool_id": _file_str("cognito_user_pool_id") or "",
         "cognito_app_client_id": _file_str("cognito_app_client_id") or "",
         "cognito_app_client_secret": _file_str("cognito_app_client_secret") or "",

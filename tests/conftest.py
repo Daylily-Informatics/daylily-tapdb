@@ -215,6 +215,7 @@ def pg_instance(tmp_path_factory):
                 "user": user,
                 "password": "",
                 "database": database,
+                "schema_name": "tapdb_testdb_dev",
             },
         },
     }
@@ -239,6 +240,7 @@ def pg_instance(tmp_path_factory):
         "config_dir": cfg_dir,
         "user": user,
         "database": database,
+        "schema_name": "tapdb_testdb_dev",
         "dsn": dsn,
         "base": base,
     }

@@ -15,6 +15,8 @@ def _ref(
     graph_expandable: bool = True,
     graph_data_path: str = "/api/graph/data",
     object_detail_path_template: str = "/api/object/{euid}",
+    relationship_type: str | None = None,
+    source_field: str | None = None,
     tenant_id: str | None = "tenant-1",
 ) -> eg.ExternalGraphRef:
     return eg.ExternalGraphRef(
@@ -29,6 +31,8 @@ def _ref(
         graph_data_path=graph_data_path,
         object_detail_path_template=object_detail_path_template,
         auth_mode=auth_mode,
+        relationship_type=relationship_type,
+        source_field=source_field,
     )
 
 
@@ -99,14 +103,19 @@ def test_external_ref_payloads_exposes_public_dicts():
         json_addl={
             "properties": {
                 "external_payload": {
-                    "tapdb_graph": {
-                        "system": "atlas",
-                        "root_euid": "A-1",
-                        "base_url": "https://atlas.local",
-                        "graph_data_path": "/api/graph/data",
-                        "object_detail_path_template": "/api/object/{euid}",
-                        "auth_mode": "none",
-                    }
+                    "tapdb_graph": [
+                        {
+                            "system": "atlas",
+                            "root_euid": "A-1",
+                            "base_url": "https://atlas.local",
+                            "graph_data_path": "/api/graph/data",
+                            "object_detail_path_template": "/api/object/{euid}",
+                            "auth_mode": "none",
+                            "label": "Atlas source object",
+                            "relationship_type": "derived_from",
+                            "source_field": "properties.atlas_euid",
+                        }
+                    ]
                 }
             }
         }
@@ -114,13 +123,15 @@ def test_external_ref_payloads_exposes_public_dicts():
 
     assert eg.external_ref_payloads(obj) == [
         {
-            "label": "atlas:A-1",
+            "label": "Atlas source object",
             "system": "atlas",
             "root_euid": "A-1",
             "tenant_id": None,
             "href": "https://atlas.local/api/object/A-1",
             "graph_expandable": True,
             "ref_index": 0,
+            "relationship_type": "derived_from",
+            "source_field": "properties.atlas_euid",
         }
     ]
 
@@ -267,7 +278,11 @@ def test_namespace_external_graph_namespaces_nodes_edges_and_bridge():
             ],
         }
     }
-    ref = _ref(tenant_id="tenant-1")
+    ref = _ref(
+        relationship_type="derived_from",
+        source_field="properties.atlas_euid",
+        tenant_id="tenant-1",
+    )
 
     out = eg.namespace_external_graph(
         payload,
@@ -287,5 +302,7 @@ def test_namespace_external_graph_namespaces_nodes_edges_and_bridge():
     assert edges[0]["data"]["target"] == "ext::atlas::tenant-1::R-2"
     assert edges[1]["data"]["is_external_bridge"] is True
     assert edges[1]["data"]["source"] == "TGX-10"
+    assert edges[1]["data"]["relationship_type"] == "derived_from"
+    assert edges[1]["data"]["source_field"] == "properties.atlas_euid"
     assert out["meta"]["node_count"] == 1
     assert out["meta"]["edge_count"] == 2

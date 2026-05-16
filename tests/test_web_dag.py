@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -90,6 +91,13 @@ def _build_fake_runtime_connection():
         json_addl={
             "properties": {
                 "color": "blue",
+                "graph": {
+                    "role": "source",
+                    "expected_fanout_max": 8,
+                    "collapse_by_default": False,
+                    "fanout_reason": "root specimen source",
+                    "debug": "do not expose",
+                },
                 "external_payload": {
                     "tapdb_graph": {
                         "system": "atlas",
@@ -103,7 +111,8 @@ def _build_fake_runtime_connection():
                 },
             }
         },
-        created_dt=None,
+        created_dt=datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        modified_dt=datetime(2024, 1, 3, 4, 5, 6, tzinfo=timezone.utc),
         is_deleted=False,
     )
     child = SimpleNamespace(
@@ -117,6 +126,7 @@ def _build_fake_runtime_connection():
         bstatus="active",
         json_addl={},
         created_dt=None,
+        modified_dt=None,
         is_deleted=False,
     )
     template = SimpleNamespace(
@@ -130,6 +140,7 @@ def _build_fake_runtime_connection():
         bstatus="active",
         json_addl={},
         created_dt=None,
+        modified_dt=None,
         is_deleted=False,
     )
     lineage = SimpleNamespace(
@@ -259,6 +270,18 @@ def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(
     assert node_ids == {"GX1", "GX2"}
     assert graph_body["elements"]["edges"][0]["data"]["source"] == "GX2"
     assert graph_body["elements"]["edges"][0]["data"]["target"] == "GX1"
+    root_node = next(
+        node["data"]
+        for node in graph_body["elements"]["nodes"]
+        if node["data"]["id"] == "GX1"
+    )
+    assert root_node["created_dt"] == "2024-01-02T03:04:05+00:00"
+    assert root_node["modified_dt"] == "2024-01-03T04:05:06+00:00"
+    assert root_node["role"] == "source"
+    assert root_node["expected_fanout_max"] == 8
+    assert root_node["collapse_by_default"] is False
+    assert root_node["fanout_reason"] == "root specimen source"
+    assert "debug" not in root_node
     assert (
         graph_body["elements"]["nodes"][0]["data"]["external_refs"][0]["root_euid"]
         == "AT-1"

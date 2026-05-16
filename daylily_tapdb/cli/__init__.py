@@ -26,7 +26,11 @@ from daylily_tapdb.cli.context import (
     resolve_context,
     set_cli_context,
 )
-from daylily_tapdb.cli.db_config import default_database_name_for_namespace
+from daylily_tapdb.cli.db_config import (
+    default_database_name_for_namespace,
+    default_schema_name_for_database,
+    validate_postgres_identifier_component,
+)
 from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.cli.spec import spec
 from daylily_tapdb.governance import (
@@ -1229,6 +1233,13 @@ def build_app():
                     prior.get("database")
                     or default_database_name_for_namespace(database_name, env_name)
                 ),
+                "schema_name": validate_postgres_identifier_component(
+                    str(
+                        prior.get("schema_name")
+                        or default_schema_name_for_database(database_name, env_name)
+                    ),
+                    field_name=f"environments.{env_name}.schema_name",
+                ),
                 "cognito_user_pool_id": str(prior.get("cognito_user_pool_id") or ""),
                 "support_email": str(prior.get("support_email") or ""),
             }
@@ -1403,6 +1414,9 @@ def build_app():
         database: Optional[str] = typer.Option(
             None, "--database", help="Database name"
         ),
+        schema_name: Optional[str] = typer.Option(
+            None, "--schema-name", help="PostgreSQL schema name"
+        ),
         cognito_user_pool_id: Optional[str] = typer.Option(
             None, "--cognito-user-pool-id", help="Bound Cognito user pool ID"
         ),
@@ -1528,6 +1542,7 @@ def build_app():
             "user",
             "password",
             "database",
+            "schema_name",
             "cognito_user_pool_id",
             "cognito_app_client_id",
             "cognito_app_client_secret",
@@ -1598,6 +1613,11 @@ def build_app():
             updates["password"] = str(password)
         if database is not None:
             updates["database"] = str(database).strip()
+        if schema_name is not None:
+            updates["schema_name"] = validate_postgres_identifier_component(
+                schema_name,
+                field_name="schema_name",
+            )
         if cognito_user_pool_id is not None:
             updates["cognito_user_pool_id"] = str(cognito_user_pool_id).strip()
         if cognito_app_client_id is not None:

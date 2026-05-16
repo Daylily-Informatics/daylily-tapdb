@@ -76,7 +76,8 @@ def _write_config(path: Path, *, queue_max: int) -> Path:
         "    domain_code: Z\n"
         "    user: tapdb\n"
         "    password: ''\n"
-        "    database: tapdb_dev\n",
+        "    database: tapdb_dev\n"
+        "    schema_name: tapdb_beta_dev\n",
         encoding="utf-8",
     )
     return path

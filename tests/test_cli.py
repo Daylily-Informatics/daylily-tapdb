@@ -108,6 +108,7 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "    user: test\n"
         '    password: ""\n'
         "    database: tapdb_dev\n"
+        "    schema_name: tapdb_testdb_dev\n"
         "  test:\n"
         "    engine_type: local\n"
         "    host: localhost\n"
@@ -117,6 +118,7 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "    user: test\n"
         '    password: ""\n'
         "    database: tapdb_test\n"
+        "    schema_name: tapdb_testdb_test\n"
         "  prod:\n"
         "    engine_type: local\n"
         "    host: localhost\n"
@@ -125,7 +127,8 @@ def _isolate_cli_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "    domain_code: Z\n"
         "    user: test\n"
         '    password: ""\n'
-        "    database: tapdb_prod\n",
+        "    database: tapdb_prod\n"
+        "    schema_name: tapdb_testdb_prod\n",
         encoding="utf-8",
     )
     os.chmod(cfg_path, 0o600)
@@ -427,7 +430,8 @@ class TestCLICognito:
             "    ui_port: 8911\n"
             "    domain_code: Z\n"
             "    user: test\n"
-            "    database: tapdb_dev\n",
+            "    database: tapdb_dev\n"
+            "    schema_name: tapdb_testdb_dev\n",
             encoding="utf-8",
         )
         result = runner.invoke(
@@ -832,6 +836,7 @@ class TestCLICognito:
                 "user": "test",
                 "password": "",
                 "database": "tapdb_dev",
+                "schema_name": "tapdb_testdb_dev",
                 "domain_code": "Z",
                 "owner_repo_name": "daylily-tapdb",
             },
@@ -1065,6 +1070,7 @@ class TestCLIBootstrap:
                             "user": "test",
                             "password": "",
                             "database": "tapdb_auruse1_daylily_tapdb_dev",
+                            "schema_name": "tapdb_auruse1_daylily_tapdb_dev",
                         }
                     },
                 },
@@ -1163,6 +1169,7 @@ class TestCLIBootstrap:
                             "user": "test",
                             "password": "",
                             "database": "tapdb_auruse1_daylily_tapdb_dev",
+                            "schema_name": "tapdb_auruse1_daylily_tapdb_dev",
                         }
                     },
                 },

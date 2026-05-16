@@ -74,7 +74,8 @@ def _isolate_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "    domain_code: Z\n"
         "    user: test\n"
         '    password: ""\n'
-        "    database: tapdb_dev\n",
+        "    database: tapdb_dev\n"
+        "    schema_name: tapdb_testdb_dev\n",
         encoding="utf-8",
     )
     os.chmod(cfg_path, 0o600)

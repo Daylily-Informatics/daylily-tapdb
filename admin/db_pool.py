@@ -64,12 +64,35 @@ def _set_audit_username(session: Session, username: Optional[str]) -> None:
         logger.warning("Could not set session audit username: %s", exc)
 
 
+def _require_schema_name(cfg: dict[str, str], *, env_name: str) -> str:
+    schema_name = str(cfg.get("schema_name") or "").strip()
+    if not schema_name:
+        raise RuntimeError(
+            f"Config for env {env_name!r} is missing required field: schema_name"
+        )
+    return schema_name
+
+
+def _set_search_path(session: Session, schema_name: str) -> None:
+    """Set per-transaction PostgreSQL search_path for TAPDB queries."""
+    bind = getattr(session, "bind", None)
+    dialect = getattr(bind, "dialect", None)
+    dialect_name = str(getattr(dialect, "name", "") or "").strip().lower()
+    if dialect_name != "postgresql":
+        return
+    session.execute(
+        text("SELECT set_config('search_path', :schema_name, true)"),
+        {"schema_name": schema_name},
+    )
+
+
 @dataclass(frozen=True)
 class EngineBundle:
     env_name: str
     engine: Engine
     SessionFactory: sessionmaker
     cfg: dict[str, str]
+    schema_name: str
 
 
 class AdminDBConnection:
@@ -94,6 +117,7 @@ class AdminDBConnection:
         trans = session.begin()
         token = db_username_var.set(_audit_username_for_session(self.app_username))
         try:
+            _set_search_path(session, self._bundle.schema_name)
             _set_audit_username(session, self.app_username)
             yield session
             if commit:
@@ -181,6 +205,7 @@ def _attach_aurora_password_provider(
 
 
 def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
+    _require_schema_name(cfg, env_name=env_name)
     engine_type = (cfg.get("engine_type") or "local").strip().lower()
     echo_sql = _parse_bool(os.environ.get("ECHO_SQL"), default=False)
 
@@ -243,13 +268,18 @@ def get_engine_bundle(env_name: str) -> EngineBundle:
             return cached
 
         cfg = get_db_config_for_env(env)
+        schema_name = _require_schema_name(cfg, env_name=env)
         engine = _build_engine_for_cfg(cfg, env_name=env)
         from admin.db_metrics import maybe_install_engine_metrics
 
         maybe_install_engine_metrics(engine, env_name=env)
         SessionFactory = sessionmaker(bind=engine)
         bundle = EngineBundle(
-            env_name=env, engine=engine, SessionFactory=SessionFactory, cfg=cfg
+            env_name=env,
+            engine=engine,
+            SessionFactory=SessionFactory,
+            cfg=cfg,
+            schema_name=schema_name,
         )
         _bundles_by_env[env] = bundle
         return bundle
