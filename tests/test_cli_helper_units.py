@@ -51,7 +51,9 @@ def _write_config(path: Path, *, engine_type: str = "local") -> Path:
         "  database: tapdb_shared\n"
         "  schema_name: tapdb_testdb\n"
         "  region: us-west-2\n"
+        "  cluster_identifier: tapdb-shared\n"
         "  iam_auth: 'false'\n"
+        "  ssl: 'true'\n"
         "safety:\n"
         "  safety_tier: shared\n"
         "  destructive_operations: confirm_required\n",

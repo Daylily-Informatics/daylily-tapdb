@@ -207,8 +207,8 @@ class AuroraConnectionBuilder:
         port: int = 5432,
         database: str,
         user: str,
-        region: str = "us-west-2",
-        iam_auth: bool = True,
+        region: str,
+        iam_auth: bool,
         secret_arn: Optional[str] = None,
         password: Optional[str] = None,
     ) -> str:
@@ -226,8 +226,8 @@ class AuroraConnectionBuilder:
             user: Database username.
             region: AWS region.
             iam_auth: Use IAM database authentication.
-            secret_arn: Secrets Manager ARN for password fallback.
-            password: Explicit password (lowest priority).
+            secret_arn: Secrets Manager ARN for password authentication.
+            password: Explicit password.
 
         Returns:
             SQLAlchemy connection URL string.

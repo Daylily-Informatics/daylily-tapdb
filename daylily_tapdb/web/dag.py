@@ -201,7 +201,12 @@ def create_tapdb_dag_router(
                         ref_index=ref_index,
                         source_euid=source_euid,
                     )
-                    out.setdefault("meta", {})
+                    meta = out.get("meta")
+                    if not isinstance(meta, dict):
+                        raise HTTPException(
+                            status_code=502,
+                            detail="external DAG response missing meta object",
+                        )
                     out["meta"].update(
                         {
                             "source_euid": source_euid,
@@ -236,8 +241,8 @@ def create_tapdb_dag_router(
                     raise HTTPException(status_code=404, detail=str(exc)) from exc
                 try:
                     payload = fetch_remote_object_detail(request, ref, euid=euid)
-                    payload.setdefault("system", ref.system)
-                    payload.setdefault("contract_version", CONTRACT_VERSION)
+                    payload["system"] = ref.system
+                    payload["contract_version"] = CONTRACT_VERSION
                     return payload
                 except Exception as exc:
                     raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -58,11 +58,6 @@ TEMPLATE_MODEL_BY_DISCRIMINATOR = {
 }
 
 _CORE_TEMPLATE_PREFIXES = {"SYS", "MSG"}
-_DEFAULT_TAPDB_CONFIG_DIR = Path.home() / ".config" / "tapdb"
-_DEFAULT_DOMAIN_REGISTRY_PATH = _DEFAULT_TAPDB_CONFIG_DIR / "domain_code_registry.json"
-_DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH = (
-    _DEFAULT_TAPDB_CONFIG_DIR / "prefix_ownership_registry.json"
-)
 
 
 def _normalize_domain_scope(domain_code: str | None) -> str:
@@ -401,7 +396,11 @@ def find_duplicate_template_keys(
     for template in templates:
         key = _template_key(template)
         source = str(template.get("_source_file") or "(unknown)")
-        key_sources.setdefault(key, []).append(source)
+        sources = key_sources.get(key)
+        if sources is None:
+            sources = []
+            key_sources[key] = sources
+        sources.append(source)
     return {key: sources for key, sources in key_sources.items() if len(sources) > 1}
 
 
@@ -881,8 +880,8 @@ def _validate_seed_ownership(
     *,
     domain_code: str,
     owner_repo_name: str,
-    domain_registry_path: Path = _DEFAULT_DOMAIN_REGISTRY_PATH,
-    prefix_registry_path: Path = _DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH,
+    domain_registry_path: Path,
+    prefix_registry_path: Path,
 ) -> None:
     domain_registry = _load_domain_registry(domain_registry_path)
     prefix_registry = _load_prefix_ownership_registry(prefix_registry_path)

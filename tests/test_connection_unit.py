@@ -10,6 +10,19 @@ def _preset_domain_env(monkeypatch):
     monkeypatch.setenv("TAPDB_OWNER_REPO", "daylily-tapdb")
 
 
+def _conn_kwargs(**overrides):
+    values = {
+        "db_user": "tapdb",
+        "app_username": "pytest",
+        "domain_code": "Z",
+        "owner_repo_name": "daylily-tapdb",
+        "echo_sql": False,
+        "engine_type": "local",
+    }
+    values.update(overrides)
+    return values
+
+
 def test_connection_builds_default_url_and_creates_engine(monkeypatch):
     from daylily_tapdb import connection as m
 
@@ -30,8 +43,15 @@ def test_connection_builds_default_url_and_creates_engine(monkeypatch):
     monkeypatch.setattr(m, "create_engine", fake_create_engine)
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
-    conn = m.TAPDBConnection(db_url=None, db_name="tapdb")
-    assert "postgresql://alice:@localhost:5533/tapdb" == called["url"]
+    conn = m.TAPDBConnection(
+        **_conn_kwargs(
+            db_url=None,
+            db_hostname="localhost:5533",
+            db_pass="",
+            db_name="tapdb",
+        )
+    )
+    assert "postgresql://tapdb:@localhost:5533/tapdb" == called["url"]
     assert conn.engine is not None
 
 
@@ -43,7 +63,7 @@ def test_set_session_username_logs_and_swallows_execute_error(monkeypatch, caplo
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:", app_username="pytest")
+    conn = m.TAPDBConnection(**_conn_kwargs(db_url="sqlite:///:memory:"))
 
     class BadSession:
         def execute(self, *a, **k):
@@ -64,10 +84,7 @@ def test_set_session_domain_code_executes_for_postgresql(monkeypatch):
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(
-        db_url="sqlite:///:memory:",
-        domain_code="Z",
-        owner_repo_name="daylily-tapdb",
-        schema_name="tapdb_unit",
+        **_conn_kwargs(db_url="sqlite:///:memory:", schema_name="tapdb_unit")
     )
 
     stmts: list[str] = []
@@ -99,8 +116,8 @@ def test_missing_domain_env_raises(monkeypatch):
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
-    with pytest.raises(ValueError, match="MERIDIAN_DOMAIN_CODE is required"):
-        m.TAPDBConnection(db_url="sqlite:///:memory:")
+    with pytest.raises(ValueError, match="domain_code is required"):
+        m.TAPDBConnection(**_conn_kwargs(db_url="sqlite:///:memory:", domain_code=None))
 
 
 def test_set_session_domain_code_skips_non_postgresql(monkeypatch):
@@ -110,7 +127,7 @@ def test_set_session_domain_code_skips_non_postgresql(monkeypatch):
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
+    conn = m.TAPDBConnection(**_conn_kwargs(db_url="sqlite:///:memory:"))
 
     calls = {"execute": 0}
 
@@ -135,9 +152,7 @@ def test_session_scope_commit_true_commits(monkeypatch):
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(
-        db_url="sqlite:///:memory:",
-        app_username="pytest",
-        schema_name="tapdb_unit",
+        **_conn_kwargs(db_url="sqlite:///:memory:", schema_name="tapdb_unit")
     )
 
     class Trans:
@@ -192,9 +207,7 @@ def test_session_scope_commit_false_rolls_back(monkeypatch):
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(
-        db_url="sqlite:///:memory:",
-        app_username="pytest",
-        schema_name="tapdb_unit",
+        **_conn_kwargs(db_url="sqlite:///:memory:", schema_name="tapdb_unit")
     )
 
     class Trans:
@@ -245,9 +258,7 @@ def test_session_scope_exception_rolls_back_and_reraises(monkeypatch):
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(
-        db_url="sqlite:///:memory:",
-        app_username="pytest",
-        schema_name="tapdb_unit",
+        **_conn_kwargs(db_url="sqlite:///:memory:", schema_name="tapdb_unit")
     )
 
     class Trans:
@@ -306,7 +317,7 @@ def test_reflect_tables_and_close_handle_exceptions(monkeypatch, caplog):
 
     monkeypatch.setattr(m, "create_engine", lambda *a, **k: Engine())
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
+    conn = m.TAPDBConnection(**_conn_kwargs(db_url="sqlite:///:memory:"))
 
     prepared = {}
 
@@ -330,7 +341,7 @@ def test_set_session_timezone_utc_skips_non_postgresql(monkeypatch):
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
+    conn = m.TAPDBConnection(**_conn_kwargs(db_url="sqlite:///:memory:"))
 
     calls = {"execute": 0}
 
@@ -354,7 +365,7 @@ def test_set_session_timezone_utc_is_noop_for_postgresql(monkeypatch):
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
+    conn = m.TAPDBConnection(**_conn_kwargs(db_url="sqlite:///:memory:"))
 
     calls = {"execute": 0}
 
@@ -378,7 +389,9 @@ def test_set_session_search_path_executes_for_postgresql(monkeypatch):
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:", schema_name="tapdb_unit")
+    conn = m.TAPDBConnection(
+        **_conn_kwargs(db_url="sqlite:///:memory:", schema_name="tapdb_unit")
+    )
 
     calls = []
 
@@ -406,7 +419,7 @@ def test_set_session_search_path_requires_schema_for_postgresql(monkeypatch):
         m, "create_engine", lambda *a, **k: types.SimpleNamespace(dispose=lambda: None)
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
-    conn = m.TAPDBConnection(db_url="sqlite:///:memory:")
+    conn = m.TAPDBConnection(**_conn_kwargs(db_url="sqlite:///:memory:"))
 
     class Sess:
         def __init__(self):
@@ -428,9 +441,7 @@ def test_session_scope_domain_setup_failure_does_not_abort_outer_transaction(
     )
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
     conn = m.TAPDBConnection(
-        db_url="sqlite:///:memory:",
-        app_username="pytest",
-        schema_name="tapdb_unit",
+        **_conn_kwargs(db_url="sqlite:///:memory:", schema_name="tapdb_unit")
     )
 
     class Trans:

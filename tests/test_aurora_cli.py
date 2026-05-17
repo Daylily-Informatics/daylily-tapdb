@@ -63,6 +63,8 @@ def _write_config(path: Path) -> Path:
         "  database: tapdb_dev\n"
         "  schema_name: tapdb_testdb\n"
         "  cluster_identifier: dev\n"
+        "  iam_auth: 'true'\n"
+        "  ssl: 'true'\n"
         "safety:\n"
         "  safety_tier: shared\n"
         "  destructive_operations: blocked\n",

@@ -21,8 +21,8 @@ from daylily_tapdb.models.template import (
     workflow_template,
 )
 from daylily_tapdb.schema_inventory import (
-    build_expected_schema_inventory,
     diff_schema_inventory,
+    load_expected_schema_inventory,
     load_live_schema_inventory,
     schema_asset_files,
 )
@@ -31,6 +31,19 @@ from daylily_tapdb.templates.mutation import allow_template_mutations
 from tests.conftest import resolve_tapdb_test_dsn
 
 _UNSET = object()
+
+
+def _conn_kwargs(**overrides):
+    values = {
+        "db_user": "tapdb",
+        "app_username": "pytest",
+        "domain_code": "T",
+        "owner_repo_name": "daylily-tapdb",
+        "echo_sql": False,
+        "engine_type": "local",
+    }
+    values.update(overrides)
+    return values
 
 
 def _set_runtime_prefix_env(monkeypatch, prefix=_UNSET) -> None:
@@ -230,7 +243,7 @@ def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch, pytestconfig
     _install_schema(dsn, schema_name, schema_sql_path)
 
     try:
-        conn = TAPDBConnection(db_url=dsn, app_username="pytest")
+        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
         tm = TemplateManager()
         factory = InstanceFactory(tm)
 
@@ -328,7 +341,7 @@ def test_postgres_identity_triggers_respect_runtime_prefix_override(
     _install_schema(dsn, schema_name, schema_sql_path)
 
     try:
-        conn = TAPDBConnection(db_url=dsn, app_username="pytest")
+        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
         with conn.session_scope(commit=False) as session:
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
             _seed_identity_prefixes(session, "AGX")
@@ -400,12 +413,12 @@ def test_postgres_schema_drift_check_smoke(pytestconfig):
     _install_schema(dsn, schema_name, schema_sql_path)
 
     try:
-        conn = TAPDBConnection(db_url=dsn, app_username="pytest")
+        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
         with conn.session_scope(commit=True) as session:
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
             _seed_identity_prefixes(session, "AGX")
 
-        expected = build_expected_schema_inventory(
+        expected = load_expected_schema_inventory(
             schema_asset_files(schema_root),
             dynamic_sequence_name="agx_instance_seq",
         )
