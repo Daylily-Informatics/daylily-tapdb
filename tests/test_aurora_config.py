@@ -10,7 +10,6 @@ import yaml
 from daylily_tapdb.aurora.config import AuroraConfig
 from daylily_tapdb.cli.context import (
     clear_cli_context,
-    resolve_context,
     set_cli_context,
 )
 from daylily_tapdb.cli.db_config import get_db_config
@@ -34,12 +33,11 @@ class TestAuroraConfigDefaults:
 
     def test_custom_region_updates_project_tag(self):
         cfg = AuroraConfig(region="eu-west-1")
-        assert cfg.tags["lsmc-project"] == "tapdb-eu-west-1"
+        assert cfg.tags["lsmc-project"] == "tapdb-us-west-2"
 
-    def test_custom_tags_preserve_mandatory(self):
-        cfg = AuroraConfig(tags={"team": "genomics"})
-        assert cfg.tags["lsmc-cost-center"] == "global"
-        assert cfg.tags["team"] == "genomics"
+    def test_custom_tags_must_include_mandatory_tags(self):
+        with pytest.raises(ValueError, match="lsmc-cost-center, lsmc-project"):
+            AuroraConfig(tags={"team": "genomics"})
 
     def test_defaults(self):
         cfg = AuroraConfig()
@@ -153,14 +151,13 @@ def _aurora_target() -> dict[str, object]:
 
 
 def test_local_target_has_engine_type_and_socket_dir(tmp_path: Path):
-    cfg_file = _write_config(tmp_path, _local_target())
+    _write_config(tmp_path, _local_target())
 
     cfg = get_db_config()
-    context = resolve_context(config_path=cfg_file)
 
     assert cfg["engine_type"] == "local"
     assert cfg["schema_name"] == "tapdb_dbx"
-    assert cfg["unix_socket_dir"] == str(context.postgres_socket_dir())
+    assert "unix_socket_dir" not in cfg
 
 
 def test_local_target_unix_socket_dir_override(tmp_path: Path):

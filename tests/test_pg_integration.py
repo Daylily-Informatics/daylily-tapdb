@@ -19,6 +19,19 @@ from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 runner = CliRunner()
 
 
+def _conn_kwargs(**overrides):
+    values = {
+        "db_user": "tapdb",
+        "app_username": "pytest",
+        "domain_code": "Z",
+        "owner_repo_name": "daylily-tapdb",
+        "echo_sql": False,
+        "engine_type": "local",
+    }
+    values.update(overrides)
+    return values
+
+
 @pytest.fixture(autouse=True)
 def _set_context(pg_instance, monkeypatch):
     """Wire up CLI context to point at the ephemeral PG cluster."""
@@ -137,7 +150,9 @@ class TestConnectionModule:
         from daylily_tapdb.connection import TAPDBConnection
 
         info = pg_instance
-        conn_obj = TAPDBConnection(db_url=info["dsn"], schema_name=info["schema_name"])
+        conn_obj = TAPDBConnection(
+            **_conn_kwargs(db_url=info["dsn"], schema_name=info["schema_name"])
+        )
         with conn_obj as c:
             with c.session_scope(commit=False) as session:
                 val = session.execute(text("SELECT current_database()")).scalar()
@@ -148,8 +163,10 @@ class TestConnectionModule:
         from daylily_tapdb.connection import TAPDBConnection
 
         conn_obj = TAPDBConnection(
-            db_url=pg_instance["dsn"],
-            schema_name=pg_instance["schema_name"],
+            **_conn_kwargs(
+                db_url=pg_instance["dsn"],
+                schema_name=pg_instance["schema_name"],
+            )
         )
         with conn_obj as c:
             with c.session_scope(commit=True) as session:

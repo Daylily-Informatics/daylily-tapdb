@@ -21,7 +21,6 @@ For write operations:
 """
 
 import logging
-import os
 from contextlib import contextmanager
 from typing import Generator, Optional
 
@@ -29,13 +28,7 @@ from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session, sessionmaker
 
-from daylily_tapdb.euid import (
-    resolve_runtime_domain_code,
-    resolve_runtime_owner_repo_name,
-)
-
 logger = logging.getLogger(__name__)
-DEFAULT_TAPDB_POSTGRES_PORT = "5533"
 
 
 class TAPDBConnection:
@@ -82,52 +75,45 @@ class TAPDBConnection:
 
         Args:
             db_url: Full database URL (overrides other db_* params)
-            db_url_prefix: Database URL prefix (default: postgresql://)
-            db_hostname: Database host:port (default: localhost:5533)
+            db_url_prefix: Database URL prefix. Required when db_url is not supplied.
+            db_hostname: Database host:port. Required when db_url is not supplied.
             db_pass: Database password
-            db_user: Database user (default: $USER)
-            db_name: Database name (default: tapdb)
-            app_username: Username for audit logging (default: $USER)
-            echo_sql: Log SQL statements (default: $ECHO_SQL env var)
+            db_user: Database user. Required when db_url is not supplied.
+            db_name: Database name. Required when db_url is not supplied.
+            app_username: Username for audit logging. Required.
+            echo_sql: Log SQL statements.
             pool_size: Connection pool size
             max_overflow: Max connections above pool_size
             pool_timeout: Seconds to wait for connection
             pool_recycle: Seconds before connection recycled
-            engine_type: Connection type — None or "local" for local PG,
+            engine_type: Connection type — "local" for local PG,
                 "aurora" for Aurora PostgreSQL with SSL + IAM auth.
             region: AWS region (only used when engine_type="aurora").
             iam_auth: Use IAM database authentication (Aurora only).
-            secret_arn: Secrets Manager ARN for password (Aurora fallback).
+            secret_arn: Secrets Manager ARN for Aurora password retrieval.
             domain_code: Domain code for session scoping (1-4 chars). Required.
             owner_repo_name: Repo-name for session ownership scoping. Required.
             schema_name: PostgreSQL schema to use as this session's search_path.
         """
         self.logger = logging.getLogger(__name__ + ".TAPDBConnection")
 
-        # Resolve defaults from environment
-        db_user = db_user or os.environ.get("USER", "tapdb")
-        self.app_username = app_username or os.environ.get("USER", "tapdb_orm")
-        self.domain_code = (
-            domain_code if domain_code is not None else resolve_runtime_domain_code()
-        )
-        self.owner_repo_name = (
-            owner_repo_name
-            if owner_repo_name is not None
-            else resolve_runtime_owner_repo_name()
-        )
+        if not db_user:
+            raise ValueError("db_user is required")
+        if not app_username:
+            raise ValueError("app_username is required")
+        self.app_username = app_username
+        self.domain_code = domain_code
+        self.owner_repo_name = owner_repo_name
         self.schema_name = (schema_name or "").strip() or None
         if not self.domain_code:
-            raise ValueError(
-                "domain_code is required. Set MERIDIAN_DOMAIN_CODE env var or pass domain_code= param."
-            )
+            raise ValueError("domain_code is required")
         if not self.owner_repo_name:
-            raise ValueError(
-                "owner_repo_name is required. Set TAPDB_OWNER_REPO env var or pass owner_repo_name= param."
-            )
+            raise ValueError("owner_repo_name is required")
 
         if echo_sql is None:
-            echo_env = os.environ.get("ECHO_SQL", "").lower()
-            echo_sql = echo_env in ("true", "1", "yes")
+            raise ValueError("echo_sql is required")
+        if engine_type not in {"local", "aurora"}:
+            raise ValueError("engine_type must be 'local' or 'aurora'")
 
         # Build database URL
         if db_url:
@@ -142,13 +128,10 @@ class TAPDBConnection:
                     "db_hostname (Aurora cluster endpoint) is required "
                     "when engine_type='aurora'."
                 )
-            # Split host:port if provided together
-            if ":" in db_hostname:
-                host, port_str = db_hostname.rsplit(":", 1)
-                port = int(port_str)
-            else:
-                host = db_hostname
-                port = 5432
+            if ":" not in db_hostname:
+                raise ValueError("db_hostname must include an explicit port for Aurora")
+            host, port_str = db_hostname.rsplit(":", 1)
+            port = int(port_str)
 
             self._db_url = AuroraConnectionBuilder.build_connection_url(
                 host=host,
@@ -160,10 +143,15 @@ class TAPDBConnection:
                 secret_arn=secret_arn,
                 password=db_pass,
             )
-        else:
-            # Local PostgreSQL (original behaviour)
-            db_hostname = db_hostname or f"localhost:{DEFAULT_TAPDB_POSTGRES_PORT}"
-            db_pass = db_pass or ""
+        elif engine_type == "local":
+            if not db_hostname:
+                raise ValueError("db_hostname is required when engine_type='local'")
+            if db_pass is None:
+                raise ValueError("db_pass is required when engine_type='local'")
+            if not db_user:
+                raise ValueError("db_user is required when engine_type='local'")
+            if not db_name:
+                raise ValueError("db_name is required when engine_type='local'")
             self._db_url = f"{db_url_prefix}{db_user}:{db_pass}@{db_hostname}/{db_name}"
 
         # Create engine with connection pooling

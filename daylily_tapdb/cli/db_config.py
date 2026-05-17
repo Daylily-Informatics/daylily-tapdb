@@ -24,8 +24,6 @@ from daylily_tapdb.euid import (
     SYSTEM_USER_PREFIX,
 )
 from daylily_tapdb.governance import (
-    DEFAULT_DOMAIN_REGISTRY_PATH,
-    DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH,
     GovernanceContext,
     normalize_owner_repo_name,
 )
@@ -259,13 +257,10 @@ def get_db_config(
             f"Config {resolved_config_path} is missing valid meta.owner_repo_name: {exc}"
         ) from exc
     domain_registry_path = Path(
-        str(meta.get("domain_registry_path") or DEFAULT_DOMAIN_REGISTRY_PATH)
+        _require_file_str(meta, "domain_registry_path", resolved_config_path)
     ).expanduser()
     prefix_ownership_registry_path = Path(
-        str(
-            meta.get("prefix_ownership_registry_path")
-            or DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH
-        )
+        _require_file_str(meta, "prefix_ownership_registry_path", resolved_config_path)
     ).expanduser()
 
     file_cfg = root.get("target") if isinstance(root, dict) else None
@@ -281,7 +276,7 @@ def get_db_config(
             return None
         return str(val)
 
-    engine_type = (_file_str("engine_type") or "local").strip().lower()
+    engine_type = _require_file_str(file_cfg, "engine_type", resolved_config_path).lower()
     try:
         schema_name = validate_postgres_identifier_component(
             _file_str("schema_name") or "",
@@ -290,11 +285,15 @@ def get_db_config(
     except RuntimeError as exc:
         raise RuntimeError(f"Config {resolved_config_path}: {exc}") from exc
 
-    safety = root.get("safety") if isinstance(root.get("safety"), dict) else {}
-    safety_tier = str(safety.get("safety_tier") or "local").strip().lower()
-    destructive_operations = (
-        str(safety.get("destructive_operations") or "confirm_required").strip().lower()
-    )
+    safety = root.get("safety")
+    if not isinstance(safety, dict):
+        raise RuntimeError(f"Config {resolved_config_path} is missing safety mapping.")
+    safety_tier = _require_file_str(safety, "safety_tier", resolved_config_path).lower()
+    destructive_operations = _require_file_str(
+        safety,
+        "destructive_operations",
+        resolved_config_path,
+    ).lower()
     if safety_tier not in {"local", "shared", "production"}:
         raise RuntimeError(
             "TapDB config safety.safety_tier must be one of: local, shared, production."
@@ -348,16 +347,12 @@ def get_db_config(
     cfg["config_path"] = str(resolved_config_path)
 
     if engine_type == "aurora":
-        cfg.setdefault("region", _file_str("region") or "us-west-2")
-        cfg.setdefault("cluster_identifier", _file_str("cluster_identifier") or "")
-        cfg.setdefault("iam_auth", _file_str("iam_auth") or "true")
-        cfg.setdefault("secret_arn", _file_str("secret_arn") or "")
-        cfg.setdefault("ssl", _file_str("ssl") or "true")
+        for key in ("region", "cluster_identifier", "iam_auth", "ssl"):
+            _require_file_str(file_cfg, key, resolved_config_path)
     else:
-        cfg.setdefault(
-            "unix_socket_dir",
-            _file_str("unix_socket_dir") or str(ctx.postgres_socket_dir()),
-        )
+        unix_socket_dir = _file_str("unix_socket_dir")
+        if unix_socket_dir:
+            cfg["unix_socket_dir"] = unix_socket_dir
 
         # Local connections must always use localhost to avoid accidental cross-host
         # reuse.

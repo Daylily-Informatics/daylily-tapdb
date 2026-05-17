@@ -35,14 +35,14 @@ console = Console()
 def _open_connection(env: Environment, *, app_username: str) -> TAPDBConnection:
     _ = env
     cfg = get_db_config()
-    engine_type = (cfg.get("engine_type") or "local").strip().lower()
-    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in (
+    engine_type = str(cfg["engine_type"]).strip().lower()
+    iam_auth = str(cfg["iam_auth"]).strip().lower() in (
         "true",
         "1",
         "yes",
         "on",
     )
-    region = (cfg.get("region") or "us-west-2").strip()
+    region = str(cfg["region"]).strip()
     return TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_user=cfg["user"],

@@ -55,6 +55,8 @@ source ./activate
 
 Always use `tapdb` CLI commands for database operations. Never run raw SQL or shell scripts.
 
+Fallback behavior is an antipattern in this workspace. Do not add, preserve, or rely on inferred config paths, dev/prd environment selectors, default database names, default schemas, default users, compatibility shims, generated substitute values, or silent public-schema/localhost behavior unless the user explicitly approves that exact behavior in the current thread. Missing config path, target identity, physical DB fields, schema name, safety policy, credentials, or malformed command shape must fail hard with a clear error.
+
 ```bash
 tapdb --config <path> bootstrap local       # Full local setup
 tapdb --config <path> db schema apply       # Apply schema

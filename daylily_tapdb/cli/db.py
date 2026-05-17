@@ -25,10 +25,9 @@ from daylily_tapdb.euid import (
     GENERIC_TEMPLATE_PREFIX,
 )
 from daylily_tapdb.schema_inventory import (
-    build_expected_schema_inventory,
     diff_schema_inventory,
     drift_entry_counts,
-    inventory_counts,
+    load_expected_schema_inventory,
     load_live_schema_inventory,
     schema_asset_files,
 )
@@ -671,7 +670,7 @@ def _run_schema_drift_check(
     identity_prefixes = _required_identity_prefixes(env)
     dynamic_sequence = _shared_sequence_name(identity_prefixes["generic_template"])
 
-    expected = build_expected_schema_inventory(
+    expected = load_expected_schema_inventory(
         asset_paths,
         dynamic_sequence_name=dynamic_sequence,
     )
@@ -693,8 +692,8 @@ def _run_schema_drift_check(
     has_drift = drift_result.has_drift
     payload = drift_result.to_payload()
     payload["counts"] = {
-        "expected": inventory_counts(drift_result.expected),
-        "live": inventory_counts(drift_result.live),
+        "expected": drift_result.expected.counts(),
+        "live": drift_result.live.counts(),
         "missing": drift_entry_counts(drift_result.missing),
         "unexpected": drift_entry_counts(drift_result.unexpected),
     }
@@ -839,10 +838,7 @@ def db_schema_apply(
         False,
         "--reinitialize",
         "-r",
-        help=(
-            "Compatibility flag. Schema apply is idempotent and refreshes "
-            "existing objects."
-        ),
+        help="Re-apply idempotent schema operations and refresh existing objects.",
     ),
 ):
     """Apply TAPDB schema to an existing database."""
@@ -1619,14 +1615,14 @@ def _tapdb_connection_for_env(
     app_username: str,
 ) -> TAPDBConnection:
     cfg = _get_db_config(env)
-    engine_type = (cfg.get("engine_type") or "local").strip().lower()
-    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in {
+    engine_type = str(cfg["engine_type"]).strip().lower()
+    iam_auth = str(cfg["iam_auth"]).strip().lower() in {
         "true",
         "1",
         "yes",
         "on",
     }
-    region = (cfg.get("region") or "us-west-2").strip()
+    region = str(cfg["region"]).strip()
     db_pass = cfg.get("password") or None
     secret_arn = cfg.get("secret_arn") or None
     return TAPDBConnection(
@@ -1661,14 +1657,14 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
     from daylily_tapdb.cli.user import _hash_password
     from daylily_tapdb.user_store import create_or_get
 
-    engine_type = (cfg.get("engine_type") or "local").strip().lower()
-    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in (
+    engine_type = str(cfg["engine_type"]).strip().lower()
+    iam_auth = str(cfg["iam_auth"]).strip().lower() in (
         "true",
         "1",
         "yes",
         "on",
     )
-    region = (cfg.get("region") or "us-west-2").strip()
+    region = str(cfg["region"]).strip()
     db_pass = cfg.get("password") or None
     secret_arn = cfg.get("secret_arn") or None
 
@@ -1734,8 +1730,8 @@ def db_seed(
     By default, seeds only CORE templates (generic + actor templates, including
     generic/external_object_link).
 
-    --include-workflow is retained for compatibility and includes optional
-    non-core template packs when present in the provided config directory.
+    --include-workflow includes optional non-core template packs when present
+    in the provided config directory.
     """
     env = Environment.target
     cfg = _get_db_config(env)
@@ -1816,7 +1812,11 @@ def db_seed(
     by_type = {}
     for t in templates:
         st = t.get("category", "unknown")
-        by_type.setdefault(st, []).append(t)
+        category_entries = by_type.get(st)
+        if category_entries is None:
+            category_entries = []
+            by_type[st] = category_entries
+        category_entries.append(t)
 
     ccyo_out.print_text("\n[bold]Templates by category:[/bold]")
     for st, tlist in sorted(by_type.items()):
@@ -1905,8 +1905,8 @@ def db_setup(
     By default, seeds only CORE templates (generic + actor templates, including
     generic/external_object_link).
 
-    --include-workflow is retained for compatibility and includes optional
-    non-core template packs when present in the provided config directory.
+    --include-workflow includes optional non-core template packs when present
+    in the provided config directory.
 
     Combines: tapdb db create + tapdb db schema apply + tapdb db data seed
 

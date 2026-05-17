@@ -333,20 +333,10 @@ class TestAdminQueryHelpers:
         result = list_events_by_destination(session, "svc://test", status="failed")
         assert result == []
 
-    def test_list_by_destination_alias(self):
-        from daylily_tapdb.outbox.queries import list_by_destination
+    def test_list_by_destination_alias_removed(self):
+        import daylily_tapdb.outbox.queries as queries
 
-        session = mock.MagicMock()
-        session.execute.return_value.scalars.return_value.all.return_value = []
-
-        result = list_by_destination(
-            session,
-            "svc://test",
-            domain_code="A",
-            issuer_app_code="APPA",
-            status="failed",
-        )
-        assert result == []
+        assert not hasattr(queries, "list_by_destination")
 
     def test_get_outbox_event_by_receipt_uuid(self):
         from daylily_tapdb.outbox.queries import get_outbox_event_by_receipt_uuid

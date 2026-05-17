@@ -28,11 +28,7 @@ from daylily_tapdb.cli.context import (
 from daylily_tapdb.cli.db_config import validate_postgres_identifier_component
 from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.cli.spec import spec
-from daylily_tapdb.governance import (
-    DEFAULT_DOMAIN_REGISTRY_PATH,
-    DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH,
-    normalize_owner_repo_name,
-)
+from daylily_tapdb.governance import normalize_owner_repo_name
 
 DEFAULT_UI_PORT = 8911
 DEFAULT_UI_HOST = "localhost"
@@ -132,30 +128,8 @@ def _ensure_tls_certificates(
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        # Fallback for older OpenSSL builds without -addext support.
-        fallback_cmd = [
-            openssl,
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-sha256",
-            "-days",
-            "3650",
-            "-nodes",
-            "-subj",
-            "/CN=localhost",
-            "-keyout",
-            str(key_path),
-            "-out",
-            str(cert_path),
-        ]
-        fallback = subprocess.run(fallback_cmd, capture_output=True, text=True)
-        if fallback.returncode != 0:
-            msg = (fallback.stderr or fallback.stdout or "").strip()
-            raise RuntimeError(
-                f"Failed to generate TLS certificate with openssl: {msg}"
-            )
+        msg = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"Failed to generate TLS certificate with openssl: {msg}")
 
     try:
         os.chmod(key_path, 0o600)
@@ -284,7 +258,7 @@ def build_app():
             help="Explicit TapDB config file path for this invocation.",
         ),
     ):
-        """Legacy direct-invocation context bridge for tests and embedding."""
+        """Prepare explicit invocation context for tests and embedding."""
         if ctx.resilient_parsing:
             return
         try:
@@ -896,16 +870,18 @@ def build_app():
 
         ccyo_out.success("\n✓ Aurora bootstrap complete")
 
-    def _read_yaml_or_json_file(path: Path) -> dict:
+    def _read_yaml_or_json_file(path: Path, *, allow_create: bool = False) -> dict:
         if not path.exists():
-            return {}
+            if allow_create:
+                return {}
+            raise RuntimeError(f"TapDB config file is required: {path}")
         raw = path.read_text(encoding="utf-8")
-        try:
-            import yaml  # type: ignore
+        import yaml  # type: ignore
 
-            return yaml.safe_load(raw) or {}
-        except ModuleNotFoundError:
-            return json.loads(raw) if raw.strip() else {}
+        loaded = yaml.safe_load(raw)
+        if not isinstance(loaded, dict):
+            raise RuntimeError(f"TapDB config file must be a YAML mapping: {path}")
+        return loaded
 
     def _write_yaml_or_json_file(path: Path, payload: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1003,7 +979,7 @@ def build_app():
 
         normalized_owner_repo_name = normalize_owner_repo_name(owner_repo_name)
 
-        existing = _read_yaml_or_json_file(config_path)
+        existing = _read_yaml_or_json_file(config_path, allow_create=True)
         existing_meta = existing.get("meta") if isinstance(existing, dict) else None
         if isinstance(existing_meta, dict) and not force:
             if (
@@ -1126,12 +1102,12 @@ def build_app():
             help="Meridian domain code for this TapDB target",
         ),
         domain_registry_path: str = typer.Option(
-            str(DEFAULT_DOMAIN_REGISTRY_PATH),
+            ...,
             "--domain-registry-path",
             help="Path to the shared Meridian domain registry JSON",
         ),
         prefix_ownership_registry_path: str = typer.Option(
-            str(DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH),
+            ...,
             "--prefix-ownership-registry-path",
             help="Path to the shared Meridian prefix ownership registry JSON",
         ),
@@ -1385,23 +1361,23 @@ def build_app():
                 f"Run: tapdb config init --client-id {ctx.client_id} --database-name {ctx.database_name}"
             )
 
-        target_cfg = root.setdefault("target", {})
-        if not isinstance(target_cfg, dict):
-            target_cfg = {}
-            root["target"] = target_cfg
+        def _required_mapping(parent: dict[str, object], key: str, label: str) -> dict[str, object]:
+            value = parent.get(key)
+            if not isinstance(value, dict):
+                raise RuntimeError(f"Config {label}.{key} section must be an explicit mapping.")
+            return value
 
-        admin_root = root.setdefault("admin", _default_admin_config())
-        if not isinstance(admin_root, dict):
-            raise RuntimeError("Config admin section must be a mapping.")
-        footer = admin_root.setdefault("footer", {})
-        session = admin_root.setdefault("session", {})
-        auth = admin_root.setdefault("auth", {})
-        disabled_user = auth.setdefault("disabled_user", {})
-        shared_host = auth.setdefault("shared_host", {})
-        cors = admin_root.setdefault("cors", {})
-        ui_root = admin_root.setdefault("ui", {})
-        tls = ui_root.setdefault("tls", {})
-        metrics = admin_root.setdefault("metrics", {})
+        target_cfg = _required_mapping(root, "target", "root")
+        admin_root = _required_mapping(root, "admin", "root")
+        footer = _required_mapping(admin_root, "footer", "admin")
+        session = _required_mapping(admin_root, "session", "admin")
+        auth = _required_mapping(admin_root, "auth", "admin")
+        disabled_user = _required_mapping(auth, "disabled_user", "admin.auth")
+        shared_host = _required_mapping(auth, "shared_host", "admin.auth")
+        cors = _required_mapping(admin_root, "cors", "admin")
+        ui_root = _required_mapping(admin_root, "ui", "admin")
+        tls = _required_mapping(ui_root, "tls", "admin.ui")
+        metrics = _required_mapping(admin_root, "metrics", "admin")
 
         updates: dict[str, str] = {}
         if engine_type is not None:
@@ -1502,10 +1478,7 @@ def build_app():
             metrics["flush_seconds"] = float(admin_metrics_flush_seconds)
             admin_changed = True
         safety_changed = False
-        safety_root = root.setdefault("safety", {})
-        if not isinstance(safety_root, dict):
-            safety_root = {}
-            root["safety"] = safety_root
+        safety_root = _required_mapping(root, "safety", "root")
         if safety_tier is not None:
             normalized = str(safety_tier).strip().lower()
             if normalized not in {"local", "shared", "production"}:
@@ -1806,10 +1779,6 @@ try:
         app = None
 except Exception:
     app = None
-
-legacy_app = app
-
-
 def _registry_add_command(
     *, registry, group_path, name, callback, help_text: str
 ) -> None:

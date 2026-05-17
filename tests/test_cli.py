@@ -196,8 +196,9 @@ class TestRootCLI:
 
 
 class TestConfigCLI:
-    def test_config_init_requires_explicit_config_path(self):
+    def test_config_init_requires_explicit_config_path(self, tmp_path: Path):
         clear_cli_context()
+        domain_registry, prefix_registry = _write_registries(tmp_path)
 
         result = runner.invoke(
             app,
@@ -212,6 +213,10 @@ class TestConfigCLI:
                 "lsmc-atlas",
                 "--domain-code",
                 "Z",
+                "--domain-registry-path",
+                str(domain_registry),
+                "--prefix-ownership-registry-path",
+                str(prefix_registry),
                 "--engine-type",
                 "local",
                 "--host",
@@ -236,6 +241,7 @@ class TestConfigCLI:
         self, tmp_path: Path
     ):
         cfg_path = tmp_path / "tapdb-config.yaml"
+        domain_registry, prefix_registry = _write_registries(tmp_path)
 
         result = runner.invoke(
             app,
@@ -252,6 +258,10 @@ class TestConfigCLI:
                 "lsmc-atlas",
                 "--domain-code",
                 "Z",
+                "--domain-registry-path",
+                str(domain_registry),
+                "--prefix-ownership-registry-path",
+                str(prefix_registry),
                 "--engine-type",
                 "local",
                 "--host",

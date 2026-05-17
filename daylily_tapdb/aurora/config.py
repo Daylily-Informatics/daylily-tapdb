@@ -51,14 +51,10 @@ class AuroraConfig:
     tags: dict[str, str] = field(default_factory=_default_tags)
 
     def __post_init__(self) -> None:
-        # Ensure mandatory tags are always present with correct defaults.
-        self.tags.setdefault("lsmc-cost-center", "global")
-        # Always recompute lsmc-project from region unless caller explicitly set it.
-        if (
-            "lsmc-project" not in self.tags
-            or self.tags["lsmc-project"] == _default_tags()["lsmc-project"]
-        ):
-            self.tags["lsmc-project"] = f"tapdb-{self.region}"
+        required = ("lsmc-cost-center", "lsmc-project")
+        missing = [key for key in required if not str(self.tags.get(key) or "").strip()]
+        if missing:
+            raise ValueError("AuroraConfig tags missing required keys: " + ", ".join(missing))
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AuroraConfig:

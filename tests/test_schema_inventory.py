@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 from daylily_tapdb.schema_inventory import (
     SchemaDriftOperationalError,
     TapdbSchemaInventory,
-    build_expected_schema_inventory,
     diff_schema_inventory,
+    load_expected_schema_inventory,
     load_live_schema_inventory,
     schema_asset_files,
 )
@@ -25,7 +25,7 @@ def _repo_schema_root() -> Path:
 
 
 def test_build_expected_schema_inventory_parses_repo_assets():
-    inventory = build_expected_schema_inventory(
+    inventory = load_expected_schema_inventory(
         schema_asset_files(_repo_schema_root()),
         dynamic_sequence_name="AGX_INSTANCE_SEQ",
     )
@@ -119,7 +119,7 @@ def test_live_inventory_and_diff_against_real_postgres(pytestconfig):
                 )
             )
 
-        expected = build_expected_schema_inventory(
+        expected = load_expected_schema_inventory(
             schema_asset_files(schema_root),
             dynamic_sequence_name="agx_instance_seq",
         )

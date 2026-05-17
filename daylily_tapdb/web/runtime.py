@@ -183,7 +183,7 @@ def _build_engine_for_cfg(
     config_path: str,
 ) -> Engine:
     _require_schema_name(cfg)
-    engine_type = (cfg.get("engine_type") or "local").strip().lower()
+    engine_type = str(cfg["engine_type"]).strip().lower()
     echo_sql = _parse_bool(os.environ.get("ECHO_SQL"), default=False)
 
     host = str(cfg["host"]).strip()
@@ -194,13 +194,9 @@ def _build_engine_for_cfg(
     secret_arn = str(cfg.get("secret_arn") or "").strip() or None
 
     if engine_type == "aurora":
-        region = str(cfg.get("region") or "us-west-2").strip()
-        iam_auth = _parse_bool(cfg.get("iam_auth"), default=True)
-        aws_profile = (
-            str(cfg.get("aws_profile") or "").strip()
-            or (os.environ.get("AWS_PROFILE") or "").strip()
-            or None
-        )
+        region = str(cfg["region"]).strip()
+        iam_auth = _parse_bool(cfg["iam_auth"], default=False)
+        aws_profile = str(cfg.get("aws_profile") or "").strip() or None
         ca_path = AuroraConnectionBuilder.ensure_ca_bundle()
         url = URL.create(
             "postgresql+psycopg2",

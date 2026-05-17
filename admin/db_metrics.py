@@ -279,7 +279,11 @@ def maybe_install_engine_metrics(engine: Engine, *, env_name: str) -> None:
         start = time.perf_counter()
         op = _extract_op(statement)
         table_hint = _extract_table_hint(statement, op)
-        conn.info.setdefault("_tapdb_metrics", {})[id(cursor)] = (start, op, table_hint)
+        metrics = conn.info.get("_tapdb_metrics")
+        if metrics is None:
+            metrics = {}
+            conn.info["_tapdb_metrics"] = metrics
+        metrics[id(cursor)] = (start, op, table_hint)
 
     def _after_cursor_execute(
         conn, cursor, statement, parameters, context, executemany
@@ -422,7 +426,11 @@ def summarize_metrics(rows: Iterable[dict]) -> dict:
         buckets: dict[str, list[float]] = {}
         for r in rows_list:
             k = str(r.get(key) or "")
-            buckets.setdefault(k, []).append(float(r.get("duration_ms") or 0.0))
+            vals = buckets.get(k)
+            if vals is None:
+                vals = []
+                buckets[k] = vals
+            vals.append(float(r.get("duration_ms") or 0.0))
         out = []
         for k, vals in buckets.items():
             s = sorted(vals)

@@ -100,9 +100,12 @@ class TapdbSchemaInventory:
     def add_table(self, table_name: str) -> None:
         table_name = _normalize_identifier(table_name)
         self.tables.add(table_name)
-        self.columns.setdefault(table_name, set())
-        self.triggers.setdefault(table_name, set())
-        self.indexes.setdefault(table_name, set())
+        if table_name not in self.columns:
+            self.columns[table_name] = set()
+        if table_name not in self.triggers:
+            self.triggers[table_name] = set()
+        if table_name not in self.indexes:
+            self.indexes[table_name] = set()
 
     def add_column(self, table_name: str, column_name: str) -> None:
         table_name = _normalize_identifier(table_name)
@@ -430,21 +433,6 @@ def schema_asset_files(schema_root: Path) -> list[Path]:
     if migrations_dir.exists():
         asset_paths.extend(sorted(migrations_dir.glob("*.sql")))
     return asset_paths
-
-
-def build_expected_schema_inventory(
-    schema_paths: Sequence[Path], *, dynamic_sequence_name: str
-) -> TapdbSchemaInventory:
-    """Compatibility wrapper for expected inventory construction."""
-    return load_expected_schema_inventory(
-        schema_paths,
-        dynamic_sequence_name=dynamic_sequence_name,
-    )
-
-
-def inventory_counts(inventory: TapdbSchemaInventory) -> dict[str, int]:
-    """Compatibility helper returning inventory category counts."""
-    return inventory.counts()
 
 
 def drift_entry_counts(entries: dict[str, list[str]]) -> dict[str, int]:

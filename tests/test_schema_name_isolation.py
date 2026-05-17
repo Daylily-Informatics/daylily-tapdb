@@ -17,6 +17,19 @@ from tests.test_integration import (
 )
 
 
+def _conn_kwargs(**overrides):
+    values = {
+        "db_user": "tapdb",
+        "app_username": "pytest",
+        "domain_code": "T",
+        "owner_repo_name": "daylily-tapdb",
+        "echo_sql": False,
+        "engine_type": "local",
+    }
+    values.update(overrides)
+    return values
+
+
 def _write_tapdb_config(
     *,
     path: Path,
@@ -58,11 +71,7 @@ def _seed_marker_template(
     *, dsn: str, schema_name: str, prefix: str, marker: str
 ) -> None:
     with TAPDBConnection(
-        db_url=dsn,
-        app_username="pytest",
-        domain_code="T",
-        owner_repo_name="daylily-tapdb",
-        schema_name=schema_name,
+        **_conn_kwargs(db_url=dsn, schema_name=schema_name)
     ) as conn:
         with conn.session_scope(commit=True) as session:
             _seed_identity_prefixes(session, prefix=prefix)
@@ -87,11 +96,7 @@ def _seed_marker_template(
 
 def _template_names(*, dsn: str, schema_name: str) -> set[str]:
     with TAPDBConnection(
-        db_url=dsn,
-        app_username="pytest",
-        domain_code="T",
-        owner_repo_name="daylily-tapdb",
-        schema_name=schema_name,
+        **_conn_kwargs(db_url=dsn, schema_name=schema_name)
     ) as conn:
         with conn.session_scope(commit=False) as session:
             return set(session.scalars(select(generic_template.name)).all())
@@ -148,22 +153,14 @@ def test_two_configured_schemas_share_one_physical_database_without_cross_reads(
         assert "Alpha Schema Marker" not in names_b
 
         with TAPDBConnection(
-            db_url=pg_instance["dsn"],
-            app_username="pytest",
-            domain_code="T",
-            owner_repo_name="daylily-tapdb",
-            schema_name=schema_a,
+            **_conn_kwargs(db_url=pg_instance["dsn"], schema_name=schema_a)
         ) as conn_a:
             with conn_a.session_scope(commit=False) as session_a:
                 count_a = session_a.scalar(
                     select(func.count()).select_from(generic_template)
                 )
         with TAPDBConnection(
-            db_url=pg_instance["dsn"],
-            app_username="pytest",
-            domain_code="T",
-            owner_repo_name="daylily-tapdb",
-            schema_name=schema_b,
+            **_conn_kwargs(db_url=pg_instance["dsn"], schema_name=schema_b)
         ) as conn_b:
             with conn_b.session_scope(commit=False) as session_b:
                 count_b = session_b.scalar(

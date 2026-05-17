@@ -231,8 +231,13 @@ def test_tapdb_connection_aurora_delegates_to_builder(_ca_bundle, monkeypatch):
         db_hostname="mydb.cluster-xyz.us-east-1.rds.amazonaws.com:5432",
         db_user="tapdb_admin",
         db_name="tapdb_dev",
+        app_username="test-admin",
+        echo_sql=False,
         region="us-east-1",
         iam_auth=True,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        schema_name="tapdb_test",
     )
     assert "sslmode=verify-full" in conn._db_url
     assert "tapdb_dev" in conn._db_url
@@ -246,7 +251,16 @@ def test_tapdb_connection_aurora_requires_hostname(monkeypatch):
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
     with pytest.raises(ValueError, match="db_hostname.*required"):
-        m.TAPDBConnection(engine_type="aurora", db_name="tapdb_dev")
+        m.TAPDBConnection(
+            engine_type="aurora",
+            db_user="tapdb_admin",
+            db_name="tapdb_dev",
+            app_username="test-admin",
+            echo_sql=False,
+            domain_code="Z",
+            owner_repo_name="daylily-tapdb",
+            schema_name="tapdb_test",
+        )
 
 
 def test_tapdb_connection_local_unchanged(monkeypatch):
@@ -268,7 +282,18 @@ def test_tapdb_connection_local_unchanged(monkeypatch):
     monkeypatch.setattr(m, "create_engine", fake_create_engine)
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
-    m.TAPDBConnection(db_name="tapdb")
+    m.TAPDBConnection(
+        engine_type="local",
+        db_hostname="localhost:5533",
+        db_user="alice",
+        db_pass="",
+        db_name="tapdb",
+        app_username="alice",
+        echo_sql=False,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        schema_name="tapdb_test",
+    )
     assert called["url"] == "postgresql://alice:@localhost:5533/tapdb"
 
 

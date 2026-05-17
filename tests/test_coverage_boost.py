@@ -275,11 +275,26 @@ class TestLineageDBHelpers:
 
 
 class TestConnection:
+    @staticmethod
+    def _kwargs(**overrides):
+        values = {
+            "db_user": "tapdb",
+            "app_username": "pytest",
+            "domain_code": "Z",
+            "owner_repo_name": "daylily-tapdb",
+            "echo_sql": False,
+            "engine_type": "local",
+        }
+        values.update(overrides)
+        return values
+
     @mock.patch("daylily_tapdb.connection.create_engine")
     def test_init_with_url(self, mock_ce):
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn = TAPDBConnection(db_url="postgresql://u:p@localhost:5432/test")
+        conn = TAPDBConnection(
+            **self._kwargs(db_url="postgresql://u:p@localhost:5432/test")
+        )
         assert conn._db_url == "postgresql://u:p@localhost:5432/test"
 
     @mock.patch("daylily_tapdb.connection.create_engine")
@@ -287,22 +302,29 @@ class TestConnection:
         from daylily_tapdb.connection import TAPDBConnection
 
         conn = TAPDBConnection(
-            db_hostname="myhost:5432", db_user="u", db_pass="p", db_name="test"
+            **self._kwargs(
+                db_hostname="myhost:5432",
+                db_user="u",
+                db_pass="p",
+                db_name="test",
+            )
         )
         assert "myhost" in conn._db_url
 
     @mock.patch("daylily_tapdb.connection.create_engine")
-    def test_init_defaults(self, mock_ce):
+    def test_missing_explicit_connection_fields_raise(self, mock_ce):
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn = TAPDBConnection()
-        assert "tapdb" in conn._db_url
+        with pytest.raises(ValueError, match="db_user is required"):
+            TAPDBConnection()
 
     @mock.patch("daylily_tapdb.connection.create_engine")
     def test_context_manager(self, mock_ce):
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn = TAPDBConnection(db_url="postgresql://u:p@localhost/test")
+        conn = TAPDBConnection(
+            **self._kwargs(db_url="postgresql://u:p@localhost/test")
+        )
         with conn as c:
             assert c is conn
 
@@ -310,7 +332,9 @@ class TestConnection:
     def test_session_scope_commit(self, mock_ce):
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn = TAPDBConnection(db_url="postgresql://u:p@localhost/test")
+        conn = TAPDBConnection(
+            **self._kwargs(db_url="postgresql://u:p@localhost/test")
+        )
         mock_session = mock.MagicMock()
         mock_trans = mock.MagicMock()
         mock_session.begin.return_value = mock_trans
@@ -323,7 +347,9 @@ class TestConnection:
     def test_session_scope_rollback_on_error(self, mock_ce):
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn = TAPDBConnection(db_url="postgresql://u:p@localhost/test")
+        conn = TAPDBConnection(
+            **self._kwargs(db_url="postgresql://u:p@localhost/test")
+        )
         mock_session = mock.MagicMock()
         mock_trans = mock.MagicMock()
         mock_session.begin.return_value = mock_trans
@@ -337,7 +363,9 @@ class TestConnection:
     def test_session_scope_no_commit(self, mock_ce):
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn = TAPDBConnection(db_url="postgresql://u:p@localhost/test")
+        conn = TAPDBConnection(
+            **self._kwargs(db_url="postgresql://u:p@localhost/test")
+        )
         mock_session = mock.MagicMock()
         mock_trans = mock.MagicMock()
         mock_session.begin.return_value = mock_trans
@@ -356,10 +384,12 @@ class TestConnection:
         ) as mock_acb:
             mock_acb.build_connection_url.return_value = "postgresql://aurora/test"
             conn = TAPDBConnection(
-                engine_type="aurora",
-                db_hostname="cluster.aws.com:5432",
-                db_user="u",
-                db_name="test",
+                **self._kwargs(
+                    engine_type="aurora",
+                    db_hostname="cluster.aws.com:5432",
+                    db_user="u",
+                    db_name="test",
+                )
             )
             assert conn._db_url == "postgresql://aurora/test"
 
@@ -368,7 +398,9 @@ class TestConnection:
         from daylily_tapdb.connection import TAPDBConnection
 
         with pytest.raises(ValueError, match="db_hostname"):
-            TAPDBConnection(engine_type="aurora", db_user="u")
+            TAPDBConnection(
+                **self._kwargs(engine_type="aurora", db_user="u", db_hostname="")
+            )
 
     @mock.patch("daylily_tapdb.connection.create_engine")
     def test_is_postgresql_session(self, mock_ce):

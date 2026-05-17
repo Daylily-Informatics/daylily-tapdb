@@ -7,7 +7,6 @@ clusters via CloudFormation.
 from __future__ import annotations
 
 import ipaddress
-import json
 import os
 import stat
 import urllib.request
@@ -114,24 +113,24 @@ def _update_config_file(
     config_path = get_config_paths()[0]
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    existing: dict = {}
-    if config_path.exists():
-        raw = config_path.read_text(encoding="utf-8")
-        try:
-            import yaml  # type: ignore
+    if not config_path.exists():
+        raise RuntimeError(f"TapDB explicit target config is required: {config_path}")
+    raw = config_path.read_text(encoding="utf-8")
+    import yaml  # type: ignore
 
-            existing = yaml.safe_load(raw) or {}
-        except ModuleNotFoundError:
-            existing = json.loads(raw) if raw.strip() else {}
+    existing = yaml.safe_load(raw)
 
     if not isinstance(existing, dict):
         raise RuntimeError(f"invalid TapDB config: {config_path}")
     target = existing.get("target")
     if not isinstance(target, dict):
         raise RuntimeError(f"TapDB explicit target config is required: {config_path}")
+    for key in ("database", "schema_name", "user", "iam_auth", "ui_port"):
+        if not str(target.get(key) or "").strip():
+            raise RuntimeError(f"TapDB explicit target config is missing target.{key}: {config_path}")
     meta = existing.get("meta")
     if not isinstance(meta, dict):
-        meta = {}
+        raise RuntimeError(f"TapDB explicit target config is missing meta mapping: {config_path}")
     meta["config_version"] = 4
     existing["meta"] = meta
 
@@ -142,25 +141,19 @@ def _update_config_file(
         "port": port,
         "database": str(target.get("database") or "").strip(),
         "schema_name": str(target.get("schema_name") or "").strip(),
-        "user": str(target.get("user") or "tapdb_admin"),
+        "user": str(target.get("user") or "").strip(),
         "region": region,
-        "cluster_identifier": cluster_identifier
-        or str(target.get("cluster_identifier") or target.get("database") or ""),
-        "iam_auth": "false" if secret_arn else str(target.get("iam_auth") or "true"),
-        "secret_arn": secret_arn or str(target.get("secret_arn") or ""),
+        "cluster_identifier": cluster_identifier or str(target.get("cluster_identifier") or "").strip(),
+        "iam_auth": "false" if secret_arn else str(target.get("iam_auth") or "").strip(),
+        "secret_arn": secret_arn or str(target.get("secret_arn") or "").strip(),
         "ssl": "true",
-        "ui_port": str(target.get("ui_port") or "8911"),
+        "ui_port": str(target.get("ui_port") or "").strip(),
     }
 
-    try:
-        import yaml  # type: ignore
-
-        config_path.write_text(
-            yaml.dump(existing, default_flow_style=False, sort_keys=False),
-            encoding="utf-8",
-        )
-    except ModuleNotFoundError:
-        config_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+    config_path.write_text(
+        yaml.dump(existing, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
 
     os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
     ccyo_out.print_text(f"  Config updated: [dim]{config_path}[/dim]")
