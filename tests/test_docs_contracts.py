@@ -38,3 +38,15 @@ def test_examples_contain_the_canonical_commands() -> None:
     assert "TAPDBConnection" in python_api
     assert "TemplateManager" in python_api
     assert "InstanceFactory" in python_api
+
+
+def test_activate_banner_does_not_advertise_legacy_env_selectors() -> None:
+    activate = (REPO_ROOT / "activate").read_text(encoding="utf-8")
+
+    assert "--env" not in activate
+    assert "dev | test | prod" not in activate
+    assert "<env>" not in activate
+    assert (
+        "tapdb --config ~/.config/tapdb/<client>/<database>/tapdb-config.yaml"
+        in activate
+    )
