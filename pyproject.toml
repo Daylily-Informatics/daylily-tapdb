@@ -31,6 +31,7 @@ dependencies = [
     "jsonschema>=4.0",
     "typer",
     "rich",
+    "pyyaml",
     "uuid6>=2024.1.12",
     "cli-core-yo==2.1.1",
     "meridian-euid==0.4.5",
@@ -53,10 +54,9 @@ dev = [
 
 # Optional CLI add-ons.
 #
-# Note: The CLI itself (Typer + Rich) is intentionally part of core deps so
+# Note: The CLI itself (Typer + Rich + PyYAML) is intentionally part of core deps so
 # `tapdb --help` works after `pip install -e .` per REFACTOR_TAPDB.md Phase 0.
 cli = [
-    "pyyaml",
 ]
 
 # Optional Aurora (AWS RDS Aurora) support.
