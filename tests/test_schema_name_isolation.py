@@ -70,9 +70,7 @@ def _write_tapdb_config(
 def _seed_marker_template(
     *, dsn: str, schema_name: str, prefix: str, marker: str
 ) -> None:
-    with TAPDBConnection(
-        **_conn_kwargs(db_url=dsn, schema_name=schema_name)
-    ) as conn:
+    with TAPDBConnection(**_conn_kwargs(db_url=dsn, schema_name=schema_name)) as conn:
         with conn.session_scope(commit=True) as session:
             _seed_identity_prefixes(session, prefix=prefix)
             _seed_templates(
@@ -95,9 +93,7 @@ def _seed_marker_template(
 
 
 def _template_names(*, dsn: str, schema_name: str) -> set[str]:
-    with TAPDBConnection(
-        **_conn_kwargs(db_url=dsn, schema_name=schema_name)
-    ) as conn:
+    with TAPDBConnection(**_conn_kwargs(db_url=dsn, schema_name=schema_name)) as conn:
         with conn.session_scope(commit=False) as session:
             return set(session.scalars(select(generic_template.name)).all())
 

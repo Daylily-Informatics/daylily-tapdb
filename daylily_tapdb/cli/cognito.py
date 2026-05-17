@@ -336,7 +336,9 @@ def _write_pool_id_to_tapdb_config(pool_id: str) -> Path:
     target["cognito_user_pool_id"] = pool_id
     meta = existing.get("meta")
     if not isinstance(meta, dict):
-        raise RuntimeError(f"TapDB explicit target config is missing meta mapping: {config_path}")
+        raise RuntimeError(
+            f"TapDB explicit target config is missing meta mapping: {config_path}"
+        )
     meta["config_version"] = 4
     existing["meta"] = meta
 
@@ -537,7 +539,9 @@ def _resolve_pool_command_context(
         _, _, values, bound_proc_env = _resolve_bound_daycog_context(env)
         proc_env = bound_proc_env
         if selected_region is None:
-            selected_region = values.get("COGNITO_REGION") or values.get("AWS_REGION") or None
+            selected_region = (
+                values.get("COGNITO_REGION") or values.get("AWS_REGION") or None
+            )
         if selected_profile is None:
             selected_profile = values.get("AWS_PROFILE") or None
     if not selected_region:
@@ -613,7 +617,9 @@ def cognito_setup(
         help="App client name (must be 'tapdb'; default: tapdb)",
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (required unless configured on the explicit TAPDB target)"
+        None,
+        "--profile",
+        help="AWS profile (required unless configured on the explicit TAPDB target)",
     ),
     region: Optional[str] = typer.Option(None, "--region", "-r", help="AWS region"),
     domain_prefix: Optional[str] = typer.Option(
@@ -763,7 +769,9 @@ def cognito_setup_with_google(
         help="App client name (must be 'tapdb'; default: tapdb)",
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (required unless configured on the explicit TAPDB target)"
+        None,
+        "--profile",
+        help="AWS profile (required unless configured on the explicit TAPDB target)",
     ),
     region: Optional[str] = typer.Option(None, "--region", "-r", help="AWS region"),
     domain_prefix: Optional[str] = typer.Option(
@@ -987,10 +995,15 @@ def cognito_status() -> None:
 @cognito_app.command("list-pools")
 def cognito_list_pools(
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (required unless configured on the explicit TAPDB target)"
+        None,
+        "--profile",
+        help="AWS profile (required unless configured on the explicit TAPDB target)",
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (required unless configured on the explicit TAPDB target)"
+        None,
+        "--region",
+        "-r",
+        help="AWS region (required unless configured on the explicit TAPDB target)",
     ),
 ) -> None:
     """List Cognito pools in the selected region via daycog."""
@@ -1012,10 +1025,15 @@ def cognito_list_apps(
         None, "--pool-name", help="Cognito pool name (default from target DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (required unless configured on the explicit TAPDB target)"
+        None,
+        "--profile",
+        help="AWS profile (required unless configured on the explicit TAPDB target)",
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (required unless configured on the explicit TAPDB target)"
+        None,
+        "--region",
+        "-r",
+        help="AWS region (required unless configured on the explicit TAPDB target)",
     ),
 ) -> None:
     """List app clients for a Cognito pool via daycog."""
@@ -1042,10 +1060,15 @@ def cognito_add_app(
         None, "--pool-name", help="Cognito pool name (default from target DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (required unless configured on the explicit TAPDB target)"
+        None,
+        "--profile",
+        help="AWS profile (required unless configured on the explicit TAPDB target)",
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (required unless configured on the explicit TAPDB target)"
+        None,
+        "--region",
+        "-r",
+        help="AWS region (required unless configured on the explicit TAPDB target)",
     ),
     logout_url: Optional[str] = typer.Option(
         None, "--logout-url", help="Optional logout URL"
@@ -1133,10 +1156,15 @@ def cognito_edit_app(
         None, "--pool-name", help="Cognito pool name (default from target DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (required unless configured on the explicit TAPDB target)"
+        None,
+        "--profile",
+        help="AWS profile (required unless configured on the explicit TAPDB target)",
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (required unless configured on the explicit TAPDB target)"
+        None,
+        "--region",
+        "-r",
+        help="AWS region (required unless configured on the explicit TAPDB target)",
     ),
 ) -> None:
     """Edit an existing app client in the pool via daycog."""
@@ -1185,10 +1213,15 @@ def cognito_remove_app(
         None, "--pool-name", help="Cognito pool name (default from target DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (required unless configured on the explicit TAPDB target)"
+        None,
+        "--profile",
+        help="AWS profile (required unless configured on the explicit TAPDB target)",
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (required unless configured on the explicit TAPDB target)"
+        None,
+        "--region",
+        "-r",
+        help="AWS region (required unless configured on the explicit TAPDB target)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
     delete_config: bool = typer.Option(
@@ -1233,10 +1266,15 @@ def cognito_add_google_idp(
         None, "--pool-name", help="Cognito pool name (default from target DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (required unless configured on the explicit TAPDB target)"
+        None,
+        "--profile",
+        help="AWS profile (required unless configured on the explicit TAPDB target)",
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (required unless configured on the explicit TAPDB target)"
+        None,
+        "--region",
+        "-r",
+        help="AWS region (required unless configured on the explicit TAPDB target)",
     ),
     google_client_id: Optional[str] = typer.Option(
         None, "--google-client-id", help="Google OAuth client ID"
@@ -1307,7 +1345,10 @@ def cognito_config_print(
         None, "--pool-name", help="Cognito pool name (default from target DB name)"
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (required unless configured on the explicit TAPDB target)"
+        None,
+        "--region",
+        "-r",
+        help="AWS region (required unless configured on the explicit TAPDB target)",
     ),
 ) -> None:
     """Print the Daycog context entry for the target pool."""
@@ -1335,10 +1376,15 @@ def cognito_config_create(
         None, "--pool-name", help="Cognito pool name (default from target DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (required unless configured on the explicit TAPDB target)"
+        None,
+        "--profile",
+        help="AWS profile (required unless configured on the explicit TAPDB target)",
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (required unless configured on the explicit TAPDB target)"
+        None,
+        "--region",
+        "-r",
+        help="AWS region (required unless configured on the explicit TAPDB target)",
     ),
 ) -> None:
     """Create a Daycog pool context from AWS and update the active context."""
@@ -1370,10 +1416,15 @@ def cognito_config_update(
         None, "--pool-name", help="Cognito pool name (default from target DB name)"
     ),
     profile: Optional[str] = typer.Option(
-        None, "--profile", help="AWS profile (required unless configured on the explicit TAPDB target)"
+        None,
+        "--profile",
+        help="AWS profile (required unless configured on the explicit TAPDB target)",
     ),
     region: Optional[str] = typer.Option(
-        None, "--region", "-r", help="AWS region (required unless configured on the explicit TAPDB target)"
+        None,
+        "--region",
+        "-r",
+        help="AWS region (required unless configured on the explicit TAPDB target)",
     ),
 ) -> None:
     """Update a Daycog pool context from AWS and refresh the active context."""

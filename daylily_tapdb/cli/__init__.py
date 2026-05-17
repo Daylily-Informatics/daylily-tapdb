@@ -1361,10 +1361,14 @@ def build_app():
                 f"Run: tapdb config init --client-id {ctx.client_id} --database-name {ctx.database_name}"
             )
 
-        def _required_mapping(parent: dict[str, object], key: str, label: str) -> dict[str, object]:
+        def _required_mapping(
+            parent: dict[str, object], key: str, label: str
+        ) -> dict[str, object]:
             value = parent.get(key)
             if not isinstance(value, dict):
-                raise RuntimeError(f"Config {label}.{key} section must be an explicit mapping.")
+                raise RuntimeError(
+                    f"Config {label}.{key} section must be an explicit mapping."
+                )
             return value
 
         target_cfg = _required_mapping(root, "target", "root")
@@ -1779,6 +1783,8 @@ try:
         app = None
 except Exception:
     app = None
+
+
 def _registry_add_command(
     *, registry, group_path, name, callback, help_text: str
 ) -> None:

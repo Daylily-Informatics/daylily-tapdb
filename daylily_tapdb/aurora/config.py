@@ -54,7 +54,9 @@ class AuroraConfig:
         required = ("lsmc-cost-center", "lsmc-project")
         missing = [key for key in required if not str(self.tags.get(key) or "").strip()]
         if missing:
-            raise ValueError("AuroraConfig tags missing required keys: " + ", ".join(missing))
+            raise ValueError(
+                "AuroraConfig tags missing required keys: " + ", ".join(missing)
+            )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AuroraConfig:

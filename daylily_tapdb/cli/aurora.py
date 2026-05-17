@@ -127,10 +127,14 @@ def _update_config_file(
         raise RuntimeError(f"TapDB explicit target config is required: {config_path}")
     for key in ("database", "schema_name", "user", "iam_auth", "ui_port"):
         if not str(target.get(key) or "").strip():
-            raise RuntimeError(f"TapDB explicit target config is missing target.{key}: {config_path}")
+            raise RuntimeError(
+                f"TapDB explicit target config is missing target.{key}: {config_path}"
+            )
     meta = existing.get("meta")
     if not isinstance(meta, dict):
-        raise RuntimeError(f"TapDB explicit target config is missing meta mapping: {config_path}")
+        raise RuntimeError(
+            f"TapDB explicit target config is missing meta mapping: {config_path}"
+        )
     meta["config_version"] = 4
     existing["meta"] = meta
 
@@ -143,8 +147,11 @@ def _update_config_file(
         "schema_name": str(target.get("schema_name") or "").strip(),
         "user": str(target.get("user") or "").strip(),
         "region": region,
-        "cluster_identifier": cluster_identifier or str(target.get("cluster_identifier") or "").strip(),
-        "iam_auth": "false" if secret_arn else str(target.get("iam_auth") or "").strip(),
+        "cluster_identifier": cluster_identifier
+        or str(target.get("cluster_identifier") or "").strip(),
+        "iam_auth": "false"
+        if secret_arn
+        else str(target.get("iam_auth") or "").strip(),
         "secret_arn": secret_arn or str(target.get("secret_arn") or "").strip(),
         "ssl": "true",
         "ui_port": str(target.get("ui_port") or "").strip(),

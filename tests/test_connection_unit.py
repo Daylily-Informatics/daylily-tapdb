@@ -117,9 +117,7 @@ def test_missing_domain_env_raises(monkeypatch):
     monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
     with pytest.raises(ValueError, match="domain_code is required"):
-        m.TAPDBConnection(
-            **_conn_kwargs(db_url="sqlite:///:memory:", domain_code=None)
-        )
+        m.TAPDBConnection(**_conn_kwargs(db_url="sqlite:///:memory:", domain_code=None))
 
 
 def test_set_session_domain_code_skips_non_postgresql(monkeypatch):

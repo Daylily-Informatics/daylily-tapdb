@@ -322,9 +322,7 @@ class TestConnection:
     def test_context_manager(self, mock_ce):
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn = TAPDBConnection(
-            **self._kwargs(db_url="postgresql://u:p@localhost/test")
-        )
+        conn = TAPDBConnection(**self._kwargs(db_url="postgresql://u:p@localhost/test"))
         with conn as c:
             assert c is conn
 
@@ -332,9 +330,7 @@ class TestConnection:
     def test_session_scope_commit(self, mock_ce):
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn = TAPDBConnection(
-            **self._kwargs(db_url="postgresql://u:p@localhost/test")
-        )
+        conn = TAPDBConnection(**self._kwargs(db_url="postgresql://u:p@localhost/test"))
         mock_session = mock.MagicMock()
         mock_trans = mock.MagicMock()
         mock_session.begin.return_value = mock_trans
@@ -347,9 +343,7 @@ class TestConnection:
     def test_session_scope_rollback_on_error(self, mock_ce):
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn = TAPDBConnection(
-            **self._kwargs(db_url="postgresql://u:p@localhost/test")
-        )
+        conn = TAPDBConnection(**self._kwargs(db_url="postgresql://u:p@localhost/test"))
         mock_session = mock.MagicMock()
         mock_trans = mock.MagicMock()
         mock_session.begin.return_value = mock_trans
@@ -363,9 +357,7 @@ class TestConnection:
     def test_session_scope_no_commit(self, mock_ce):
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn = TAPDBConnection(
-            **self._kwargs(db_url="postgresql://u:p@localhost/test")
-        )
+        conn = TAPDBConnection(**self._kwargs(db_url="postgresql://u:p@localhost/test"))
         mock_session = mock.MagicMock()
         mock_trans = mock.MagicMock()
         mock_session.begin.return_value = mock_trans

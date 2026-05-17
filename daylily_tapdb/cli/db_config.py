@@ -276,7 +276,9 @@ def get_db_config(
             return None
         return str(val)
 
-    engine_type = _require_file_str(file_cfg, "engine_type", resolved_config_path).lower()
+    engine_type = _require_file_str(
+        file_cfg, "engine_type", resolved_config_path
+    ).lower()
     try:
         schema_name = validate_postgres_identifier_component(
             _file_str("schema_name") or "",
