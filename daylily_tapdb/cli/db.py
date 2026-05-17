@@ -1638,6 +1638,7 @@ def _tapdb_connection_for_env(
         domain_code=str(cfg["domain_code"]),
         owner_repo_name=str(cfg["owner_repo_name"]),
         schema_name=str(cfg["schema_name"]),
+        echo_sql=False,
     )
 
 
@@ -1682,6 +1683,7 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
             domain_code=str(cfg["domain_code"]),
             owner_repo_name=str(cfg["owner_repo_name"]),
             schema_name=str(cfg["schema_name"]),
+            echo_sql=False,
         ) as conn:
             with conn.session_scope(commit=True) as session:
                 user, created = create_or_get(
