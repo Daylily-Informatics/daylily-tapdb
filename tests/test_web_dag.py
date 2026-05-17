@@ -202,7 +202,7 @@ def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(
 ) -> None:
     monkeypatch.setattr(
         "daylily_tapdb.web.runtime.get_db",
-        lambda _config_path, _env_name: _build_fake_runtime_connection().conn,
+        lambda _config_path: _build_fake_runtime_connection().conn,
     )
     monkeypatch.setattr(
         "daylily_tapdb.web.dag.fetch_remote_graph",
@@ -234,7 +234,6 @@ def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(
     app.include_router(
         create_tapdb_dag_router(
             config_path="/tmp/tapdb-config.yaml",
-            env_name="dev",
             service_name="dewey",
         )
     )
@@ -315,13 +314,12 @@ def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(
 def test_create_tapdb_dag_router_returns_404_for_non_owned_euid(monkeypatch) -> None:
     monkeypatch.setattr(
         "daylily_tapdb.web.runtime.get_db",
-        lambda _config_path, _env_name: _build_fake_runtime_connection().conn,
+        lambda _config_path: _build_fake_runtime_connection().conn,
     )
     app = FastAPI()
     app.include_router(
         create_tapdb_dag_router(
             config_path="/tmp/tapdb-config.yaml",
-            env_name="dev",
             service_name="dewey",
         )
     )

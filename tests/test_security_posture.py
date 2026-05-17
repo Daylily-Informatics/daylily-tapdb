@@ -1,14 +1,11 @@
 """Focused tests for security-sensitive configuration paths."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from admin import main as admin_main
 from daylily_tapdb.aurora import connection as aurora_connection
-from daylily_tapdb.cli.db import Environment
-from daylily_tapdb.cli.pg import _get_instance_lock_file
 
 
 def test_admin_templates_enable_html_autoescape():
@@ -59,7 +56,7 @@ def test_aurora_ca_bundle_rejects_non_https_download_url(monkeypatch, tmp_path: 
         aurora_connection.AuroraConnectionBuilder.ensure_ca_bundle()
 
 
-def test_prod_instance_lock_uses_system_temp_dir():
-    assert _get_instance_lock_file(Environment.prod) == (
-        Path(tempfile.gettempdir()) / "tapdb-prod-instance.lock"
-    )
+def test_env_selector_names_are_absent_from_security_surface():
+    from daylily_tapdb.cli.db import Environment
+
+    assert [item.value for item in Environment] == ["target"]

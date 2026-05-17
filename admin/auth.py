@@ -16,8 +16,7 @@ from itsdangerous import BadSignature
 
 from admin.cognito import get_cognito_auth
 from admin.db_pool import get_db_connection
-from daylily_tapdb.cli.context import active_env_name
-from daylily_tapdb.cli.db_config import get_admin_settings_for_env
+from daylily_tapdb.cli.db_config import get_admin_settings
 from daylily_tapdb.user_store import (
     create_or_get,
     get_by_login_or_email,
@@ -34,8 +33,7 @@ SESSION_MAX_AGE = 86400  # 24 hours
 
 
 def _admin_settings() -> dict[str, Any]:
-    env_name = active_env_name("dev").strip().lower()
-    return get_admin_settings_for_env(env_name)
+    return get_admin_settings()
 
 
 def _auth_disabled() -> bool:
@@ -164,9 +162,8 @@ def _tapdb_url(request: Request, path: str) -> str:
 
 
 def get_db():
-    """Get a DB connection using the active explicit TapDB env."""
-    env = active_env_name("dev").lower()
-    return get_db_connection(env)
+    """Get a DB connection using the active explicit TapDB target."""
+    return get_db_connection()
 
 
 def get_user_by_username(username: str) -> Optional[dict]:

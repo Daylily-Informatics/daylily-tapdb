@@ -7,7 +7,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -15,9 +14,9 @@ import typer
 from cli_core_yo import ccyo_out
 from rich.console import Console
 
-from daylily_tapdb.cli.context import active_env_name, resolve_context
+from daylily_tapdb.cli.context import resolve_context
 from daylily_tapdb.cli.db import Environment
-from daylily_tapdb.cli.db_config import get_db_config_for_env
+from daylily_tapdb.cli.db_config import get_db_config
 
 console = Console()
 
@@ -25,53 +24,32 @@ pg_app = typer.Typer(help="PostgreSQL service management commands")
 
 
 def _get_postgres_data_dir(env: "Environment") -> Path:
-    """Get PostgreSQL data directory for environment.
-
-    dev/test: ~/.config/tapdb/<client>/<database>/<env>/postgres/data
-    prod: system default or PGDATA env var
-    """
-    if env.value == "prod":
-        # Production uses system default
-        return Path(os.environ.get("PGDATA", "/var/lib/postgresql/data"))
-    ctx = resolve_context(
-        require_keys=True,
-        env_name=env.value,
-    )
-    return ctx.postgres_dir(env.value) / "data"
+    """Get PostgreSQL data directory for the explicit target."""
+    _ = env
+    ctx = resolve_context(require_keys=True)
+    return ctx.postgres_dir() / "data"
 
 
 def _get_postgres_log_file(env: "Environment") -> Path:
-    if env.value == "prod":
-        return Path("/var/log/postgresql/postgresql.log")
-    ctx = resolve_context(
-        require_keys=True,
-        env_name=env.value,
-    )
-    return ctx.postgres_dir(env.value) / "postgresql.log"
+    _ = env
+    ctx = resolve_context(require_keys=True)
+    return ctx.postgres_dir() / "postgresql.log"
 
 
 def _get_postgres_socket_dir(env: "Environment") -> Path:
-    if env.value == "prod":
-        return Path("/var/run/postgresql")
-    cfg = get_db_config_for_env(env.value)
+    _ = env
+    cfg = get_db_config()
     configured = str(cfg.get("unix_socket_dir") or "").strip()
     if configured:
         return Path(configured).expanduser()
-    ctx = resolve_context(
-        require_keys=True,
-        env_name=env.value,
-    )
-    return ctx.postgres_socket_dir(env.value)
+    ctx = resolve_context(require_keys=True)
+    return ctx.postgres_socket_dir()
 
 
 def _get_instance_lock_file(env: "Environment") -> Path:
-    if env.value == "prod":
-        return Path(tempfile.gettempdir()) / "tapdb-prod-instance.lock"
-    ctx = resolve_context(
-        require_keys=True,
-        env_name=env.value,
-    )
-    return ctx.lock_dir(env.value) / "instance.lock"
+    _ = env
+    ctx = resolve_context(require_keys=True)
+    return ctx.lock_dir() / "instance.lock"
 
 
 def _build_pg_ctl_options(port: int, socket_dir: Path) -> str:
@@ -142,21 +120,16 @@ def _is_port_available(port: int) -> bool:
 
 
 def _active_env() -> Environment:
-    raw = active_env_name("dev").strip()
-    try:
-        return Environment(raw)
-    except ValueError:
-        return Environment.dev
+    return Environment.target
 
 
 def _get_pg_service_cmd() -> tuple[str, list[str], list[str], Path]:
     """
     Get platform-specific system PostgreSQL service commands.
 
-    This is intended for production environments where PostgreSQL is managed as a
-    system service (e.g., systemd on Linux). Local dev/test should use the
-    data-dir based commands: `tapdb --config <path> --env <name> pg init`
-    + `tapdb --config <path> --env <name> pg start-local`.
+    This is intended for system-managed PostgreSQL. Local explicit targets should
+    use data-dir based commands: `tapdb --config <path> pg init` +
+    `tapdb --config <path> pg start-local`.
 
     Returns: (method, start_cmd, stop_cmd, log_path)
     """
@@ -223,8 +196,7 @@ def _is_pg_running() -> tuple[bool, str]:
 def pg_start():
     """Start system PostgreSQL service (production only).
 
-    For local development, prefer:
-    tapdb --config <path> --env <name> pg start-local <env>
+    For local development, prefer: tapdb --config <path> pg start-local
     """
     running, details = _is_pg_running()
     if running:
@@ -237,15 +209,9 @@ def pg_start():
     if method == "unknown":
         ccyo_out.error("No system PostgreSQL service found")
         ccyo_out.print_text("")
-        ccyo_out.print_text(
-            "[bold]Recommended: Use TAPDB local dev/test commands[/bold]"
-        )
-        ccyo_out.print_text(
-            "  [cyan]tapdb pg init dev[/cyan]         # Initialize data directory"
-        )
-        ccyo_out.print_text(
-            "  [cyan]tapdb --config <path> --env dev pg start-local dev[/cyan]  # Start local instance"
-        )
+        ccyo_out.print_text("[bold]Recommended: Use TAPDB local target commands[/bold]")
+        ccyo_out.print_text("  [cyan]tapdb --config <path> pg init[/cyan]")
+        ccyo_out.print_text("  [cyan]tapdb --config <path> pg start-local[/cyan]")
         ccyo_out.print_text("")
         ccyo_out.print_text(
             "[dim]Install PostgreSQL so initdb/pg_ctl"
@@ -288,7 +254,7 @@ def pg_start():
 def pg_stop():
     """Stop system PostgreSQL service (production only).
 
-    For local development instances, use: tapdb pg stop-local <env>
+    For local development instances, use: tapdb --config <path> pg stop-local
     """
     running, _ = _is_pg_running()
     if not running:
@@ -300,7 +266,7 @@ def pg_stop():
     if method == "unknown":
         ccyo_out.error("No system PostgreSQL service found")
         ccyo_out.print_text(
-            "  For local instances, use: [cyan]tapdb pg stop-local <env>[/cyan]"
+            "  For local instances, use: [cyan]tapdb --config <path> pg stop-local[/cyan]"
         )
         raise typer.Exit(1)
 
@@ -336,19 +302,7 @@ def pg_status():
     ccyo_out.print_text("\n[bold cyan]━━━ PostgreSQL Status ━━━[/bold cyan]")
 
     env = _active_env()
-    if env == Environment.prod:
-        running, details = _is_pg_running()
-        if running:
-            ccyo_out.success("PostgreSQL is running")
-            ccyo_out.print_text(f"  Version: {details}")
-        else:
-            ccyo_out.error("○ PostgreSQL is not running")
-            if details and details not in ("", "timeout"):
-                ccyo_out.print_text(f"  Error: {details}")
-            ccyo_out.print_text("\n  Start with: [cyan]tapdb pg start[/cyan]")
-        return
-
-    cfg = get_db_config_for_env(env.value)
+    cfg = get_db_config()
     host = cfg["host"]
     port = cfg["port"]
     user = cfg["user"]
@@ -367,15 +321,11 @@ def pg_status():
     else:
         ccyo_out.error("○ Local PostgreSQL is not running")
         ccyo_out.print_text(
-            f"  Start with: [cyan]tapdb --config <path> --env {env.value} "
-            f"pg start-local {env.value}[/cyan]"
+            "  Start with: [cyan]tapdb --config <path> pg start-local[/cyan]"
         )
 
     ccyo_out.print_text("\n[bold]Local Runtime:[/bold]")
-    ctx = resolve_context(
-        require_keys=True,
-        env_name=env.value,
-    )
+    ctx = resolve_context(require_keys=True)
     ccyo_out.print_text(f"  Namespace: {ctx.namespace_slug()}")
     ccyo_out.print_text(f"  Host:      {host}")
     ccyo_out.print_text(f"  Port:      {port}")
@@ -399,8 +349,7 @@ def pg_logs(
     env = _active_env()
     local_logs: list[Path] = []
     try:
-        if env != Environment.prod:
-            local_logs.append(_get_postgres_log_file(env))
+        local_logs.append(_get_postgres_log_file(env))
     except RuntimeError:
         # Namespace may be unresolved for non-local invocations.
         pass
@@ -470,29 +419,16 @@ def pg_restart():
 
 @pg_app.command("init")
 def pg_init(
-    env: Environment = typer.Argument(..., help="Target environment (dev/test only)"),
     force: bool = typer.Option(
         False, "--force", "-f", help="Reinitialize if already exists"
     ),
 ):
-    """Initialize a PostgreSQL data directory for dev/test.
-
-    Creates a local PostgreSQL data directory in:
-    ~/.config/tapdb/<client-id>/<database-name>/<env>/postgres/data
-    for development and testing. Production uses system PostgreSQL.
-
-    After init, start with:
-    tapdb --config <path> --env <name> pg start-local <env>
-    """
-    if env == Environment.prod:
-        ccyo_out.error("Cannot init prod environment locally")
-        ccyo_out.print_text("  Production should use system PostgreSQL installation")
-        raise typer.Exit(1)
-
+    """Initialize the local PostgreSQL data directory for the explicit target."""
+    env = Environment.target
     data_dir = _get_postgres_data_dir(env)
 
     ccyo_out.print_text(
-        f"\n[bold cyan]━━━ Initialize PostgreSQL ({env.value}) ━━━[/bold cyan]"
+        "\n[bold cyan]━━━ Initialize PostgreSQL (explicit target) ━━━[/bold cyan]"
     )
     ccyo_out.print_text(f"  Data directory: {data_dir}")
 
@@ -520,7 +456,7 @@ def pg_init(
     data_dir.parent.mkdir(parents=True, exist_ok=True)
 
     ccyo_out.warning("► Running initdb...")
-    cfg = get_db_config_for_env(env.value)
+    cfg = get_db_config()
     initdb_superuser = str(cfg.get("user") or "postgres").strip() or "postgres"
 
     # Run initdb
@@ -544,15 +480,8 @@ def pg_init(
         if result.returncode == 0:
             ccyo_out.success("PostgreSQL data directory initialized")
             ccyo_out.print_text("\n[bold]Next steps:[/bold]")
-            ccyo_out.print_text(
-                f"  [cyan]tapdb --config <path> --env {env.value} "
-                f"pg start-local {env.value}[/cyan]  # Start PostgreSQL"
-            )
-            ccyo_out.print_text(
-                f"  [cyan]tapdb --config <path> --env {env.value} "
-                f"db setup {env.value}[/cyan]"
-                "        # Create DB + schema + seed"
-            )
+            ccyo_out.print_text("  [cyan]tapdb --config <path> pg start-local[/cyan]")
+            ccyo_out.print_text("  [cyan]tapdb --config <path> db setup[/cyan]")
         else:
             ccyo_out.error("initdb failed")
             ccyo_out.print_text(f"  {result.stderr}")
@@ -569,38 +498,30 @@ def pg_init(
 
 @pg_app.command("start-local")
 def pg_start_local(
-    env: Environment = typer.Argument(..., help="Target environment (dev/test only)"),
     port: Optional[int] = typer.Option(
         None,
         "--port",
         "-p",
-        help="Port override (must match configured environments.<env>.port)",
+        help="Port override (must match configured target.port)",
     ),
 ):
-    """Start a local PostgreSQL instance for dev/test.
+    """Start a local PostgreSQL instance for the explicit target.
 
     Uses the data directory created by 'tapdb pg init'.
     """
-    if env == Environment.prod:
-        ccyo_out.error("Use 'tapdb pg start' for production")
-        raise typer.Exit(1)
-
-    cfg = get_db_config_for_env(env.value)
+    env = Environment.target
+    cfg = get_db_config()
     configured_port = int(str(cfg.get("port") or "0"))
     if configured_port < 1:
-        ccyo_out.error(f"Missing/invalid configured port for env {env.value}.")
-        ccyo_out.print_text(
-            f"  Set environments.{env.value}.port in the namespaced TAPDB config."
-        )
+        ccyo_out.error("Missing/invalid configured target.port.")
+        ccyo_out.print_text("  Set target.port in the explicit TAPDB config.")
         raise typer.Exit(1)
 
     if port is None:
         port = configured_port
     elif port != configured_port:
-        ccyo_out.error("--port override does not match configured TAPDB env port.")
-        ccyo_out.print_text(
-            f"  Configured environments.{env.value}.port = {configured_port}"
-        )
+        ccyo_out.error("--port override does not match configured TAPDB target port.")
+        ccyo_out.print_text(f"  Configured target.port = {configured_port}")
         raise typer.Exit(1)
 
     data_dir = _get_postgres_data_dir(env)
@@ -611,7 +532,7 @@ def pg_start_local(
 
     if not data_dir.exists() or not (data_dir / "PG_VERSION").exists():
         ccyo_out.error("Data directory not initialized")
-        ccyo_out.print_text(f"  Run: [cyan]tapdb pg init {env.value}[/cyan]")
+        ccyo_out.print_text("  Run: [cyan]tapdb --config <path> pg init[/cyan]")
         raise typer.Exit(1)
 
     # Find pg_ctl (must be in PATH)
@@ -632,12 +553,11 @@ def pg_start_local(
     if not _is_port_available(port):
         ccyo_out.error(f"{_port_conflict_details(port)}")
         ccyo_out.print_text(
-            "  Update environments."
-            f"{env.value}.port in the namespaced TAPDB config to a free port."
+            "  Update target.port in the explicit TAPDB config to a free port."
         )
         raise typer.Exit(1)
 
-    ccyo_out.warning(f"► Starting PostgreSQL ({env.value}) on port {port}...")
+    ccyo_out.warning(f"► Starting PostgreSQL explicit target on port {port}...")
 
     log_file = _get_postgres_log_file(env)
     log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -672,7 +592,7 @@ def pg_start_local(
             ccyo_out.print_text(f"  Log:  {log_file}")
             ccyo_out.print_text(f"  Socket dir: {socket_dir}")
             lock_payload = {
-                "env": env.value,
+                "target": "explicit",
                 "port": port,
                 "data_dir": str(data_dir),
                 "log_file": str(log_file),
@@ -684,9 +604,7 @@ def pg_start_local(
             )
             ccyo_out.print_text(f"  Lock: {lock_file}")
             ccyo_out.print_text("\n[bold]Next step:[/bold]")
-            ccyo_out.print_text(
-                f"  [cyan]tapdb --env {env.value} db setup {env.value}[/cyan]"
-            )
+            ccyo_out.print_text("  [cyan]tapdb --config <path> db setup[/cyan]")
         else:
             ccyo_out.error("Failed to start PostgreSQL")
             ccyo_out.print_text(f"  {result.stderr}")
@@ -700,14 +618,9 @@ def pg_start_local(
 
 
 @pg_app.command("stop-local")
-def pg_stop_local(
-    env: Environment = typer.Argument(..., help="Target environment (dev/test only)"),
-):
-    """Stop a local PostgreSQL instance for dev/test."""
-    if env == Environment.prod:
-        ccyo_out.error("Use 'tapdb pg stop' for production")
-        raise typer.Exit(1)
-
+def pg_stop_local():
+    """Stop a local PostgreSQL instance for the explicit target."""
+    env = Environment.target
     data_dir = _get_postgres_data_dir(env)
     lock_file = _get_instance_lock_file(env)
 
@@ -723,7 +636,7 @@ def pg_stop_local(
         ccyo_out.print_text("  [cyan]conda install -c conda-forge postgresql[/cyan]")
         raise typer.Exit(1)
 
-    ccyo_out.warning(f"► Stopping PostgreSQL ({env.value})...")
+    ccyo_out.warning("► Stopping PostgreSQL explicit target...")
 
     try:
         result = subprocess.run(

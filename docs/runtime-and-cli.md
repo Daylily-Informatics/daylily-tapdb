@@ -6,17 +6,19 @@ This document describes how TAPDB is operated today: config-first, namespace-sco
 
 ## Operating Model
 
-TAPDB treats a deployment as a namespace made from `client_id` + `database_name` + `env`.
+TAPDB treats a runtime as one explicit resolved target made from
+`client_id`, `database_name`, `schema_name`, and the physical database
+connection fields in a single config file.
 
 The CLI resolves that namespace from config metadata and explicit runtime flags:
 
 ```bash
-tapdb --config /abs/path/to/tapdb-config.yaml --env dev ...
+tapdb --config /abs/path/to/tapdb-config.yaml ...
 ```
 
 The config file must carry `meta.client_id` and `meta.database_name`. The runtime context helpers live in [`daylily_tapdb/cli/context.py`](../daylily_tapdb/cli/context.py), and the public command groups are defined in [`daylily_tapdb/cli/__init__.py`](../daylily_tapdb/cli/__init__.py).
 
-Config initialization is the main exception: it requires `--config` but creates the metadata that later runtime commands resolve through `--env`.
+Config initialization requires `--config` and writes the single target that later runtime commands use directly.
 
 ### Namespace Layout
 
@@ -26,10 +28,10 @@ The current runtime layout is rooted under:
 ~/.config/tapdb/<client-id>/<database-name>/
 ```
 
-The environment-specific runtime tree is then nested beneath the active `env`:
+The runtime tree is nested beneath `runtime/`:
 
 ```text
-~/.config/tapdb/<client-id>/<database-name>/<env>/
+~/.config/tapdb/<client-id>/<database-name>/runtime/
 ```
 
 Important subpaths used by the CLI:
@@ -39,7 +41,7 @@ Important subpaths used by the CLI:
 - `locks/` for local lock metadata
 
 For most namespaces the local Postgres socket directory lives under
-`<env>/postgres/run/`. When the full path would exceed PostgreSQL's Unix socket
+`runtime/postgres/run/`. When the full path would exceed PostgreSQL's Unix socket
 path limit, TAPDB automatically falls back to a short deterministic temp
 directory so the local bootstrap path remains runnable from deep worktrees or
 temporary test paths.
@@ -55,7 +57,6 @@ The root command is `tapdb`. The current help surface shows these top-level grou
 - `config`
 - `bootstrap`
 - `ui`
-- `db-config`
 - `db`
 - `pg`
 - `users`
@@ -64,8 +65,7 @@ The root command is `tapdb`. The current help surface shows these top-level grou
 
 That split is deliberate:
 
-- `config` manages generic config-file operations.
-- `db-config` initializes or updates the namespace-aware TAPDB config.
+- `config` initializes or updates the explicit-target TAPDB config.
 - `pg` manages local or system PostgreSQL processes.
 - `db` manages database lifecycle, schema, migrations, backup, and data seeding.
 - `ui` manages the admin server process.
@@ -78,7 +78,7 @@ That split is deliberate:
 
 The basic local flow is:
 
-1. Create or update the namespace config.
+1. Create or update the explicit target config.
 2. Initialize a local Postgres data directory.
 3. Start the local Postgres instance.
 4. Apply schema.
@@ -88,26 +88,30 @@ The basic local flow is:
 The CLI surfaces for that flow are already present and exercised in tests:
 
 ```bash
-tapdb --config <path> db-config init \
+tapdb --config <path> config init \
   --client-id <client-id> \
   --database-name <database-name> \
   --owner-repo-name <repo-name> \
-  --env dev \
-  --domain-code dev=<domain-code> \
+  --domain-code <domain-code> \
   --domain-registry-path /abs/path/to/domain_code_registry.json \
   --prefix-ownership-registry-path /abs/path/to/prefix_ownership_registry.json \
-  --db-port dev=5533 \
-  --ui-port dev=8911
+  --engine-type local \
+  --host localhost \
+  --port 5533 \
+  --ui-port 8911 \
+  --user tapdb \
+  --database tapdb_<client-id>_<database-name> \
+  --schema-name tapdb_<client-id>_<database-name>
 
-tapdb --config <path> --env dev pg init dev
-tapdb --config <path> --env dev pg start-local dev
-tapdb --config <path> --env dev db config validate
-tapdb --config <path> --env dev db schema apply dev
-tapdb --config <path> --env dev db data seed dev
-tapdb --config <path> --env dev bootstrap local --no-gui
+tapdb --config <path> pg init
+tapdb --config <path> pg start-local
+tapdb --config <path> db config validate
+tapdb --config <path> db schema apply
+tapdb --config <path> db data seed
+tapdb --config <path> bootstrap local --no-gui
 ```
 
-`tapdb bootstrap local` is the preferred orchestration entrypoint for local developer setup. It includes optional flags for `--no-gui`, `--include-workflow`, and `--insecure-dev-defaults` for dev-only bootstrap flows. The command is documented by the CLI help and covered by the CLI test suite in [`tests/test_cli.py`](../tests/test_cli.py) and [`tests/test_cli_coverage.py`](../tests/test_cli_coverage.py).
+`tapdb bootstrap local` is the preferred orchestration entrypoint for local developer setup. It includes optional flags for `--no-gui`, `--include-workflow`, and `--insecure-dev-defaults` for local-only bootstrap flows. The command is documented by the CLI help and covered by the CLI test suite in [`tests/test_cli.py`](../tests/test_cli.py) and [`tests/test_cli_coverage.py`](../tests/test_cli_coverage.py).
 
 For local single-repo runs, TAPDB also ships packaged example registry fixtures
 under [`daylily_tapdb/etc`](../daylily_tapdb/etc). They are useful for docs
@@ -117,10 +121,10 @@ examples, tests, and isolated TapDB-only bootstrap flows.
 
 Schema work is separated from data seeding:
 
-- `tapdb db schema apply <env>` applies the SQL schema.
+- `tapdb db schema apply` applies the SQL schema.
 - `tapdb db config validate` checks namespace config and template-pack structure without touching the database.
-- `tapdb db schema migrate <env>` runs tracked SQL migrations.
-- `tapdb db data seed <env>` loads templates into the database.
+- `tapdb db schema migrate` runs tracked SQL migrations.
+- `tapdb db data seed` loads templates into the database.
 
 That separation matters because TAPDB uses the database as the runtime source of truth for templates, while JSON packs are just input material for seeding and validation. The schema and seed commands are part of the CLI contract and are exercised against a real ephemeral PostgreSQL instance in [`tests/test_pg_integration.py`](../tests/test_pg_integration.py).
 
@@ -135,7 +139,7 @@ That separation matters because TAPDB uses the database as the runtime source of
 - Postgres probe status
 - optional JSON output via `--json`
 
-For CLI v2, JSON is a root-global flag, so use `tapdb --config <path> --env <name> --json info` rather than a command-local JSON switch.
+For CLI v2, JSON is a root-global flag, so use `tapdb --config <path> --json info` rather than a command-local JSON switch.
 
 It also performs best-effort `psql` probes when available. The implementation lives in [`daylily_tapdb/cli/__init__.py`](../daylily_tapdb/cli/__init__.py), and the runtime context resolution lives in [`daylily_tapdb/cli/context.py`](../daylily_tapdb/cli/context.py).
 
@@ -146,11 +150,11 @@ The admin UI is managed separately from the database, but still inside the TAPDB
 Relevant commands:
 
 ```bash
-tapdb --config <path> --env <name> ui start
-tapdb --config <path> --env <name> ui stop
-tapdb --config <path> --env <name> ui status
-tapdb --config <path> --env <name> ui restart
-tapdb --config <path> --env <name> ui logs
+tapdb --config <path> ui start
+tapdb --config <path> ui stop
+tapdb --config <path> ui status
+tapdb --config <path> ui restart
+tapdb --config <path> ui logs
 ```
 
 The UI server supports foreground/background operation, explicit port and host overrides, and explicit TLS certificate overrides. The admin app itself is loaded through [`daylily_tapdb.cli.admin_server`](../daylily_tapdb/cli/admin_server.py).

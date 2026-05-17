@@ -19,7 +19,6 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Start the TAPDB admin UI with explicit TapDB context.",
     )
     parser.add_argument("--config", required=True, help="TapDB config file path")
-    parser.add_argument("--env", required=True, help="TapDB env name")
     parser.add_argument("--host", required=True, help="UI bind host")
     parser.add_argument("--port", required=True, type=int, help="UI bind port")
     parser.add_argument("--ssl-keyfile", required=True, help="TLS key file")
@@ -32,22 +31,19 @@ def _context_file_path() -> Path:
     return Path.cwd() / _CONTEXT_FILENAME
 
 
-def _write_context_file(
-    *, config_path: str, env_name: str, host: str, port: int
-) -> Path:
+def _write_context_file(*, config_path: str, host: str, port: int) -> Path:
     ctx = resolve_context(
         require_keys=True,
         config_path=config_path,
-        env_name=env_name,
     )
-    ui_dir = ctx.ui_dir(env_name)
+    ui_dir = ctx.ui_dir()
     ui_dir.mkdir(parents=True, exist_ok=True)
     context_file = ui_dir / _CONTEXT_FILENAME
     context_file.write_text(
         json.dumps(
             {
                 "config_path": str(Path(config_path).expanduser().resolve()),
-                "env_name": env_name,
+                "target": "explicit",
                 "host": host,
                 "port": port,
             },
@@ -65,7 +61,7 @@ def _read_context_file() -> dict[str, object]:
     if not context_file.exists():
         raise RuntimeError(
             "Explicit TapDB admin context is missing. "
-            "Start the UI through `tapdb --config <path> --env <name> ui start`."
+            "Start the UI through `tapdb --config <path> ui start`."
         )
     raw = json.loads(context_file.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -73,9 +69,9 @@ def _read_context_file() -> dict[str, object]:
     return raw
 
 
-def load_admin_app(*, config_path: str, env_name: str):
-    """Build the TAPDB admin FastAPI app for an explicit config/env."""
-    set_cli_context(config_path=config_path, env_name=env_name)
+def load_admin_app(*, config_path: str):
+    """Build the TAPDB admin FastAPI app for an explicit config target."""
+    set_cli_context(config_path=config_path)
     admin_main = importlib.import_module("admin.main")
     admin_main = importlib.reload(admin_main)
     admin_main.app.state.tapdb_admin_module = admin_main
@@ -86,12 +82,11 @@ def main() -> None:
     args = _build_parser().parse_args()
     context_file = _write_context_file(
         config_path=args.config,
-        env_name=args.env,
         host=args.host,
         port=args.port,
     )
     os.chdir(context_file.parent)
-    set_cli_context(config_path=args.config, env_name=args.env)
+    set_cli_context(config_path=args.config)
 
     import uvicorn
 
@@ -109,12 +104,11 @@ def main() -> None:
 def build_app():
     context = _read_context_file()
     config_path = str(context.get("config_path") or "").strip()
-    env_name = str(context.get("env_name") or "").strip()
-    if not config_path or not env_name:
+    if not config_path:
         raise RuntimeError("TapDB admin context file is incomplete.")
     from daylily_tapdb.web import create_tapdb_web_app
 
-    return create_tapdb_web_app(config_path=config_path, env_name=env_name)
+    return create_tapdb_web_app(config_path=config_path)
 
 
 if __name__ == "__main__":

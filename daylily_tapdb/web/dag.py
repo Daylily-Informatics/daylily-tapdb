@@ -25,14 +25,13 @@ from . import runtime as dag_runtime
 CONTRACT_VERSION = "dag:v1"
 
 
-def _service_name_for(config_path: str, env_name: str, service_name: str | None) -> str:
+def _service_name_for(config_path: str, service_name: str | None) -> str:
     normalized = str(service_name or "").strip()
     if normalized:
         return normalized
     context = resolve_context(
         require_keys=True,
         config_path=config_path,
-        env_name=env_name,
     )
     return str(context.client_id or "tapdb").strip() or "tapdb"
 
@@ -91,21 +90,17 @@ def build_dag_capability_advertisement(
 def create_tapdb_dag_router(
     *,
     config_path: str,
-    env_name: str,
     service_name: str | None = None,
 ) -> APIRouter:
     """Build the canonical `/api/dag/*` router for a TapDB-backed service."""
 
     resolved_config_path = str(config_path or "").strip()
-    resolved_env_name = str(env_name or "").strip()
-    resolved_service_name = _service_name_for(
-        resolved_config_path, resolved_env_name, service_name
-    )
+    resolved_service_name = _service_name_for(resolved_config_path, service_name)
     router = APIRouter()
 
     @router.get("/api/dag/object/{euid}")
     async def dag_object_detail(euid: str) -> dict[str, Any]:
-        with dag_runtime.get_db(resolved_config_path, resolved_env_name) as conn:
+        with dag_runtime.get_db(resolved_config_path) as conn:
             with conn.session_scope() as session:
                 obj, record_type = find_object_by_euid(session, euid)
                 if obj is None or not record_type:
@@ -123,7 +118,7 @@ def create_tapdb_dag_router(
         start_euid: str,
         depth: int = Query(4, ge=0, le=10),
     ) -> dict[str, Any]:
-        with dag_runtime.get_db(resolved_config_path, resolved_env_name) as conn:
+        with dag_runtime.get_db(resolved_config_path) as conn:
             with conn.session_scope() as session:
                 obj, record_type = find_object_by_euid(session, start_euid)
                 if obj is None or not record_type:
@@ -158,7 +153,7 @@ def create_tapdb_dag_router(
         relationship_type: str = "",
         limit: int = Query(25, ge=1, le=100),
     ) -> dict[str, Any]:
-        with dag_runtime.get_db(resolved_config_path, resolved_env_name) as conn:
+        with dag_runtime.get_db(resolved_config_path) as conn:
             with conn.session_scope() as session:
                 payload = search_objects(
                     session,
@@ -186,7 +181,7 @@ def create_tapdb_dag_router(
         ref_index: int = Query(..., ge=0),
         depth: int = Query(4, ge=0, le=10),
     ) -> dict[str, Any]:
-        with dag_runtime.get_db(resolved_config_path, resolved_env_name) as conn:
+        with dag_runtime.get_db(resolved_config_path) as conn:
             with conn.session_scope() as session:
                 obj, _record_type = find_object_by_euid(session, source_euid)
                 if obj is None:
@@ -227,7 +222,7 @@ def create_tapdb_dag_router(
         ref_index: int = Query(..., ge=0),
         euid: str = Query(...),
     ) -> dict[str, Any]:
-        with dag_runtime.get_db(resolved_config_path, resolved_env_name) as conn:
+        with dag_runtime.get_db(resolved_config_path) as conn:
             with conn.session_scope() as session:
                 obj, _record_type = find_object_by_euid(session, source_euid)
                 if obj is None:

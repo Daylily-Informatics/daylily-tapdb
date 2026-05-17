@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import Optional
 
 CONFIG_FILENAME = "tapdb-config.yaml"
+RUNTIME_DIRNAME = "runtime"
 _KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ACTIVE_CLIENT_ID: Optional[str] = None
 _ACTIVE_DATABASE_NAME: Optional[str] = None
-_ACTIVE_ENV_NAME: Optional[str] = None
 _ACTIVE_CONFIG_PATH: Optional[Path] = None
 
 
@@ -68,7 +68,6 @@ class TapdbContext:
 
     client_id: str
     database_name: str
-    env_name: Optional[str] = None
     explicit_config_path: Optional[Path] = None
 
     def namespace_slug(self) -> str:
@@ -84,54 +83,42 @@ class TapdbContext:
             return self.explicit_config_path
         return self.config_dir() / CONFIG_FILENAME
 
-    def runtime_dir(self, env_name: Optional[str] = None) -> Path:
-        resolved_env = (env_name or self.env_name or "").strip()
-        if not resolved_env:
-            raise RuntimeError("Environment name is required to resolve runtime_dir")
-        return self.config_dir() / resolved_env
+    def runtime_dir(self) -> Path:
+        return self.config_dir() / RUNTIME_DIRNAME
 
-    def ui_dir(self, env_name: Optional[str] = None) -> Path:
-        return self.runtime_dir(env_name) / "ui"
+    def ui_dir(self) -> Path:
+        return self.runtime_dir() / "ui"
 
-    def postgres_dir(self, env_name: Optional[str] = None) -> Path:
-        return self.runtime_dir(env_name) / "postgres"
+    def postgres_dir(self) -> Path:
+        return self.runtime_dir() / "postgres"
 
-    def postgres_socket_dir(self, env_name: Optional[str] = None) -> Path:
-        candidate = self.postgres_dir(env_name) / "run"
+    def postgres_socket_dir(self) -> Path:
+        candidate = self.postgres_dir() / "run"
         max_socket_path = 103
         sample_socket = candidate / ".s.PGSQL.65535"
         if len(str(sample_socket)) <= max_socket_path:
             return candidate
 
-        resolved_env = (env_name or self.env_name or "").strip()
-        if not resolved_env:
-            raise RuntimeError("Environment name is required to resolve runtime_dir")
         digest = hashlib.sha256(
-            f"{self.client_id}:{self.database_name}:{resolved_env}".encode("utf-8")
+            f"{self.client_id}:{self.database_name}".encode("utf-8")
         ).hexdigest()[:12]
-        return Path(tempfile.gettempdir()) / f"tapdb-pg-{digest}-{resolved_env}"
+        return Path(tempfile.gettempdir()) / f"tapdb-pg-{digest}"
 
-    def lock_dir(self, env_name: Optional[str] = None) -> Path:
-        return self.runtime_dir(env_name) / "locks"
+    def lock_dir(self) -> Path:
+        return self.runtime_dir() / "locks"
 
 
 def set_cli_context(
     *,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
-    env_name: Optional[str] = None,
     config_path: Optional[str | Path] = None,
 ) -> None:
     """Set process-local CLI context from explicit command-line inputs."""
 
-    global \
-        _ACTIVE_CLIENT_ID, \
-        _ACTIVE_DATABASE_NAME, \
-        _ACTIVE_ENV_NAME, \
-        _ACTIVE_CONFIG_PATH
+    global _ACTIVE_CLIENT_ID, _ACTIVE_DATABASE_NAME, _ACTIVE_CONFIG_PATH
     _ACTIVE_CLIENT_ID = _normalize_key(client_id, field_name="client-id")
     _ACTIVE_DATABASE_NAME = _normalize_key(database_name, field_name="database-name")
-    _ACTIVE_ENV_NAME = str(env_name or "").strip().lower() or None
     if config_path is None or str(config_path).strip() == "":
         _ACTIVE_CONFIG_PATH = None
     else:
@@ -142,14 +129,6 @@ def clear_cli_context() -> None:
     """Clear process-local CLI context."""
 
     set_cli_context()
-
-
-def active_env_name(default: str = "dev") -> str:
-    """Return the current explicit TapDB env name for this process."""
-    runtime_env = _runtime_invocation_value("env_name")
-    if runtime_env:
-        return runtime_env.lower()
-    return (_ACTIVE_ENV_NAME or default).strip()
 
 
 def active_config_path() -> Optional[Path]:
@@ -173,13 +152,11 @@ def active_context_overrides() -> dict[str, Optional[str | Path]]:
 
     runtime_client = _runtime_invocation_value("client_id")
     runtime_database = _runtime_invocation_value("database_name")
-    runtime_env = _runtime_invocation_value("env_name")
     return {
         "client_id": _ACTIVE_CLIENT_ID
         or _normalize_key(runtime_client, field_name="client-id"),
         "database_name": _ACTIVE_DATABASE_NAME
         or _normalize_key(runtime_database, field_name="database-name"),
-        "env_name": _ACTIVE_ENV_NAME or (runtime_env.lower() if runtime_env else None),
         "config_path": active_config_path(),
     }
 
@@ -215,7 +192,6 @@ def resolve_context(
     require_keys: bool = True,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
-    env_name: Optional[str] = None,
     config_path: Optional[str | Path] = None,
 ) -> Optional[TapdbContext]:
     """Resolve TAPDB namespace context from config metadata.
@@ -256,13 +232,9 @@ def resolve_context(
         and resolved_client
         and resolved_db
     ):
-        resolved_env = (
-            env_name or active_overrides["env_name"] or ""
-        ).strip().lower() or None
         return TapdbContext(
             client_id=resolved_client,
             database_name=resolved_db,
-            env_name=resolved_env,
             explicit_config_path=None,
         )
 
@@ -277,12 +249,8 @@ def resolve_context(
             )
         raise RuntimeError("TapDB config path is required. Set --config.")
 
-    resolved_env = (
-        env_name or active_overrides["env_name"] or ""
-    ).strip().lower() or None
     return TapdbContext(
         client_id=resolved_client,
         database_name=resolved_db,
-        env_name=resolved_env,
         explicit_config_path=resolved_config_path,
     )

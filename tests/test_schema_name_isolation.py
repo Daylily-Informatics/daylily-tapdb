@@ -5,7 +5,8 @@ from pathlib import Path
 import yaml
 from sqlalchemy import func, select
 
-from daylily_tapdb.cli.db_config import get_db_config_for_env
+from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
+from daylily_tapdb.cli.db_config import get_db_config
 from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.models.template import generic_template
 from tests.test_integration import (
@@ -28,20 +29,23 @@ def _write_tapdb_config(
     )
     meta = dict(source_config["meta"])
     meta["database_name"] = database_name
+    meta["config_version"] = 4
     payload = {
         "meta": meta,
-        "environments": {
-            "dev": {
-                "engine_type": "local",
-                "host": "localhost",
-                "port": pg_instance["port"],
-                "ui_port": 18911,
-                "domain_code": "Z",
-                "user": pg_instance["user"],
-                "password": "",
-                "database": pg_instance["database"],
-                "schema_name": schema_name,
-            },
+        "target": {
+            "engine_type": "local",
+            "host": "localhost",
+            "port": pg_instance["port"],
+            "ui_port": 18911,
+            "domain_code": "Z",
+            "user": pg_instance["user"],
+            "password": "",
+            "database": pg_instance["database"],
+            "schema_name": schema_name,
+        },
+        "safety": {
+            "safety_tier": "local",
+            "destructive_operations": "confirm_required",
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,8 +118,13 @@ def test_two_configured_schemas_share_one_physical_database_without_cross_reads(
         schema_name=schema_b,
     )
 
-    cfg_a = get_db_config_for_env("dev", config_path=config_a)
-    cfg_b = get_db_config_for_env("dev", config_path=config_b)
+    try:
+        set_cli_context(config_path=config_a)
+        cfg_a = get_db_config()
+        set_cli_context(config_path=config_b)
+        cfg_b = get_db_config()
+    finally:
+        clear_cli_context()
     assert cfg_a["database"] == cfg_b["database"] == pg_instance["database"]
     assert cfg_a["schema_name"] == schema_a
     assert cfg_b["schema_name"] == schema_b

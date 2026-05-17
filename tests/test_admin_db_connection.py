@@ -28,8 +28,8 @@ def test_admin_get_db_reuses_single_engine_bundle(monkeypatch):
     )
     monkeypatch.setattr(
         pool_mod,
-        "get_db_config_for_env",
-        lambda _env: {
+        "get_db_config",
+        lambda: {
             "engine_type": "local",
             "host": "localhost",
             "port": "5533",
@@ -60,8 +60,8 @@ def test_admin_get_engine_bundle_requires_schema_name(monkeypatch):
     pool_mod._clear_engine_cache_for_tests()
     monkeypatch.setattr(
         pool_mod,
-        "get_db_config_for_env",
-        lambda _env: {
+        "get_db_config",
+        lambda: {
             "engine_type": "local",
             "host": "localhost",
             "port": "5533",
@@ -72,7 +72,7 @@ def test_admin_get_engine_bundle_requires_schema_name(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="schema_name"):
-        pool_mod.get_engine_bundle("dev")
+        pool_mod.get_engine_bundle()
 
 
 def test_admin_session_scope_sets_search_path(monkeypatch):

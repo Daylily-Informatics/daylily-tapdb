@@ -16,7 +16,7 @@ from rich.table import Table
 
 from daylily_tapdb import TAPDBConnection
 from daylily_tapdb.cli.db import Environment
-from daylily_tapdb.cli.db_config import get_db_config_for_env
+from daylily_tapdb.cli.db_config import get_db_config
 from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.passwords import hash_password as _hash_password
 from daylily_tapdb.user_store import (
@@ -33,7 +33,8 @@ console = Console()
 
 
 def _open_connection(env: Environment, *, app_username: str) -> TAPDBConnection:
-    cfg = get_db_config_for_env(env.value)
+    _ = env
+    cfg = get_db_config()
     engine_type = (cfg.get("engine_type") or "local").strip().lower()
     iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in (
         "true",
@@ -54,6 +55,7 @@ def _open_connection(env: Environment, *, app_username: str) -> TAPDBConnection:
         app_username=app_username,
         domain_code=str(cfg["domain_code"]),
         owner_repo_name=str(cfg["owner_repo_name"]),
+        schema_name=str(cfg["schema_name"]),
     )
 
 
@@ -75,12 +77,12 @@ def _format_date(value: object, *, include_time: bool = False) -> str:
 
 @user_app.command("list")
 def user_list(
-    env: Environment = typer.Argument(..., help="Target environment"),
     show_inactive: bool = typer.Option(
         False, "--inactive", "-i", help="Include inactive users"
     ),
 ):
     """List all users."""
+    env = Environment.target
     try:
         with _open_connection(env, app_username="tapdb_user_cli") as conn:
             with conn.session_scope() as session:
@@ -93,7 +95,7 @@ def user_list(
         ccyo_out.print_text("[dim]No users found[/dim]")
         return
 
-    table = Table(title=f"TAPDB Users ({env.value})")
+    table = Table(title="TAPDB Users (explicit target)")
     table.add_column("Username", style="cyan")
     table.add_column("Email")
     table.add_column("Display Name")
@@ -120,7 +122,6 @@ def user_list(
 
 @user_app.command("add")
 def user_add(
-    env: Environment = typer.Argument(..., help="Target environment"),
     username: str = typer.Option(..., "--username", "-u", help="Username (unique)"),
     role: str = typer.Option("user", "--role", "-r", help="Role: admin or user"),
     email: Optional[str] = typer.Option(None, "--email", "-e", help="Email address"),
@@ -132,6 +133,7 @@ def user_add(
     ),
 ):
     """Add a new user."""
+    env = Environment.target
     if role not in ("admin", "user"):
         ccyo_out.error(f"Invalid role: {role}. Must be 'admin' or 'user'")
         raise typer.Exit(1)
@@ -174,11 +176,11 @@ def user_add(
 
 @user_app.command("set-role")
 def user_set_role(
-    env: Environment = typer.Argument(..., help="Target environment"),
     username: str = typer.Argument(..., help="Username to modify"),
     role: str = typer.Argument(..., help="New role: admin or user"),
 ):
     """Set user role (admin or user)."""
+    env = Environment.target
     if role not in ("admin", "user"):
         ccyo_out.error(f"Invalid role: {role}. Must be 'admin' or 'user'")
         raise typer.Exit(1)
@@ -199,10 +201,10 @@ def user_set_role(
 
 @user_app.command("deactivate")
 def user_deactivate(
-    env: Environment = typer.Argument(..., help="Target environment"),
     username: str = typer.Argument(..., help="Username to deactivate"),
 ):
     """Deactivate a user (soft disable)."""
+    env = Environment.target
     try:
         with _open_connection(env, app_username=username) as conn:
             with conn.session_scope(commit=True) as session:
@@ -218,10 +220,10 @@ def user_deactivate(
 
 @user_app.command("activate")
 def user_activate(
-    env: Environment = typer.Argument(..., help="Target environment"),
     username: str = typer.Argument(..., help="Username to activate"),
 ):
     """Activate a user."""
+    env = Environment.target
     try:
         with _open_connection(env, app_username=username) as conn:
             with conn.session_scope(commit=True) as session:
@@ -237,7 +239,6 @@ def user_activate(
 
 @user_app.command("set-password")
 def user_set_password(
-    env: Environment = typer.Argument(..., help="Target environment"),
     username: str = typer.Argument(..., help="Username"),
     password: str = typer.Option(
         ...,
@@ -250,6 +251,7 @@ def user_set_password(
     ),
 ):
     """Set user password."""
+    env = Environment.target
     try:
         pw_hash = _hash_password(password)
     except RuntimeError as e:
@@ -281,11 +283,11 @@ def user_set_password(
 
 @user_app.command("delete")
 def user_delete(
-    env: Environment = typer.Argument(..., help="Target environment"),
     username: str = typer.Argument(..., help="Username to delete"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ):
     """Delete a user (soft delete)."""
+    env = Environment.target
     if not force:
         confirm = typer.confirm(f"Permanently delete user '{username}'?")
         if not confirm:

@@ -37,21 +37,20 @@ def pytest_addoption(parser):
         "--tapdb-env",
         action="store",
         default="",
-        help="Explicit TapDB env name for integration tests.",
+        help="Deprecated; TapDB tests now use the explicit config target.",
     )
 
 
 def resolve_tapdb_test_dsn(pytestconfig) -> str:
     config_path = str(pytestconfig.getoption("--tapdb-config") or "").strip()
-    env_name = str(pytestconfig.getoption("--tapdb-env") or "").strip().lower()
-    if not config_path or not env_name:
-        pytest.skip(
-            "Set --tapdb-config and --tapdb-env to run Postgres integration tests"
-        )
+    if not config_path:
+        pytest.skip("Set --tapdb-config to run Postgres integration tests")
 
-    from daylily_tapdb.cli.db_config import get_db_config_for_env
+    from daylily_tapdb.cli.context import set_cli_context
+    from daylily_tapdb.cli.db_config import get_db_config
 
-    cfg = get_db_config_for_env(env_name, config_path=config_path)
+    set_cli_context(config_path=config_path)
+    cfg = get_db_config(config_path=config_path)
     user = str(cfg.get("user") or "postgres")
     password = str(cfg.get("password") or "")
     host = str(cfg.get("host") or "localhost")
@@ -198,36 +197,39 @@ def pg_instance(tmp_path_factory):
 
     cfg_data = {
         "meta": {
-            "config_version": 3,
+            "config_version": 4,
             "client_id": "testclient",
             "database_name": "testdb",
             "owner_repo_name": "daylily-tapdb",
             "domain_registry_path": str(domain_registry_path),
             "prefix_ownership_registry_path": str(prefix_registry_path),
         },
-        "environments": {
-            "dev": {
-                "engine_type": "local",
-                "host": "localhost",
-                "port": port,
-                "ui_port": 18911,
-                "domain_code": "Z",
-                "user": user,
-                "password": "",
-                "database": database,
-                "schema_name": "tapdb_testdb_dev",
-            },
+        "target": {
+            "engine_type": "local",
+            "host": "localhost",
+            "port": port,
+            "ui_port": 18911,
+            "domain_code": "Z",
+            "user": user,
+            "password": "",
+            "database": database,
+            "schema_name": "tapdb_testdb",
+            "unix_socket_dir": str(socket_dir),
+        },
+        "safety": {
+            "safety_tier": "local",
+            "destructive_operations": "confirm_required",
         },
     }
     cfg_path.write_text(yaml.safe_dump(cfg_data), encoding="utf-8")
     os.chmod(cfg_path, 0o600)
 
     # Construct a postgres_dir layout that matches what pg.py expects
-    pg_runtime = cfg_dir / "dev" / "postgres"
+    pg_runtime = cfg_dir / "runtime" / "postgres"
     pg_runtime.mkdir(parents=True, exist_ok=True)
     # Symlink data and run dirs so CLI pg commands find them
     (pg_runtime / "data").symlink_to(data_dir)
-    run_link = pg_runtime / "run"
+    run_link = pg_runtime / "socket"
     run_link.symlink_to(socket_dir)
 
     dsn = f"postgresql://{user}:@localhost:{port}/{database}"
@@ -240,7 +242,7 @@ def pg_instance(tmp_path_factory):
         "config_dir": cfg_dir,
         "user": user,
         "database": database,
-        "schema_name": "tapdb_testdb_dev",
+        "schema_name": "tapdb_testdb",
         "dsn": dsn,
         "base": base,
     }

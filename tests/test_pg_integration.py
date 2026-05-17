@@ -28,7 +28,6 @@ def _set_context(pg_instance, monkeypatch):
     set_cli_context(
         client_id="testclient",
         database_name="testdb",
-        env_name="dev",
         config_path=info["config_path"],
     )
     monkeypatch.setattr(cli_mod, "PID_FILE", info["base"] / "ui.pid")
@@ -62,7 +61,7 @@ class TestPgConnectivity:
 class TestSchemaApply:
     def test_db_schema_apply(self, pg_instance):
         """Apply the full tapdb schema to the ephemeral database."""
-        result = runner.invoke(app, ["db", "schema", "apply", "dev"])
+        result = runner.invoke(app, ["db", "schema", "apply"])
         output = result.output
         # Should succeed or at least exercise the code path
         assert result.exit_code in (0, 1), f"exit={result.exit_code}\n{output}"
@@ -96,7 +95,7 @@ class TestSchemaApply:
 
 class TestSchemaStatus:
     def test_db_schema_status(self, pg_instance):
-        result = runner.invoke(app, ["db", "schema", "status", "dev"])
+        result = runner.invoke(app, ["db", "schema", "status"])
         assert result.exit_code in (0, 1)
 
 
@@ -108,7 +107,7 @@ class TestSchemaStatus:
 class TestDbLifecycle:
     def test_db_create_already_exists(self, pg_instance):
         """db create should handle 'already exists' gracefully."""
-        result = runner.invoke(app, ["db", "create", "dev"])
+        result = runner.invoke(app, ["db", "create"])
         assert result.exit_code in (0, 1)
 
     def test_db_config_validate(self, pg_instance):
@@ -124,7 +123,7 @@ class TestDbLifecycle:
 class TestDataSeed:
     def test_db_data_seed(self, pg_instance):
         """Attempt to seed template data. May fail if schema not applied."""
-        result = runner.invoke(app, ["db", "data", "seed", "dev"])
+        result = runner.invoke(app, ["db", "data", "seed"])
         assert result.exit_code in (0, 1)
 
 
@@ -164,7 +163,7 @@ class TestConnectionModule:
 
 class TestSchemaMigrate:
     def test_db_schema_migrate(self, pg_instance):
-        result = runner.invoke(app, ["db", "schema", "migrate", "dev"])
+        result = runner.invoke(app, ["db", "schema", "migrate"])
         assert result.exit_code in (0, 1)
 
 

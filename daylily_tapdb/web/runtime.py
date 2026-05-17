@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from daylily_tapdb.aurora.connection import AuroraConnectionBuilder
 from daylily_tapdb.cli.db_config import (
-    get_admin_settings_for_env,
-    get_db_config_for_env,
+    get_admin_settings,
+    get_db_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,12 +48,10 @@ def _set_audit_username(session: Session, username: Optional[str]) -> None:
         logger.warning("Could not set session audit username: %s", exc)
 
 
-def _require_schema_name(cfg: dict[str, str], *, env_name: str) -> str:
+def _require_schema_name(cfg: dict[str, str]) -> str:
     schema_name = str(cfg.get("schema_name") or "").strip()
     if not schema_name:
-        raise RuntimeError(
-            f"Config for env {env_name!r} is missing required field: schema_name"
-        )
+        raise RuntimeError("TapDB target config is missing required field: schema_name")
     return schema_name
 
 
@@ -73,7 +71,7 @@ def _set_search_path(session: Session, schema_name: str) -> None:
 @dataclass(frozen=True)
 class RuntimeBundle:
     config_path: str
-    env_name: str
+    target_name: str
     engine: Engine
     SessionFactory: sessionmaker
     cfg: dict[str, str]
@@ -120,10 +118,9 @@ def _create_engine(
     url: URL,
     *,
     config_path: str,
-    env_name: str,
     echo_sql: bool,
 ) -> Engine:
-    settings = get_admin_settings_for_env(env_name, config_path=config_path)
+    settings = get_admin_settings(config_path=config_path)
     pool_size = int(settings.get("db_pool_size") or 5)
     max_overflow = int(settings.get("db_max_overflow") or 10)
     pool_timeout = int(settings.get("db_pool_timeout") or 30)
@@ -184,9 +181,8 @@ def _build_engine_for_cfg(
     cfg: dict[str, str],
     *,
     config_path: str,
-    env_name: str,
 ) -> Engine:
-    _require_schema_name(cfg, env_name=env_name)
+    _require_schema_name(cfg)
     engine_type = (cfg.get("engine_type") or "local").strip().lower()
     echo_sql = _parse_bool(os.environ.get("ECHO_SQL"), default=False)
 
@@ -218,7 +214,6 @@ def _build_engine_for_cfg(
         engine = _create_engine(
             url,
             config_path=config_path,
-            env_name=env_name,
             echo_sql=echo_sql,
         )
         _attach_aurora_password_provider(
@@ -245,22 +240,17 @@ def _build_engine_for_cfg(
     return _create_engine(
         url,
         config_path=config_path,
-        env_name=env_name,
         echo_sql=echo_sql,
     )
 
 
-def get_db(config_path: str, env_name: str) -> RuntimeDBConnection:
+def get_db(config_path: str) -> RuntimeDBConnection:
     """Return a pooled DB connection wrapper for the DAG router."""
 
-    env = str(env_name or "").strip().lower()
-    if not env:
-        raise RuntimeError("TapDB env name is required.")
-
-    cfg = get_db_config_for_env(env, config_path=config_path)
-    schema_name = _require_schema_name(cfg, env_name=env)
+    cfg = get_db_config(config_path=config_path)
+    schema_name = _require_schema_name(cfg)
     resolved_config_path = str(cfg.get("config_path") or str(config_path)).strip()
-    key = (resolved_config_path, env)
+    key = (resolved_config_path, schema_name)
 
     with _bundle_lock:
         bundle = _bundles.get(key)
@@ -268,11 +258,10 @@ def get_db(config_path: str, env_name: str) -> RuntimeDBConnection:
             engine = _build_engine_for_cfg(
                 cfg,
                 config_path=resolved_config_path,
-                env_name=env,
             )
             bundle = RuntimeBundle(
                 config_path=resolved_config_path,
-                env_name=env,
+                target_name="target",
                 engine=engine,
                 SessionFactory=sessionmaker(bind=engine),
                 cfg=cfg,
@@ -297,6 +286,6 @@ def _clear_runtime_cache_for_tests() -> None:
             logger.warning(
                 "Error disposing DAG runtime engine for %s/%s: %s",
                 bundle.config_path,
-                bundle.env_name,
+                bundle.target_name,
                 exc,
             )

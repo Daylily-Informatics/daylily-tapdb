@@ -389,6 +389,7 @@ class TestConnection:
 
 class TestPasswords:
     def test_hash_password(self):
+        pytest.importorskip("passlib.context")
         from daylily_tapdb.passwords import hash_password
 
         h = hash_password("mysecret")
@@ -407,12 +408,14 @@ class TestPasswords:
             hash_password(None)
 
     def test_verify_password_correct(self):
+        pytest.importorskip("passlib.context")
         from daylily_tapdb.passwords import hash_password, verify_password
 
         h = hash_password("test123")
         assert verify_password("test123", h) is True
 
     def test_verify_password_wrong(self):
+        pytest.importorskip("passlib.context")
         from daylily_tapdb.passwords import hash_password, verify_password
 
         h = hash_password("test123")

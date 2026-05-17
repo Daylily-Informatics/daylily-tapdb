@@ -26,8 +26,8 @@ from typing import Iterable, Optional
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
-from daylily_tapdb.cli.context import active_env_name, resolve_context
-from daylily_tapdb.cli.db_config import get_admin_settings_for_env
+from daylily_tapdb.cli.context import resolve_context
+from daylily_tapdb.cli.db_config import get_admin_settings
 
 # Request attribution (set by middleware and session_scope).
 request_path_var: ContextVar[str] = ContextVar("tapdb_request_path", default="")
@@ -60,8 +60,7 @@ def _parse_bool(value: object, *, default: bool) -> bool:
 
 
 def _admin_settings() -> dict[str, object]:
-    env_name = active_env_name("dev").strip().lower()
-    return get_admin_settings_for_env(env_name)
+    return get_admin_settings()
 
 
 def metrics_enabled() -> bool:
@@ -111,9 +110,9 @@ def _extract_table_hint(statement: str, op: str) -> str:
 
 
 def _metrics_root_dir(env_name: str) -> Path:
-    env = (env_name or "dev").strip().lower()
-    ctx = resolve_context(require_keys=True, env_name=env)
-    return ctx.runtime_dir(env) / "metrics"
+    _ = env_name
+    ctx = resolve_context(require_keys=True)
+    return ctx.runtime_dir() / "metrics"
 
 
 def two_week_period_start_utc(now_utc: datetime) -> datetime:
@@ -166,7 +165,7 @@ class MetricsRow:
 
 class TSVMetricsWriter:
     def __init__(self, env_name: str):
-        self._env_name = (env_name or "dev").strip().lower()
+        self._env_name = "target"
         settings = _admin_settings()
         self._queue_max = int(settings.get("metrics_queue_max") or 20000)
         self._flush_secs = float(settings.get("metrics_flush_seconds") or 1.0)
@@ -227,7 +226,7 @@ _writers_by_env: dict[str, TSVMetricsWriter] = {}
 def _get_writer(env_name: str) -> Optional[TSVMetricsWriter]:
     if not metrics_enabled():
         return None
-    env = (env_name or "dev").strip().lower()
+    env = "target"
     with _writer_lock:
         writer = _writers_by_env.get(env)
         if writer is None:
@@ -237,7 +236,8 @@ def _get_writer(env_name: str) -> Optional[TSVMetricsWriter]:
 
 
 def get_dropped_count(env_name: str) -> int:
-    env = (env_name or "dev").strip().lower()
+    _ = env_name
+    env = "target"
     with _writer_lock:
         writer = _writers_by_env.get(env)
     return writer.dropped_count() if writer else 0
@@ -456,7 +456,7 @@ def summarize_metrics(rows: Iterable[dict]) -> dict:
 
 
 def build_metrics_page_context(env_name: str, *, limit: int = 5000) -> dict:
-    env = (env_name or "dev").strip().lower()
+    env = "target"
     clamped = max(1, min(int(limit), 20000))
     now = datetime.now(timezone.utc)
     period_start = two_week_period_start_utc(now)
