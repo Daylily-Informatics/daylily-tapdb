@@ -241,7 +241,7 @@ class TestDbRunPsqlAuroraBranch:
                     stdout="42\n",
                     stderr="",
                 )
-                ok, out = _run_psql(Environment.dev, sql="SELECT 42")
+                ok, out = _run_psql(Environment.target, sql="SELECT 42")
 
         assert ok is True
         assert out == "42"
@@ -269,7 +269,7 @@ class TestDbRunPsqlAuroraBranch:
                     stdout="1\n",
                     stderr="",
                 )
-                ok, out = _run_psql(Environment.dev, sql="SELECT 1")
+                ok, out = _run_psql(Environment.target, sql="SELECT 1")
 
         assert ok is True
         # Verify PGSSLMODE was NOT set (local mode)

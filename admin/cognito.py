@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from daylily_tapdb.cli.cognito import REQUIRED_COGNITO_CLIENT_NAME
-from daylily_tapdb.cli.context import active_env_name
-from daylily_tapdb.cli.db_config import get_db_config_for_env
+from daylily_tapdb.cli.db_config import get_db_config
 
 
 @dataclass(frozen=True)
@@ -29,14 +28,14 @@ class TapdbPoolConfig:
 
 
 def resolve_tapdb_pool_config(env_name: Optional[str] = None) -> TapdbPoolConfig:
-    """Resolve TAPDB Cognito runtime config for an environment."""
-    env_key = (env_name or active_env_name("dev")).strip().lower()
-    cfg = get_db_config_for_env(env_key)
+    """Resolve TAPDB Cognito runtime config for the explicit target."""
+    _ = env_name
+    cfg = get_db_config()
     pool_id = (cfg.get("cognito_user_pool_id") or "").strip()
     if not pool_id:
         raise RuntimeError(
-            f"TAPDB Cognito is not configured for env '{env_key}'. "
-            f"Set environments.{env_key}.cognito_user_pool_id in tapdb config."
+            "TAPDB Cognito is not configured for the explicit target. "
+            "Set target.cognito_user_pool_id in tapdb config."
         )
 
     app_client_id = (cfg.get("cognito_app_client_id") or "").strip()
@@ -51,13 +50,13 @@ def resolve_tapdb_pool_config(env_name: Optional[str] = None) -> TapdbPoolConfig
         )
     if not app_client_id:
         raise RuntimeError(
-            f"TAPDB Cognito app client is not configured for env '{env_key}'. "
-            f"Set environments.{env_key}.cognito_app_client_id in tapdb config."
+            "TAPDB Cognito app client is not configured for the explicit target. "
+            "Set target.cognito_app_client_id in tapdb config."
         )
     if not region:
         raise RuntimeError(
-            f"TAPDB Cognito region is not configured for env '{env_key}'. "
-            f"Set environments.{env_key}.cognito_region in tapdb config."
+            "TAPDB Cognito region is not configured for the explicit target. "
+            "Set target.cognito_region in tapdb config."
         )
 
     return TapdbPoolConfig(

@@ -18,8 +18,7 @@ from cli_core_yo import ccyo_out
 from rich.console import Console
 from rich.table import Table
 
-from daylily_tapdb.cli.context import resolve_context
-from daylily_tapdb.cli.db_config import default_database_name_for_namespace
+from daylily_tapdb.cli.db_config import get_db_config
 from daylily_tapdb.cli.output import print_renderable
 
 console = Console()
@@ -46,9 +45,22 @@ def _ensure_boto3():
         raise typer.Exit(1)
 
 
-def _stack_name_for_env(env: str) -> str:
-    """Derive CloudFormation stack name from environment name."""
-    return f"tapdb-{env}"
+def _target_cluster_identifier() -> str:
+    cfg = get_db_config()
+    cluster_identifier = str(
+        cfg.get("cluster_identifier") or cfg.get("database") or ""
+    ).strip()
+    if not cluster_identifier:
+        raise RuntimeError(
+            "TapDB target.cluster_identifier or target.database is required "
+            "for Aurora commands."
+        )
+    return cluster_identifier
+
+
+def _stack_name_for_target(cluster_identifier: str) -> str:
+    """Derive CloudFormation stack name from the explicit target config."""
+    return f"tapdb-{cluster_identifier}"
 
 
 def _detect_caller_public_ip() -> str:
@@ -87,7 +99,6 @@ def _resolve_ingress_cidr(
 
 
 def _update_config_file(
-    env: str,
     endpoint: str,
     port: str,
     region: str,
@@ -113,43 +124,32 @@ def _update_config_file(
         except ModuleNotFoundError:
             existing = json.loads(raw) if raw.strip() else {}
 
-    if "environments" not in existing:
-        existing["environments"] = {}
+    if not isinstance(existing, dict):
+        raise RuntimeError(f"invalid TapDB config: {config_path}")
+    target = existing.get("target")
+    if not isinstance(target, dict):
+        raise RuntimeError(f"TapDB explicit target config is required: {config_path}")
+    meta = existing.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+    meta["config_version"] = 4
+    existing["meta"] = meta
 
-    try:
-        ctx = resolve_context(require_keys=False, env_name=env)
-    except RuntimeError:
-        ctx = None
-    if ctx:
-        meta = existing.get("meta") if isinstance(existing, dict) else None
-        existing["meta"] = {
-            "config_version": 3,
-            "client_id": ctx.client_id,
-            "database_name": ctx.database_name,
-            "owner_repo_name": str((meta or {}).get("owner_repo_name") or ""),
-            "domain_registry_path": str((meta or {}).get("domain_registry_path") or ""),
-            "prefix_ownership_registry_path": str(
-                (meta or {}).get("prefix_ownership_registry_path") or ""
-            ),
-        }
-
-    env_cfg = existing["environments"].get(env, {}) or {}
-    database_name = str(env_cfg.get("database") or "").strip()
-    if not database_name and ctx:
-        database_name = default_database_name_for_namespace(ctx.database_name, env)
-    existing["environments"][env] = {
-        **env_cfg,
+    existing["target"] = {
+        **target,
         "engine_type": "aurora",
         "host": endpoint,
         "port": port,
-        "database": database_name or f"tapdb_{env}",
-        "user": "tapdb_admin",
+        "database": str(target.get("database") or "").strip(),
+        "schema_name": str(target.get("schema_name") or "").strip(),
+        "user": str(target.get("user") or "tapdb_admin"),
         "region": region,
-        "cluster_identifier": cluster_identifier or env,
-        "iam_auth": "false" if secret_arn else str(env_cfg.get("iam_auth") or "true"),
-        "secret_arn": secret_arn or str(env_cfg.get("secret_arn") or ""),
+        "cluster_identifier": cluster_identifier
+        or str(target.get("cluster_identifier") or target.get("database") or ""),
+        "iam_auth": "false" if secret_arn else str(target.get("iam_auth") or "true"),
+        "secret_arn": secret_arn or str(target.get("secret_arn") or ""),
         "ssl": "true",
-        "ui_port": str(env_cfg.get("ui_port") or "8911"),
+        "ui_port": str(target.get("ui_port") or "8911"),
     }
 
     try:
@@ -168,7 +168,6 @@ def _update_config_file(
 
 @aurora_app.command("create")
 def aurora_create(
-    env: str = typer.Argument(..., help="Environment name (e.g. dev, staging, prod)"),
     region: str = typer.Option("us-west-2", "--region", "-r", help="AWS region"),
     instance_class: str = typer.Option(
         "db.r6g.large", "--instance-class", help="RDS instance class"
@@ -210,6 +209,12 @@ def aurora_create(
 ):
     """Create an Aurora PostgreSQL cluster via CloudFormation."""
     try:
+        cluster_identifier = _target_cluster_identifier()
+    except RuntimeError as exc:
+        ccyo_out.error(str(exc))
+        raise typer.Exit(1)
+
+    try:
         resolved_cidr = _resolve_ingress_cidr(cidr, publicly_accessible)
     except RuntimeError as exc:
         ccyo_out.error(str(exc))
@@ -232,7 +237,7 @@ def aurora_create(
 
     config = AuroraConfig(
         region=region,
-        cluster_identifier=env,
+        cluster_identifier=cluster_identifier,
         instance_class=instance_class,
         engine_version=engine_version,
         vpc_id=vpc_id,
@@ -243,9 +248,12 @@ def aurora_create(
         tags=tags,
     )
 
-    stack_name = _stack_name_for_env(env)
-    ccyo_out.print_text(f"\n[bold cyan]━━━ Aurora Create ({env}) ━━━[/bold cyan]")
+    stack_name = _stack_name_for_target(cluster_identifier)
+    ccyo_out.print_text(
+        "\n[bold cyan]━━━ Aurora Create (explicit target) ━━━[/bold cyan]"
+    )
     ccyo_out.print_text(f"  Stack:    {stack_name}")
+    ccyo_out.print_text(f"  Cluster:  {cluster_identifier}")
     ccyo_out.print_text(f"  Region:   {region}")
     ccyo_out.print_text(f"  Instance: {instance_class}")
     ccyo_out.print_text(f"  Engine:   PostgreSQL {engine_version}")
@@ -263,9 +271,7 @@ def aurora_create(
             ccyo_out.success(
                 f"Stack creation initiated (stack: {initiated['stack_name']})."
             )
-            ccyo_out.detail(
-                f"Check progress with: [cyan]tapdb aurora status {env}[/cyan]"
-            )
+            ccyo_out.detail("Check progress with: [cyan]tapdb aurora status[/cyan]")
             return
         else:
             # Block with live progress using rich status spinner
@@ -296,10 +302,10 @@ def aurora_create(
         ccyo_out.print_text(f"  Endpoint: [cyan]{endpoint}[/cyan]")
         ccyo_out.print_text(f"  Port:     {port}")
         _update_config_file(
-            env,
             endpoint,
             port,
             region,
+            cluster_identifier=cluster_identifier,
             secret_arn=outputs.get("SecretArn"),
         )
 
@@ -309,7 +315,6 @@ def aurora_create(
 
 @aurora_app.command("delete")
 def aurora_delete(
-    env: str = typer.Argument(..., help="Environment name"),
     region: str = typer.Option("us-west-2", "--region", "-r", help="AWS region"),
     retain_networking: bool = typer.Option(
         True,
@@ -320,10 +325,15 @@ def aurora_delete(
 ):
     """Delete an Aurora CloudFormation stack."""
     _ensure_boto3()
+    try:
+        cluster_identifier = _target_cluster_identifier()
+    except RuntimeError as exc:
+        ccyo_out.error(str(exc))
+        raise typer.Exit(1)
 
     from daylily_tapdb.aurora.stack_manager import AuroraStackManager
 
-    stack_name = _stack_name_for_env(env)
+    stack_name = _stack_name_for_target(cluster_identifier)
 
     if not force:
         from rich.prompt import Confirm
@@ -339,8 +349,11 @@ def aurora_delete(
             ccyo_out.print_text("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
-    ccyo_out.print_text(f"\n[bold cyan]━━━ Aurora Delete ({env}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        "\n[bold cyan]━━━ Aurora Delete (explicit target) ━━━[/bold cyan]"
+    )
     ccyo_out.print_text(f"  Stack:  {stack_name}")
+    ccyo_out.print_text(f"  Cluster: {cluster_identifier}")
     ccyo_out.print_text(f"  Region: {region}")
     ccyo_out.print_text(f"  Retain networking: {retain_networking}")
     ccyo_out.print_text("")
@@ -351,7 +364,7 @@ def aurora_delete(
         mgr = AuroraStackManager(region=region)
 
         # Disable deletion protection before stack deletion
-        cluster_id = env
+        cluster_id = cluster_identifier
         try:
             rds = boto3.client("rds", region_name=region)
             rds.modify_db_cluster(
@@ -377,16 +390,20 @@ def aurora_delete(
 
 @aurora_app.command("status")
 def aurora_status(
-    env: str = typer.Argument(..., help="Environment name"),
     region: str = typer.Option("us-west-2", "--region", "-r", help="AWS region"),
     as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Show Aurora stack status, endpoint, and outputs."""
     _ensure_boto3()
+    try:
+        cluster_identifier = _target_cluster_identifier()
+    except RuntimeError as exc:
+        ccyo_out.error(str(exc))
+        raise typer.Exit(1)
 
     from daylily_tapdb.aurora.stack_manager import AuroraStackManager
 
-    stack_name = _stack_name_for_env(env)
+    stack_name = _stack_name_for_target(cluster_identifier)
 
     try:
         mgr = AuroraStackManager(region=region)
@@ -404,8 +421,11 @@ def aurora_status(
     if "FAILED" in status:
         color = "red"
 
-    ccyo_out.print_text(f"\n[bold cyan]━━━ Aurora Status ({env}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        "\n[bold cyan]━━━ Aurora Status (explicit target) ━━━[/bold cyan]"
+    )
     ccyo_out.print_text(f"  Stack:  {stack_name}")
+    ccyo_out.print_text(f"  Cluster: {cluster_identifier}")
     ccyo_out.print_text(f"  Region: {region}")
     ccyo_out.print_text(f"  Status: [{color}]{status}[/{color}]")
 
@@ -418,26 +438,34 @@ def aurora_status(
 
 @aurora_app.command("connect")
 def aurora_connect(
-    env: str = typer.Argument(..., help="Environment name"),
     region: str = typer.Option("us-west-2", "--region", "-r", help="AWS region"),
     user: str = typer.Option("tapdb_admin", "--user", "-u", help="Database user"),
     database: str = typer.Option(
         None,
         "--database",
         "-d",
-        help="Database name (default: tapdb_<env>)",
+        help="Database name (default: target.database)",
     ),
     export: bool = typer.Option(
         False, "--export", "-e", help="Print export statements for shell"
     ),
 ):
-    """Print or export connection info for an Aurora environment."""
+    """Print or export connection info for the explicit Aurora target."""
     _ensure_boto3()
+    try:
+        cfg = get_db_config()
+        cluster_identifier = _target_cluster_identifier()
+    except RuntimeError as exc:
+        ccyo_out.error(str(exc))
+        raise typer.Exit(1)
 
     from daylily_tapdb.aurora.stack_manager import AuroraStackManager
 
-    db_name = database or f"tapdb_{env}"
-    stack_name = _stack_name_for_env(env)
+    db_name = database or str(cfg.get("database") or "").strip()
+    if not db_name:
+        ccyo_out.error("target.database is required for Aurora connection output.")
+        raise typer.Exit(1)
+    stack_name = _stack_name_for_target(cluster_identifier)
 
     try:
         mgr = AuroraStackManager(region=region)
@@ -463,7 +491,9 @@ def aurora_connect(
         ccyo_out.print_text(f"export PGUSER={user}")
         ccyo_out.print_text("export PGSSLMODE=verify-full")
     else:
-        ccyo_out.print_text(f"\n[bold cyan]━━━ Aurora Connect ({env}) ━━━[/bold cyan]")
+        ccyo_out.print_text(
+            "\n[bold cyan]━━━ Aurora Connect (explicit target) ━━━[/bold cyan]"
+        )
         ccyo_out.print_text(f"  Endpoint: [cyan]{endpoint}[/cyan]")
         ccyo_out.print_text(f"  Port:     {port}")
         ccyo_out.print_text(f"  Database: {db_name}")

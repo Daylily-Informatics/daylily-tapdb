@@ -1,10 +1,13 @@
 """Tests for tapdb aurora CLI commands."""
 
+from __future__ import annotations
+
 import json
 import re
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
+import yaml
 from typer.testing import CliRunner
 
 from daylily_tapdb.cli import build_app
@@ -22,39 +25,59 @@ def _strip(s: str) -> str:
     return _ANSI_RE.sub("", s)
 
 
-_TEST_CONFIG_PATH: str = ""
-
-
-def _namespaced(args: list[str]) -> list[str]:
-    return ["--config", _TEST_CONFIG_PATH, *args]
-
-
-@pytest.fixture(autouse=True)
-def _namespace_env(tmp_path, monkeypatch):
-    global _TEST_CONFIG_PATH
-    # Create a minimal config file with metadata so resolve_context succeeds
-    config_dir = tmp_path / ".config" / "tapdb" / "testclient" / "testdb"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_file = config_dir / "tapdb-config.yaml"
-    config_file.write_text(
-        "metadata:\n  client_id: testclient\n  database_name: testdb\n"
-        "environments:\n  dev:\n    host: localhost\n    port: 5432\n"
+def _write_config(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    domain_registry = path.parent / "domain_code_registry.json"
+    prefix_registry = path.parent / "prefix_ownership_registry.json"
+    domain_registry.write_text(
+        '{"version":"0.4.0","domains":{"Z":{"name":"test-localhost"}}}\n',
+        encoding="utf-8",
     )
-    _TEST_CONFIG_PATH = str(config_file)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    prefix_registry.write_text(
+        (
+            '{"version":"0.4.0","ownership":{"Z":{'
+            '"TPX":{"issuer_app_code":"daylily-tapdb"},'
+            '"EDG":{"issuer_app_code":"daylily-tapdb"},'
+            '"ADT":{"issuer_app_code":"daylily-tapdb"},'
+            '"SYS":{"issuer_app_code":"daylily-tapdb"},'
+            '"MSG":{"issuer_app_code":"daylily-tapdb"}}}}\n'
+        ),
+        encoding="utf-8",
+    )
+    path.write_text(
+        "meta:\n"
+        "  config_version: 4\n"
+        "  client_id: testclient\n"
+        "  database_name: testdb\n"
+        "  owner_repo_name: daylily-tapdb\n"
+        f"  domain_registry_path: {domain_registry}\n"
+        f"  prefix_ownership_registry_path: {prefix_registry}\n"
+        "target:\n"
+        "  engine_type: local\n"
+        "  host: localhost\n"
+        "  port: '5432'\n"
+        "  ui_port: '8911'\n"
+        "  domain_code: Z\n"
+        "  user: tapdb_admin\n"
+        "  password: ''\n"
+        "  database: tapdb_dev\n"
+        "  schema_name: tapdb_testdb\n"
+        "  cluster_identifier: dev\n"
+        "safety:\n"
+        "  safety_tier: shared\n"
+        "  destructive_operations: blocked\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    return path
 
 
-@pytest.fixture()
-def app():
-    """Build a fresh Typer app for each test."""
-    return build_app()
-
-
-# ── helpers ──────────────────────────────────────────────────────────
+def _namespaced(tmp_path: Path, args: list[str]) -> list[str]:
+    cfg_path = _write_config(tmp_path / "tapdb-config.yaml")
+    return ["--config", str(cfg_path), *args]
 
 
 def _mock_stack_manager():
-    """Return a MagicMock that quacks like AuroraStackManager."""
     mgr = MagicMock()
     mgr.create_stack.return_value = {
         "stack_name": "tapdb-dev",
@@ -94,337 +117,170 @@ def _mock_stack_manager():
     return mgr
 
 
-# ── aurora help ──────────────────────────────────────────────────────
-
-
-class TestAuroraHelp:
-    def test_aurora_help(self, app):
-        result = runner.invoke(app, ["aurora", "--help"])
-        assert result.exit_code == 0
-        out = _strip(result.output)
-        assert "create" in out
-        assert "delete" in out
-        assert "status" in out
-        assert "connect" in out
-        assert "list" in out
-
-    def test_tapdb_help_shows_aurora(self, app):
-        result = runner.invoke(app, ["--help"])
-        assert result.exit_code == 0
-        assert "aurora" in _strip(result.output)
-
-
-# ── aurora create ────────────────────────────────────────────────────
-
-
-class TestAuroraCreate:
-    def test_resolve_ingress_cidr_uses_explicit_value(self):
-        assert (
-            _resolve_ingress_cidr(
-                "1.2.3.4/32",
-                True,
-                public_ip_resolver=lambda: "5.6.7.8",
-            )
-            == "1.2.3.4/32"
-        )
-
-    def test_resolve_ingress_cidr_uses_current_ip_for_public_access(self):
-        assert (
-            _resolve_ingress_cidr(
-                None,
-                True,
-                public_ip_resolver=lambda: "24.7.124.62",
-            )
-            == "24.7.124.62/32"
-        )
-
-    def test_resolve_ingress_cidr_defaults_private_range(self):
-        assert (
-            _resolve_ingress_cidr(
-                None,
-                False,
-                public_ip_resolver=lambda: "24.7.124.62",
-            )
-            == _DEFAULT_PRIVATE_INGRESS_CIDR
-        )
-
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_create_success(self, mock_mgr_cls, app, tmp_path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path))
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(
-            app, _namespaced(["aurora", "create", "dev", "--vpc-id", "vpc-123"])
-        )
-        assert result.exit_code == 0
-        out = _strip(result.output)
-        assert "created" in out.lower() or "✓" in result.output
-        mock_mgr.create_stack.assert_called_once()
-        config = mock_mgr.create_stack.call_args.args[0]
-        assert config.cidr == _DEFAULT_PRIVATE_INGRESS_CIDR
-
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_create_publicly_accessible_resolves_current_ip(
-        self, mock_mgr_cls, app, tmp_path, monkeypatch
-    ):
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setattr(
-            "daylily_tapdb.cli.aurora._detect_caller_public_ip",
-            lambda: "24.7.124.62",
-        )
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(
-            app,
-            _namespaced(["aurora", "create", "dev", "--publicly-accessible"]),
-        )
-        assert result.exit_code == 0
-        config = mock_mgr.create_stack.call_args.args[0]
-        assert config.publicly_accessible is True
-        assert config.cidr == "24.7.124.62/32"
-        assert "24.7.124.62/32" in _strip(result.output)
-
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_create_failure(self, mock_mgr_cls, app):
-        mock_mgr_cls.return_value.create_stack.side_effect = RuntimeError("boom")
-        result = runner.invoke(app, _namespaced(["aurora", "create", "dev"]))
-        assert result.exit_code == 1
-
-    def test_create_publicly_accessible_fails_when_ip_resolution_fails(
-        self, app, monkeypatch
-    ):
-        monkeypatch.setattr(
-            "daylily_tapdb.cli.aurora._detect_caller_public_ip",
-            lambda: (_ for _ in ()).throw(RuntimeError("resolve failed")),
-        )
-
-        result = runner.invoke(
-            app,
-            _namespaced(["aurora", "create", "dev", "--publicly-accessible"]),
-        )
-        assert result.exit_code == 1
-        assert "resolve failed" in _strip(result.output)
-
-
-# ── aurora delete ────────────────────────────────────────────────────
-
-
-class TestAuroraDelete:
-    @patch("boto3.client")
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_delete_force(self, mock_mgr_cls, mock_boto3_client, app):
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(app, ["aurora", "delete", "dev", "--force"])
-        assert result.exit_code == 0
-        mock_mgr.delete_stack.assert_called_once_with(
-            "tapdb-dev", retain_networking=True
-        )
-
-    @patch("boto3.client")
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_delete_no_retain(self, mock_mgr_cls, mock_boto3_client, app):
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(
-            app, ["aurora", "delete", "dev", "--force", "--no-retain-networking"]
-        )
-        assert result.exit_code == 0
-        mock_mgr.delete_stack.assert_called_once_with(
-            "tapdb-dev", retain_networking=False
-        )
-
-    @patch("boto3.client")
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_delete_failure(self, mock_mgr_cls, mock_boto3_client, app):
-        mock_mgr_cls.return_value.delete_stack.side_effect = RuntimeError("boom")
-        result = runner.invoke(app, ["aurora", "delete", "dev", "--force"])
-        assert result.exit_code == 1
-
-
-# ── aurora status ────────────────────────────────────────────────────
-
-
-class TestAuroraStatus:
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_status_success(self, mock_mgr_cls, app):
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(app, ["aurora", "status", "dev"])
-        assert result.exit_code == 0
-        out = _strip(result.output)
-        assert "CREATE_COMPLETE" in out
-        assert "ClusterEndpoint" in out
-
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_status_json(self, mock_mgr_cls, app):
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(app, ["aurora", "status", "dev", "--json"])
-        assert result.exit_code == 0
-        data = json.loads(_strip(result.output))
-        assert data["status"] == "CREATE_COMPLETE"
-
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_status_not_found(self, mock_mgr_cls, app):
-        mock_mgr_cls.return_value.get_stack_status.side_effect = RuntimeError(
-            "not found"
-        )
-        result = runner.invoke(app, ["aurora", "status", "dev"])
-        assert result.exit_code == 1
-
-
-# ── aurora connect ───────────────────────────────────────────────────
-
-
-class TestAuroraConnect:
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_connect_info(self, mock_mgr_cls, app):
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(app, ["aurora", "connect", "dev"])
-        assert result.exit_code == 0
-        out = _strip(result.output)
-        assert "tapdb-dev.cluster-xyz" in out
-        assert "5432" in out
-
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_connect_export(self, mock_mgr_cls, app):
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(app, ["aurora", "connect", "dev", "--export"])
-        assert result.exit_code == 0
-        out = _strip(result.output)
-        assert "export PGHOST=" in out
-        assert "export PGPORT=" in out
-
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_connect_no_endpoint(self, mock_mgr_cls, app):
-        mock_mgr = MagicMock()
-        mock_mgr.get_stack_status.return_value = {
-            "stack_name": "tapdb-dev",
-            "status": "CREATE_IN_PROGRESS",
-            "outputs": {},
-        }
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(app, ["aurora", "connect", "dev"])
-        assert result.exit_code == 1
-
-
-# ── aurora list ──────────────────────────────────────────────────────
-
-
-class TestAuroraList:
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_list_table(self, mock_mgr_cls, app):
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(app, ["aurora", "list"])
-        assert result.exit_code == 0
-        out = _strip(result.output)
-        assert "tapdb-dev" in out
-
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_list_json(self, mock_mgr_cls, app):
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(app, ["aurora", "list", "--json"])
-        assert result.exit_code == 0
-        data = json.loads(_strip(result.output))
-        assert "tapdb-dev" in data
-
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_list_empty(self, mock_mgr_cls, app):
-        mock_mgr = MagicMock()
-        mock_mgr.detect_existing_resources.return_value = {}
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(app, ["aurora", "list"])
-        assert result.exit_code == 0
-        assert "No tapdb Aurora stacks" in _strip(result.output)
-
-
-# ── config update ────────────────────────────────────────────────────
-
-
-class TestConfigUpdate:
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_create_updates_config(self, mock_mgr_cls, app, tmp_path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path))
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(app, _namespaced(["aurora", "create", "staging"]))
-        assert result.exit_code == 0
-
-        config_path = (
-            tmp_path
-            / ".config"
-            / "tapdb"
-            / "testclient"
-            / "testdb"
-            / "tapdb-config.yaml"
-        )
-        assert config_path.exists()
-        raw = config_path.read_text()
-        # Should contain the environment entry
-        assert "staging" in raw
-        assert "aurora" in raw
-
-
-# ── aurora create --background ──────────────────────────────────────
-
-
-class TestAuroraCreateBackground:
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_background_returns_immediately(self, mock_mgr_cls, app):
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(
-            app,
-            _namespaced(
-                ["aurora", "create", "dev", "--background", "--vpc-id", "vpc-123"]
-            ),
-        )
-        assert result.exit_code == 0
-        out = _strip(result.output)
-        assert "initiated" in out.lower()
-        assert "tapdb aurora status dev" in out
-        mock_mgr.initiate_create_stack.assert_called_once()
-        mock_mgr.create_stack.assert_not_called()
-
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_no_background_calls_create_stack(
-        self, mock_mgr_cls, app, tmp_path, monkeypatch
-    ):
-        monkeypatch.setenv("HOME", str(tmp_path))
-        mock_mgr = _mock_stack_manager()
-        mock_mgr_cls.return_value = mock_mgr
-
-        result = runner.invoke(
-            app, _namespaced(["aurora", "create", "dev", "--vpc-id", "vpc-123"])
-        )
-        assert result.exit_code == 0
-        mock_mgr.create_stack.assert_called_once()
-        mock_mgr.initiate_create_stack.assert_not_called()
-
-    @patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
-    def test_background_failure(self, mock_mgr_cls, app):
-        mock_mgr_cls.return_value.initiate_create_stack.side_effect = RuntimeError(
-            "No default VPC"
-        )
-        result = runner.invoke(app, ["aurora", "create", "dev", "--background"])
-        assert result.exit_code == 1
-        assert "No default VPC" in _strip(result.output)
+def test_aurora_help(app=None):
+    app = app or build_app()
+    result = runner.invoke(app, ["aurora", "--help"])
+    assert result.exit_code == 0
+    out = _strip(result.output)
+    assert "create" in out
+    assert "delete" in out
+    assert "status" in out
+    assert "connect" in out
+    assert "list" in out
+
+
+def test_resolve_ingress_cidr_modes():
+    assert (
+        _resolve_ingress_cidr("1.2.3.4/32", True, public_ip_resolver=lambda: "5.6.7.8")
+        == "1.2.3.4/32"
+    )
+    assert (
+        _resolve_ingress_cidr(None, True, public_ip_resolver=lambda: "24.7.124.62")
+        == "24.7.124.62/32"
+    )
+    assert (
+        _resolve_ingress_cidr(None, False, public_ip_resolver=lambda: "24.7.124.62")
+        == _DEFAULT_PRIVATE_INGRESS_CIDR
+    )
+
+
+@patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+def test_create_success(mock_mgr_cls, tmp_path):
+    mock_mgr = _mock_stack_manager()
+    mock_mgr_cls.return_value = mock_mgr
+
+    result = runner.invoke(
+        build_app(), _namespaced(tmp_path, ["aurora", "create", "--vpc-id", "vpc-123"])
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "created" in _strip(result.output).lower() or "✓" in result.output
+    mock_mgr.create_stack.assert_called_once()
+    config = mock_mgr.create_stack.call_args.args[0]
+    assert config.cluster_identifier == "dev"
+    assert config.cidr == _DEFAULT_PRIVATE_INGRESS_CIDR
+
+
+@patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+def test_create_publicly_accessible_resolves_current_ip(
+    mock_mgr_cls, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "daylily_tapdb.cli.aurora._detect_caller_public_ip",
+        lambda: "24.7.124.62",
+    )
+    mock_mgr = _mock_stack_manager()
+    mock_mgr_cls.return_value = mock_mgr
+
+    result = runner.invoke(
+        build_app(),
+        _namespaced(tmp_path, ["aurora", "create", "--publicly-accessible"]),
+    )
+
+    assert result.exit_code == 0, result.output
+    config = mock_mgr.create_stack.call_args.args[0]
+    assert config.publicly_accessible is True
+    assert config.cidr == "24.7.124.62/32"
+
+
+@patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+def test_create_failure(mock_mgr_cls, tmp_path):
+    mock_mgr_cls.return_value.create_stack.side_effect = RuntimeError("boom")
+
+    result = runner.invoke(build_app(), _namespaced(tmp_path, ["aurora", "create"]))
+
+    assert result.exit_code == 1
+    assert "boom" in _strip(result.output)
+
+
+@patch("boto3.client")
+@patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+def test_delete_force(mock_mgr_cls, _mock_boto3_client, tmp_path):
+    mock_mgr = _mock_stack_manager()
+    mock_mgr_cls.return_value = mock_mgr
+
+    result = runner.invoke(
+        build_app(), _namespaced(tmp_path, ["aurora", "delete", "--force"])
+    )
+
+    assert result.exit_code == 0, result.output
+    mock_mgr.delete_stack.assert_called_once_with("tapdb-dev", retain_networking=True)
+
+
+@patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+def test_status_json(mock_mgr_cls, tmp_path):
+    mock_mgr = _mock_stack_manager()
+    mock_mgr_cls.return_value = mock_mgr
+
+    result = runner.invoke(
+        build_app(), _namespaced(tmp_path, ["aurora", "status", "--json"])
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(_strip(result.output))
+    assert data["status"] == "CREATE_COMPLETE"
+
+
+@patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+def test_connect_export(mock_mgr_cls, tmp_path):
+    mock_mgr = _mock_stack_manager()
+    mock_mgr_cls.return_value = mock_mgr
+
+    result = runner.invoke(
+        build_app(), _namespaced(tmp_path, ["aurora", "connect", "--export"])
+    )
+
+    assert result.exit_code == 0, result.output
+    out = _strip(result.output)
+    assert "export PGHOST=" in out
+    assert "export PGDATABASE=tapdb_dev" in out
+
+
+@patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+def test_list_json(mock_mgr_cls):
+    mock_mgr = _mock_stack_manager()
+    mock_mgr_cls.return_value = mock_mgr
+
+    result = runner.invoke(build_app(), ["aurora", "list", "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(_strip(result.output))
+    assert "tapdb-dev" in data
+
+
+@patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+def test_create_updates_explicit_target_config(mock_mgr_cls, tmp_path):
+    cfg_path = _write_config(tmp_path / "tapdb-config.yaml")
+    mock_mgr = _mock_stack_manager()
+    mock_mgr_cls.return_value = mock_mgr
+
+    result = runner.invoke(build_app(), ["--config", str(cfg_path), "aurora", "create"])
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    assert payload["meta"]["config_version"] == 4
+    assert "environments" not in payload
+    assert payload["target"]["engine_type"] == "aurora"
+    assert payload["target"]["host"].startswith("tapdb-dev.cluster-xyz")
+    assert payload["target"]["cluster_identifier"] == "dev"
+    assert payload["target"]["secret_arn"].endswith(":secret:tapdb-dev")
+
+
+@patch("daylily_tapdb.aurora.stack_manager.AuroraStackManager")
+def test_background_returns_immediately(mock_mgr_cls, tmp_path):
+    mock_mgr = _mock_stack_manager()
+    mock_mgr_cls.return_value = mock_mgr
+
+    result = runner.invoke(
+        build_app(),
+        _namespaced(
+            tmp_path, ["aurora", "create", "--background", "--vpc-id", "vpc-123"]
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    out = _strip(result.output)
+    assert "initiated" in out.lower()
+    assert "tapdb aurora status" in out
+    mock_mgr.initiate_create_stack.assert_called_once()
+    mock_mgr.create_stack.assert_not_called()

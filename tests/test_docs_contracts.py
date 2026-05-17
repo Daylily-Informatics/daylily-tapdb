@@ -16,7 +16,7 @@ def test_readme_exists_and_points_to_examples() -> None:
     assert "examples/readme/10_bootstrap_local.sh" in text
     assert "examples/readme/20_python_api.py" in text
     assert "source ./activate" in text
-    assert "tapdb --config <path> --env <name>" in text
+    assert "tapdb --config <path> ..." in text
     assert "--json info" in text
 
 
@@ -32,7 +32,8 @@ def test_examples_contain_the_canonical_commands() -> None:
     )
 
     assert "tapdb --help" in smoke
-    assert "db-config init" in bootstrap
+    assert "config init" in bootstrap
+    assert "--env" not in bootstrap
     assert "bootstrap local --no-gui" in bootstrap
     assert "TAPDBConnection" in python_api
     assert "TemplateManager" in python_api

@@ -33,7 +33,7 @@ def _write_config(path: Path, *, queue_max: int) -> Path:
     )
     path.write_text(
         "meta:\n"
-        "  config_version: 3\n"
+        "  config_version: 4\n"
         "  client_id: alpha\n"
         "  database_name: beta\n"
         "  owner_repo_name: daylily-tapdb\n"
@@ -67,17 +67,19 @@ def _write_config(path: Path, *, queue_max: int) -> Path:
         "  db_max_overflow: 10\n"
         "  db_pool_timeout: 30\n"
         "  db_pool_recycle: 1800\n"
-        "environments:\n"
-        "  dev:\n"
-        "    engine_type: local\n"
-        "    host: localhost\n"
-        "    port: '5533'\n"
-        "    ui_port: '8911'\n"
-        "    domain_code: Z\n"
-        "    user: tapdb\n"
-        "    password: ''\n"
-        "    database: tapdb_dev\n"
-        "    schema_name: tapdb_beta_dev\n",
+        "target:\n"
+        "  engine_type: local\n"
+        "  host: localhost\n"
+        "  port: '5533'\n"
+        "  ui_port: '8911'\n"
+        "  domain_code: Z\n"
+        "  user: tapdb\n"
+        "  password: ''\n"
+        "  database: tapdb_shared\n"
+        "  schema_name: tapdb_beta\n"
+        "safety:\n"
+        "  safety_tier: shared\n"
+        "  destructive_operations: confirm_required\n",
         encoding="utf-8",
     )
     return path
@@ -97,7 +99,7 @@ def test_tsv_writer_writes_header_and_rows(tmp_path):
         queue_max=100,
     )
     clear_cli_context()
-    set_cli_context(config_path=cfg_path, env_name="dev")
+    set_cli_context(config_path=cfg_path)
 
     writer = TSVMetricsWriter("dev")
     writer.enqueue(
@@ -132,7 +134,7 @@ def test_tsv_writer_drops_when_queue_full(tmp_path):
         queue_max=1,
     )
     clear_cli_context()
-    set_cli_context(config_path=cfg_path, env_name="dev")
+    set_cli_context(config_path=cfg_path)
 
     writer = TSVMetricsWriter("dev")
     time.sleep(0.05)

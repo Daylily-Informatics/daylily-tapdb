@@ -34,7 +34,7 @@ def test_user_list_shows_no_users(monkeypatch: pytest.MonkeyPatch):
         user_mod, "list_users", lambda _session, include_inactive=False: []
     )
 
-    result = runner.invoke(user_mod.user_app, ["list", "dev"])
+    result = runner.invoke(user_mod.user_app, ["list"])
 
     assert result.exit_code == 0
     assert "No users found" in result.output
@@ -58,10 +58,10 @@ def test_user_list_renders_table(monkeypatch: pytest.MonkeyPatch):
         ],
     )
 
-    result = runner.invoke(user_mod.user_app, ["list", "dev"])
+    result = runner.invoke(user_mod.user_app, ["list"])
 
     assert result.exit_code == 0
-    assert "TAPDB Users (dev)" in result.output
+    assert "TAPDB Users (explicit target)" in result.output
     assert "Admin" in result.output
     assert "14:00" in result.output
 
@@ -81,7 +81,6 @@ def test_user_add_success(monkeypatch: pytest.MonkeyPatch):
         user_mod.user_app,
         [
             "add",
-            "dev",
             "--username",
             "alice@example.com",
             "--role",
@@ -115,7 +114,7 @@ def test_user_add_duplicate_exits_nonzero(monkeypatch: pytest.MonkeyPatch):
 
     result = runner.invoke(
         user_mod.user_app,
-        ["add", "dev", "--username", "alice@example.com"],
+        ["add", "--username", "alice@example.com"],
     )
 
     assert result.exit_code == 1
@@ -128,7 +127,7 @@ def test_user_set_role_success(monkeypatch: pytest.MonkeyPatch):
 
     result = runner.invoke(
         user_mod.user_app,
-        ["set-role", "dev", "alice@example.com", "admin"],
+        ["set-role", "alice@example.com", "admin"],
     )
 
     assert result.exit_code == 0
@@ -145,8 +144,8 @@ def test_user_activate_and_deactivate_success(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(user_mod, "set_active", _fake_set_active)
 
-    deactivate = runner.invoke(user_mod.user_app, ["deactivate", "dev", "alice"])
-    activate = runner.invoke(user_mod.user_app, ["activate", "dev", "alice"])
+    deactivate = runner.invoke(user_mod.user_app, ["deactivate", "alice"])
+    activate = runner.invoke(user_mod.user_app, ["activate", "alice"])
 
     assert deactivate.exit_code == 0
     assert activate.exit_code == 0
@@ -170,7 +169,7 @@ def test_user_set_password_success(monkeypatch: pytest.MonkeyPatch):
 
     result = runner.invoke(
         user_mod.user_app,
-        ["set-password", "dev", "alice", "--password", "secret"],
+        ["set-password", "alice", "--password", "secret"],
     )
 
     assert result.exit_code == 0
@@ -185,7 +184,7 @@ def test_user_set_password_success(monkeypatch: pytest.MonkeyPatch):
 def test_user_delete_cancelled_without_force(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(user_mod.typer, "confirm", lambda _msg: False)
 
-    result = runner.invoke(user_mod.user_app, ["delete", "dev", "alice"])
+    result = runner.invoke(user_mod.user_app, ["delete", "alice"])
 
     assert result.exit_code == 0
     assert "Cancelled" in result.output
@@ -196,7 +195,7 @@ def test_user_delete_success(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(user_mod, "_open_connection", lambda *_a, **_k: _FakeConn())
     monkeypatch.setattr(user_mod, "soft_delete", lambda _session, _username: True)
 
-    result = runner.invoke(user_mod.user_app, ["delete", "dev", "alice"])
+    result = runner.invoke(user_mod.user_app, ["delete", "alice"])
 
     assert result.exit_code == 0
     assert "Deleted user" in result.output

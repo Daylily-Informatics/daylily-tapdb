@@ -70,7 +70,7 @@ TapDB has two relevant runtime layers:
 The supported CLI form is:
 
 ```bash
-tapdb --config <path> --env <name> ...
+tapdb --config <path> ...
 ```
 
 The config metadata must include:
@@ -80,10 +80,9 @@ The config metadata must include:
 - `meta.owner_repo_name`
 - `meta.domain_registry_path`
 - `meta.prefix_ownership_registry_path`
-
-Each configured environment must include:
-
-- `domain_code`
+- `target.domain_code`
+- `target.database`
+- `target.schema_name`
 
 There is no client-code-derived prefix behavior, no passive prefix inheritance,
 and no compatibility path for missing governance metadata.
@@ -99,7 +98,7 @@ The Python connection layer sets session values before work begins:
 The SQL layer rejects missing session state. Application code must provide both
 domain and owner repo deliberately.
 
-Environment defaults:
+Runtime ownership inputs:
 
 - `MERIDIAN_DOMAIN_CODE`
 - `TAPDB_OWNER_REPO`
@@ -138,8 +137,8 @@ Do not substitute one for another.
 
 ```mermaid
 flowchart LR
-    CLI["tapdb --config <path> --env <name>"]
-    CFG["tapdb-config.yaml\nmeta.owner_repo_name\nmeta.domain_registry_path\nmeta.prefix_ownership_registry_path\nenv.domain_code"]
+    CLI["tapdb --config <path>"]
+    CFG["tapdb-config.yaml\nmeta.owner_repo_name\nmeta.domain_registry_path\nmeta.prefix_ownership_registry_path\ntarget.domain_code"]
     CONN["TAPDBConnection"]
     SESS["PostgreSQL session state\nsession.current_username\nsession.current_domain_code\nsession.current_owner_repo_name"]
     ROWS["Rows and triggers\nuid, euid, domain_code, issuer_app_code, tenant_id"]

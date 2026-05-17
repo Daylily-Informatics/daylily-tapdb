@@ -17,16 +17,10 @@ spec = CliSpec(
     policy=PolicySpec(),
     config=ConfigSpec(
         xdg_relative_path="config.yaml",
-        template_bytes=b"environments: {}\n",
+        template_bytes=b"meta: {}\ntarget: {}\n",
     ),
     context=InvocationContextSpec(
         options=[
-            ContextOptionSpec(
-                name="env_name",
-                option_flags=("--env",),
-                value_type="str",
-                help="Explicit TapDB environment name for this invocation.",
-            ),
             ContextOptionSpec(
                 name="client_id",
                 option_flags=("--client-id",),

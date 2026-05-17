@@ -31,7 +31,7 @@ def _write_config(path: Path) -> Path:
     )
     path.write_text(
         "meta:\n"
-        "  config_version: 3\n"
+        "  config_version: 4\n"
         "  client_id: alpha\n"
         "  database_name: beta\n"
         "  owner_repo_name: daylily-tapdb\n"
@@ -65,16 +65,19 @@ def _write_config(path: Path) -> Path:
         "  db_max_overflow: 10\n"
         "  db_pool_timeout: 30\n"
         "  db_pool_recycle: 1800\n"
-        "environments:\n"
-        "  dev:\n"
-        "    engine_type: local\n"
-        "    host: localhost\n"
-        "    port: '5533'\n"
-        "    ui_port: '8911'\n"
-        "    domain_code: Z\n"
-        "    user: tapdb\n"
-        "    password: ''\n"
-        "    database: tapdb_dev\n",
+        "target:\n"
+        "  engine_type: local\n"
+        "  host: localhost\n"
+        "  port: '5533'\n"
+        "  ui_port: '8911'\n"
+        "  domain_code: Z\n"
+        "  user: tapdb\n"
+        "  password: ''\n"
+        "  database: tapdb_shared\n"
+        "  schema_name: tapdb_beta\n"
+        "safety:\n"
+        "  safety_tier: shared\n"
+        "  destructive_operations: confirm_required\n",
         encoding="utf-8",
     )
     path.chmod(stat.S_IRUSR | stat.S_IWUSR)
@@ -85,7 +88,6 @@ def test_cli_spec_uses_platform_v2_context_contract() -> None:
     assert spec.policy.profile == "platform-v2"
     assert spec.context is not None
     assert [option.name for option in spec.context.options] == [
-        "env_name",
         "client_id",
         "database_name",
     ]
@@ -160,14 +162,22 @@ def test_json_rejected_for_non_json_command(tmp_path: Path) -> None:
             "beta",
             "--owner-repo-name",
             "daylily-tapdb",
-            "--env",
-            "dev",
             "--domain-code",
-            "dev=Z",
-            "--db-port",
-            "dev=5533",
+            "Z",
+            "--engine-type",
+            "local",
+            "--host",
+            "localhost",
+            "--port",
+            "5533",
             "--ui-port",
-            "dev=8911",
+            "8911",
+            "--user",
+            "tapdb",
+            "--database",
+            "tapdb_shared",
+            "--schema-name",
+            "tapdb_beta",
         ],
     )
 
@@ -183,7 +193,7 @@ def test_framework_invocation_context_reaches_runtime_command(tmp_path: Path) ->
 
     result = runner.invoke(
         framework_app,
-        ["--config", str(cfg_path), "--env", "dev", "ui", "status"],
+        ["--config", str(cfg_path), "ui", "status"],
     )
 
     assert result.exit_code == 0

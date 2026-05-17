@@ -21,16 +21,11 @@ from daylily_tapdb.cli._registry_v2 import help_text, policy_for_command
 from daylily_tapdb.cli.context import (
     TapdbContext,
     active_context_overrides,
-    active_env_name,
     clear_cli_context,
     resolve_context,
     set_cli_context,
 )
-from daylily_tapdb.cli.db_config import (
-    default_database_name_for_namespace,
-    default_schema_name_for_database,
-    validate_postgres_identifier_component,
-)
+from daylily_tapdb.cli.db_config import validate_postgres_identifier_component
 from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.cli.spec import spec
 from daylily_tapdb.governance import (
@@ -47,20 +42,13 @@ PID_FILE = Path.home() / ".tapdb" / "ui.pid"
 LOG_FILE = Path.home() / ".tapdb" / "ui.log"
 
 
-def _active_env_name() -> str:
-    return active_env_name("dev").strip().lower()
+def _require_context() -> TapdbContext:
+    return resolve_context(require_keys=True)
 
 
-def _require_context(*, env_name: Optional[str] = None) -> TapdbContext:
-    return resolve_context(
-        require_keys=True,
-        env_name=env_name if env_name is not None else _active_env_name(),
-    )
-
-
-def _ui_runtime_paths(env_name: Optional[str] = None) -> tuple[Path, Path, Path]:
-    ctx = _require_context(env_name=env_name)
-    ui_dir = ctx.ui_dir(env_name or _active_env_name())
+def _ui_runtime_paths() -> tuple[Path, Path, Path]:
+    ctx = _require_context()
+    ui_dir = ctx.ui_dir()
     return (
         ui_dir / "ui.pid",
         ui_dir / "ui.log",
@@ -69,20 +57,18 @@ def _ui_runtime_paths(env_name: Optional[str] = None) -> tuple[Path, Path, Path]
 
 
 def _resolve_tls_paths(
-    env_name: Optional[str] = None,
     *,
     cert_file: Optional[Path] = None,
     key_file: Optional[Path] = None,
 ) -> tuple[Path, Path]:
     """Resolve TLS cert/key paths from CLI overrides, config, or runtime defaults."""
-    from daylily_tapdb.cli.db_config import get_admin_settings_for_env
+    from daylily_tapdb.cli.db_config import get_admin_settings
 
-    pid_file, _, certs_dir = _ui_runtime_paths(env_name)
+    pid_file, _, certs_dir = _ui_runtime_paths()
     _ = pid_file  # path access validates context + env
     default_cert = certs_dir / "localhost.crt"
     default_key = certs_dir / "localhost.key"
-    resolved_env = env_name or _active_env_name()
-    admin_settings = get_admin_settings_for_env(resolved_env)
+    admin_settings = get_admin_settings()
     if cert_file is not None:
         cert = cert_file.expanduser()
     elif admin_settings.get("tls_cert_path"):
@@ -102,13 +88,11 @@ def _resolve_tls_paths(
 def _ensure_tls_certificates(
     host: str,
     *,
-    env_name: Optional[str] = None,
     cert_file: Optional[Path] = None,
     key_file: Optional[Path] = None,
 ) -> tuple[Path, Path]:
     """Ensure TLS cert/key exist for HTTPS UI startup."""
     cert_path, key_path = _resolve_tls_paths(
-        env_name,
         cert_file=cert_file,
         key_file=key_file,
     )
@@ -299,11 +283,6 @@ def build_app():
             readable=False,
             help="Explicit TapDB config file path for this invocation.",
         ),
-        env_name: Optional[str] = typer.Option(
-            None,
-            "--env",
-            help="Explicit TapDB environment name for this invocation.",
-        ),
     ):
         """Legacy direct-invocation context bridge for tests and embedding."""
         if ctx.resilient_parsing:
@@ -324,9 +303,6 @@ def build_app():
                 if database_name is not None
                 else prior_context.get("database_name")
             ),
-            env_name=env_name
-            if env_name is not None
-            else prior_context.get("env_name"),
             config_path=(
                 config_path
                 if config_path is not None
@@ -379,7 +355,7 @@ def build_app():
             None,
             "--port",
             "-p",
-            help="Port to run the server on (defaults to environments.<env>.ui_port)",
+            help="Port to run the server on (defaults to target.ui_port)",
         ),
         host: str = typer.Option(
             DEFAULT_UI_HOST, "--host", "-h", help="Host to bind to"
@@ -400,22 +376,20 @@ def build_app():
         ),
     ):
         """Start the TAPDB Admin UI server."""
-        from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+        from daylily_tapdb.cli.db_config import get_config_path, get_db_config
 
-        env_name = _active_env_name()
-        pid_file, log_file, _ = _ui_runtime_paths(env_name)
+        pid_file, log_file, _ = _ui_runtime_paths()
         pid_file.parent.mkdir(parents=True, exist_ok=True)
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
-        cfg = get_db_config_for_env(env_name)
+        cfg = get_db_config()
         configured_port = int(str(cfg.get("ui_port") or DEFAULT_UI_PORT))
         if port is None:
             port = configured_port
         elif port != configured_port:
             ccyo_out.error("UI port override is not allowed in strict mode.")
             ccyo_out.print_text(
-                f"  Configured ui_port for env {env_name}: "
-                f"[cyan]{configured_port}[/cyan]"
+                f"  Configured target.ui_port: [cyan]{configured_port}[/cyan]"
             )
             raise typer.Exit(1)
 
@@ -439,18 +413,16 @@ def build_app():
 
         if not _port_is_available(host, port):
             ccyo_out.error(f"{_port_conflict_details(port)}")
-            ns = _require_context(env_name=env_name).namespace_slug()
+            ns = _require_context().namespace_slug()
             ccyo_out.print_text(f"  Namespace: [dim]{ns}[/dim]")
             ccyo_out.print_text(
-                "  Update environments."
-                f"{env_name}.ui_port in the namespaced config to a free port."
+                "  Update target.ui_port in the namespaced config to a free port."
             )
             raise typer.Exit(1)
 
         try:
             cert_path, key_path = _ensure_tls_certificates(
                 host,
-                env_name=env_name,
                 cert_file=ssl_certfile,
                 key_file=ssl_keyfile,
             )
@@ -465,8 +437,6 @@ def build_app():
             "daylily_tapdb.cli.admin_server",
             "--config",
             str(effective_config_path),
-            "--env",
-            env_name,
             "--host",
             host,
             "--port",
@@ -525,7 +495,6 @@ def build_app():
         ),
     ):
         """Install mkcert local CA and generate localhost TLS certs for the UI."""
-        env_name = _active_env_name()
         mkcert = shutil.which("mkcert")
         if not mkcert:
             ccyo_out.error("mkcert is required for trusted local HTTPS certs.")
@@ -534,7 +503,7 @@ def build_app():
             )
             raise typer.Exit(1)
 
-        default_cert, default_key = _resolve_tls_paths(env_name)
+        default_cert, default_key = _resolve_tls_paths()
         cert_path = (cert_file or default_cert).expanduser()
         key_path = (key_file or default_key).expanduser()
         cert_path.parent.mkdir(parents=True, exist_ok=True)
@@ -574,14 +543,13 @@ def build_app():
         ccyo_out.print_text(f"   Cert: [dim]{cert_path}[/dim]")
         ccyo_out.print_text(f"   Key:  [dim]{key_path}[/dim]")
         ccyo_out.print_text(
-            "   Restart UI: [cyan]tapdb --config <path> --env <name> ui restart[/cyan]"
+            "   Restart UI: [cyan]tapdb --config <path> ui restart[/cyan]"
         )
 
     @ui_app.command("stop")
     def ui_stop():
         """Stop the TAPDB Admin UI server."""
-        env_name = _active_env_name()
-        pid_file, _, _ = _ui_runtime_paths(env_name)
+        pid_file, _, _ = _ui_runtime_paths()
         pid = _get_pid(pid_file)
         if not pid:
             ccyo_out.warning("No UI server running")
@@ -610,8 +578,7 @@ def build_app():
     @ui_app.command("status")
     def ui_status():
         """Check the status of the TAPDB Admin UI server."""
-        env_name = _active_env_name()
-        pid_file, log_file, _ = _ui_runtime_paths(env_name)
+        pid_file, log_file, _ = _ui_runtime_paths()
         pid = _get_pid(pid_file)
         if pid:
             ccyo_out.success(f"UI server is running (PID {pid})")
@@ -631,8 +598,7 @@ def build_app():
         lines: int = typer.Option(50, "--lines", "-n", help="Number of lines to show"),
     ):
         """View TAPDB Admin UI server logs (tails by default, Ctrl+C to stop)."""
-        env_name = _active_env_name()
-        _, log_file, _ = _ui_runtime_paths(env_name)
+        _, log_file, _ = _ui_runtime_paths()
         if not log_file.exists():
             ccyo_out.warning("No log file found. Start the server first.")
             return
@@ -674,28 +640,15 @@ def build_app():
         )
 
     def _resolve_bootstrap_env() -> DbEnvironment:
-        raw = str(active_context_overrides().get("env_name") or "").strip().lower()
-        if not raw:
-            ccyo_out.error("TapDB bootstrap requires an explicit --env value.")
-            ccyo_out.print_text(
-                "  Example: [cyan]tapdb --config <path> --env dev bootstrap local[/cyan]"
-            )
-            raise typer.Exit(1)
-        try:
-            return DbEnvironment(raw)
-        except ValueError:
-            ccyo_out.error(f"Unsupported TapDB env '{raw}'")
-            ccyo_out.print_text("  Supported values: dev, test, prod")
-            raise typer.Exit(1)
+        return DbEnvironment.target
 
     def _maybe_start_ui_after_bootstrap(no_gui: bool) -> None:
-        from daylily_tapdb.cli.db_config import get_db_config_for_env
+        from daylily_tapdb.cli.db_config import get_db_config
 
         if no_gui:
             ccyo_out.print_text("  UI start skipped (--no-gui)")
             return
-        env_name = _active_env_name()
-        cfg = get_db_config_for_env(env_name)
+        cfg = get_db_config()
         ui_port = int(str(cfg.get("ui_port") or DEFAULT_UI_PORT))
         try:
             ui_start(
@@ -710,8 +663,7 @@ def build_app():
             ccyo_out.error(f"DB is ready, but UI start failed: {e}")
             ccyo_out.print_text(
                 "  Recover with: "
-                f"[cyan]tapdb --config <path> --env {env_name} "
-                f"ui start --background --port {ui_port}[/cyan]"
+                f"[cyan]tapdb --config <path> ui start --background --port {ui_port}[/cyan]"
             )
 
     @bootstrap_app.command("local")
@@ -728,31 +680,25 @@ def build_app():
         insecure_dev_defaults: bool = typer.Option(
             False,
             "--insecure-dev-defaults",
-            help="DEV ONLY: create default admin user (tapdb_admin/passw0rd)",
+            help="LOCAL/SHARED ONLY: create default admin user (tapdb_admin/passw0rd)",
         ),
     ):
         """Bootstrap local TAPDB runtime, database, schema, and seed data."""
-        from daylily_tapdb.cli.db_config import get_db_config_for_env
+        from daylily_tapdb.cli.db_config import get_db_config
 
         env = _resolve_bootstrap_env()
-        cfg = get_db_config_for_env(env.value)
+        cfg = get_db_config()
         if cfg.get("engine_type") == "aurora":
             ccyo_out.error("Active target is Aurora; use bootstrap aurora")
             raise typer.Exit(1)
 
         ccyo_out.print_text(
-            f"\n[bold cyan]━━━ Bootstrap Local ({env.value}) ━━━[/bold cyan]"
+            "\n[bold cyan]━━━ Bootstrap Local (explicit target) ━━━[/bold cyan]"
         )
 
-        if env in (DbEnvironment.dev, DbEnvironment.test):
-            ccyo_out.print_text(
-                "\n[bold]Step 1/6: Ensure local PostgreSQL runtime[/bold]"
-            )
-            pg_init(env=env, force=False)
-            pg_start_local(env=env, port=None)
-        else:
-            ccyo_out.print_text("\n[bold]Step 1/6: Local runtime management[/bold]")
-            ccyo_out.print_text("  Skipping local runtime management for prod target")
+        ccyo_out.print_text("\n[bold]Step 1/6: Ensure local PostgreSQL runtime[/bold]")
+        pg_init(force=False)
+        pg_start_local(port=None)
 
         ccyo_out.print_text("\n[bold]Step 2/6: Ensure database exists[/bold]")
         create_database(env=env, owner=None)
@@ -815,62 +761,25 @@ def build_app():
         insecure_dev_defaults: bool = typer.Option(
             False,
             "--insecure-dev-defaults",
-            help="DEV ONLY: create default admin user (tapdb_admin/passw0rd)",
-        ),
-        owner_repo_name: Optional[str] = typer.Option(
-            None,
-            "--owner-repo-name",
-            help="Repo-name token used for Meridian prefix ownership validation when bootstrap creates config",
-        ),
-        domain_code: list[str] = typer.Option(
-            [],
-            "--domain-code",
-            help="Per-env domain code mapping (ENV=CODE, repeatable) when bootstrap creates config",
-        ),
-        ui_port: list[str] = typer.Option(
-            [],
-            "--ui-port",
-            help="Per-env UI port mapping (ENV=PORT, repeatable) when bootstrap creates config",
-        ),
-        domain_registry_path: str = typer.Option(
-            str(DEFAULT_DOMAIN_REGISTRY_PATH),
-            "--domain-registry-path",
-            help="Path to the shared Meridian domain registry JSON",
-        ),
-        prefix_ownership_registry_path: str = typer.Option(
-            str(DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH),
-            "--prefix-ownership-registry-path",
-            help="Path to the shared Meridian prefix ownership registry JSON",
+            help="LOCAL/SHARED ONLY: create default admin user (tapdb_admin/passw0rd)",
         ),
     ):
         """Bootstrap Aurora TAPDB stack (infra + DB + schema + seed + optional UI)."""
         from daylily_tapdb.aurora.config import AuroraConfig
         from daylily_tapdb.aurora.stack_manager import AuroraStackManager
-        from daylily_tapdb.cli.aurora import (
-            _ensure_boto3,
-            _resolve_ingress_cidr,
-            _stack_name_for_env,
-            _update_config_file,
-        )
+        from daylily_tapdb.cli.aurora import _ensure_boto3, _resolve_ingress_cidr
 
         _ensure_boto3()
         env = _resolve_bootstrap_env()
-        stack_name = _stack_name_for_env(cluster)
+        stack_name = cluster
 
         ccyo_out.print_text(
-            f"\n[bold cyan]━━━ Bootstrap Aurora ({env.value} -> {cluster})"
+            f"\n[bold cyan]━━━ Bootstrap Aurora (explicit target -> {cluster})"
             " ━━━[/bold cyan]"
         )
 
-        ccyo_out.print_text("\n[bold]Step 1/8: Ensure TapDB config[/bold]")
-        config_path = _ensure_bootstrap_config_for_aurora(
-            env_name=env.value,
-            owner_repo_name=owner_repo_name,
-            domain_code=domain_code,
-            ui_port=ui_port,
-            domain_registry_path=domain_registry_path,
-            prefix_ownership_registry_path=prefix_ownership_registry_path,
-        )
+        ccyo_out.print_text("\n[bold]Step 1/8: Verify explicit TapDB config[/bold]")
+        config_path = _ensure_bootstrap_config_for_aurora()
         ccyo_out.success(f"  Config ready: {config_path}")
 
         ccyo_out.print_text("\n[bold]Step 2/8: Ensure Aurora cluster[/bold]")
@@ -919,14 +828,46 @@ def build_app():
             ccyo_out.error(f"Aurora endpoint not available for {stack_name}")
             raise typer.Exit(1)
 
-        ccyo_out.print_text("\n[bold]Step 3/8: Update TAPDB target config[/bold]")
-        _update_config_file(
-            env.value,
-            endpoint,
-            port,
-            region,
-            cluster_identifier=cluster,
-            secret_arn=outputs.get("SecretArn"),
+        ccyo_out.print_text("\n[bold]Step 3/8: TAPDB target config[/bold]")
+        config_update(
+            engine_type="aurora",
+            host=endpoint,
+            port=int(port),
+            ui_port=None,
+            user=None,
+            password=None,
+            database=None,
+            schema_name=None,
+            cognito_user_pool_id=None,
+            cognito_app_client_id=None,
+            cognito_app_client_secret=None,
+            cognito_client_name=None,
+            cognito_region=None,
+            cognito_domain=None,
+            cognito_callback_url=None,
+            cognito_logout_url=None,
+            domain_code=None,
+            owner_repo_name=None,
+            domain_registry_path=None,
+            prefix_ownership_registry_path=None,
+            support_email=None,
+            admin_repo_url=None,
+            admin_session_secret=None,
+            admin_auth_mode=None,
+            admin_disabled_user_email=None,
+            admin_disabled_user_role=None,
+            admin_shared_host_session_secret=None,
+            admin_shared_host_session_cookie=None,
+            admin_shared_host_session_max_age_seconds=None,
+            admin_allowed_origin=[],
+            admin_tls_cert_path=None,
+            admin_tls_key_path=None,
+            admin_metrics_enabled=None,
+            admin_metrics_queue_max=None,
+            admin_metrics_flush_seconds=None,
+            clear=[],
+            safety_tier="production",
+            destructive_operations="blocked",
         )
 
         ccyo_out.print_text("\n[bold]Step 4/8: Ensure database exists[/bold]")
@@ -979,102 +920,6 @@ def build_app():
             path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         os.chmod(path, 0o600)
 
-    def _parse_env_port_pairs(values: list[str], *, flag: str) -> dict[str, int]:
-        parsed: dict[str, int] = {}
-        for raw in values:
-            text = str(raw).strip()
-            if not text:
-                continue
-            if "=" not in text:
-                raise RuntimeError(f"{flag} must be provided as ENV=PORT (got {raw!r})")
-            env_name, port_s = text.split("=", 1)
-            env_name = env_name.strip().lower()
-            port_s = port_s.strip()
-            if not env_name:
-                raise RuntimeError(f"{flag} missing environment in {raw!r}")
-            if not port_s.isdigit():
-                raise RuntimeError(f"{flag} has invalid port in {raw!r}")
-            port = int(port_s)
-            if port < 1 or port > 65535:
-                raise RuntimeError(f"{flag} port out of range in {raw!r}")
-            parsed[env_name] = port
-        return parsed
-
-    def _resolve_required_port(
-        *,
-        env_name: str,
-        field: str,
-        explicit_map: dict[str, int],
-        existing_env_cfg: dict,
-    ) -> int:
-        if env_name in explicit_map:
-            return explicit_map[env_name]
-
-        existing_raw = str(existing_env_cfg.get(field) or "").strip()
-        if existing_raw.isdigit():
-            return int(existing_raw)
-
-        if sys.stdin.isatty():
-            while True:
-                entered = typer.prompt(f"Enter {field} for {env_name}")
-                if entered.strip().isdigit():
-                    value = int(entered.strip())
-                    if 1 <= value <= 65535:
-                        return value
-                ccyo_out.error(f"Invalid {field} for {env_name}")
-
-        raise RuntimeError(
-            f"Missing required {field} for env {env_name}. "
-            f"Set via --db-port {env_name}=<port> or --ui-port {env_name}=<port>."
-        )
-
-    def _parse_env_text_pairs(values: list[str], *, flag: str) -> dict[str, str]:
-        parsed: dict[str, str] = {}
-        for raw in values:
-            text = str(raw).strip()
-            if not text:
-                continue
-            if "=" not in text:
-                raise RuntimeError(
-                    f"{flag} must be provided as ENV=VALUE (got {raw!r})"
-                )
-            env_name, value = text.split("=", 1)
-            env_name = env_name.strip().lower()
-            value = value.strip()
-            if not env_name:
-                raise RuntimeError(f"{flag} missing environment in {raw!r}")
-            if not value:
-                raise RuntimeError(f"{flag} missing value in {raw!r}")
-            parsed[env_name] = value
-        return parsed
-
-    def _resolve_required_text(
-        *,
-        env_name: str,
-        field: str,
-        explicit_map: dict[str, str],
-        existing_env_cfg: dict,
-        flag: str,
-    ) -> str:
-        if env_name in explicit_map:
-            return explicit_map[env_name]
-
-        existing_raw = str(existing_env_cfg.get(field) or "").strip()
-        if existing_raw:
-            return existing_raw
-
-        if sys.stdin.isatty():
-            while True:
-                entered = typer.prompt(f"Enter {field} for {env_name}")
-                if entered.strip():
-                    return entered.strip()
-                ccyo_out.error(f"Invalid {field} for {env_name}")
-
-        raise RuntimeError(
-            f"Missing required {field} for env {env_name}. "
-            f"Set via {flag} {env_name}=<value>."
-        )
-
     def _require_explicit_config_flag() -> Path:
         config_path = active_context_overrides().get("config_path")
         if not config_path:
@@ -1082,7 +927,9 @@ def build_app():
                 "TapDB config commands require --config. "
                 "Example: tapdb --config ~/.config/tapdb/atlas/app/tapdb-config.yaml "
                 "config init --client-id atlas --database-name app "
-                "--owner-repo-name lsmc-atlas --domain-code dev=Z"
+                "--owner-repo-name lsmc-atlas --domain-code Z "
+                "--engine-type local --host localhost --port 5533 --ui-port 8911 "
+                "--database tapdb_atlas --schema-name tapdb_atlas"
             )
         return Path(config_path)
 
@@ -1131,13 +978,19 @@ def build_app():
         client_id: str,
         database_name: str,
         owner_repo_name: str,
-        domain_code: list[str],
+        domain_code: str,
         domain_registry_path: str,
         prefix_ownership_registry_path: str,
-        env: list[str],
-        db_port: list[str],
-        ui_port: list[str],
-        schema_name: list[str],
+        engine_type: str,
+        host: str,
+        port: int,
+        ui_port: int,
+        user: str,
+        password: str,
+        database: str,
+        schema_name: str,
+        safety_tier: str,
+        destructive_operations: str,
         force: bool,
     ) -> tuple[Path, dict]:
         current = active_context_overrides()
@@ -1148,9 +1001,6 @@ def build_app():
         )
         config_path = _require_explicit_config_flag()
 
-        env_names = sorted({e.strip().lower() for e in env if str(e).strip()})
-        if not env_names:
-            raise RuntimeError("At least one --env must be provided")
         normalized_owner_repo_name = normalize_owner_repo_name(owner_repo_name)
 
         existing = _read_yaml_or_json_file(config_path)
@@ -1165,14 +1015,36 @@ def build_app():
                     "Use --force to overwrite."
                 )
 
-        db_ports = _parse_env_port_pairs(db_port, flag="--db-port")
-        ui_ports = _parse_env_port_pairs(ui_port, flag="--ui-port")
-        schema_names = _parse_env_text_pairs(schema_name, flag="--schema-name")
-        domain_codes = _parse_env_text_pairs(domain_code, flag="--domain-code")
+        normalized_engine_type = str(engine_type or "").strip().lower()
+        if normalized_engine_type not in {"local", "aurora"}:
+            raise RuntimeError("--engine-type must be local or aurora")
+        normalized_safety_tier = str(safety_tier or "").strip().lower()
+        if normalized_safety_tier not in {"local", "shared", "production"}:
+            raise RuntimeError("--safety-tier must be local, shared, or production")
+        normalized_destructive_operations = (
+            str(destructive_operations or "").strip().lower()
+        )
+        if normalized_destructive_operations not in {
+            "blocked",
+            "confirm_required",
+            "allowed",
+        }:
+            raise RuntimeError(
+                "--destructive-operations must be blocked, confirm_required, or allowed"
+            )
+        normalized_schema_name = validate_postgres_identifier_component(
+            schema_name, field_name="target.schema_name"
+        )
+        normalized_database = validate_postgres_identifier_component(
+            database, field_name="target.database"
+        )
+        normalized_domain_code = str(domain_code or "").strip().upper()
+        if not normalized_domain_code:
+            raise RuntimeError("--domain-code is required")
 
         root = existing if isinstance(existing, dict) else {}
         root["meta"] = {
-            "config_version": 3,
+            "config_version": 4,
             "client_id": client_id,
             "database_name": database_name,
             "owner_repo_name": normalized_owner_repo_name,
@@ -1200,139 +1072,42 @@ def build_app():
                     merged_admin[key] = value
             root["admin"] = merged_admin
 
-        envs = root.setdefault("environments", {})
-        for env_name in env_names:
-            prior = envs.get(env_name, {}) or {}
-            resolved_db_port = _resolve_required_port(
-                env_name=env_name,
-                field="port",
-                explicit_map=db_ports,
-                existing_env_cfg=prior,
-            )
-            resolved_ui_port = _resolve_required_port(
-                env_name=env_name,
-                field="ui_port",
-                explicit_map=ui_ports,
-                existing_env_cfg=prior,
-            )
-            resolved_domain_code = _resolve_required_text(
-                env_name=env_name,
-                field="domain_code",
-                explicit_map=domain_codes,
-                existing_env_cfg=prior,
-                flag="--domain-code",
-            )
-            envs[env_name] = {
-                **prior,
-                "engine_type": str(prior.get("engine_type") or "local"),
-                "host": "localhost",
-                "port": str(resolved_db_port),
-                "ui_port": str(resolved_ui_port),
-                "domain_code": resolved_domain_code,
-                "user": str(prior.get("user") or os.environ.get("USER", "postgres")),
-                "password": str(prior.get("password") or ""),
-                "database": str(
-                    prior.get("database")
-                    or default_database_name_for_namespace(database_name, env_name)
-                ),
-                "schema_name": validate_postgres_identifier_component(
-                    str(
-                        schema_names.get(env_name)
-                        or prior.get("schema_name")
-                        or default_schema_name_for_database(database_name, env_name)
-                    ),
-                    field_name=f"environments.{env_name}.schema_name",
-                ),
-                "cognito_user_pool_id": str(prior.get("cognito_user_pool_id") or ""),
-                "support_email": str(prior.get("support_email") or ""),
-            }
+        prior_target = (
+            root.get("target") if isinstance(root.get("target"), dict) else {}
+        )
+        root["target"] = {
+            **prior_target,
+            "engine_type": normalized_engine_type,
+            "host": str(host).strip(),
+            "port": str(port),
+            "ui_port": str(ui_port),
+            "domain_code": normalized_domain_code,
+            "user": str(user).strip(),
+            "password": str(password),
+            "database": normalized_database,
+            "schema_name": normalized_schema_name,
+            "cognito_user_pool_id": str(prior_target.get("cognito_user_pool_id") or ""),
+            "support_email": str(prior_target.get("support_email") or ""),
+        }
+        root["safety"] = {
+            "safety_tier": normalized_safety_tier,
+            "destructive_operations": normalized_destructive_operations,
+        }
+        root.pop("environments", None)
 
         _write_yaml_or_json_file(config_path, root)
         return config_path, root
 
-    def _ensure_bootstrap_config_for_aurora(
-        *,
-        env_name: str,
-        owner_repo_name: Optional[str],
-        domain_code: list[str],
-        ui_port: list[str],
-        domain_registry_path: str,
-        prefix_ownership_registry_path: str,
-    ) -> Path:
+    def _ensure_bootstrap_config_for_aurora() -> Path:
         config_path = _require_explicit_config_flag()
         root = _read_yaml_or_json_file(config_path)
-        envs = root.get("environments") if isinstance(root, dict) else None
-        if (
-            config_path.exists()
-            and isinstance(envs, dict)
-            and isinstance(envs.get(env_name), dict)
-        ):
+        target = root.get("target") if isinstance(root, dict) else None
+        if config_path.exists() and isinstance(target, dict) and target:
             return config_path
-
-        current = active_context_overrides()
-        client_id = str(current.get("client_id") or "").strip()
-        database_name = str(current.get("database_name") or "").strip()
-        if not client_id or not database_name:
-            raise RuntimeError(
-                "Aurora bootstrap needs --client-id and --database-name when the "
-                "TapDB config is missing or the target env is not configured."
-            )
-
-        meta = root.get("meta") if isinstance(root, dict) else None
-        resolved_owner_repo_name = str(owner_repo_name or "").strip()
-        if not resolved_owner_repo_name and isinstance(meta, dict):
-            resolved_owner_repo_name = str(meta.get("owner_repo_name") or "").strip()
-        if not resolved_owner_repo_name:
-            raise RuntimeError(
-                "Aurora bootstrap needs --owner-repo-name when it must create or "
-                "extend the TapDB config."
-            )
-
-        parsed_domain_codes = _parse_env_text_pairs(domain_code, flag="--domain-code")
-        parsed_ui_ports = _parse_env_port_pairs(ui_port, flag="--ui-port")
-        if not isinstance(envs, dict) or env_name not in envs:
-            if env_name not in parsed_domain_codes:
-                raise RuntimeError(
-                    "Aurora bootstrap needs --domain-code "
-                    f"{env_name}=<code> when it must create or extend the TapDB config."
-                )
-            if env_name not in parsed_ui_ports:
-                raise RuntimeError(
-                    "Aurora bootstrap needs --ui-port "
-                    f"{env_name}=<port> when it must create or extend the TapDB config."
-                )
-
-        resolved_domain_registry_path = domain_registry_path
-        resolved_prefix_registry_path = prefix_ownership_registry_path
-        if isinstance(meta, dict):
-            if (
-                not resolved_domain_registry_path
-                or resolved_domain_registry_path == str(DEFAULT_DOMAIN_REGISTRY_PATH)
-            ) and str(meta.get("domain_registry_path") or "").strip():
-                resolved_domain_registry_path = str(meta["domain_registry_path"])
-            if (
-                not resolved_prefix_registry_path
-                or resolved_prefix_registry_path
-                == str(DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH)
-            ) and str(meta.get("prefix_ownership_registry_path") or "").strip():
-                resolved_prefix_registry_path = str(
-                    meta["prefix_ownership_registry_path"]
-                )
-
-        initialized_path, _ = _initialize_namespaced_config(
-            client_id=client_id,
-            database_name=database_name,
-            owner_repo_name=resolved_owner_repo_name,
-            domain_code=domain_code,
-            domain_registry_path=resolved_domain_registry_path,
-            prefix_ownership_registry_path=resolved_prefix_registry_path,
-            env=[env_name],
-            db_port=[f"{env_name}=5432"],
-            ui_port=ui_port,
-            schema_name=[],
-            force=False,
+        raise RuntimeError(
+            "Aurora bootstrap requires an explicit TapDB v4 config with a target "
+            "section. Run `tapdb --config <path> config init ...` first."
         )
-        return initialized_path
 
     @config_root_app.command("init")
     def config_init(
@@ -1345,10 +1120,10 @@ def build_app():
             "--owner-repo-name",
             help="Repo-name token used for Meridian prefix ownership validation",
         ),
-        domain_code: list[str] = typer.Option(
-            [],
+        domain_code: str = typer.Option(
+            ...,
             "--domain-code",
-            help="Per-env domain code mapping (ENV=CODE, repeatable)",
+            help="Meridian domain code for this TapDB target",
         ),
         domain_registry_path: str = typer.Option(
             str(DEFAULT_DOMAIN_REGISTRY_PATH),
@@ -1360,31 +1135,45 @@ def build_app():
             "--prefix-ownership-registry-path",
             help="Path to the shared Meridian prefix ownership registry JSON",
         ),
-        env: list[str] = typer.Option(
-            ["dev"],
-            "--env",
-            help="Environment to configure (repeat for multiple)",
+        engine_type: str = typer.Option(
+            ...,
+            "--engine-type",
+            help="Physical database backend: local or aurora",
         ),
-        db_port: list[str] = typer.Option(
-            [],
-            "--db-port",
-            help="Per-env DB port mapping (ENV=PORT, repeatable)",
+        host: str = typer.Option(..., "--host", help="Physical database host"),
+        port: int = typer.Option(..., "--port", help="Physical database port"),
+        ui_port: int = typer.Option(..., "--ui-port", help="TapDB UI port"),
+        user: str = typer.Option(..., "--user", help="Database user"),
+        password: str = typer.Option(
+            "",
+            "--password",
+            help="Database password. Use an empty string for passwordless local auth.",
         ),
-        ui_port: list[str] = typer.Option(
-            [],
-            "--ui-port",
-            help="Per-env UI port mapping (ENV=PORT, repeatable)",
+        database: str = typer.Option(
+            ...,
+            "--database",
+            help="Physical PostgreSQL database name",
         ),
-        schema_name: list[str] = typer.Option(
-            [],
+        schema_name: str = typer.Option(
+            ...,
             "--schema-name",
-            help="Per-env PostgreSQL schema mapping (ENV=SCHEMA, repeatable)",
+            help="PostgreSQL schema name for this service namespace",
+        ),
+        safety_tier: str = typer.Option(
+            "local",
+            "--safety-tier",
+            help="Safety tier: local, shared, or production",
+        ),
+        destructive_operations: str = typer.Option(
+            "confirm_required",
+            "--destructive-operations",
+            help="Destructive operation policy: blocked, confirm_required, or allowed",
         ),
         force: bool = typer.Option(
             False, "--force", help="Overwrite existing config metadata if needed"
         ),
     ) -> None:
-        """Initialize a namespaced TAPDB v3 config."""
+        """Initialize a single-target TAPDB v4 config."""
         config_path, root = _initialize_namespaced_config(
             client_id=client_id,
             database_name=database_name,
@@ -1392,27 +1181,31 @@ def build_app():
             domain_code=domain_code,
             domain_registry_path=domain_registry_path,
             prefix_ownership_registry_path=prefix_ownership_registry_path,
-            env=env,
-            db_port=db_port,
+            engine_type=engine_type,
+            host=host,
+            port=port,
             ui_port=ui_port,
+            user=user,
+            password=password,
+            database=database,
             schema_name=schema_name,
+            safety_tier=safety_tier,
+            destructive_operations=destructive_operations,
             force=force,
         )
-        ccyo_out.success("TAPDB namespaced config initialized")
+        ccyo_out.success("TAPDB explicit-target config initialized")
         ccyo_out.print_text(f"  Namespace: [bold]{client_id}/{database_name}[/bold]")
         ccyo_out.print_text(f"  Path:      [dim]{config_path}[/dim]")
-        env_names = sorted({e.strip().lower() for e in env if str(e).strip()})
-        for env_name in env_names:
-            env_cfg = root["environments"][env_name]
-            ccyo_out.print_text(
-                f"  {env_name}: db_port={env_cfg['port']} ui_port={env_cfg['ui_port']}"
-            )
+        target_cfg = root["target"]
+        ccyo_out.print_text(
+            f"  target:    engine={target_cfg['engine_type']} "
+            f"database={target_cfg['database']} schema={target_cfg['schema_name']}"
+        )
 
     @config_root_app.command("update")
     def config_update(
-        env: str = typer.Option(..., "--env", help="Environment to update"),
         engine_type: Optional[str] = typer.Option(
-            None, "--engine-type", help="Database engine type for this environment"
+            None, "--engine-type", help="Database engine type for this target"
         ),
         host: Optional[str] = typer.Option(None, "--host", help="Database host"),
         port: Optional[int] = typer.Option(None, "--port", help="Database port"),
@@ -1452,7 +1245,7 @@ def build_app():
             None, "--cognito-logout-url", help="Bound Cognito logout URL"
         ),
         domain_code: Optional[str] = typer.Option(
-            None, "--domain-code", help="Meridian domain code for this environment"
+            None, "--domain-code", help="Meridian domain code for this target"
         ),
         owner_repo_name: Optional[str] = typer.Option(
             None,
@@ -1533,17 +1326,23 @@ def build_app():
         clear: list[str] = typer.Option(
             [],
             "--clear",
-            help="Environment field to clear (repeatable)",
+            help="Target field to clear (repeatable)",
+        ),
+        safety_tier: Optional[str] = typer.Option(
+            None,
+            "--safety-tier",
+            help="Safety tier: local, shared, or production",
+        ),
+        destructive_operations: Optional[str] = typer.Option(
+            None,
+            "--destructive-operations",
+            help="Destructive operation policy: blocked, confirm_required, or allowed",
         ),
     ) -> None:
-        """Update fields inside a namespaced TAPDB v3 config."""
+        """Update fields inside a single-target TAPDB v4 config."""
         from daylily_tapdb.cli.db_config import get_config_path
 
         ctx = _require_context()
-        env_name = str(env or "").strip().lower()
-        if not env_name:
-            raise RuntimeError("--env is required")
-
         allowed_fields = {
             "engine_type",
             "host",
@@ -1568,7 +1367,7 @@ def build_app():
         invalid_fields = sorted(clear_fields - allowed_fields)
         if invalid_fields:
             raise RuntimeError(
-                "Unknown field(s) for --clear: " + ", ".join(invalid_fields)
+                "Unknown target field(s) for --clear: " + ", ".join(invalid_fields)
             )
 
         config_path = get_config_path()
@@ -1586,14 +1385,10 @@ def build_app():
                 f"Run: tapdb config init --client-id {ctx.client_id} --database-name {ctx.database_name}"
             )
 
-        envs = root.setdefault("environments", {})
-        if not isinstance(envs, dict):
-            envs = {}
-            root["environments"] = envs
-        env_cfg = envs.setdefault(env_name, {})
-        if not isinstance(env_cfg, dict):
-            env_cfg = {}
-            envs[env_name] = env_cfg
+        target_cfg = root.setdefault("target", {})
+        if not isinstance(target_cfg, dict):
+            target_cfg = {}
+            root["target"] = target_cfg
 
         admin_root = root.setdefault("admin", _default_admin_config())
         if not isinstance(admin_root, dict):
@@ -1706,23 +1501,47 @@ def build_app():
         if admin_metrics_flush_seconds is not None:
             metrics["flush_seconds"] = float(admin_metrics_flush_seconds)
             admin_changed = True
+        safety_changed = False
+        safety_root = root.setdefault("safety", {})
+        if not isinstance(safety_root, dict):
+            safety_root = {}
+            root["safety"] = safety_root
+        if safety_tier is not None:
+            normalized = str(safety_tier).strip().lower()
+            if normalized not in {"local", "shared", "production"}:
+                raise RuntimeError("--safety-tier must be local, shared, or production")
+            safety_root["safety_tier"] = normalized
+            safety_changed = True
+        if destructive_operations is not None:
+            normalized = str(destructive_operations).strip().lower()
+            if normalized not in {"blocked", "confirm_required", "allowed"}:
+                raise RuntimeError(
+                    "--destructive-operations must be blocked, confirm_required, or allowed"
+                )
+            safety_root["destructive_operations"] = normalized
+            safety_changed = True
 
-        if not updates and not clear_fields and not admin_changed:
+        if (
+            not updates
+            and not clear_fields
+            and not admin_changed
+            and not safety_changed
+        ):
             raise RuntimeError("No config changes requested.")
 
         for field_name in clear_fields:
-            env_cfg[field_name] = ""
-        env_cfg.update(updates)
+            target_cfg[field_name] = ""
+        target_cfg.update(updates)
+        root.pop("environments", None)
 
         _write_yaml_or_json_file(config_path, root)
-        ccyo_out.success("TAPDB namespaced config updated")
+        ccyo_out.success("TAPDB explicit-target config updated")
         ccyo_out.print_text(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
         ccyo_out.print_text(f"  Path:      [dim]{config_path}[/dim]")
-        ccyo_out.print_text(f"  Env:       [bold]{env_name}[/bold]")
         for field_name in sorted(clear_fields):
             ccyo_out.print_text(f"  cleared:   {field_name}")
         for field_name in sorted(updates.keys()):
-            ccyo_out.print_text(f"  set:       {field_name}={env_cfg[field_name]}")
+            ccyo_out.print_text(f"  set:       {field_name}={target_cfg[field_name]}")
 
     @app.command("version")
     def version():
@@ -1733,64 +1552,33 @@ def build_app():
 
     @app.command("info")
     def info(
-        check_all_envs: bool = typer.Option(
-            False,
-            "--check-all-envs",
-            help=(
-                "Probe PostgreSQL status for dev/test/prod (may contact remote hosts). "
-                "Default probes only the active TapDB env."
-            ),
-        ),
         as_json: bool = typer.Option(
             False, "--json", help="Emit machine-readable JSON (no tables)."
         ),
     ):
-        """Show TAPDB configuration and status."""
+        """Show TAPDB explicit-target configuration and status."""
         import json
         import shutil
         from datetime import UTC, datetime
-        from urllib.parse import urlsplit, urlunsplit
 
         from daylily_tapdb import __version__
-        from daylily_tapdb.cli.db_config import (
-            get_config_path,
-            get_db_config_for_env,
-        )
-
-        def _sanitize_url(raw: str) -> str:
-            if not raw:
-                return ""
-            try:
-                parts = urlsplit(raw)
-                if parts.username and parts.password:
-                    host = parts.hostname or ""
-                    netloc = f"{parts.username}@{host}"
-                    if parts.port:
-                        netloc = f"{netloc}:{parts.port}"
-                    return urlunsplit(
-                        (parts.scheme, netloc, parts.path, parts.query, parts.fragment)
-                    )
-            except Exception:
-                return raw
-            return raw
+        from daylily_tapdb.cli.db_config import get_config_path, get_db_config
 
         def _psql_query(cfg: dict[str, str], sql: str) -> tuple[bool, str]:
             psql = shutil.which("psql")
             if not psql:
                 return False, "psql not found"
-
             env_vars = os.environ.copy()
             env_vars["PGCONNECT_TIMEOUT"] = "3"
             if cfg.get("password"):
                 env_vars["PGPASSWORD"] = cfg["password"]
-
             cmd = [
                 psql,
                 "-X",
                 "-q",
                 "-t",
                 "-A",
-                "-w",  # never prompt for password
+                "-w",
                 "-v",
                 "ON_ERROR_STOP=1",
                 "-h",
@@ -1814,12 +1602,10 @@ def build_app():
                 )
             except Exception as e:
                 return False, str(e)
-
             if result.returncode != 0:
-                return (
-                    False,
-                    (result.stderr or "").strip() or f"psql exit={result.returncode}",
-                )
+                return False, (
+                    result.stderr or ""
+                ).strip() or f"psql exit={result.returncode}"
             return True, (result.stdout or "").strip()
 
         def _human_duration(seconds: int | None) -> str:
@@ -1841,10 +1627,6 @@ def build_app():
             return " ".join(parts)
 
         def _ui_process_times(pid: int) -> dict[str, object]:
-            """Return UI process start time + uptime, best-effort.
-
-            Uses `ps` (per requirement) for process start time.
-            """
             result: dict[str, object] = {
                 "pid": pid,
                 "running": True,
@@ -1870,8 +1652,6 @@ def build_app():
                 if not raw:
                     result["error"] = "ps returned empty start time"
                     return result
-
-                # macOS/BSD ps lstart format: "Mon Jan  2 15:04:05 2006"
                 start_dt = datetime.strptime(raw, "%a %b %d %H:%M:%S %Y").replace(
                     tzinfo=UTC
                 )
@@ -1884,45 +1664,12 @@ def build_app():
                 result["error"] = str(e)
                 return result
 
-        tapdb_env = _active_env_name()
-
-        def _pg_probe(env_name: str, cfg: dict[str, str]) -> dict[str, object]:
-            url = f"postgresql://{cfg['user']}@{cfg['host']}:{cfg['port']}/{cfg['database']}"
-            should_check = check_all_envs or (env_name == tapdb_env)
-            out: dict[str, object] = {
-                "env": env_name,
-                "url": url,
-                "password_set": bool(cfg.get("password")),
-                "checked": should_check,
-                "status": None,
-                "error": None,
-                "uptime": None,
-            }
-            if not should_check:
-                return out
-
-            ok, msg = _psql_query(cfg, "select 1;")
-            if not ok:
-                out["status"] = "error"
-                out["error"] = msg
-                return out
-            out["status"] = "ok"
-
-            ok_u, msg_u = _psql_query(cfg, "select now() - pg_postmaster_start_time();")
-            if ok_u:
-                out["uptime"] = msg_u
-            else:
-                out["uptime"] = f"error: {msg_u}"
-            return out
-
-        # NOTE: This function is nested inside build_app();
-        # keep indentation purely spaces to avoid TabError.
-        ctx = _require_context(env_name=tapdb_env)
+        ctx = _require_context()
+        cfg = get_db_config()
         effective_config_path = get_config_path()
-        ui_pid_file, ui_log_file, _ = _ui_runtime_paths(tapdb_env)
-        runtime_root = ctx.runtime_dir(tapdb_env)
+        ui_pid_file, ui_log_file, _ = _ui_runtime_paths()
+        runtime_root = ctx.runtime_dir()
 
-        # Template JSON config dir (repo-local)
         template_config_dir: str | None = None
         template_config_error: str | None = None
         try:
@@ -1933,35 +1680,35 @@ def build_app():
             template_config_error = str(e)
 
         ui_pid = _get_pid(ui_pid_file)
-        ui_times: dict[str, object] | None = None
-        if ui_pid:
-            ui_times = _ui_process_times(ui_pid)
-
-        pg_envs: dict[str, dict[str, object]] = {}
-        for env_name in ["dev", "test", "prod"]:
-            try:
-                cfg = get_db_config_for_env(env_name)
-                pg_envs[env_name] = _pg_probe(env_name, cfg)
-            except Exception as e:
-                checked = check_all_envs or (env_name == tapdb_env)
-                pg_envs[env_name] = {
-                    "env": env_name,
-                    "url": "(unconfigured)",
-                    "password_set": False,
-                    "checked": checked,
-                    "status": "error" if checked else None,
-                    "error": str(e),
-                    "uptime": None,
-                }
+        ui_times: dict[str, object] | None = (
+            _ui_process_times(ui_pid) if ui_pid else None
+        )
+        url = (
+            f"postgresql://{cfg['user']}@{cfg['host']}:{cfg['port']}/{cfg['database']}"
+        )
+        ok, msg = _psql_query(cfg, "select 1;")
+        uptime = None
+        if ok:
+            ok_u, msg_u = _psql_query(cfg, "select now() - pg_postmaster_start_time();")
+            uptime = msg_u if ok_u else f"error: {msg_u}"
+        postgres = {
+            "target": "explicit",
+            "url": url,
+            "schema_name": cfg.get("schema_name"),
+            "password_set": bool(cfg.get("password")),
+            "status": "ok" if ok else "error",
+            "error": None if ok else msg,
+            "uptime": uptime,
+        }
 
         if as_json:
             payload: dict[str, object] = {
                 "version": __version__,
                 "python": sys.version.split()[0],
-                "tapdb_env": tapdb_env,
+                "target": "explicit",
                 "client_id": ctx.client_id,
                 "database_name": ctx.database_name,
-                "check_all_envs": check_all_envs,
+                "schema_name": cfg.get("schema_name"),
                 "paths": {
                     "ui_pid_file": str(ui_pid_file),
                     "ui_log_file": str(ui_log_file),
@@ -1980,25 +1727,21 @@ def build_app():
                     "pid": ui_pid,
                     "process": ui_times,
                 },
-                "postgres": pg_envs,
+                "postgres": postgres,
             }
             sys.stdout.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
             return
 
-        # --- General ---
         general = Table(title="TAPDB Info", show_header=True)
         general.add_column("Property", style="cyan")
         general.add_column("Value")
         general.add_row("Version", __version__)
         general.add_row("Python", sys.version.split()[0])
-        general.add_row("TapDB Env", tapdb_env)
+        general.add_row("Target", "explicit")
         general.add_row("Client ID", ctx.client_id)
         general.add_row("Database Name", ctx.database_name)
+        general.add_row("Schema Name", str(cfg.get("schema_name") or ""))
         general.add_row("Namespace", ctx.namespace_slug())
-        general.add_row(
-            "DB probes", "all envs" if check_all_envs else "active env only"
-        )
-
         general.add_row("UI Server", f"Running (PID {ui_pid})" if ui_pid else "Stopped")
         if ui_times and ui_times.get("start_time"):
             general.add_row("UI Start Time", str(ui_times.get("start_time")))
@@ -2007,11 +1750,9 @@ def build_app():
         general.add_row("UI Log File", str(ui_log_file))
         print_renderable(general)
 
-        # --- Config ---
         config_table = Table(title="Config", show_header=True)
         config_table.add_column("Property", style="cyan")
         config_table.add_column("Value")
-
         exists_label = "exists" if effective_config_path.exists() else "missing"
         config_table.add_row(
             "Effective config",
@@ -2020,40 +1761,32 @@ def build_app():
         config_table.add_row("Config dir", str(effective_config_path.parent))
         config_table.add_row("Runtime root", str(runtime_root))
         config_table.add_row("DB log dir", str(runtime_root / "logs"))
-
         if template_config_dir:
             config_table.add_row("Template config dir", template_config_dir)
         else:
             config_table.add_row(
                 "Template config dir", f"(not found) {template_config_error}"
             )
-
         print_renderable(config_table)
 
-        # --- Postgres ---
         pg_table = Table(title="PostgreSQL", show_header=True)
-        pg_table.add_column("Env", style="cyan")
+        pg_table.add_column("Target", style="cyan")
         pg_table.add_column("URL")
+        pg_table.add_column("Schema")
         pg_table.add_column("Password")
         pg_table.add_column("Status")
         pg_table.add_column("Uptime")
-
-        for env_name in ["dev", "test", "prod"]:
-            row = pg_envs[env_name]
-            url = str(row.get("url") or "")
-            pw = "set" if row.get("password_set") else "(not set)"
-            checked = bool(row.get("checked"))
-            if not checked:
-                status = "-"
-                uptime = "-"
-            else:
-                status = str(row.get("status") or "-")
-                if status == "error" and row.get("error"):
-                    status = f"error: {row.get('error')}"
-                uptime = str(row.get("uptime") or "-")
-
-            pg_table.add_row(env_name, f"[dim]{url}[/dim]", pw, status, uptime)
-
+        status = str(postgres.get("status") or "-")
+        if status == "error" and postgres.get("error"):
+            status = f"error: {postgres.get('error')}"
+        pg_table.add_row(
+            "explicit",
+            f"[dim]{url}[/dim]",
+            str(cfg.get("schema_name") or ""),
+            "set" if postgres.get("password_set") else "(not set)",
+            status,
+            str(postgres.get("uptime") or "-"),
+        )
         print_renderable(pg_table)
 
     return app

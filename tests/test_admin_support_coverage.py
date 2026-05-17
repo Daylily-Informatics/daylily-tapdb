@@ -96,11 +96,10 @@ def test_db_metrics_helpers_cover_parse_extract_tail_and_summary(tmp_path, monke
     )
     assert metrics_mod._extract_table_hint("bad sql", "UPDATE") == ""
 
-    monkeypatch.setattr(metrics_mod, "active_env_name", lambda default="dev": "DEV")
     monkeypatch.setattr(
         metrics_mod,
-        "get_admin_settings_for_env",
-        lambda env_name: {"metrics_enabled": False, "metrics_queue_max": 7},
+        "get_admin_settings",
+        lambda: {"metrics_enabled": False, "metrics_queue_max": 7},
     )
     assert metrics_mod._admin_settings()["metrics_queue_max"] == 7
     assert metrics_mod.metrics_enabled() is False
@@ -118,9 +117,9 @@ def test_db_metrics_helpers_cover_parse_extract_tail_and_summary(tmp_path, monke
     monkeypatch.setattr(
         metrics_mod,
         "resolve_context",
-        lambda **_kwargs: SimpleNamespace(runtime_dir=lambda env: tmp_path / env),
+        lambda **_kwargs: SimpleNamespace(runtime_dir=lambda: tmp_path / "runtime"),
     )
-    assert metrics_mod._metrics_root_dir("dev") == tmp_path / "dev" / "metrics"
+    assert metrics_mod._metrics_root_dir("ignored") == tmp_path / "runtime" / "metrics"
 
     metrics_file = tmp_path / "metrics.tsv"
     metrics_file.write_text(
@@ -660,8 +659,8 @@ def test_db_pool_helpers_cover_engine_build_session_scope_and_dispose(
 
     monkeypatch.setattr(
         pool_mod,
-        "get_db_config_for_env",
-        lambda _env: {
+        "get_db_config",
+        lambda: {
             "engine_type": "local",
             "host": "localhost",
             "port": "5432",
@@ -682,8 +681,8 @@ def test_db_pool_helpers_cover_engine_build_session_scope_and_dispose(
     )
     pool_mod._clear_engine_cache_for_tests()
     bundle = pool_mod.get_engine_bundle("DEV")
-    assert bundle.env_name == "dev"
-    assert captured["metrics"] == ["dev"]
+    assert bundle.env_name == "target"
+    assert captured["metrics"] == ["target"]
     assert isinstance(pool_mod.get_db_connection("dev"), pool_mod.AdminDBConnection)
 
     bad_engine = SimpleNamespace(

@@ -26,15 +26,16 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from daylily_tapdb.aurora.connection import AuroraConnectionBuilder
 from daylily_tapdb.cli.db_config import (
-    get_admin_settings_for_env,
-    get_db_config_for_env,
+    get_admin_settings,
+    get_db_config,
 )
 
 logger = logging.getLogger(__name__)
 
 
 def _admin_settings(env_name: str) -> dict[str, object]:
-    return get_admin_settings_for_env(env_name)
+    _ = env_name
+    return get_admin_settings()
 
 
 def _parse_bool(value: object, *, default: bool) -> bool:
@@ -68,7 +69,7 @@ def _require_schema_name(cfg: dict[str, str], *, env_name: str) -> str:
     schema_name = str(cfg.get("schema_name") or "").strip()
     if not schema_name:
         raise RuntimeError(
-            f"Config for env {env_name!r} is missing required field: schema_name"
+            "Config for explicit TapDB target is missing required field: schema_name"
         )
     return schema_name
 
@@ -259,15 +260,16 @@ def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
     return _create_engine(url, echo_sql=echo_sql, env_name=env_name)
 
 
-def get_engine_bundle(env_name: str) -> EngineBundle:
-    """Return (and cache) the shared engine bundle for an env."""
-    env = (env_name or "dev").strip().lower()
+def get_engine_bundle(env_name: str = "target") -> EngineBundle:
+    """Return (and cache) the shared engine bundle for the explicit target."""
+    _ = env_name
+    env = "target"
     with _engine_lock:
         cached = _bundles_by_env.get(env)
         if cached is not None:
             return cached
 
-        cfg = get_db_config_for_env(env)
+        cfg = get_db_config()
         schema_name = _require_schema_name(cfg, env_name=env)
         engine = _build_engine_for_cfg(cfg, env_name=env)
         from admin.db_metrics import maybe_install_engine_metrics
@@ -285,8 +287,9 @@ def get_engine_bundle(env_name: str) -> EngineBundle:
         return bundle
 
 
-def get_db_connection(env_name: str) -> AdminDBConnection:
+def get_db_connection(env_name: str = "target") -> AdminDBConnection:
     """Create a per-request AdminDBConnection backed by the cached Engine."""
+    _ = env_name
     return AdminDBConnection(get_engine_bundle(env_name))
 
 
