@@ -16,6 +16,7 @@ def test_pyproject_pins_published_cli_core_yo() -> None:
     admin_dependencies = data["project"]["optional-dependencies"]["admin"]
 
     assert "cli-core-yo==2.1.1" in dependencies
+    assert "pyyaml" in dependencies
     assert "cli-core-yo==2.1.1" in dev_dependencies
     assert "daylily-auth-cognito==2.1.5" in admin_dependencies
     assert all("daylily-cognito" not in dependency for dependency in admin_dependencies)
