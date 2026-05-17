@@ -192,6 +192,7 @@ def test_tapdb_connection_for_env_passes_schema(
     assert seen["schema_name"] == "tapdb_testdb"
     assert seen["db_name"] == "tapdb_shared"
     assert seen["app_username"] == "tester"
+    assert seen["echo_sql"] is False
 
 
 def test_create_default_admin_skips_without_insecure_flag() -> None:

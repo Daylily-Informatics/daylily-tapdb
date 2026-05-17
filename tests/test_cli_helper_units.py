@@ -126,6 +126,7 @@ def test_tapdb_connection_for_env_uses_normalized_engine_flags(
     assert seen["engine_type"] == "local"
     assert seen["iam_auth"] is False
     assert seen["schema_name"] == "tapdb_testdb"
+    assert seen["echo_sql"] is False
 
 
 def test_user_open_connection_maps_explicit_target(
