@@ -331,6 +331,7 @@ def get_db_config(
         "cluster_identifier": _file_str("cluster_identifier") or "",
         "iam_auth": _file_str("iam_auth") or "",
         "ssl": _file_str("ssl") or "",
+        "sslrootcert": _file_str("sslrootcert") or "",
         "domain_code": _require_file_str(file_cfg, "domain_code", resolved_config_path),
         "safety_tier": safety_tier,
         "destructive_operations": destructive_operations,
