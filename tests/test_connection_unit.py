@@ -55,6 +55,74 @@ def test_connection_builds_default_url_and_creates_engine(monkeypatch):
     assert conn.engine is not None
 
 
+def test_postgresql_checkout_listener_applies_explicit_session_settings(monkeypatch):
+    from daylily_tapdb import connection as m
+
+    listened = {}
+
+    class FakeCursor:
+        def __init__(self):
+            self.calls = []
+            self.closed = False
+
+        def execute(self, sql, params=None):
+            self.calls.append((sql, params or ()))
+
+        def close(self):
+            self.closed = True
+
+    class FakeDBAPIConnection:
+        def __init__(self):
+            self.cursor_obj = FakeCursor()
+
+        def cursor(self):
+            return self.cursor_obj
+
+    class FakeEngine:
+        dialect = types.SimpleNamespace(name="postgresql")
+
+        def dispose(self):
+            return None
+
+    def fake_listen(engine, event_name, callback):
+        listened["engine"] = engine
+        listened["event_name"] = event_name
+        listened["callback"] = callback
+
+    monkeypatch.setattr(m, "create_engine", lambda *a, **k: FakeEngine())
+    monkeypatch.setattr(m, "event", types.SimpleNamespace(listen=fake_listen))
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+
+    conn = m.TAPDBConnection(
+        **_conn_kwargs(
+            db_url="postgresql://tapdb:test@localhost:5533/tapdb",
+            schema_name="tapdb_unit_schema",
+            app_username="alice@example.com",
+        )
+    )
+    assert listened["engine"] is conn.engine
+    assert listened["event_name"] == "checkout"
+
+    dbapi_connection = FakeDBAPIConnection()
+    listened["callback"](dbapi_connection, object(), object())
+
+    calls = dbapi_connection.cursor_obj.calls
+    assert calls[0] == (
+        "SELECT set_config('search_path', %s, false)",
+        ("tapdb_unit_schema",),
+    )
+    assert calls[1] == ("SET session.current_domain_code = %s", ("Z",))
+    assert calls[2] == (
+        "SET session.current_owner_repo_name = %s",
+        ("daylily-tapdb",),
+    )
+    assert calls[3] == (
+        "SET session.current_username = %s",
+        ("alice@example.com",),
+    )
+    assert dbapi_connection.cursor_obj.closed is True
+
+
 def test_set_session_username_logs_and_swallows_execute_error(monkeypatch, caplog):
     from daylily_tapdb import connection as m
 

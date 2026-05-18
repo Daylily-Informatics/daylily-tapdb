@@ -24,7 +24,7 @@ import logging
 from contextlib import contextmanager
 from typing import Generator, Optional
 
-from sqlalchemy import MetaData, create_engine, text
+from sqlalchemy import MetaData, create_engine, event, text
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -167,6 +167,7 @@ class TAPDBConnection:
             pool_recycle=pool_recycle,
             pool_pre_ping=True,
         )
+        self._install_connection_checkout_settings()
 
         # Create session factory
         self._Session = sessionmaker(bind=self.engine)
@@ -174,6 +175,41 @@ class TAPDBConnection:
         # Create metadata and automap base for reflected tables
         metadata = MetaData()
         self.AutomapBase = automap_base(metadata=metadata)
+
+    def _install_connection_checkout_settings(self) -> None:
+        """Apply explicit TAPDB session settings whenever a DBAPI connection is used."""
+        dialect = getattr(self.engine, "dialect", None)
+        dialect_name = str(getattr(dialect, "name", "") or "").strip().lower()
+        if dialect_name != "postgresql":
+            return
+        if not self.schema_name:
+            raise ValueError("schema_name is required for PostgreSQL TAPDB sessions.")
+
+        schema_name = self.schema_name
+        domain_code = self.domain_code or ""
+        owner_repo_name = self.owner_repo_name or ""
+        app_username = self.app_username
+
+        def _on_checkout(dbapi_connection, _connection_record, _connection_proxy):
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute("SELECT set_config('search_path', %s, false)", (schema_name,))
+                cursor.execute(
+                    "SET session.current_domain_code = %s",
+                    (domain_code,),
+                )
+                cursor.execute(
+                    "SET session.current_owner_repo_name = %s",
+                    (owner_repo_name,),
+                )
+                cursor.execute(
+                    "SET session.current_username = %s",
+                    (app_username,),
+                )
+            finally:
+                cursor.close()
+
+        event.listen(self.engine, "checkout", _on_checkout)
 
     @staticmethod
     def _is_postgresql_session(session: Session) -> bool:
