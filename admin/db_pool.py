@@ -211,6 +211,7 @@ def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
     echo_sql = _parse_bool(os.environ.get("ECHO_SQL"), default=False)
 
     host = str(cfg["host"]).strip()
+    hostaddr = str(cfg.get("hostaddr") or "").strip()
     port = int(str(cfg["port"]).strip())
     database = str(cfg["database"]).strip()
     user = str(cfg["user"]).strip()
@@ -233,7 +234,11 @@ def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
             host=host,
             port=port,
             database=database,
-            query={"sslmode": "verify-full", "sslrootcert": str(ca_path)},
+            query={
+                **({"hostaddr": hostaddr} if hostaddr else {}),
+                "sslmode": "verify-full",
+                "sslrootcert": str(ca_path),
+            },
         )
         engine = _create_engine(url, echo_sql=echo_sql, env_name=env_name)
         _attach_aurora_password_provider(

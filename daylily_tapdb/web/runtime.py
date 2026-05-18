@@ -187,6 +187,7 @@ def _build_engine_for_cfg(
     echo_sql = _parse_bool(os.environ.get("ECHO_SQL"), default=False)
 
     host = str(cfg["host"]).strip()
+    hostaddr = str(cfg.get("hostaddr") or "").strip()
     port = int(str(cfg["port"]).strip())
     database = str(cfg["database"]).strip()
     user = str(cfg["user"]).strip()
@@ -205,7 +206,11 @@ def _build_engine_for_cfg(
             host=host,
             port=port,
             database=database,
-            query={"sslmode": "verify-full", "sslrootcert": str(ca_path)},
+            query={
+                **({"hostaddr": hostaddr} if hostaddr else {}),
+                "sslmode": "verify-full",
+                "sslrootcert": str(ca_path),
+            },
         )
         engine = _create_engine(
             url,

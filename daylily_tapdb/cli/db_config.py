@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -351,7 +352,21 @@ def get_db_config(
     if engine_type == "aurora":
         for key in ("region", "cluster_identifier", "iam_auth", "ssl"):
             _require_file_str(file_cfg, key, resolved_config_path)
+        hostaddr = _file_str("hostaddr")
+        if hostaddr:
+            try:
+                ipaddress.ip_address(hostaddr)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Config {resolved_config_path}: target.hostaddr must be an IP address."
+                ) from exc
+            cfg["hostaddr"] = hostaddr
     else:
+        if _file_str("hostaddr"):
+            raise RuntimeError(
+                f"Config {resolved_config_path}: target.hostaddr is only supported "
+                "for aurora explicit targets."
+            )
         unix_socket_dir = _file_str("unix_socket_dir")
         if unix_socket_dir:
             cfg["unix_socket_dir"] = unix_socket_dir

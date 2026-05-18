@@ -210,6 +210,25 @@ def test_build_connection_url_explicit_password(_ca_bundle):
     assert "sslmode=verify-full" in url
 
 
+def test_build_connection_url_hostaddr_preserves_tls_host(_ca_bundle):
+    from daylily_tapdb.aurora.connection import AuroraConnectionBuilder
+
+    url = AuroraConnectionBuilder.build_connection_url(
+        host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
+        hostaddr="127.0.0.1",
+        port=15432,
+        database="tapdb_dev",
+        user="tapdb_admin",
+        region="us-east-1",
+        iam_auth=False,
+        password="plain-pw",
+    )
+
+    assert "@mydb.cluster-xyz.us-east-1.rds.amazonaws.com:15432/tapdb_dev" in url
+    assert "hostaddr=127.0.0.1" in url
+    assert "sslmode=verify-full" in url
+
+
 # ---------------------------------------------------------------------------
 # TAPDBConnection with engine_type="aurora"
 # ---------------------------------------------------------------------------
@@ -241,6 +260,35 @@ def test_tapdb_connection_aurora_delegates_to_builder(_ca_bundle, monkeypatch):
     )
     assert "sslmode=verify-full" in conn._db_url
     assert "tapdb_dev" in conn._db_url
+
+
+def test_tapdb_connection_aurora_passes_hostaddr(_ca_bundle, monkeypatch):
+    from daylily_tapdb import connection as m
+
+    class FakeEngine:
+        def dispose(self):
+            return None
+
+    monkeypatch.setattr(m, "create_engine", lambda url, **kw: FakeEngine())
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+
+    conn = m.TAPDBConnection(
+        engine_type="aurora",
+        db_hostname="mydb.cluster-xyz.us-east-1.rds.amazonaws.com:15432",
+        db_hostaddr="127.0.0.1",
+        db_user="tapdb_admin",
+        db_pass="plain-pw",
+        db_name="tapdb_dev",
+        app_username="test-admin",
+        echo_sql=False,
+        region="us-east-1",
+        iam_auth=False,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        schema_name="tapdb_test",
+    )
+
+    assert "hostaddr=127.0.0.1" in conn._db_url
 
 
 def test_tapdb_connection_aurora_requires_hostname(monkeypatch):

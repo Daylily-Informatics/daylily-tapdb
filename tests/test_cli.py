@@ -295,6 +295,54 @@ class TestConfigCLI:
         }
         assert "environments" not in root
 
+    def test_config_init_writes_aurora_hostaddr_when_explicit(self, tmp_path: Path):
+        cfg_path = tmp_path / "tapdb-config.yaml"
+        domain_registry, prefix_registry = _write_registries(tmp_path)
+
+        result = runner.invoke(
+            app,
+            [
+                "--config",
+                str(cfg_path),
+                "config",
+                "init",
+                "--client-id",
+                "atlas",
+                "--database-name",
+                "atlas-dayfly5",
+                "--owner-repo-name",
+                "lsmc-atlas",
+                "--domain-code",
+                "Z",
+                "--domain-registry-path",
+                str(domain_registry),
+                "--prefix-ownership-registry-path",
+                str(prefix_registry),
+                "--engine-type",
+                "aurora",
+                "--host",
+                "db.example.us-west-2.rds.amazonaws.com",
+                "--hostaddr",
+                "127.0.0.1",
+                "--port",
+                "15432",
+                "--ui-port",
+                "8911",
+                "--user",
+                "tapdb",
+                "--database",
+                "tapdb_dayfly5",
+                "--schema-name",
+                "tapdb_atlas_dayfly5",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        root = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        assert root["target"]["host"] == "db.example.us-west-2.rds.amazonaws.com"
+        assert root["target"]["hostaddr"] == "127.0.0.1"
+        assert root["target"]["port"] == "15432"
+
     def test_config_update_targets_single_target_and_safety_fields(self):
         result = runner.invoke(
             app,

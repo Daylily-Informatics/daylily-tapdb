@@ -959,6 +959,7 @@ def build_app():
         prefix_ownership_registry_path: str,
         engine_type: str,
         host: str,
+        hostaddr: str | None,
         port: int,
         ui_port: int,
         user: str,
@@ -1055,6 +1056,7 @@ def build_app():
             **prior_target,
             "engine_type": normalized_engine_type,
             "host": str(host).strip(),
+            **({"hostaddr": str(hostaddr).strip()} if hostaddr else {}),
             "port": str(port),
             "ui_port": str(ui_port),
             "domain_code": normalized_domain_code,
@@ -1117,6 +1119,14 @@ def build_app():
             help="Physical database backend: local or aurora",
         ),
         host: str = typer.Option(..., "--host", help="Physical database host"),
+        hostaddr: Optional[str] = typer.Option(
+            None,
+            "--hostaddr",
+            help=(
+                "Explicit libpq hostaddr for Aurora tunnels; keep --host as the "
+                "RDS hostname for verify-full"
+            ),
+        ),
         port: int = typer.Option(..., "--port", help="Physical database port"),
         ui_port: int = typer.Option(..., "--ui-port", help="TapDB UI port"),
         user: str = typer.Option(..., "--user", help="Database user"),
@@ -1159,6 +1169,7 @@ def build_app():
             prefix_ownership_registry_path=prefix_ownership_registry_path,
             engine_type=engine_type,
             host=host,
+            hostaddr=hostaddr,
             port=port,
             ui_port=ui_port,
             user=user,
@@ -1184,6 +1195,11 @@ def build_app():
             None, "--engine-type", help="Database engine type for this target"
         ),
         host: Optional[str] = typer.Option(None, "--host", help="Database host"),
+        hostaddr: Optional[str] = typer.Option(
+            None,
+            "--hostaddr",
+            help="Explicit libpq hostaddr for Aurora tunnels",
+        ),
         port: Optional[int] = typer.Option(None, "--port", help="Database port"),
         ui_port: Optional[int] = typer.Option(None, "--ui-port", help="TapDB UI port"),
         user: Optional[str] = typer.Option(None, "--user", help="Database user"),
@@ -1322,6 +1338,7 @@ def build_app():
         allowed_fields = {
             "engine_type",
             "host",
+            "hostaddr",
             "port",
             "ui_port",
             "user",
@@ -1388,6 +1405,8 @@ def build_app():
             updates["engine_type"] = str(engine_type).strip().lower()
         if host is not None:
             updates["host"] = str(host).strip()
+        if hostaddr is not None:
+            updates["hostaddr"] = str(hostaddr).strip()
         if port is not None:
             updates["port"] = str(port)
         if ui_port is not None:

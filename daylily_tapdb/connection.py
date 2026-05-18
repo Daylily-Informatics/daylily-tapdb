@@ -53,6 +53,7 @@ class TAPDBConnection:
         db_url: Optional[str] = None,
         db_url_prefix: str = "postgresql://",
         db_hostname: Optional[str] = None,
+        db_hostaddr: Optional[str] = None,
         db_pass: Optional[str] = None,
         db_user: Optional[str] = None,
         db_name: str = "tapdb",
@@ -77,6 +78,7 @@ class TAPDBConnection:
             db_url: Full database URL (overrides other db_* params)
             db_url_prefix: Database URL prefix. Required when db_url is not supplied.
             db_hostname: Database host:port. Required when db_url is not supplied.
+            db_hostaddr: Optional explicit network address for Aurora SSM tunnels.
             db_pass: Database password
             db_user: Database user. Required when db_url is not supplied.
             db_name: Database name. Required when db_url is not supplied.
@@ -142,6 +144,7 @@ class TAPDBConnection:
                 iam_auth=iam_auth,
                 secret_arn=secret_arn,
                 password=db_pass,
+                hostaddr=db_hostaddr,
             )
         elif engine_type == "local":
             if not db_hostname:

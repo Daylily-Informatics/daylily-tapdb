@@ -45,6 +45,7 @@ def _open_connection(env: Environment, *, app_username: str) -> TAPDBConnection:
     region = str(cfg["region"]).strip()
     return TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
+        db_hostaddr=cfg.get("hostaddr") or None,
         db_user=cfg["user"],
         db_pass=cfg.get("password") or None,
         secret_arn=cfg.get("secret_arn") or None,

@@ -17,7 +17,7 @@ import stat
 import time
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote_plus, urlsplit
+from urllib.parse import quote_plus, urlencode, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +211,7 @@ class AuroraConnectionBuilder:
         iam_auth: bool,
         secret_arn: Optional[str] = None,
         password: Optional[str] = None,
+        hostaddr: Optional[str] = None,
     ) -> str:
         """Build a SQLAlchemy PostgreSQL URL with SSL for Aurora.
 
@@ -228,6 +229,9 @@ class AuroraConnectionBuilder:
             iam_auth: Use IAM database authentication.
             secret_arn: Secrets Manager ARN for password authentication.
             password: Explicit password.
+            hostaddr: Optional explicit network address for libpq. Use this for
+                local SSM tunnels while keeping ``host`` as the RDS hostname for
+                ``sslmode=verify-full``.
 
         Returns:
             SQLAlchemy connection URL string.
@@ -251,11 +255,18 @@ class AuroraConnectionBuilder:
         # URL-encode the credential (IAM tokens contain special chars)
         encoded_cred = quote_plus(credential)
 
-        # Build URL with SSL query params
+        # Build URL with SSL query params. When hostaddr is set, libpq connects
+        # to that address but still uses host for certificate verification.
+        query = {
+            "sslmode": "verify-full",
+            "sslrootcert": str(ca_path),
+        }
+        if hostaddr:
+            query["hostaddr"] = str(hostaddr).strip()
         url = (
             f"postgresql+psycopg2://{quote_plus(user)}:{encoded_cred}"
             f"@{host}:{port}/{database}"
-            f"?sslmode=verify-full&sslrootcert={quote_plus(str(ca_path))}"
+            f"?{urlencode(query)}"
         )
         logger.debug(
             "Built Aurora connection URL for %s@%s:%s/%s (iam=%s)",

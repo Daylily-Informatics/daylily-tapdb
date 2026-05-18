@@ -9,6 +9,7 @@ import sysconfig
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
+from urllib.parse import urlencode
 from typing import Any, Optional
 
 import typer
@@ -316,7 +317,11 @@ def _get_connection_string(env: Environment, database: Optional[str] = None) -> 
     db = database or cfg["database"]
     base = f"postgresql://{cfg['user']}@{cfg['host']}:{cfg['port']}/{db}"
     if cfg.get("engine_type") == "aurora":
-        return f"{base}?sslmode=verify-full"
+        query = {"sslmode": "verify-full"}
+        hostaddr = str(cfg.get("hostaddr") or "").strip()
+        if hostaddr:
+            query["hostaddr"] = hostaddr
+        return f"{base}?{urlencode(query)}"
     return base
 
 
@@ -441,6 +446,7 @@ def _run_psql(
             iam_auth=iam_auth,
             secret_arn=cfg.get("secret_arn") or None,
             password=cfg.get("password") or None,
+            hostaddr=cfg.get("hostaddr") or None,
             sql=aurora_sql,
             file=aurora_file,
         )
@@ -1627,6 +1633,7 @@ def _tapdb_connection_for_env(
     secret_arn = cfg.get("secret_arn") or None
     return TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
+        db_hostaddr=cfg.get("hostaddr") or None,
         db_user=cfg["user"],
         db_pass=db_pass,
         secret_arn=secret_arn,
@@ -1672,6 +1679,7 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
     try:
         with TAPDBConnection(
             db_hostname=f"{cfg['host']}:{cfg['port']}",
+            db_hostaddr=cfg.get("hostaddr") or None,
             db_user=cfg["user"],
             db_pass=db_pass,
             secret_arn=secret_arn,
