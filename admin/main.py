@@ -105,7 +105,6 @@ def _active_tapdb_env() -> str:
 
 
 APP_ENV = _active_tapdb_env()
-IS_PROD = APP_ENV == "prod"
 DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
 DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/tapdb-core"
 _RESERVED_TEMPLATE_COORDS = {("generic", "actor", "system_user")}
@@ -116,6 +115,7 @@ def _default_admin_settings() -> dict[str, Any]:
         "support_email": DEFAULT_SUPPORT_EMAIL,
         "repo_url": DEFAULT_GITHUB_REPO_URL,
         "session_secret": "",
+        "production_like": False,
         "auth_mode": "tapdb",
         "disabled_user_email": "tapdb-admin@localhost",
         "disabled_user_role": "admin",
@@ -144,6 +144,35 @@ def _load_admin_settings() -> dict[str, Any]:
 
 
 ADMIN_SETTINGS = _load_admin_settings()
+
+
+def _is_production_like(env_name: str, settings: dict[str, Any]) -> bool:
+    normalized = str(env_name or "").strip().lower()
+    if normalized in {"prod", "production"}:
+        return True
+    if normalized.startswith("prod-") or normalized.endswith("-prod"):
+        return True
+    return bool(settings.get("production_like"))
+
+
+def _validate_production_admin_settings(settings: dict[str, Any]) -> None:
+    auth_mode = str(settings.get("auth_mode") or "").strip().lower()
+    if auth_mode == "disabled":
+        raise RuntimeError("Refusing to start production-like TapDB admin with disabled auth")
+    if auth_mode == "shared_host" and not str(
+        settings.get("shared_host_session_secret") or ""
+    ).strip():
+        raise RuntimeError(
+            "Refusing to start production-like TapDB admin shared_host auth without "
+            "admin.auth.shared_host.session_secret"
+        )
+    if not str(settings.get("session_secret") or "").strip():
+        raise RuntimeError("Refusing to start production-like TapDB admin without admin.session.secret")
+
+
+IS_PROD = _is_production_like(APP_ENV, ADMIN_SETTINGS)
+if IS_PROD:
+    _validate_production_admin_settings(ADMIN_SETTINGS)
 
 
 def _require_https_url(url: str, *, label: str) -> str:
@@ -198,9 +227,6 @@ def _build_footer_metadata() -> Dict[str, str]:
 
 templates.globals["tapdb_footer"] = _build_footer_metadata()
 
-# Session secret key
-if IS_PROD and not str(ADMIN_SETTINGS.get("session_secret") or "").strip():
-    raise RuntimeError("Refusing to start in prod without admin.session.secret")
 SESSION_SECRET = str(
     ADMIN_SETTINGS.get("session_secret") or ""
 ).strip() or secrets.token_hex(32)

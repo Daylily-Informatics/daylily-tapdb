@@ -437,6 +437,7 @@ def get_admin_settings_for_env(
         field_name="admin.auth.shared_host",
     )
     cors = _as_mapping(admin.get("cors"), field_name="admin.cors")
+    security = _as_mapping(admin.get("security"), field_name="admin.security")
     ui = _as_mapping(admin.get("ui"), field_name="admin.ui")
     tls = _as_mapping(ui.get("tls"), field_name="admin.ui.tls")
     metrics = _as_mapping(admin.get("metrics"), field_name="admin.metrics")
@@ -460,6 +461,7 @@ def get_admin_settings_for_env(
         ),
         "session_secret": _string(session.get("secret")),
         "auth_mode": auth_mode,
+        "production_like": _bool(security.get("production_like"), default=False),
         "disabled_user_email": _string(
             disabled_user.get("email"),
             default=DEFAULT_DISABLED_ADMIN_EMAIL,

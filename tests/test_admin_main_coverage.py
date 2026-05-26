@@ -14,6 +14,29 @@ import admin.auth as auth_mod
 import admin.main as admin_main
 
 
+def test_production_like_admin_settings_fail_closed() -> None:
+    assert admin_main._is_production_like("prod", {"production_like": False}) is True
+    assert admin_main._is_production_like("lsmcok1", {"production_like": True}) is True
+    assert admin_main._is_production_like("dev", {"production_like": False}) is False
+
+    with pytest.raises(RuntimeError, match="disabled auth"):
+        admin_main._validate_production_admin_settings(
+            {"auth_mode": "disabled", "session_secret": "secret"}
+        )
+
+    with pytest.raises(RuntimeError, match="shared_host auth"):
+        admin_main._validate_production_admin_settings(
+            {"auth_mode": "shared_host", "session_secret": "secret"}
+        )
+
+    with pytest.raises(RuntimeError, match="admin.session.secret"):
+        admin_main._validate_production_admin_settings({"auth_mode": "tapdb"})
+
+    admin_main._validate_production_admin_settings(
+        {"auth_mode": "shared_host", "session_secret": "secret", "shared_host_session_secret": "host-secret"}
+    )
+
+
 class _FakeTemplateRender:
     def __init__(self, name: str, state: dict):
         self.name = name
