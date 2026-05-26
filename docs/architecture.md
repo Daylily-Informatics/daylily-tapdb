@@ -75,7 +75,9 @@ The codebase exposes three main surfaces:
 - the Python library for application code that needs to resolve templates or create instances
 - PostgreSQL for authoritative storage, triggers, and row-level scoping
 
-The CLI is the operational boundary. Runtime commands are always namespaced with `--config <path>` and `--env <name>`, because TAPDB is designed to be used by more than one client and more than one environment at once.
+The CLI is the operational boundary. Runtime commands always use an explicit
+`--config <path>`. That config resolves one target: client namespace, logical
+database namespace, PostgreSQL schema, and physical database connection.
 
 ## What TAPDB Is Not
 

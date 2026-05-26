@@ -20,6 +20,7 @@ All TapDB-backed contributors should expose these routes:
 
 - `GET /api/dag/object/{euid}`
 - `GET /api/dag/data?start_euid=<euid>&depth=<n>`
+- `GET /api/dag/search?...filters`
 - `GET /api/dag/external?source_euid=<euid>&ref_index=<i>&depth=<n>`
 - `GET /api/dag/external/object?source_euid=<euid>&ref_index=<i>&euid=<remote_euid>`
 
@@ -106,6 +107,47 @@ Edge `data` must include at least:
 }
 ```
 
+Graph node `data` also includes `external_refs` when the object carries explicit
+TapDB graph refs or is a typed external identifier object.
+
+### `GET /api/dag/search`
+
+- Searches local TapDB objects for UI and aggregator entrypoints.
+- Supports filters for `q`, exact `euid`, `record_type`, `category`, `type`,
+  `subtype`, `tenant_id`, `relationship_type`, and `limit`.
+- Search results are candidates. Exact ownership still comes from
+  `/api/dag/object/{euid}` or an explicit `service_id + euid` request.
+
+Minimum payload shape:
+
+```json
+{
+  "items": [
+    {
+      "system": "bloom",
+      "service": "bloom",
+      "record_type": "instance",
+      "euid": "Z:BCN-33",
+      "display_label": "Specimen tube",
+      "category": "container",
+      "type": "tube",
+      "tenant_id": null,
+      "relationship_type": null,
+      "graph_href": "/api/dag/data?start_euid=Z:BCN-33"
+    }
+  ],
+  "page": {
+    "limit": 25,
+    "total": 1,
+    "next_cursor": null
+  },
+  "meta": {
+    "owner_service": "bloom",
+    "contract_version": "dag:v1"
+  }
+}
+```
+
 ### `GET /api/dag/external`
 
 - Expands one explicit external reference from a local object.
@@ -124,8 +166,10 @@ Edge `data` must include at least:
   local IDs.
 - A service can be perspective-local only. It does not need to be globally
   canonical to contribute.
-- Search endpoints can still exist for UI convenience, but they are not part of
-  owner resolution.
+- Search endpoints are for UI convenience and cross-service entrypoints. They
+  are not a substitute for exact ownership.
+- Typed external identifier objects are valid federation refs when their
+  metadata provides a `system`/`target_system` and `root_euid`/`target_euid`.
 
 ## Capability Advertising
 
@@ -137,6 +181,7 @@ Current canonical capability labels are:
 
 - `exact_lookup`
 - `native_graph`
+- `object_search`
 - `external_graph_expansion`
 
 ## Host Integration

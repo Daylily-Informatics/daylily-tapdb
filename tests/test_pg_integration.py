@@ -19,6 +19,19 @@ from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 runner = CliRunner()
 
 
+def _conn_kwargs(**overrides):
+    values = {
+        "db_user": "tapdb",
+        "app_username": "pytest",
+        "domain_code": "Z",
+        "owner_repo_name": "daylily-tapdb",
+        "echo_sql": False,
+        "engine_type": "local",
+    }
+    values.update(overrides)
+    return values
+
+
 @pytest.fixture(autouse=True)
 def _set_context(pg_instance, monkeypatch):
     """Wire up CLI context to point at the ephemeral PG cluster."""
@@ -28,7 +41,6 @@ def _set_context(pg_instance, monkeypatch):
     set_cli_context(
         client_id="testclient",
         database_name="testdb",
-        env_name="dev",
         config_path=info["config_path"],
     )
     monkeypatch.setattr(cli_mod, "PID_FILE", info["base"] / "ui.pid")
@@ -62,7 +74,7 @@ class TestPgConnectivity:
 class TestSchemaApply:
     def test_db_schema_apply(self, pg_instance):
         """Apply the full tapdb schema to the ephemeral database."""
-        result = runner.invoke(app, ["db", "schema", "apply", "dev"])
+        result = runner.invoke(app, ["db", "schema", "apply"])
         output = result.output
         # Should succeed or at least exercise the code path
         assert result.exit_code in (0, 1), f"exit={result.exit_code}\n{output}"
@@ -75,9 +87,10 @@ class TestSchemaApply:
                 conn.execute(
                     text(
                         "SELECT tablename FROM pg_tables "
-                        "WHERE schemaname = 'public' "
+                        "WHERE schemaname = :schema_name "
                         "ORDER BY tablename"
-                    )
+                    ),
+                    {"schema_name": pg_instance["schema_name"]},
                 )
                 .scalars()
                 .all()
@@ -95,7 +108,7 @@ class TestSchemaApply:
 
 class TestSchemaStatus:
     def test_db_schema_status(self, pg_instance):
-        result = runner.invoke(app, ["db", "schema", "status", "dev"])
+        result = runner.invoke(app, ["db", "schema", "status"])
         assert result.exit_code in (0, 1)
 
 
@@ -107,7 +120,7 @@ class TestSchemaStatus:
 class TestDbLifecycle:
     def test_db_create_already_exists(self, pg_instance):
         """db create should handle 'already exists' gracefully."""
-        result = runner.invoke(app, ["db", "create", "dev"])
+        result = runner.invoke(app, ["db", "create"])
         assert result.exit_code in (0, 1)
 
     def test_db_config_validate(self, pg_instance):
@@ -123,7 +136,7 @@ class TestDbLifecycle:
 class TestDataSeed:
     def test_db_data_seed(self, pg_instance):
         """Attempt to seed template data. May fail if schema not applied."""
-        result = runner.invoke(app, ["db", "data", "seed", "dev"])
+        result = runner.invoke(app, ["db", "data", "seed"])
         assert result.exit_code in (0, 1)
 
 
@@ -137,7 +150,9 @@ class TestConnectionModule:
         from daylily_tapdb.connection import TAPDBConnection
 
         info = pg_instance
-        conn_obj = TAPDBConnection(db_url=info["dsn"])
+        conn_obj = TAPDBConnection(
+            **_conn_kwargs(db_url=info["dsn"], schema_name=info["schema_name"])
+        )
         with conn_obj as c:
             with c.session_scope(commit=False) as session:
                 val = session.execute(text("SELECT current_database()")).scalar()
@@ -147,7 +162,12 @@ class TestConnectionModule:
         """Verify commit path works with SET LOCAL for audit logging."""
         from daylily_tapdb.connection import TAPDBConnection
 
-        conn_obj = TAPDBConnection(db_url=pg_instance["dsn"])
+        conn_obj = TAPDBConnection(
+            **_conn_kwargs(
+                db_url=pg_instance["dsn"],
+                schema_name=pg_instance["schema_name"],
+            )
+        )
         with conn_obj as c:
             with c.session_scope(commit=True) as session:
                 session.execute(text("SELECT 1"))
@@ -160,7 +180,7 @@ class TestConnectionModule:
 
 class TestSchemaMigrate:
     def test_db_schema_migrate(self, pg_instance):
-        result = runner.invoke(app, ["db", "schema", "migrate", "dev"])
+        result = runner.invoke(app, ["db", "schema", "migrate"])
         assert result.exit_code in (0, 1)
 
 
@@ -199,7 +219,12 @@ class TestDbCommands:
 
 class TestORMOperations:
     def _engine(self, pg_instance):
-        return create_engine(pg_instance["dsn"])
+        return create_engine(
+            pg_instance["dsn"],
+            connect_args={
+                "options": f"-csearch_path={pg_instance['schema_name']}",
+            },
+        )
 
     def test_query_templates(self, pg_instance):
         """Verify seeded templates are queryable."""
@@ -252,8 +277,9 @@ class TestORMOperations:
                 conn.execute(
                     text(
                         "SELECT sequencename FROM pg_sequences "
-                        "WHERE schemaname = 'public'"
-                    )
+                        "WHERE schemaname = :schema_name"
+                    ),
+                    {"schema_name": pg_instance["schema_name"]},
                 )
                 .scalars()
                 .all()

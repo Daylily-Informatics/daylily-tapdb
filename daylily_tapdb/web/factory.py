@@ -55,14 +55,12 @@ def _attach_canonical_dag_router(
     app,
     *,
     config_path: str,
-    env_name: str,
     service_name: str | None,
 ) -> None:
     if getattr(app.state, "tapdb_dag_router_attached", False):
         return
     router = create_tapdb_dag_router(
         config_path=config_path,
-        env_name=env_name,
         service_name=service_name,
     )
     app.include_router(router, dependencies=[Depends(require_tapdb_api_user)])
@@ -119,20 +117,18 @@ class TapdbHostBridgeMount:
 def create_tapdb_web_app(
     *,
     config_path: str,
-    env_name: str,
     host_bridge: TapdbHostBridge | None = None,
 ):
     """Build the reusable TapDB web surface for standalone or embedded use."""
 
     from daylily_tapdb.cli.admin_server import load_admin_app
 
-    app = load_admin_app(config_path=config_path, env_name=env_name)
+    app = load_admin_app(config_path=config_path)
     app.state.tapdb_host_bridge = host_bridge
     _configure_template_environment(app.state.tapdb_admin_module, host_bridge)
     _attach_canonical_dag_router(
         app,
         config_path=config_path,
-        env_name=env_name,
         service_name=(host_bridge.service_name if host_bridge is not None else None),
     )
     if host_bridge is not None and host_bridge.auth_mode == "host_session":

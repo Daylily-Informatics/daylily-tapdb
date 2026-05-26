@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -24,8 +25,6 @@ from daylily_tapdb.euid import (
     SYSTEM_USER_PREFIX,
 )
 from daylily_tapdb.governance import (
-    DEFAULT_DOMAIN_REGISTRY_PATH,
-    DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH,
     GovernanceContext,
     normalize_owner_repo_name,
 )
@@ -34,6 +33,7 @@ DEFAULT_CONFIG_FILENAME = CONFIG_FILENAME
 DEFAULT_TAPDB_POSTGRES_PORT = "5533"
 DEFAULT_UI_PORT = "8911"
 SUPPORTED_CONFIG_VERSION = "3"
+SUPPORTED_TARGET_CONFIG_VERSION = "4"
 DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
 DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/daylily-tapdb"
 DEFAULT_ADMIN_SHARED_SESSION_COOKIE = "session"
@@ -48,6 +48,7 @@ DEFAULT_DB_MAX_OVERFLOW = 10
 DEFAULT_DB_POOL_TIMEOUT = 30
 DEFAULT_DB_POOL_RECYCLE = 1800
 _POSTGRES_IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
+_SAFE_POSTGRES_IDENTIFIER_COMPONENT_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 
 def normalize_postgres_identifier_component(value: str) -> str:
@@ -64,14 +65,33 @@ def normalize_postgres_identifier_component(value: str) -> str:
     return normalized
 
 
-def default_database_name_for_namespace(database_name: str, env_name: str) -> str:
-    """Build the default logical database name for a namespace/env pair."""
+def default_database_name_for_namespace(database_name: str, env_name: str = "") -> str:
+    """Build the default physical database name for a namespace."""
 
-    return (
-        "tapdb_"
-        f"{normalize_postgres_identifier_component(database_name)}_"
-        f"{normalize_postgres_identifier_component(env_name)}"
-    )
+    base = f"tapdb_{normalize_postgres_identifier_component(database_name)}"
+    if str(env_name or "").strip():
+        return f"{base}_{normalize_postgres_identifier_component(env_name)}"
+    return base
+
+
+def default_schema_name_for_database(database_name: str, env_name: str = "") -> str:
+    """Build the default schema name for a database namespace."""
+
+    return default_database_name_for_namespace(database_name, env_name)
+
+
+def validate_postgres_identifier_component(value: str, *, field_name: str) -> str:
+    """Validate an explicitly configured PostgreSQL identifier component."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        raise RuntimeError(f"{field_name} is required")
+    if not _SAFE_POSTGRES_IDENTIFIER_COMPONENT_RE.fullmatch(raw):
+        raise RuntimeError(
+            f"{field_name} must be a safe PostgreSQL identifier component "
+            "([a-z_][a-z0-9_]{0,62})"
+        )
+    return raw
 
 
 def get_config_paths(
@@ -175,10 +195,14 @@ def _validate_meta_for_context(root: dict[str, Any], ctx: TapdbContext) -> None:
         )
 
     cfg_version = meta.get("config_version")
-    version_ok = str(cfg_version).strip() == SUPPORTED_CONFIG_VERSION
+    version_ok = str(cfg_version).strip() in {
+        SUPPORTED_CONFIG_VERSION,
+        SUPPORTED_TARGET_CONFIG_VERSION,
+    }
     if not version_ok:
         raise RuntimeError(
-            f"Unsupported config_version {cfg_version!r}. Expected {SUPPORTED_CONFIG_VERSION}."
+            f"Unsupported config_version {cfg_version!r}. "
+            f"Expected {SUPPORTED_TARGET_CONFIG_VERSION}."
         )
 
     cfg_client = str(meta.get("client_id") or "").strip()
@@ -196,20 +220,17 @@ def _validate_meta_for_context(root: dict[str, Any], ctx: TapdbContext) -> None:
         )
 
 
-def get_db_config_for_env(
-    env_name: str,
+def get_db_config(
     *,
     config_path: Optional[str | Path] = None,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
 ) -> dict[str, str]:
-    """Resolve DB config for an environment name (dev/test/prod/aurora_*)."""
-    env_key = env_name.lower()
+    """Resolve the single explicit TapDB target from the active config."""
     ctx = resolve_context(
         require_keys=True,
         client_id=client_id,
         database_name=database_name,
-        env_name=env_key,
         config_path=config_path,
     )
 
@@ -224,37 +245,30 @@ def get_db_config_for_env(
             f"No TAPDB config found at {resolved_config_path}. "
             "Run: tapdb config init --client-id <id> --database-name <name>"
         )
-    if ctx:
-        _validate_meta_for_context(root, ctx)
+    _validate_target_meta_for_context(root, ctx, resolved_config_path)
     meta = root.get("meta") if isinstance(root, dict) else None
     if not isinstance(meta, dict):
         raise RuntimeError(f"Config metadata is required in {resolved_config_path}.")
     try:
-        owner_repo_name = normalize_owner_repo_name(str(meta.get("owner_repo_name") or ""))
+        owner_repo_name = normalize_owner_repo_name(
+            str(meta.get("owner_repo_name") or "")
+        )
     except ValueError as exc:
         raise RuntimeError(
             f"Config {resolved_config_path} is missing valid meta.owner_repo_name: {exc}"
         ) from exc
     domain_registry_path = Path(
-        str(meta.get("domain_registry_path") or DEFAULT_DOMAIN_REGISTRY_PATH)
+        _require_file_str(meta, "domain_registry_path", resolved_config_path)
     ).expanduser()
     prefix_ownership_registry_path = Path(
-        str(
-            meta.get("prefix_ownership_registry_path")
-            or DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH
-        )
+        _require_file_str(meta, "prefix_ownership_registry_path", resolved_config_path)
     ).expanduser()
 
-    file_cfg: dict[str, Any] = {}
-    if "environments" in root and isinstance(root.get("environments"), dict):
-        file_cfg = root["environments"].get(env_key, {}) or {}
-    else:
-        file_cfg = root.get(env_key, {}) or {}
-
-    if not file_cfg:
+    file_cfg = root.get("target") if isinstance(root, dict) else None
+    if not isinstance(file_cfg, dict) or not file_cfg:
         raise RuntimeError(
-            f"Environment {env_key!r} is not configured in {resolved_config_path}. "
-            f"Run: tapdb config init --env {env_key}"
+            f"TapDB target is not configured in {resolved_config_path}. "
+            "Run: tapdb config init --client-id <id> --database-name <name>."
         )
 
     def _file_str(key: str) -> str | None:
@@ -263,17 +277,46 @@ def get_db_config_for_env(
             return None
         return str(val)
 
-    engine_type = (_file_str("engine_type") or "local").strip().lower()
+    engine_type = _require_file_str(
+        file_cfg, "engine_type", resolved_config_path
+    ).lower()
+    try:
+        schema_name = validate_postgres_identifier_component(
+            _file_str("schema_name") or "",
+            field_name="target.schema_name",
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"Config {resolved_config_path}: {exc}") from exc
+
+    safety = root.get("safety")
+    if not isinstance(safety, dict):
+        raise RuntimeError(f"Config {resolved_config_path} is missing safety mapping.")
+    safety_tier = _require_file_str(safety, "safety_tier", resolved_config_path).lower()
+    destructive_operations = _require_file_str(
+        safety,
+        "destructive_operations",
+        resolved_config_path,
+    ).lower()
+    if safety_tier not in {"local", "shared", "production"}:
+        raise RuntimeError(
+            "TapDB config safety.safety_tier must be one of: local, shared, production."
+        )
+    if destructive_operations not in {"blocked", "confirm_required", "allowed"}:
+        raise RuntimeError(
+            "TapDB config safety.destructive_operations must be one of: "
+            "blocked, confirm_required, allowed."
+        )
 
     cfg: dict[str, str] = {
         "engine_type": engine_type,
-        "host": _file_str("host") or "localhost",
-        "port": _file_str("port") or DEFAULT_TAPDB_POSTGRES_PORT,
-        "ui_port": _file_str("ui_port") or DEFAULT_UI_PORT,
-        "user": _file_str("user") or "postgres",
+        "host": _require_file_str(file_cfg, "host", resolved_config_path),
+        "port": _require_file_str(file_cfg, "port", resolved_config_path),
+        "ui_port": _require_file_str(file_cfg, "ui_port", resolved_config_path),
+        "user": _require_file_str(file_cfg, "user", resolved_config_path),
         "password": _file_str("password") or "",
         "secret_arn": _file_str("secret_arn") or "",
-        "database": _file_str("database") or f"tapdb_{env_key}",
+        "database": _require_file_str(file_cfg, "database", resolved_config_path),
+        "schema_name": schema_name,
         "cognito_user_pool_id": _file_str("cognito_user_pool_id") or "",
         "cognito_app_client_id": _file_str("cognito_app_client_id") or "",
         "cognito_app_client_secret": _file_str("cognito_app_client_secret") or "",
@@ -284,7 +327,14 @@ def get_db_config_for_env(
         "cognito_logout_url": _file_str("cognito_logout_url") or "",
         "support_email": _file_str("support_email") or "",
         "aws_profile": _file_str("aws_profile") or "",
-        "domain_code": _file_str("domain_code") or "",
+        "region": _file_str("region") or "",
+        "cluster_identifier": _file_str("cluster_identifier") or "",
+        "iam_auth": _file_str("iam_auth") or "",
+        "ssl": _file_str("ssl") or "",
+        "sslrootcert": _file_str("sslrootcert") or "",
+        "domain_code": _require_file_str(file_cfg, "domain_code", resolved_config_path),
+        "safety_tier": safety_tier,
+        "destructive_operations": destructive_operations,
     }
 
     if ctx:
@@ -301,34 +351,33 @@ def get_db_config_for_env(
     cfg["config_path"] = str(resolved_config_path)
 
     if engine_type == "aurora":
-        cfg.setdefault("region", _file_str("region") or "us-west-2")
-        cfg.setdefault("cluster_identifier", _file_str("cluster_identifier") or "")
-        cfg.setdefault("iam_auth", _file_str("iam_auth") or "true")
-        cfg.setdefault("secret_arn", _file_str("secret_arn") or "")
-        cfg.setdefault("ssl", _file_str("ssl") or "true")
+        for key in ("region", "cluster_identifier", "iam_auth", "ssl"):
+            _require_file_str(file_cfg, key, resolved_config_path)
+        hostaddr = _file_str("hostaddr")
+        if hostaddr:
+            try:
+                ipaddress.ip_address(hostaddr)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Config {resolved_config_path}: target.hostaddr must be an IP address."
+                ) from exc
+            cfg["hostaddr"] = hostaddr
     else:
-        cfg.setdefault(
-            "unix_socket_dir",
-            _file_str("unix_socket_dir") or str(ctx.postgres_socket_dir(env_key)),
-        )
+        if _file_str("hostaddr"):
+            raise RuntimeError(
+                f"Config {resolved_config_path}: target.hostaddr is only supported "
+                "for aurora explicit targets."
+            )
+        unix_socket_dir = _file_str("unix_socket_dir")
+        if unix_socket_dir:
+            cfg["unix_socket_dir"] = unix_socket_dir
 
         # Local connections must always use localhost to avoid accidental cross-host
         # reuse.
         if str(cfg["host"]).strip().lower() != "localhost":
             raise RuntimeError(
-                f"Invalid local host {cfg['host']!r} for env {env_key}. "
+                f"Invalid local host {cfg['host']!r} for explicit target. "
                 "Local TAPDB must use host 'localhost'."
-            )
-        required_fields = ("port", "ui_port", "domain_code")
-        missing_required = [
-            field
-            for field in required_fields
-            if not str(file_cfg.get(field) or "").strip()
-        ]
-        if missing_required:
-            raise RuntimeError(
-                f"Config {resolved_config_path} is missing required field(s) for "
-                f"env {env_key}: {', '.join(missing_required)}"
             )
 
     governance = GovernanceContext.load(
@@ -340,6 +389,30 @@ def get_db_config_for_env(
     cfg["domain_code"] = governance.domain_code
 
     return cfg
+
+
+def _validate_target_meta_for_context(
+    root: dict[str, Any], ctx: TapdbContext, resolved_config_path: Path
+) -> None:
+    meta = root.get("meta")
+    if not isinstance(meta, dict):
+        raise RuntimeError(f"Config metadata is required in {resolved_config_path}.")
+    cfg_version = str(meta.get("config_version") or "").strip()
+    if cfg_version != SUPPORTED_TARGET_CONFIG_VERSION:
+        raise RuntimeError(
+            f"Unsupported config_version {cfg_version!r}. "
+            f"Expected {SUPPORTED_TARGET_CONFIG_VERSION} for explicit-target TapDB config."
+        )
+    _validate_meta_for_context(root, ctx)
+
+
+def _require_file_str(
+    file_cfg: dict[str, Any], key: str, resolved_config_path: Path
+) -> str:
+    val = file_cfg.get(key)
+    if val is None or not str(val).strip():
+        raise RuntimeError(f"Config {resolved_config_path} is missing target.{key}.")
+    return str(val).strip()
 
 
 def _as_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
@@ -398,20 +471,14 @@ def _string_list(value: Any) -> list[str]:
     return [item.strip() for item in text.split(",") if item.strip()]
 
 
-def get_admin_settings_for_env(
-    env_name: str,
+def get_admin_settings(
     *,
     config_path: Optional[str | Path] = None,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolve normalized admin/UI settings from the active TapDB config."""
-    env_key = str(env_name or "").strip().lower()
-    if not env_key:
-        raise RuntimeError("TapDB env name is required to load admin settings.")
-
-    cfg = get_db_config_for_env(
-        env_key,
+    cfg = get_db_config(
         config_path=config_path,
         client_id=client_id,
         database_name=database_name,
@@ -450,7 +517,7 @@ def get_admin_settings_for_env(
 
     return {
         "config_path": str(resolved_config_path),
-        "env_name": env_key,
+        "target_name": "target",
         "support_email": _string(
             cfg.get("support_email"),
             default=DEFAULT_SUPPORT_EMAIL,

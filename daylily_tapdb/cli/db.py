@@ -9,27 +9,26 @@ import sysconfig
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
+from urllib.parse import urlencode
 from typing import Any, Optional
 
 import typer
 from cli_core_yo import ccyo_out
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from daylily_tapdb import TAPDBConnection
-from daylily_tapdb.cli.db_config import get_config_path, get_db_config_for_env
+from daylily_tapdb.cli.db_config import get_config_path, get_db_config
 from daylily_tapdb.euid import (
     AUDIT_LOG_PREFIX,
     GENERIC_INSTANCE_LINEAGE_PREFIX,
     GENERIC_TEMPLATE_PREFIX,
 )
 from daylily_tapdb.schema_inventory import (
-    build_expected_schema_inventory,
     diff_schema_inventory,
     drift_entry_counts,
-    inventory_counts,
+    load_expected_schema_inventory,
     load_live_schema_inventory,
     schema_asset_files,
 )
@@ -79,8 +78,7 @@ def _normalize_instance_prefix(prefix: str) -> str:
         raise ValueError("instance_prefix cannot be empty")
     if not _MERIDIAN_PREFIX_RE.fullmatch(normalized):
         raise ValueError(
-            "instance_prefix must match ^[0-9A-HJ-KMNP-TV-Z]{1,4}$, "
-            f"got: {prefix!r}"
+            f"instance_prefix must match ^[0-9A-HJ-KMNP-TV-Z]{{1,4}}$, got: {prefix!r}"
         )
     return normalized
 
@@ -264,11 +262,8 @@ def _resolve_seed_config_dirs(config_path: Optional[Path]) -> list[Path]:
     return _loader_resolve_seed_config_dirs(config_path)
 
 
-# Environment enum
 class Environment(str, Enum):
-    dev = "dev"
-    test = "test"
-    prod = "prod"
+    target = "target"
 
 
 def _ensure_dirs():
@@ -290,8 +285,26 @@ def _log_operation(env: str, operation: str, details: str = ""):
 
 
 def _get_db_config(env: Environment) -> dict:
-    """Get database configuration for environment."""
-    return get_db_config_for_env(env.value)
+    """Get database configuration for the explicit target."""
+    _ = env
+    return get_db_config()
+
+
+def _configured_schema_name(env: Environment) -> Optional[str]:
+    cfg = _get_db_config(env)
+    raw_schema_name = cfg.get("schema_name")
+    if raw_schema_name is None:
+        return None
+    schema_name = str(raw_schema_name).strip()
+    return schema_name or None
+
+
+def _get_schema_name(env: Environment) -> str:
+    """Return the configured PostgreSQL schema name for TAPDB objects."""
+    schema_name = _configured_schema_name(env)
+    if schema_name is None:
+        raise ValueError("schema_name must be configured for TAPDB DB commands")
+    return schema_name
 
 
 def _get_connection_string(env: Environment, database: Optional[str] = None) -> str:
@@ -304,8 +317,40 @@ def _get_connection_string(env: Environment, database: Optional[str] = None) -> 
     db = database or cfg["database"]
     base = f"postgresql://{cfg['user']}@{cfg['host']}:{cfg['port']}/{db}"
     if cfg.get("engine_type") == "aurora":
-        return f"{base}?sslmode=verify-full"
+        query = {"sslmode": "verify-full"}
+        hostaddr = str(cfg.get("hostaddr") or "").strip()
+        if hostaddr:
+            query["hostaddr"] = hostaddr
+        return f"{base}?{urlencode(query)}"
     return base
+
+
+def _resolved_target_label(cfg: dict[str, str]) -> str:
+    return (
+        f"{cfg.get('client_id')}/{cfg.get('database_name')}/"
+        f"{cfg.get('schema_name')}@{cfg.get('database')}"
+    )
+
+
+def _require_destructive_confirmation(
+    cfg: dict[str, str], *, operation: str, confirm_target: Optional[str]
+) -> None:
+    policy = str(cfg.get("destructive_operations") or "confirm_required").strip()
+    target_label = _resolved_target_label(cfg)
+    if policy == "blocked":
+        raise RuntimeError(
+            f"Destructive operation '{operation}' is blocked for target {target_label}."
+        )
+    if policy == "allowed":
+        return
+    if confirm_target != target_label:
+        ccyo_out.error("\nWARNING: DESTRUCTIVE OPERATION")
+        ccyo_out.print_text(f"Operation: [bold]{operation}[/bold]")
+        ccyo_out.print_text(f"Target:    [bold]{target_label}[/bold]")
+        ccyo_out.print_text(
+            f"Rerun with [cyan]--confirm-target {target_label}[/cyan] to proceed."
+        )
+        raise typer.Exit(1)
 
 
 def _schema_root_candidates() -> list[Path]:
@@ -375,11 +420,23 @@ def _run_psql(
     """
     cfg = _get_db_config(env)
     db = database or cfg["database"]
+    schema_name = (
+        _configured_schema_name(env) if _uses_configured_database(database) else None
+    )
+    apply_search_path = schema_name is not None
 
     if cfg.get("engine_type") == "aurora":
         from daylily_tapdb.aurora.schema_deployer import AuroraSchemaDeployer
 
         iam_auth = cfg.get("iam_auth", "true").lower() in ("true", "1", "yes")
+        aurora_sql = sql
+        aurora_file = file
+        if apply_search_path:
+            if file:
+                aurora_sql = _read_file_with_schema_search_path(schema_name, file)
+                aurora_file = None
+            elif sql:
+                aurora_sql = _with_schema_search_path(schema_name, sql)
         return AuroraSchemaDeployer.run_psql(
             host=cfg["host"],
             port=int(cfg["port"]),
@@ -389,8 +446,9 @@ def _run_psql(
             iam_auth=iam_auth,
             secret_arn=cfg.get("secret_arn") or None,
             password=cfg.get("password") or None,
-            sql=sql,
-            file=file,
+            hostaddr=cfg.get("hostaddr") or None,
+            sql=aurora_sql,
+            file=aurora_file,
         )
 
     cmd = [
@@ -410,6 +468,9 @@ def _run_psql(
         "-v",
         "ON_ERROR_STOP=1",
     ]
+
+    if apply_search_path:
+        cmd.extend(["-c", _set_search_path_sql(schema_name)])
 
     if file:
         cmd.extend(["-f", str(file)])
@@ -444,6 +505,22 @@ def _quoted_sql_ident(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
+def _set_search_path_sql(schema_name: str) -> str:
+    return f"SET search_path TO {_quoted_sql_ident(schema_name)}"
+
+
+def _with_schema_search_path(schema_name: str, sql: str) -> str:
+    return f"{_set_search_path_sql(schema_name)};\n{sql}"
+
+
+def _read_file_with_schema_search_path(schema_name: str, file: Path) -> str:
+    return _with_schema_search_path(schema_name, file.read_text(encoding="utf-8"))
+
+
+def _uses_configured_database(database: Optional[str]) -> bool:
+    return database is None
+
+
 def _bootstrap_user_candidates(preferred_user: str) -> list[str]:
     candidates: list[str] = []
     for candidate in [
@@ -460,7 +537,7 @@ def _bootstrap_user_candidates(preferred_user: str) -> list[str]:
 
 def _ensure_local_role(env: Environment, role_name: str) -> None:
     cfg = _get_db_config(env)
-    if env == Environment.prod or cfg.get("engine_type") != "local":
+    if cfg.get("engine_type") != "local":
         return
 
     requested_role = str(role_name or "").strip()
@@ -535,6 +612,7 @@ def _parse_single_int(output: str) -> int:
 
 def _get_table_counts(env: Environment) -> dict:
     """Get row counts for TAPDB tables."""
+    _get_schema_name(env)
     tables = [
         "generic_template",
         "generic_instance",
@@ -557,11 +635,13 @@ def _get_table_counts(env: Environment) -> dict:
 
 def _schema_exists(env: Environment) -> bool:
     """Check if TAPDB schema exists in database."""
+    schema_name = _get_schema_name(env)
     success, psql_out = _run_psql(
         env,
         sql=(
             "SELECT COUNT(*) FROM information_schema.tables"
-            " WHERE table_name = 'generic_template'"
+            f" WHERE table_schema = {_quoted_sql_literal(schema_name)}"
+            " AND table_name = 'generic_template'"
         ),
     )
     if not success:
@@ -572,6 +652,17 @@ def _schema_exists(env: Environment) -> bool:
         return False
 
 
+def _ensure_schema_exists(env: Environment) -> None:
+    """Create the configured PostgreSQL schema when it is absent."""
+    schema_name = _get_schema_name(env)
+    success, psql_out = _run_psql(
+        env,
+        sql=f"CREATE SCHEMA IF NOT EXISTS {_quoted_sql_ident(schema_name)}",
+    )
+    if not success:
+        raise RuntimeError(f"Failed to create schema {schema_name!r}: {psql_out}")
+
+
 def _run_schema_drift_check(
     env: Environment,
     *,
@@ -579,12 +670,13 @@ def _run_schema_drift_check(
 ) -> tuple[dict[str, Any], bool]:
     """Build drift payload for CLI output."""
     cfg = _get_db_config(env)
+    schema_name = _get_schema_name(env)
     schema_root = _find_schema_root(required_subpath=Path("tapdb_schema.sql"))
     asset_paths = schema_asset_files(schema_root)
     identity_prefixes = _required_identity_prefixes(env)
     dynamic_sequence = _shared_sequence_name(identity_prefixes["generic_template"])
 
-    expected = build_expected_schema_inventory(
+    expected = load_expected_schema_inventory(
         asset_paths,
         dynamic_sequence_name=dynamic_sequence,
     )
@@ -593,7 +685,7 @@ def _run_schema_drift_check(
         app_username="tapdb_schema_drift_check",
     ) as conn:
         with conn.session_scope(commit=False) as session:
-            live = load_live_schema_inventory(session)
+            live = load_live_schema_inventory(session, schema_name=schema_name)
 
     drift_result = diff_schema_inventory(
         expected,
@@ -606,8 +698,8 @@ def _run_schema_drift_check(
     has_drift = drift_result.has_drift
     payload = drift_result.to_payload()
     payload["counts"] = {
-        "expected": inventory_counts(drift_result.expected),
-        "live": inventory_counts(drift_result.live),
+        "expected": drift_result.expected.counts(),
+        "live": drift_result.live.counts(),
         "missing": drift_entry_counts(drift_result.missing),
         "unexpected": drift_entry_counts(drift_result.unexpected),
     }
@@ -646,25 +738,25 @@ def _db_callback(ctx: typer.Context) -> None:
         ccyo_out.error(f"{exc}")
         ccyo_out.print_text(
             "  Example: [cyan]tapdb --client-id atlas --database-name app "
-            "db create dev[/cyan]"
+            "--config ~/.config/tapdb/atlas/app/tapdb-config.yaml db create[/cyan]"
         )
         raise typer.Exit(1) from exc
 
 
 @db_app.command("create")
 def db_create(
-    env: Environment = typer.Argument(..., help="Target environment"),
     owner: Optional[str] = typer.Option(
         None, "--owner", "-o", help="Database owner (default: connection user)"
     ),
 ):
-    """Create the TAPDB database for the specified environment."""
+    """Create the TAPDB database for the explicit target."""
+    env = Environment.target
     cfg = _get_db_config(env)
     db_name = cfg["database"]
     db_owner = owner or cfg["user"]
 
     ccyo_out.print_text(
-        f"\n[bold cyan]━━━ Create TAPDB Database ({env.value}) ━━━[/bold cyan]"
+        "\n[bold cyan]━━━ Create TAPDB Database (explicit target) ━━━[/bold cyan]"
     )
     ccyo_out.print_text(f"  Host:     {cfg['host']}:{cfg['port']}")
     ccyo_out.print_text(f"  Database: {db_name}")
@@ -695,15 +787,19 @@ def db_create(
         raise typer.Exit(1)
 
     ccyo_out.success(f"Database '{db_name}' created")
-    ccyo_out.print_text(f"  Next: [cyan]tapdb db schema apply {env.value}[/cyan]")
+    ccyo_out.print_text("  Next: [cyan]tapdb db schema apply[/cyan]")
 
 
 @db_app.command("delete")
 def db_delete(
-    env: Environment = typer.Argument(..., help="Target environment"),
-    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+    confirm_target: Optional[str] = typer.Option(
+        None,
+        "--confirm-target",
+        help="Required target label for destructive delete confirmation",
+    ),
 ):
-    """Delete the TAPDB database for the specified environment."""
+    """Delete the TAPDB database for the explicit target."""
+    env = Environment.target
     cfg = _get_db_config(env)
     db_name = cfg["database"]
 
@@ -717,25 +813,11 @@ def db_delete(
         ccyo_out.warning(f"Database '{db_name}' does not exist")
         return
 
-    if not force:
-        ccyo_out.error("\n⚠️  WARNING: DESTRUCTIVE OPERATION")
-        ccyo_out.print_text(
-            f"This will permanently delete database: [bold]{db_name}[/bold]"
-        )
-        ccyo_out.print_text("All data will be lost!\n")
-
-        if env == Environment.prod:
-            ccyo_out.error("🚨 THIS IS A PRODUCTION DATABASE! 🚨\n")
-
-        if not Confirm.ask(f"Delete database '{db_name}'?", default=False):
-            ccyo_out.print_text("[dim]Aborted.[/dim]")
-            raise typer.Exit(0)
-
-        if env == Environment.prod:
-            typed = typer.prompt("Type the database name to confirm")
-            if typed != db_name:
-                ccyo_out.error("Name mismatch. Aborted.")
-                raise typer.Exit(1)
+    _require_destructive_confirmation(
+        cfg,
+        operation="delete database",
+        confirm_target=confirm_target,
+    )
 
     ccyo_out.warning(f"► Deleting database '{db_name}'...")
     term_sql = f"""
@@ -758,38 +840,42 @@ def db_delete(
 
 @schema_app.command("apply")
 def db_schema_apply(
-    env: Environment = typer.Argument(..., help="Target environment"),
     reinitialize: bool = typer.Option(
         False,
         "--reinitialize",
         "-r",
-        help=(
-            "Compatibility flag. Schema apply is idempotent and refreshes "
-            "existing objects."
-        ),
+        help="Re-apply idempotent schema operations and refresh existing objects.",
     ),
 ):
     """Apply TAPDB schema to an existing database."""
+    env = Environment.target
     _ensure_dirs()
     cfg = _get_db_config(env)
 
     ccyo_out.print_text(
-        f"\n[bold cyan]━━━ Apply TAPDB Schema ({env.value}) ━━━[/bold cyan]"
+        "\n[bold cyan]━━━ Apply TAPDB Schema (explicit target) ━━━[/bold cyan]"
     )
     ccyo_out.print_text(f"  Host:     {cfg['host']}:{cfg['port']}")
     ccyo_out.print_text(f"  Database: {cfg['database']}")
+    ccyo_out.print_text(f"  Schema:   {_get_schema_name(env)}")
     ccyo_out.print_text(f"  User:     {cfg['user']}")
     ccyo_out.print_text("")
 
     if not _check_db_exists(env, cfg["database"]):
         ccyo_out.error(f"Database '{cfg['database']}' does not exist")
-        ccyo_out.print_text(f"  Create with: [cyan]tapdb db create {env.value}[/cyan]")
+        ccyo_out.print_text("  Create with: [cyan]tapdb db create[/cyan]")
         raise typer.Exit(1)
 
     try:
         schema_file = _find_schema_file()
         ccyo_out.success(f"Schema file: {schema_file}")
     except FileNotFoundError as e:
+        ccyo_out.error(f"{e}")
+        raise typer.Exit(1)
+
+    try:
+        _ensure_schema_exists(env)
+    except RuntimeError as e:
         ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
@@ -837,33 +923,31 @@ def db_schema_apply(
 
 
 @schema_app.command("status")
-def db_status(
-    env: Environment = typer.Argument(..., help="Target environment"),
-):
-    """Check TAPDB schema status in the specified environment."""
+def db_status():
+    """Check TAPDB schema status for the explicit target."""
+    env = Environment.target
     cfg = _get_db_config(env)
 
-    ccyo_out.print_text(f"\n[bold cyan]━━━ TAPDB Status ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        "\n[bold cyan]━━━ TAPDB Status (explicit target) ━━━[/bold cyan]"
+    )
 
     # Check database exists
     if not _check_db_exists(env, cfg["database"]):
         ccyo_out.error(f"Database '{cfg['database']}' does not exist")
-        ccyo_out.print_text(
-            f"\n  Create with: [cyan]tapdb db create {env.value}[/cyan]"
-        )
+        ccyo_out.print_text("\n  Create with: [cyan]tapdb db create[/cyan]")
         raise typer.Exit(1)
 
     ccyo_out.success(f"Database: {cfg['database']}")
+    ccyo_out.success(f"Schema: {_get_schema_name(env)}")
 
     # Check schema
     if not _schema_exists(env):
         ccyo_out.error("TAPDB schema not found")
-        ccyo_out.print_text(
-            f"\n  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]"
-        )
+        ccyo_out.print_text("\n  Initialize with: [cyan]tapdb db schema apply[/cyan]")
         raise typer.Exit(1)
 
-    ccyo_out.success("Schema: installed")
+    ccyo_out.success("Schema objects: installed")
 
     # Get table counts
     counts = _get_table_counts(env)
@@ -896,7 +980,6 @@ def db_status(
 
 @schema_app.command("drift-check")
 def db_schema_drift_check(
-    env: Environment = typer.Argument(..., help="Target environment"),
     json_output: bool = typer.Option(
         False, "--json", help="Emit machine-readable JSON report"
     ),
@@ -910,6 +993,7 @@ def db_schema_drift_check(
     ),
 ):
     """Detect TAPDB schema drift against canonical TAPDB schema assets."""
+    env = Environment.target
     cfg = _get_db_config(env)
     if not _check_db_exists(env, cfg["database"]):
         message = f"Database '{cfg['database']}' does not exist"
@@ -918,9 +1002,9 @@ def db_schema_drift_check(
                 json.dumps(
                     {
                         "status": "error",
-                        "env": env.value,
+                        "target": "explicit",
                         "database": cfg["database"],
-                        "schema_name": None,
+                        "schema_name": cfg["schema_name"],
                         "strict": strict,
                         "error": message,
                     },
@@ -941,9 +1025,9 @@ def db_schema_drift_check(
                 json.dumps(
                     {
                         "status": "error",
-                        "env": env.value,
+                        "target": "explicit",
                         "database": cfg["database"],
-                        "schema_name": None,
+                        "schema_name": cfg["schema_name"],
                         "strict": strict,
                         "error": message,
                     },
@@ -952,7 +1036,7 @@ def db_schema_drift_check(
                 )
             )
         else:
-            ccyo_out.error(f"Drift check failed for {env.value}: {message}")
+            ccyo_out.error(f"Drift check failed: {message}")
         raise typer.Exit(2) from exc
 
     if json_output:
@@ -961,7 +1045,7 @@ def db_schema_drift_check(
 
     schema_name = payload.get("schema_name") or "(not found)"
     ccyo_out.print_text(
-        f"\n[bold cyan]━━━ TAPDB Schema Drift Check ({env.value}) ━━━[/bold cyan]"
+        "\n[bold cyan]━━━ TAPDB Schema Drift Check (explicit target) ━━━[/bold cyan]"
     )
     ccyo_out.print_text(f"  Database: {payload['database']}")
     ccyo_out.print_text(f"  Schema:   {schema_name}")
@@ -991,9 +1075,10 @@ def db_schema_drift_check(
 
 @schema_app.command("reset")
 def db_nuke(
-    env: Environment = typer.Argument(..., help="Target environment"),
-    force: bool = typer.Option(
-        False, "--force", "-f", help="Skip confirmations (for CI/automation)"
+    confirm_target: Optional[str] = typer.Option(
+        None,
+        "--confirm-target",
+        help="Required target label for destructive reset confirmation",
     ),
 ):
     """
@@ -1001,6 +1086,7 @@ def db_nuke(
 
     ⚠️  DESTRUCTIVE OPERATION - This cannot be undone!
     """
+    env = Environment.target
     cfg = _get_db_config(env)
     is_aurora = cfg.get("engine_type") == "aurora"
 
@@ -1025,8 +1111,9 @@ def db_nuke(
     ccyo_out.print_text(
         Panel(
             f"[bold red]⚠️  DESTRUCTIVE OPERATION[/bold red]\n\n"
-            f"Environment: [bold]{env.value.upper()}[/bold]\n"
+            f"Target:      [bold]{_resolved_target_label(cfg)}[/bold]\n"
             f"Database:    [bold]{cfg['database']}[/bold]\n"
+            f"Schema:      [bold]{_get_schema_name(env)}[/bold]\n"
             f"Host:        {cfg['host']}:{cfg['port']}\n"
             f"{aurora_warning}\n"
             f"[yellow]Data to be deleted:[/yellow]\n"
@@ -1047,33 +1134,11 @@ def db_nuke(
         )
     )
 
-    if not force:
-        # Confirmation 1: Environment
-        env_upper = env.value.upper()
-        ccyo_out.error(
-            f"\nConfirmation 1/3: You are about to nuke the {env_upper} database."
-        )
-        if not Confirm.ask("  Proceed?", default=False):
-            ccyo_out.print_text("[dim]Aborted.[/dim]")
-            return
-
-        # Confirmation 2: Type environment name
-        ccyo_out.print_text(
-            "\n[bold]Confirmation 2/3:[/bold] Type the environment name to confirm:"
-        )
-        typed_env = Prompt.ask("  Environment name")
-        if typed_env.lower() != env.value.lower():
-            ccyo_out.error(
-                f"Input '{typed_env}' does not match '{env.value}'. Aborted."
-            )
-            return
-
-        # Confirmation 3: Type DELETE EVERYTHING
-        ccyo_out.error("\nConfirmation 3/3: Type DELETE EVERYTHING to proceed:")
-        typed_confirm = Prompt.ask("  Confirm")
-        if typed_confirm != "DELETE EVERYTHING":
-            ccyo_out.error("Input does not match 'DELETE EVERYTHING'. Aborted.")
-            return
+    _require_destructive_confirmation(
+        cfg,
+        operation="reset schema",
+        confirm_target=confirm_target,
+    )
 
     ccyo_out.warning("\n► Nuking TAPDB schema...")
 
@@ -1167,9 +1232,7 @@ def db_nuke(
     if success:
         _log_operation(env.value, "NUKE", f"Deleted {total_rows} rows from all tables")
         ccyo_out.success("TAPDB schema nuked successfully")
-        ccyo_out.print_text(
-            f"\n  Recreate with: [cyan]tapdb db schema apply {env.value}[/cyan]"
-        )
+        ccyo_out.print_text("\n  Recreate with: [cyan]tapdb db schema apply[/cyan]")
     else:
         ccyo_out.error(f"Nuke failed:\n{psql_out}")
         _log_operation(env.value, "NUKE_FAILED", psql_out[:200])
@@ -1178,16 +1241,16 @@ def db_nuke(
 
 @schema_app.command("migrate")
 def db_migrate(
-    env: Environment = typer.Argument(..., help="Target environment"),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be done without making changes"
     ),
 ):
-    """Apply schema migrations/updates to the specified environment."""
+    """Apply schema migrations/updates to the explicit target."""
+    env = Environment.target
     cfg = _get_db_config(env)
 
     ccyo_out.print_text(
-        f"\n[bold cyan]━━━ Migrate TAPDB Schema ({env.value}) ━━━[/bold cyan]"
+        "\n[bold cyan]━━━ Migrate TAPDB Schema (explicit target) ━━━[/bold cyan]"
     )
 
     # Check database and schema exist
@@ -1278,7 +1341,6 @@ def db_migrate(
 
 @data_app.command("backup")
 def db_backup(
-    env: Environment = typer.Argument(..., help="Target environment"),
     backup_path: Optional[Path] = typer.Option(
         None, "--output", "-o", help="Output file path"
     ),
@@ -1286,10 +1348,13 @@ def db_backup(
         False, "--data-only", help="Backup data only (no schema)"
     ),
 ):
-    """Backup TAPDB data from the specified environment."""
+    """Backup TAPDB data from the explicit target."""
+    env = Environment.target
     cfg = _get_db_config(env)
 
-    ccyo_out.print_text(f"\n[bold cyan]━━━ Backup TAPDB ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        "\n[bold cyan]━━━ Backup TAPDB (explicit target) ━━━[/bold cyan]"
+    )
 
     if not _check_db_exists(env, cfg["database"]):
         ccyo_out.error(f"Database '{cfg['database']}' does not exist")
@@ -1298,7 +1363,7 @@ def db_backup(
     # Generate output filename
     if backup_path is None:
         timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-        backup_path = Path(f"tapdb_{env.value}_{timestamp}.sql")
+        backup_path = Path(f"tapdb_target_{timestamp}.sql")
 
     # Build pg_dump command
     cmd = [
@@ -1360,14 +1425,20 @@ def db_backup(
 
 @data_app.command("restore")
 def db_restore(
-    env: Environment = typer.Argument(..., help="Target environment"),
     input_file: Path = typer.Option(..., "--input", "-i", help="Input backup file"),
-    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+    confirm_target: Optional[str] = typer.Option(
+        None,
+        "--confirm-target",
+        help="Required target label for destructive restore confirmation",
+    ),
 ):
-    """Restore TAPDB data from a backup file."""
+    """Restore TAPDB data into the explicit target from a backup file."""
+    env = Environment.target
     cfg = _get_db_config(env)
 
-    ccyo_out.print_text(f"\n[bold cyan]━━━ Restore TAPDB ({env.value}) ━━━[/bold cyan]")
+    ccyo_out.print_text(
+        "\n[bold cyan]━━━ Restore TAPDB (explicit target) ━━━[/bold cyan]"
+    )
 
     if not input_file.exists():
         ccyo_out.error(f"Backup file not found: {input_file}")
@@ -1379,18 +1450,18 @@ def db_restore(
     )
 
     ccyo_out.print_text(f"  File:     {input_file} ({size_str})")
-    ccyo_out.print_text(f"  Target:   {cfg['database']} ({env.value})")
+    ccyo_out.print_text(f"  Target:   {_resolved_target_label(cfg)}")
 
-    if not force:
-        ccyo_out.warning(f"\nThis will overwrite existing data in {cfg['database']}")
-        if not Confirm.ask("  Proceed?", default=False):
-            ccyo_out.print_text("[dim]Aborted.[/dim]")
-            return
+    _require_destructive_confirmation(
+        cfg,
+        operation="restore data",
+        confirm_target=confirm_target,
+    )
 
     # Ensure database exists
     if not _check_db_exists(env, cfg["database"]):
         ccyo_out.error(f"Database '{cfg['database']}' does not exist")
-        ccyo_out.print_text(f"  Create with: [cyan]tapdb db create {env.value}[/cyan]")
+        ccyo_out.print_text("  Create with: [cyan]tapdb db create[/cyan]")
         raise typer.Exit(1)
 
     ccyo_out.warning("► Restoring from backup...")
@@ -1550,18 +1621,19 @@ def _tapdb_connection_for_env(
     app_username: str,
 ) -> TAPDBConnection:
     cfg = _get_db_config(env)
-    engine_type = (cfg.get("engine_type") or "local").strip().lower()
-    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in {
+    engine_type = str(cfg["engine_type"]).strip().lower()
+    iam_auth = str(cfg["iam_auth"]).strip().lower() in {
         "true",
         "1",
         "yes",
         "on",
     }
-    region = (cfg.get("region") or "us-west-2").strip()
+    region = str(cfg["region"]).strip()
     db_pass = cfg.get("password") or None
     secret_arn = cfg.get("secret_arn") or None
     return TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
+        db_hostaddr=cfg.get("hostaddr") or None,
         db_user=cfg["user"],
         db_pass=db_pass,
         secret_arn=secret_arn,
@@ -1572,6 +1644,8 @@ def _tapdb_connection_for_env(
         app_username=app_username,
         domain_code=str(cfg["domain_code"]),
         owner_repo_name=str(cfg["owner_repo_name"]),
+        schema_name=str(cfg["schema_name"]),
+        echo_sql=False,
     )
 
 
@@ -1582,28 +1656,30 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
             "  Skipping default admin creation (use --insecure-dev-defaults)"
         )
         return False
-    if env == Environment.prod:
-        ccyo_out.error("  Refusing to create default admin in prod")
+
+    cfg = _get_db_config(env)
+    if str(cfg.get("safety_tier") or "").strip().lower() == "production":
+        ccyo_out.error("  Refusing to create default admin for production safety tier")
         return False
 
     from daylily_tapdb.cli.user import _hash_password
     from daylily_tapdb.user_store import create_or_get
 
-    cfg = _get_db_config(env)
-    engine_type = (cfg.get("engine_type") or "local").strip().lower()
-    iam_auth = (cfg.get("iam_auth") or "true").strip().lower() in (
+    engine_type = str(cfg["engine_type"]).strip().lower()
+    iam_auth = str(cfg["iam_auth"]).strip().lower() in (
         "true",
         "1",
         "yes",
         "on",
     )
-    region = (cfg.get("region") or "us-west-2").strip()
+    region = str(cfg["region"]).strip()
     db_pass = cfg.get("password") or None
     secret_arn = cfg.get("secret_arn") or None
 
     try:
         with TAPDBConnection(
             db_hostname=f"{cfg['host']}:{cfg['port']}",
+            db_hostaddr=cfg.get("hostaddr") or None,
             db_user=cfg["user"],
             db_pass=db_pass,
             secret_arn=secret_arn,
@@ -1614,6 +1690,8 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
             app_username="tapdb_admin",
             domain_code=str(cfg["domain_code"]),
             owner_repo_name=str(cfg["owner_repo_name"]),
+            schema_name=str(cfg["schema_name"]),
+            echo_sql=False,
         ) as conn:
             with conn.session_scope(commit=True) as session:
                 user, created = create_or_get(
@@ -1639,7 +1717,6 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
 
 @data_app.command("seed")
 def db_seed(
-    env: Environment = typer.Argument(..., help="Target environment"),
     config_path: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config directory"
     ),
@@ -1663,14 +1740,15 @@ def db_seed(
     By default, seeds only CORE templates (generic + actor templates, including
     generic/external_object_link).
 
-    --include-workflow is retained for compatibility and includes optional
-    non-core template packs when present in the provided config directory.
+    --include-workflow includes optional non-core template packs when present
+    in the provided config directory.
     """
+    env = Environment.target
     cfg = _get_db_config(env)
 
     mode = "core + optional packs" if include_workflow else "core only"
     ccyo_out.print_text(
-        f"\n[bold cyan]━━━ Seed TAPDB Templates ({env.value}) ━━━[/bold cyan]"
+        "\n[bold cyan]━━━ Seed TAPDB Templates (explicit target) ━━━[/bold cyan]"
     )
     ccyo_out.print_text(f"  Mode: {mode}")
     ccyo_out.print_text(f"  Core categories: {', '.join(sorted(CORE_CATEGORIES))}")
@@ -1693,14 +1771,12 @@ def db_seed(
     # Check database and schema exist
     if not _check_db_exists(env, cfg["database"]):
         ccyo_out.error(f"Database '{cfg['database']}' does not exist")
-        ccyo_out.print_text(f"  Create with: [cyan]tapdb db create {env.value}[/cyan]")
+        ccyo_out.print_text("  Create with: [cyan]tapdb db create[/cyan]")
         raise typer.Exit(1)
 
     if not _schema_exists(env):
         ccyo_out.error("TAPDB schema not found")
-        ccyo_out.print_text(
-            f"  Initialize with: [cyan]tapdb db schema apply {env.value}[/cyan]"
-        )
+        ccyo_out.print_text("  Initialize with: [cyan]tapdb db schema apply[/cyan]")
         raise typer.Exit(1)
 
     ccyo_out.warning("► Loading template configurations...")
@@ -1746,7 +1822,11 @@ def db_seed(
     by_type = {}
     for t in templates:
         st = t.get("category", "unknown")
-        by_type.setdefault(st, []).append(t)
+        category_entries = by_type.get(st)
+        if category_entries is None:
+            category_entries = []
+            by_type[st] = category_entries
+        category_entries.append(t)
 
     ccyo_out.print_text("\n[bold]Templates by category:[/bold]")
     for st, tlist in sorted(by_type.items()):
@@ -1808,8 +1888,16 @@ def db_seed(
 
 @db_app.command("setup")
 def db_setup(
-    env: Environment = typer.Argument(..., help="Target environment"),
-    force: bool = typer.Option(False, "--force", "-f", help="Reinitialize if exists"),
+    recreate: bool = typer.Option(
+        False,
+        "--recreate",
+        help="Delete and recreate the target database before setup",
+    ),
+    confirm_target: Optional[str] = typer.Option(
+        None,
+        "--confirm-target",
+        help="Required target label when --recreate is used",
+    ),
     include_workflow: bool = typer.Option(
         False,
         "--include-workflow",
@@ -1819,7 +1907,7 @@ def db_setup(
     insecure_dev_defaults: bool = typer.Option(
         False,
         "--insecure-dev-defaults",
-        help="DEV ONLY: create default admin user (tapdb_admin/passw0rd)",
+        help="LOCAL/SHARED ONLY: create default admin user (tapdb_admin/passw0rd)",
     ),
 ):
     """Full database setup: create database, apply schema, seed templates.
@@ -1827,20 +1915,21 @@ def db_setup(
     By default, seeds only CORE templates (generic + actor templates, including
     generic/external_object_link).
 
-    --include-workflow is retained for compatibility and includes optional
-    non-core template packs when present in the provided config directory.
+    --include-workflow includes optional non-core template packs when present
+    in the provided config directory.
 
     Combines: tapdb db create + tapdb db schema apply + tapdb db data seed
 
     For aurora environments, the database is already created by CloudFormation,
     so the "create database" step is skipped.
     """
+    env = Environment.target
     cfg = _get_db_config(env)
     is_aurora = cfg.get("engine_type") == "aurora"
 
     mode = "core + optional packs" if include_workflow else "core only"
     ccyo_out.print_text(
-        f"\n[bold cyan]━━━ TAPDB Full Setup ({env.value}) ━━━[/bold cyan]"
+        "\n[bold cyan]━━━ TAPDB Full Setup (explicit target) ━━━[/bold cyan]"
     )
     ccyo_out.print_text(f"  Database: {cfg['database']}")
     ccyo_out.print_text(f"  Host:     {cfg['host']}:{cfg['port']}")
@@ -1852,26 +1941,28 @@ def db_setup(
 
     # Step 1: Ensure database exists
     ccyo_out.print_text("\n[bold]Step 1/5: Ensure Database[/bold]")
-    if force and not is_aurora and _check_db_exists(env, cfg["database"]):
-        ccyo_out.warning("  ► --force requested; recreating database")
-        db_delete(env, force=True)
-    db_create(env, owner=None)
+    if recreate and is_aurora:
+        ccyo_out.error("--recreate is not supported for Aurora targets.")
+        raise typer.Exit(1)
+    if recreate and _check_db_exists(env, cfg["database"]):
+        ccyo_out.warning("  ► --recreate requested; recreating database")
+        db_delete(confirm_target=confirm_target)
+    db_create(owner=None)
 
     # Step 2: Apply schema
     ccyo_out.print_text("\n[bold]Step 2/5: Apply Schema[/bold]")
-    db_schema_apply(env, reinitialize=force)
+    db_schema_apply(reinitialize=recreate)
 
     # Step 3: Apply migrations
     ccyo_out.print_text("\n[bold]Step 3/5: Apply Migrations[/bold]")
-    db_migrate(env, dry_run=False)
+    db_migrate(dry_run=False)
 
     # Step 4: Seed templates
     ccyo_out.print_text("\n[bold]Step 4/5: Seed Templates[/bold]")
     db_seed(
-        env,
         config_path=None,
         include_workflow=include_workflow,
-        skip_existing=not force,
+        skip_existing=not recreate,
         dry_run=False,
     )
 
@@ -1895,39 +1986,62 @@ def db_setup(
 
 
 # Shared operation entry points used by orchestrators (e.g. bootstrap).
-def create_database(env: Environment, owner: Optional[str] = None) -> None:
-    db_create(env=env, owner=owner)
+def create_database(
+    env: Environment = Environment.target,
+    owner: Optional[str] = None,
+) -> None:
+    _ = env
+    db_create(owner=owner)
 
 
-def delete_database(env: Environment, force: bool = False) -> None:
-    db_delete(env=env, force=force)
+def delete_database(
+    env: Environment = Environment.target,
+    *,
+    confirm_target: Optional[str] = None,
+) -> None:
+    _ = env
+    db_delete(confirm_target=confirm_target)
 
 
-def apply_schema(env: Environment, reinitialize: bool = False) -> None:
-    db_schema_apply(env=env, reinitialize=reinitialize)
+def apply_schema(
+    env: Environment = Environment.target,
+    reinitialize: bool = False,
+) -> None:
+    _ = env
+    db_schema_apply(reinitialize=reinitialize)
 
 
-def schema_status(env: Environment) -> None:
-    db_status(env=env)
+def schema_status(env: Environment = Environment.target) -> None:
+    _ = env
+    db_status()
 
 
-def reset_schema(env: Environment, force: bool = False) -> None:
-    db_nuke(env=env, force=force)
+def reset_schema(
+    env: Environment = Environment.target,
+    *,
+    confirm_target: Optional[str] = None,
+) -> None:
+    _ = env
+    db_nuke(confirm_target=confirm_target)
 
 
-def run_migrations(env: Environment, dry_run: bool = False) -> None:
-    db_migrate(env=env, dry_run=dry_run)
+def run_migrations(
+    env: Environment = Environment.target,
+    dry_run: bool = False,
+) -> None:
+    _ = env
+    db_migrate(dry_run=dry_run)
 
 
 def seed_templates(
-    env: Environment,
+    env: Environment = Environment.target,
     config_path: Optional[Path] = None,
     include_workflow: bool = False,
     skip_existing: bool = True,
     dry_run: bool = False,
 ) -> None:
+    _ = env
     db_seed(
-        env=env,
         config_path=config_path,
         include_workflow=include_workflow,
         skip_existing=skip_existing,

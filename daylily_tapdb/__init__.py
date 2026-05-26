@@ -6,11 +6,10 @@ with PostgreSQL and SQLAlchemy.
 
 Example:
     from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory
-    from daylily_tapdb.cli.db_config import get_db_config_for_env
+    from daylily_tapdb.cli.db_config import get_db_config
 
-    # Connect using an explicit TapDB config + env (recommended)
-    cfg = get_db_config_for_env(
-        "dev",
+    # Connect using an explicit TapDB target config.
+    cfg = get_db_config(
         config_path="~/.config/tapdb/tapdb/tapdb/tapdb-config.yaml",
     )
     db = TAPDBConnection(

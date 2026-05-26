@@ -171,7 +171,11 @@ def test_db_migrate_idempotent_when_all_migrations_already_applied(
     migrations_dir.mkdir(parents=True)
     (migrations_dir / "001_test.sql").write_text("SELECT 1;\n")
 
-    monkeypatch.setattr(m, "_get_db_config", lambda env: {"database": "tapdb"})
+    monkeypatch.setattr(
+        m,
+        "_get_db_config",
+        lambda env: {"database": "tapdb", "schema_name": "tapdb_app"},
+    )
     monkeypatch.setattr(m, "_check_db_exists", lambda env, db: True)
     monkeypatch.setattr(m, "_schema_exists", lambda env: True)
 
@@ -185,7 +189,7 @@ def test_db_migrate_idempotent_when_all_migrations_already_applied(
 
     monkeypatch.setattr(m, "_run_psql", fake_run_psql)
 
-    m.db_migrate(m.Environment.dev, dry_run=False)
+    m.db_migrate(dry_run=False)
 
     # Ensure we never attempted to apply a migration file.
     assert not any(c["file"] is not None for c in calls)
@@ -208,7 +212,11 @@ def test_db_migrate_uses_installed_data_migrations(tmp_path, monkeypatch):
     migration_file.write_text("SELECT 1;\n")
 
     monkeypatch.setattr(m.sysconfig, "get_paths", lambda: {"data": str(data_root)})
-    monkeypatch.setattr(m, "_get_db_config", lambda env: {"database": "tapdb"})
+    monkeypatch.setattr(
+        m,
+        "_get_db_config",
+        lambda env: {"database": "tapdb", "schema_name": "tapdb_app"},
+    )
     monkeypatch.setattr(m, "_check_db_exists", lambda env, db: True)
     monkeypatch.setattr(m, "_schema_exists", lambda env: True)
 
@@ -223,7 +231,7 @@ def test_db_migrate_uses_installed_data_migrations(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_run_psql", fake_run_psql)
     monkeypatch.setattr(m, "_log_operation", lambda *_args, **_kwargs: None)
 
-    m.db_migrate(m.Environment.dev, dry_run=False)
+    m.db_migrate(dry_run=False)
 
     assert any(c["file"] == migration_file for c in calls)
 
@@ -239,6 +247,7 @@ def test_db_nuke_drops_outbox_and_inbox_tables_before_scope_functions(monkeypatc
             "host": "localhost",
             "port": "5533",
             "engine_type": "local",
+            "schema_name": "tapdb_dev",
         },
     )
     monkeypatch.setattr(m, "_check_db_exists", lambda _env, _db: True)
@@ -258,14 +267,14 @@ def test_db_nuke_drops_outbox_and_inbox_tables_before_scope_functions(monkeypatc
     captured: dict[str, str] = {}
 
     def fake_run_psql(env, *, sql=None, file=None):
-        assert env == m.Environment.dev
+        assert env == m.Environment.target
         assert file is None
         captured["sql"] = sql or ""
         return True, ""
 
     monkeypatch.setattr(m, "_run_psql", fake_run_psql)
 
-    m.db_nuke(m.Environment.dev, force=True)
+    m.db_nuke(confirm_target="None/None/tapdb_dev@tapdb_dev")
 
     sql = captured["sql"]
     outbox_attempt_drop = "DROP TABLE IF EXISTS outbox_event_attempt CASCADE;"
@@ -298,13 +307,13 @@ def test_ensure_instance_prefix_sequence_rejects_invalid_prefix():
     import daylily_tapdb.cli.db as m
 
     with pytest.raises(ValueError, match="must match"):
-        m._ensure_instance_prefix_sequence(m.Environment.dev, "ABCDE")
+        m._ensure_instance_prefix_sequence(m.Environment.target, "ABCDE")
 
     with pytest.raises(ValueError, match="cannot be empty"):
-        m._ensure_instance_prefix_sequence(m.Environment.dev, "")
+        m._ensure_instance_prefix_sequence(m.Environment.target, "")
 
     with pytest.raises(ValueError, match="cannot be empty"):
-        m._ensure_instance_prefix_sequence(m.Environment.dev, "   ")
+        m._ensure_instance_prefix_sequence(m.Environment.target, "   ")
 
     m._normalize_instance_prefix("A1")
 
@@ -320,7 +329,7 @@ def test_ensure_instance_prefix_sequence_quotes_sql(monkeypatch):
         return True, ""
 
     monkeypatch.setattr(m, "_run_psql", fake_run_psql)
-    m._ensure_instance_prefix_sequence(m.Environment.dev, "AGX")
+    m._ensure_instance_prefix_sequence(m.Environment.target, "AGX")
 
     sql = captured["sql"]
     assert '"agx_instance_seq"' in sql

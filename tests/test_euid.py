@@ -5,12 +5,12 @@ from __future__ import annotations
 import pytest
 
 from daylily_tapdb.euid import (
-    EUIDConfig,
     AUDIT_LOG_PREFIX,
     GENERIC_INSTANCE_LINEAGE_PREFIX,
     GENERIC_TEMPLATE_PREFIX,
     SYSTEM_MESSAGE_PREFIX,
     SYSTEM_USER_PREFIX,
+    EUIDConfig,
     format_euid,
     normalize_domain_code,
     normalize_prefix,

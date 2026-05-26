@@ -60,11 +60,10 @@ from admin.domain_access import (
     validate_allowed_origins,
 )
 from daylily_tapdb import InstanceFactory, TemplateManager, __version__
-from daylily_tapdb.cli.context import active_env_name
 from daylily_tapdb.cli.db_config import (
-    get_admin_settings_for_env,
+    get_admin_settings,
     get_config_path,
-    get_db_config_for_env,
+    get_db_config,
 )
 from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.instance import generic_instance
@@ -100,11 +99,11 @@ templates = Environment(
 )
 
 
-def _active_tapdb_env() -> str:
-    return active_env_name("dev").lower()
+def _active_tapdb_target() -> str:
+    return "target"
 
 
-APP_ENV = _active_tapdb_env()
+APP_ENV = _active_tapdb_target()
 DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
 DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/tapdb-core"
 _RESERVED_TEMPLATE_COORDS = {("generic", "actor", "system_user")}
@@ -137,7 +136,7 @@ def _default_admin_settings() -> dict[str, Any]:
 
 def _load_admin_settings() -> dict[str, Any]:
     try:
-        return get_admin_settings_for_env(APP_ENV)
+        return get_admin_settings()
     except Exception as exc:
         logger.warning("Could not resolve TAPDB admin settings from config: %s", exc)
         return _default_admin_settings()
@@ -366,10 +365,9 @@ def get_db():
     """Get database connection.
 
     Uses the canonical config loader from daylily_tapdb.cli.db_config.
-    The active env comes from explicit TapDB CLI/app context and defaults to 'dev'.
+    The active target comes from explicit TapDB CLI/app context.
     """
-    env = _active_tapdb_env()
-    return get_db_connection(env)
+    return get_db_connection()
 
 
 def get_style(request: Optional[Request] = None) -> Dict[str, str]:
@@ -405,7 +403,7 @@ templates.globals["is_reserved_template"] = _is_reserved_template
 
 def load_db_metrics_context(*, limit: int = 5000) -> dict:
     """Load DB metrics data for the admin metrics page (test-friendly wrapper)."""
-    env = _active_tapdb_env()
+    env = _active_tapdb_target()
     return build_metrics_page_context(env, limit=limit)
 
 
@@ -414,6 +412,9 @@ def _empty_db_inventory_context(*, error: Optional[str] = None) -> dict:
     return {
         "db_inventory_error": error,
         "db_inventory_db_name": None,
+        "db_inventory_physical_db_name": None,
+        "db_inventory_active_schema_name": None,
+        "db_inventory_search_path": [],
         "db_inventory_schema_names": [],
         "db_inventory_counts": {
             "schemas": 0,
@@ -445,6 +446,19 @@ def load_db_inventory_context() -> dict:
             with conn.session_scope() as session:
                 db_name = session.execute(text("SELECT current_database()")).scalar()
                 ctx["db_inventory_db_name"] = str(db_name or "")
+                ctx["db_inventory_physical_db_name"] = str(db_name or "")
+                active_schema = str(
+                    session.execute(text("SELECT current_schema()")).scalar() or ""
+                ).strip()
+                if not active_schema:
+                    raise RuntimeError("Active PostgreSQL schema is not configured.")
+                ctx["db_inventory_active_schema_name"] = active_schema
+                search_path = session.execute(
+                    text("SELECT current_schemas(false) AS schema_names")
+                ).scalar()
+                ctx["db_inventory_search_path"] = [
+                    str(item) for item in (search_path or [])
+                ]
 
                 schema_filter = """
                     nspname NOT IN ('pg_catalog', 'information_schema')
@@ -453,10 +467,7 @@ def load_db_inventory_context() -> dict:
                     AND nspname NOT LIKE 'pg_toast_temp_%'
                 """
                 schemaname_filter = """
-                    schemaname NOT IN ('pg_catalog', 'information_schema')
-                    AND schemaname NOT LIKE 'pg_toast%'
-                    AND schemaname NOT LIKE 'pg_temp_%'
-                    AND schemaname NOT LIKE 'pg_toast_temp_%'
+                    schemaname = :schema_name
                 """
 
                 schema_rows = session.execute(
@@ -482,7 +493,8 @@ def load_db_inventory_context() -> dict:
                             WHERE {schemaname_filter}
                             ORDER BY schemaname, tablename
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 views = [
@@ -495,7 +507,8 @@ def load_db_inventory_context() -> dict:
                             WHERE {schemaname_filter}
                             ORDER BY schemaname, viewname
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 materialized_views = [
@@ -508,7 +521,8 @@ def load_db_inventory_context() -> dict:
                             WHERE {schemaname_filter}
                             ORDER BY schemaname, matviewname
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 sequences = [
@@ -521,14 +535,15 @@ def load_db_inventory_context() -> dict:
                             WHERE {schemaname_filter}
                             ORDER BY schemaname, sequencename
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 triggers = [
                     dict(row)
                     for row in session.execute(
                         text(
-                            f"""
+                            """
                             SELECT
                                 ns.nspname AS schema_name,
                                 cls.relname AS table_name,
@@ -537,27 +552,29 @@ def load_db_inventory_context() -> dict:
                             JOIN pg_class cls ON cls.oid = tg.tgrelid
                             JOIN pg_namespace ns ON ns.oid = cls.relnamespace
                             WHERE NOT tg.tgisinternal
-                              AND {schema_filter}
+                              AND ns.nspname = :schema_name
                             ORDER BY ns.nspname, cls.relname, tg.tgname
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 functions = [
                     dict(row)
                     for row in session.execute(
                         text(
-                            f"""
+                            """
                             SELECT
                                 ns.nspname AS schema_name,
                                 p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
                                     AS function_signature
                             FROM pg_proc p
                             JOIN pg_namespace ns ON ns.oid = p.pronamespace
-                            WHERE {schema_filter}
+                            WHERE ns.nspname = :schema_name
                             ORDER BY ns.nspname, function_signature
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
                 indexes = [
@@ -573,7 +590,8 @@ def load_db_inventory_context() -> dict:
                             WHERE {schemaname_filter}
                             ORDER BY schemaname, tablename, indexname
                             """
-                        )
+                        ),
+                        {"schema_name": active_schema},
                     ).mappings()
                 ]
 
@@ -615,7 +633,12 @@ def _normalize_cognito_domain(raw_domain: str) -> str:
     if not domain:
         raise RuntimeError("COGNITO_DOMAIN is not configured")
     parts = urlsplit(domain)
-    if parts.scheme or parts.netloc or "/" in domain or any(char.isspace() for char in domain):
+    if (
+        parts.scheme
+        or parts.netloc
+        or "/" in domain
+        or any(char.isspace() for char in domain)
+    ):
         raise RuntimeError(f"Invalid COGNITO_DOMAIN value: {raw_domain!r}")
     return domain
 
@@ -868,7 +891,7 @@ async def oauth_login(
     if user:
         return RedirectResponse(tapdb_url(request, "/"), status_code=302)
 
-    env_name = _active_tapdb_env()
+    env_name = _active_tapdb_target()
     try:
         runtime = _resolve_cognito_oauth_runtime(env_name)
     except Exception as exc:
@@ -907,7 +930,7 @@ async def oauth_callback(
     error_description: Optional[str] = None,
 ):
     """Handle Cognito Hosted UI OAuth callback."""
-    env_name = _active_tapdb_env()
+    env_name = _active_tapdb_target()
     if error:
         details = error_description or error
         content = templates.get_template("login.html").render(
@@ -1396,8 +1419,8 @@ async def info_page(request: Request):
     """Runtime info page with DB and Cognito connection details."""
     user = request.state.user
     permissions = get_user_permissions(user)
-    env = _active_tapdb_env()
-    cfg = get_db_config_for_env(env)
+    env = _active_tapdb_target()
+    cfg = get_db_config()
     is_admin = str(user.get("role") or "").strip().lower() == "admin"
 
     inventory_ctx = _empty_db_inventory_context()
@@ -1411,7 +1434,7 @@ async def info_page(request: Request):
     )
 
     db_rows: List[tuple[str, str]] = [
-        ("environment", env),
+        ("target", env),
         ("config_path", str(get_config_path())),
         ("runtime_database_name", runtime_db_name),
     ]

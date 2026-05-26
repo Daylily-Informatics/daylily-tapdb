@@ -88,11 +88,25 @@
     </p>
     {% else %}
     <p style="margin-bottom: 0.75rem;">
-        Connected runtime database:
-        <code>{{ db_inventory_db_name or "unknown" }}</code>
+        Physical database:
+        <code>{{ db_inventory_physical_db_name or db_inventory_db_name or "unknown" }}</code>
     </p>
     <p style="margin-bottom: 0.75rem;">
-        Schemas:
+        Active configured schema:
+        <code>{{ db_inventory_active_schema_name or "unknown" }}</code>
+    </p>
+    <p style="margin-bottom: 0.75rem;">
+        Search path:
+        {% if db_inventory_search_path %}
+        {% for schema_name in db_inventory_search_path %}
+        <code>{{ schema_name }}</code>{% if not loop.last %}, {% endif %}
+        {% endfor %}
+        {% else %}
+        <span style="color: var(--text-muted);">none</span>
+        {% endif %}
+    </p>
+    <p style="margin-bottom: 0.75rem;">
+        Non-system schemas:
         {% if db_inventory_schema_names %}
         {% for schema_name in db_inventory_schema_names %}
         <code>{{ schema_name }}</code>{% if not loop.last %}, {% endif %}

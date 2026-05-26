@@ -90,7 +90,9 @@ class AuroraStackManager:
     # create_stack
     # ------------------------------------------------------------------
 
-    def _stack_request(self, config: AuroraConfig) -> tuple[str, str, list[dict[str, str]], list[dict[str, str]], str]:
+    def _stack_request(
+        self, config: AuroraConfig
+    ) -> tuple[str, str, list[dict[str, str]], list[dict[str, str]], str]:
         vpc_id, subnet_ids = self._resolve_vpc_and_subnets(config)
         stack_name = f"tapdb-{config.cluster_identifier}"
         template_body = json.dumps(generate_template())

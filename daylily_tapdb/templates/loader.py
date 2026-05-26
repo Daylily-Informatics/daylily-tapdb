@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,12 +12,12 @@ from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from daylily_tapdb.euid import normalize_domain_code
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.sequences import (
     _normalize_instance_prefix,
     ensure_instance_prefix_sequence,
 )
-from daylily_tapdb.euid import normalize_domain_code
 from daylily_tapdb.templates.mutation import allow_template_mutations
 from daylily_tapdb.validation.instantiation_layouts import (
     format_validation_error,
@@ -59,11 +58,6 @@ TEMPLATE_MODEL_BY_DISCRIMINATOR = {
 }
 
 _CORE_TEMPLATE_PREFIXES = {"SYS", "MSG"}
-_DEFAULT_TAPDB_CONFIG_DIR = Path.home() / ".config" / "tapdb"
-_DEFAULT_DOMAIN_REGISTRY_PATH = _DEFAULT_TAPDB_CONFIG_DIR / "domain_code_registry.json"
-_DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH = (
-    _DEFAULT_TAPDB_CONFIG_DIR / "prefix_ownership_registry.json"
-)
 
 
 def _normalize_domain_scope(domain_code: str | None) -> str:
@@ -113,9 +107,7 @@ def _load_prefix_ownership_registry(path: Path) -> dict[str, Any]:
     payload = _load_json_file(path)
     ownership = payload.get("ownership")
     if not isinstance(ownership, dict):
-        raise ValueError(
-            f"Prefix registry must define an object 'ownership': {path}"
-        )
+        raise ValueError(f"Prefix registry must define an object 'ownership': {path}")
     return payload
 
 
@@ -124,9 +116,7 @@ def _assert_registered_domain(
 ) -> None:
     domains = domain_registry.get("domains", {})
     if domain_code not in domains:
-        raise ValueError(
-            f"Domain {domain_code!r} is not registered in {source}"
-        )
+        raise ValueError(f"Domain {domain_code!r} is not registered in {source}")
 
 
 def _assert_prefix_claimed(
@@ -406,7 +396,11 @@ def find_duplicate_template_keys(
     for template in templates:
         key = _template_key(template)
         source = str(template.get("_source_file") or "(unknown)")
-        key_sources.setdefault(key, []).append(source)
+        sources = key_sources.get(key)
+        if sources is None:
+            sources = []
+            key_sources[key] = sources
+        sources.append(source)
     return {key: sources for key, sources in key_sources.items() if len(sources) > 1}
 
 
@@ -656,7 +650,9 @@ def validate_template_configs(
                 )
                 normalized_instance_prefix = ""
             if normalized_instance_prefix:
-                normalized_category = str(template.get("category") or "").strip().upper()
+                normalized_category = (
+                    str(template.get("category") or "").strip().upper()
+                )
                 if normalized_category != normalized_instance_prefix:
                     issues.append(
                         ConfigIssue(
@@ -672,7 +668,10 @@ def validate_template_configs(
                     )
 
                 is_core_template = _is_source_under_dir(source_file, core_config_dir)
-                if is_core_template and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES:
+                if (
+                    is_core_template
+                    and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES
+                ):
                     issues.append(
                         ConfigIssue(
                             level="error",
@@ -684,7 +683,10 @@ def validate_template_configs(
                             ),
                         )
                     )
-                if not is_core_template and normalized_instance_prefix in _CORE_TEMPLATE_PREFIXES:
+                if (
+                    not is_core_template
+                    and normalized_instance_prefix in _CORE_TEMPLATE_PREFIXES
+                ):
                     issues.append(
                         ConfigIssue(
                             level="error",
@@ -850,13 +852,19 @@ def _prepare_seed_templates(
                 f"{normalized_instance_prefix!r})."
             )
 
-        if is_core_template and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES:
+        if (
+            is_core_template
+            and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES
+        ):
             raise ValueError(
                 f"TapDB bundled core template {_template_code(item)!r} must use "
                 f"reserved prefixes {sorted(_CORE_TEMPLATE_PREFIXES)!r}."
             )
 
-        if not is_core_template and normalized_instance_prefix in _CORE_TEMPLATE_PREFIXES:
+        if (
+            not is_core_template
+            and normalized_instance_prefix in _CORE_TEMPLATE_PREFIXES
+        ):
             raise ValueError(
                 f"Client template {_template_code(item)!r} cannot persist reserved "
                 f"TapDB operational prefix {normalized_instance_prefix!r}."
@@ -872,8 +880,8 @@ def _validate_seed_ownership(
     *,
     domain_code: str,
     owner_repo_name: str,
-    domain_registry_path: Path = _DEFAULT_DOMAIN_REGISTRY_PATH,
-    prefix_registry_path: Path = _DEFAULT_PREFIX_OWNERSHIP_REGISTRY_PATH,
+    domain_registry_path: Path,
+    prefix_registry_path: Path,
 ) -> None:
     domain_registry = _load_domain_registry(domain_registry_path)
     prefix_registry = _load_prefix_ownership_registry(prefix_registry_path)

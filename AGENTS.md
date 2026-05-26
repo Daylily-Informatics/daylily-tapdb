@@ -55,17 +55,19 @@ source ./activate
 
 Always use `tapdb` CLI commands for database operations. Never run raw SQL or shell scripts.
 
+Fallback behavior is an antipattern in this workspace. Do not add, preserve, or rely on inferred config paths, dev/prd environment selectors, default database names, default schemas, default users, compatibility shims, generated substitute values, or silent public-schema/localhost behavior unless the user explicitly approves that exact behavior in the current thread. Missing config path, target identity, physical DB fields, schema name, safety policy, credentials, or malformed command shape must fail hard with a clear error.
+
 ```bash
-tapdb --config <path> --env <name> bootstrap local         # Full local setup
-tapdb --config <path> --env <name> db schema apply <env>   # Apply schema
-tapdb --config <path> --env <name> db schema migrate <env> # Run migrations
-tapdb --config <path> --env <name> db data seed <env>      # Seed templates
+tapdb --config <path> bootstrap local       # Full local setup
+tapdb --config <path> db schema apply       # Apply schema
+tapdb --config <path> db schema migrate     # Run migrations
+tapdb --config <path> db data seed          # Seed templates
 ```
 
 Use explicit TapDB context for runtime commands:
 
 ```bash
-tapdb --config <path> --env <name> ...
+tapdb --config <path> ...
 ```
 
 ## No Circumvention Policy
@@ -78,15 +80,14 @@ tapdb --config <path> --env <name> ...
 ## Testing
 
 ```bash
-# Run all tests (deselect known-broken smoke tests)
-python -m pytest tests/ -q --deselect tests/test_admin_routes_smoke.py
+# Run all tests
+python -m pytest tests/ -q
 
 # Run specific test file
 python -m pytest tests/test_models.py -q
 ```
 
-- **Known pre-existing failures**: `tests/test_admin_routes_smoke.py` (TypeError in route mocks — not a regression).
-- All other tests must pass before merging.
+- All tests must pass before merging.
 
 ## Branch Discipline
 

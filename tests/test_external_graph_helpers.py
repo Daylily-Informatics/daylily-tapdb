@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import admin.external_graph as eg
+from daylily_tapdb.services import external_refs as eg
 from daylily_tapdb.services import external_refs as svc
 
 
-def test_admin_external_graph_reexports_service_helpers() -> None:
+def test_external_graph_helpers_are_imported_from_service_module() -> None:
     assert eg.ExternalGraphRef is svc.ExternalGraphRef
     assert eg.resolve_external_graph_refs is svc.resolve_external_graph_refs
     assert eg.get_external_ref_by_index is svc.get_external_ref_by_index

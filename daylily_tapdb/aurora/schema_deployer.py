@@ -36,6 +36,7 @@ class AuroraSchemaDeployer:
         iam_auth: bool = True,
         secret_arn: Optional[str] = None,
         password: Optional[str] = None,
+        hostaddr: Optional[str] = None,
     ) -> tuple[list[str], dict[str, str]]:
         """Build psql command and environment variables for Aurora.
 
@@ -70,6 +71,8 @@ class AuroraSchemaDeployer:
         env_vars["PGPASSWORD"] = credential
         env_vars["PGSSLMODE"] = "verify-full"
         env_vars["PGSSLROOTCERT"] = str(ca_path)
+        if hostaddr:
+            env_vars["PGHOSTADDR"] = str(hostaddr).strip()
 
         cmd = [
             "psql",
@@ -103,6 +106,7 @@ class AuroraSchemaDeployer:
         iam_auth: bool = True,
         secret_arn: Optional[str] = None,
         password: Optional[str] = None,
+        hostaddr: Optional[str] = None,
         sql: Optional[str] = None,
         file: Optional[Path] = None,
     ) -> tuple[bool, str]:
@@ -121,6 +125,7 @@ class AuroraSchemaDeployer:
                 iam_auth=iam_auth,
                 secret_arn=secret_arn,
                 password=password,
+                hostaddr=hostaddr,
             )
 
             if file:
@@ -155,6 +160,7 @@ class AuroraSchemaDeployer:
         iam_auth: bool = True,
         secret_arn: Optional[str] = None,
         password: Optional[str] = None,
+        hostaddr: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Deploy the TAPDB schema to an Aurora PostgreSQL cluster.
 
@@ -182,6 +188,7 @@ class AuroraSchemaDeployer:
             iam_auth=iam_auth,
             secret_arn=secret_arn,
             password=password,
+            hostaddr=hostaddr,
             file=schema_file,
         )
 

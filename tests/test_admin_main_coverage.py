@@ -480,8 +480,8 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(
         admin_main,
-        "get_db_config_for_env",
-        lambda _env: {
+        "get_db_config",
+        lambda: {
             "host": "127.0.0.1",
             "port": 5432,
             "database": "tapdb_dev_runtime",
@@ -490,7 +490,7 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         },
     )
     monkeypatch.setattr(admin_main, "get_config_path", lambda: "/tmp/tapdb-config.yaml")
-    monkeypatch.setattr(admin_main, "_active_tapdb_env", lambda: "dev")
+    monkeypatch.setattr(admin_main, "_active_tapdb_target", lambda: "target")
     monkeypatch.setattr(
         admin_main,
         "resolve_tapdb_pool_config",
@@ -580,16 +580,16 @@ def test_main_query_helpers_and_footer_metadata(route_client, monkeypatch):
     with pytest.raises(RuntimeError, match="COGNITO_DOMAIN"):
         admin_main._normalize_cognito_domain("")
     with pytest.raises(RuntimeError, match="Invalid COGNITO_DOMAIN"):
-        admin_main._normalize_cognito_domain("https://example.auth.us-west-2.amazoncognito.com")
+        admin_main._normalize_cognito_domain(
+            "https://example.auth.us-west-2.amazoncognito.com"
+        )
     with pytest.raises(RuntimeError, match="https URL"):
         admin_main._require_https_url("http://not-secure", label="endpoint")
 
     monkeypatch.setattr(
         admin_main,
         "_git_output",
-        lambda *args: {"rev-parse": "abc123", "describe": "v5.0.0"}.get(
-            args[0], "main"
-        ),
+        lambda *args: {"rev-parse": "abc123", "describe": "5.0.0"}.get(args[0], "main"),
     )
     monkeypatch.setattr(
         admin_main,
@@ -710,6 +710,8 @@ def test_main_load_db_inventory_context_covers_success_and_error(monkeypatch):
     rows = iter(
         [
             SimpleNamespace(scalar=lambda: "tapdb_dev"),
+            SimpleNamespace(scalar=lambda: "public"),
+            SimpleNamespace(scalar=lambda: ["public"]),
             _InventoryMappings([{"schema_name": "public"}, {"schema_name": "app_ns"}]),
             _InventoryMappings(
                 [{"schema_name": "public", "table_name": "generic_instance"}]
@@ -751,7 +753,7 @@ def test_main_load_db_inventory_context_covers_success_and_error(monkeypatch):
     )
 
     class _InventorySession:
-        def execute(self, _stmt):
+        def execute(self, _stmt, _params=None):
             return next(rows)
 
     class _InventoryConn:
@@ -768,6 +770,9 @@ def test_main_load_db_inventory_context_covers_success_and_error(monkeypatch):
     monkeypatch.setattr(admin_main, "get_db", lambda: _InventoryConn())
     ctx = admin_main.load_db_inventory_context()
     assert ctx["db_inventory_db_name"] == "tapdb_dev"
+    assert ctx["db_inventory_physical_db_name"] == "tapdb_dev"
+    assert ctx["db_inventory_active_schema_name"] == "public"
+    assert ctx["db_inventory_search_path"] == ["public"]
     assert ctx["db_inventory_counts"]["schemas"] == 2
     assert ctx["db_inventory_tables"]
 

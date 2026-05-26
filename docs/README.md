@@ -13,7 +13,7 @@ This directory holds the support material for the TAPDB substrate. The root [REA
 - TAPDB is a reusable substrate, not a domain repo.
 - The current codebase is organized around templates, instances, lineage, audit, outbox, inbox, and explicit scoping.
 - Meridian terminology in the docs should use `domain` and `domain_code`, not older sandbox language.
-- CLI examples should reflect the current `tapdb --config ... --env ...` namespace model.
+- CLI examples should reflect the current `tapdb --config ...` explicit-target model.
 
 ## Deep Dives
 

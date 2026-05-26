@@ -88,7 +88,7 @@ def docs_local_runtime(tmp_path_factory: pytest.TempPathFactory) -> dict[str, ob
 
     stop_cmd = (
         "source ./activate >/dev/null 2>&1 && "
-        f"tapdb --config '{config_path}' --env dev pg stop-local dev"
+        f"tapdb --config '{config_path}' pg stop-local"
     )
     subprocess.run(
         ["bash", "-lc", stop_cmd],

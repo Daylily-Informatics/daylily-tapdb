@@ -448,8 +448,8 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(
         admin_main,
-        "get_db_config_for_env",
-        lambda _env: {
+        "get_db_config",
+        lambda: {
             "host": "127.0.0.1",
             "port": 5432,
             "database": "tapdb_dev_runtime",

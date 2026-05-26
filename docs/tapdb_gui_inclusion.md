@@ -30,7 +30,6 @@ app.mount(
     "/tapdb",
     create_tapdb_web_app(
         config_path="/abs/path/to/tapdb-config.yaml",
-        env_name="dev",
         host_bridge=bridge,
     ),
 )
@@ -122,7 +121,7 @@ Use this only for local development or diagnostics.
 ## 6) Troubleshooting
 
 - `OAuth login is not configured ... cognito_user_pool_id`:
-  Set `environments.<env>.cognito_user_pool_id` in tapdb config.
+  Set `target.cognito_user_pool_id` in the explicit TapDB config.
 - `redirect_mismatch` from Cognito:
   Ensure callback/logout URLs in Cognito app client match actual TAPDB URL/port.
 - Host bridge auth not taking effect:

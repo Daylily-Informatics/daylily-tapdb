@@ -56,14 +56,12 @@ app.mount(
     "/tapdb",
     create_tapdb_web_app(
         config_path="/abs/path/to/tapdb-config.yaml",
-        env_name="dev",
         host_bridge=bridge,
     ),
 )
 app.include_router(
     create_tapdb_dag_router(
         config_path="/abs/path/to/tapdb-config.yaml",
-        env_name="dev",
         service_name="dewey",
     ),
     dependencies=[Depends(my_session_or_service_auth)],

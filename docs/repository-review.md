@@ -46,9 +46,9 @@ The current CLI is config-first and namespace-scoped, but the existing documenta
 The codebase currently expects:
 
 - explicit `--config`
-- explicit `--env`
+- one explicit target per config
 - metadata-driven namespace resolution
-- runtime layout under `~/.config/tapdb/<client>/<database>/<env>/`
+- runtime layout under `~/.config/tapdb/<client>/<database>/runtime/`
 
 That needs to be documented as the operational contract, not as an implementation detail.
 

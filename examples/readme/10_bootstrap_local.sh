@@ -25,6 +25,8 @@ CLIENT_ID="${TAPDB_DOCS_CLIENT_ID:-docs}"
 DATABASE_NAME="${TAPDB_DOCS_DATABASE_NAME:-demo}"
 OWNER_REPO_NAME="${TAPDB_DOCS_OWNER_REPO_NAME:-daylily-tapdb}"
 DOMAIN_CODE="${TAPDB_DOCS_DOMAIN_CODE:-Z}"
+PHYSICAL_DATABASE="${TAPDB_DOCS_PHYSICAL_DATABASE:-tapdb_docs_demo}"
+SCHEMA_NAME="${TAPDB_DOCS_SCHEMA_NAME:-tapdb_docs_demo}"
 DB_PORT="${TAPDB_DOCS_DB_PORT:-15533}"
 UI_PORT="${TAPDB_DOCS_UI_PORT:-18911}"
 CONFIG_PATH="${TAPDB_DOCS_CONFIG:-$WORKDIR/.config/tapdb/$CLIENT_ID/$DATABASE_NAME/tapdb-config.yaml}"
@@ -82,21 +84,25 @@ prefix_registry_path.write_text(
 )
 PY
 
-tapdb --config "$CONFIG_PATH" db-config init \
+tapdb --config "$CONFIG_PATH" config init \
     --client-id "$CLIENT_ID" \
     --database-name "$DATABASE_NAME" \
     --owner-repo-name "$OWNER_REPO_NAME" \
-    --env dev \
-    --domain-code "dev=$DOMAIN_CODE" \
+    --domain-code "$DOMAIN_CODE" \
     --domain-registry-path "$DOMAIN_REGISTRY_PATH" \
     --prefix-ownership-registry-path "$PREFIX_OWNERSHIP_REGISTRY_PATH" \
-    --db-port "dev=$DB_PORT" \
-    --ui-port "dev=$UI_PORT" \
+    --engine-type local \
+    --host localhost \
+    --port "$DB_PORT" \
+    --ui-port "$UI_PORT" \
+    --user tapdb \
+    --database "$PHYSICAL_DATABASE" \
+    --schema-name "$SCHEMA_NAME" \
     --force
 
-tapdb --config "$CONFIG_PATH" --env dev bootstrap local --no-gui
+tapdb --config "$CONFIG_PATH" bootstrap local --no-gui
 
 printf '\nBootstrap example completed.\n'
 printf 'Config: %s\n' "$CONFIG_PATH"
-printf 'Runtime root: %s\n' "$(dirname "$CONFIG_PATH")/dev"
+printf 'Runtime root: %s\n' "$(dirname "$CONFIG_PATH")/runtime"
 printf 'Next: TAPDB_DOCS_WORKDIR=%s python examples/readme/20_python_api.py\n' "$WORKDIR"

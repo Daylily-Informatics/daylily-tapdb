@@ -60,8 +60,16 @@ class TestFailFastConnection:
         monkeypatch.setattr(m, "create_engine", lambda *a, **kw: mock.MagicMock())
         monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
 
-        with pytest.raises(ValueError, match="TAPDB_OWNER_REPO is required"):
-            m.TAPDBConnection(db_url="postgresql://x", owner_repo_name=None)
+        with pytest.raises(ValueError, match="owner_repo_name is required"):
+            m.TAPDBConnection(
+                db_url="postgresql://x",
+                db_user="tapdb",
+                app_username="pytest",
+                domain_code="T",
+                owner_repo_name=None,
+                echo_sql=False,
+                engine_type="local",
+            )
 
 
 # ---------------------------------------------------------------------------

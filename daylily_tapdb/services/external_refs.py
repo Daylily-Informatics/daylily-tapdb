@@ -12,6 +12,12 @@ from urllib.request import urlopen
 from fastapi import Request
 
 ALLOWED_AUTH_MODES = {"none", "same_origin"}
+TYPED_EXTERNAL_IDENTIFIER_MARKERS = {
+    "external_identifier",
+    "external_id",
+    "external_reference",
+    "tapdb_external_identifier",
+}
 
 
 @dataclass(frozen=True)
@@ -29,6 +35,8 @@ class ExternalGraphRef:
     graph_data_path: str | None
     object_detail_path_template: str | None
     auth_mode: str
+    relationship_type: str | None = None
+    source_field: str | None = None
 
     def to_public_dict(self, *, ref_index: int) -> dict[str, Any]:
         payload = {
@@ -40,6 +48,10 @@ class ExternalGraphRef:
             "graph_expandable": self.graph_expandable,
             "ref_index": ref_index,
         }
+        if self.relationship_type:
+            payload["relationship_type"] = self.relationship_type
+        if self.source_field:
+            payload["source_field"] = self.source_field
         if self.reason:
             payload["reason"] = self.reason
         return payload
@@ -73,8 +85,99 @@ def _compose_object_href(
     return urljoin(base_url.rstrip("/") + "/", relative.lstrip("/"))
 
 
+def _external_ref_from_item(raw: Any) -> ExternalGraphRef:
+    item = _as_dict(raw)
+    system = _clean(
+        item.get("system")
+        or item.get("target_system")
+        or item.get("service")
+        or item.get("service_id")
+    )
+    root_euid = _clean(
+        item.get("root_euid")
+        or item.get("target_euid")
+        or item.get("remote_euid")
+        or item.get("value")
+        or item.get("euid")
+    )
+    tenant_id = _clean(item.get("tenant_id")) or None
+    base_url = _clean(item.get("base_url")) or None
+    graph_data_path = _clean(item.get("graph_data_path")) or None
+    object_detail_path_template = (
+        _clean(item.get("object_detail_path_template")) or None
+    )
+    auth_mode = _clean(item.get("auth_mode")) or "none"
+    relationship_type = _clean(item.get("relationship_type")) or None
+    source_field = _clean(item.get("source_field")) or None
+    href = _clean(item.get("href")) or None
+    if not href and base_url and object_detail_path_template and root_euid:
+        href = _compose_object_href(
+            base_url=base_url,
+            object_detail_path_template=object_detail_path_template,
+            root_euid=root_euid,
+        )
+
+    graph_expandable = True
+    reason: str | None = None
+    missing: list[str] = []
+    if not system:
+        missing.append("system")
+    if not root_euid:
+        missing.append("root_euid")
+    if not base_url:
+        missing.append("base_url")
+    if not graph_data_path:
+        missing.append("graph_data_path")
+    if not object_detail_path_template:
+        missing.append("object_detail_path_template")
+    if auth_mode not in ALLOWED_AUTH_MODES:
+        missing.append("auth_mode")
+    if missing:
+        graph_expandable = False
+        reason = "Missing required graph metadata: " + ", ".join(missing)
+
+    label = _clean(item.get("label")) or (
+        f"{system}:{root_euid}" if system and root_euid else "external reference"
+    )
+    return ExternalGraphRef(
+        label=label,
+        system=system or "external",
+        root_euid=root_euid,
+        tenant_id=tenant_id,
+        href=href,
+        graph_expandable=graph_expandable,
+        reason=reason,
+        base_url=base_url,
+        graph_data_path=graph_data_path,
+        object_detail_path_template=object_detail_path_template,
+        auth_mode=auth_mode,
+        relationship_type=relationship_type,
+        source_field=source_field,
+    )
+
+
+def _typed_external_identifier_items(obj: Any, properties: dict[str, Any]) -> list[Any]:
+    raw = (
+        properties.get("tapdb_external_identifier")
+        or properties.get("external_identifier")
+        or properties.get("external_reference")
+    )
+    if isinstance(raw, list):
+        return list(raw)
+    if isinstance(raw, dict):
+        return [raw]
+    markers = {
+        _clean(getattr(obj, "category", None)).lower(),
+        _clean(getattr(obj, "type", None)).lower(),
+        _clean(getattr(obj, "subtype", None)).lower(),
+    }
+    if markers & TYPED_EXTERNAL_IDENTIFIER_MARKERS:
+        return [properties]
+    return []
+
+
 def resolve_external_graph_refs(obj: Any) -> list[ExternalGraphRef]:
-    """Parse explicit `external_payload.tapdb_graph` refs from object JSON."""
+    """Parse explicit external graph refs and typed external identifier objects."""
 
     json_addl = _as_dict(getattr(obj, "json_addl", None))
     properties = _as_dict(json_addl.get("properties"))
@@ -87,64 +190,17 @@ def resolve_external_graph_refs(obj: Any) -> list[ExternalGraphRef]:
         refs_raw = [tapdb_graph]
     else:
         refs_raw = []
+    refs_raw.extend(_typed_external_identifier_items(obj, properties))
 
     refs: list[ExternalGraphRef] = []
+    seen: set[tuple[str, str, str | None]] = set()
     for raw in refs_raw:
-        item = _as_dict(raw)
-        system = _clean(item.get("system"))
-        root_euid = _clean(item.get("root_euid"))
-        tenant_id = _clean(item.get("tenant_id")) or None
-        base_url = _clean(item.get("base_url")) or None
-        graph_data_path = _clean(item.get("graph_data_path")) or None
-        object_detail_path_template = (
-            _clean(item.get("object_detail_path_template")) or None
-        )
-        auth_mode = _clean(item.get("auth_mode")) or "none"
-        href = _clean(item.get("href")) or None
-        if not href and base_url and object_detail_path_template and root_euid:
-            href = _compose_object_href(
-                base_url=base_url,
-                object_detail_path_template=object_detail_path_template,
-                root_euid=root_euid,
-            )
-
-        graph_expandable = True
-        reason: str | None = None
-        missing: list[str] = []
-        if not system:
-            missing.append("system")
-        if not root_euid:
-            missing.append("root_euid")
-        if not base_url:
-            missing.append("base_url")
-        if not graph_data_path:
-            missing.append("graph_data_path")
-        if not object_detail_path_template:
-            missing.append("object_detail_path_template")
-        if auth_mode not in ALLOWED_AUTH_MODES:
-            missing.append("auth_mode")
-        if missing:
-            graph_expandable = False
-            reason = "Missing required graph metadata: " + ", ".join(missing)
-
-        label = _clean(item.get("label")) or (
-            f"{system}:{root_euid}" if system and root_euid else "external reference"
-        )
-        refs.append(
-            ExternalGraphRef(
-                label=label,
-                system=system or "external",
-                root_euid=root_euid,
-                tenant_id=tenant_id,
-                href=href,
-                graph_expandable=graph_expandable,
-                reason=reason,
-                base_url=base_url,
-                graph_data_path=graph_data_path,
-                object_detail_path_template=object_detail_path_template,
-                auth_mode=auth_mode,
-            )
-        )
+        ref = _external_ref_from_item(raw)
+        key = (ref.system, ref.root_euid, ref.tenant_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append(ref)
 
     refs.sort(
         key=lambda ref: (ref.system, ref.label, ref.root_euid, ref.tenant_id or "")
@@ -282,21 +338,20 @@ def namespace_external_graph(
         namespaced_edges.append({"data": edge_data})
 
     bridge_id = f"bridge::{source_euid}::{ref.system}::{ref.tenant_id or 'global'}::{ref.root_euid}"
-    namespaced_edges.append(
-        {
-            "data": {
-                "id": bridge_id,
-                "source": source_euid,
-                "target": namespaced_id(ref.root_euid),
-                "relationship_type": "external_reference",
-                "is_external_bridge": True,
-                "external_system": ref.system,
-                "external_tenant_id": ref.tenant_id,
-                "source_ref_index": ref_index,
-                "external_source_euid": source_euid,
-            }
-        }
-    )
+    bridge_data = {
+        "id": bridge_id,
+        "source": source_euid,
+        "target": namespaced_id(ref.root_euid),
+        "relationship_type": ref.relationship_type or "external_reference",
+        "is_external_bridge": True,
+        "external_system": ref.system,
+        "external_tenant_id": ref.tenant_id,
+        "source_ref_index": ref_index,
+        "external_source_euid": source_euid,
+    }
+    if ref.source_field:
+        bridge_data["source_field"] = ref.source_field
+    namespaced_edges.append({"data": bridge_data})
 
     return {
         "elements": {"nodes": namespaced_nodes, "edges": namespaced_edges},

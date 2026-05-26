@@ -26,15 +26,16 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from daylily_tapdb.aurora.connection import AuroraConnectionBuilder
 from daylily_tapdb.cli.db_config import (
-    get_admin_settings_for_env,
-    get_db_config_for_env,
+    get_admin_settings,
+    get_db_config,
 )
 
 logger = logging.getLogger(__name__)
 
 
 def _admin_settings(env_name: str) -> dict[str, object]:
-    return get_admin_settings_for_env(env_name)
+    _ = env_name
+    return get_admin_settings()
 
 
 def _parse_bool(value: object, *, default: bool) -> bool:
@@ -64,12 +65,35 @@ def _set_audit_username(session: Session, username: Optional[str]) -> None:
         logger.warning("Could not set session audit username: %s", exc)
 
 
+def _require_schema_name(cfg: dict[str, str], *, env_name: str) -> str:
+    schema_name = str(cfg.get("schema_name") or "").strip()
+    if not schema_name:
+        raise RuntimeError(
+            "Config for explicit TapDB target is missing required field: schema_name"
+        )
+    return schema_name
+
+
+def _set_search_path(session: Session, schema_name: str) -> None:
+    """Set per-transaction PostgreSQL search_path for TAPDB queries."""
+    bind = getattr(session, "bind", None)
+    dialect = getattr(bind, "dialect", None)
+    dialect_name = str(getattr(dialect, "name", "") or "").strip().lower()
+    if dialect_name != "postgresql":
+        return
+    session.execute(
+        text("SELECT set_config('search_path', :schema_name, true)"),
+        {"schema_name": schema_name},
+    )
+
+
 @dataclass(frozen=True)
 class EngineBundle:
     env_name: str
     engine: Engine
     SessionFactory: sessionmaker
     cfg: dict[str, str]
+    schema_name: str
 
 
 class AdminDBConnection:
@@ -94,6 +118,7 @@ class AdminDBConnection:
         trans = session.begin()
         token = db_username_var.set(_audit_username_for_session(self.app_username))
         try:
+            _set_search_path(session, self._bundle.schema_name)
             _set_audit_username(session, self.app_username)
             yield session
             if commit:
@@ -181,10 +206,12 @@ def _attach_aurora_password_provider(
 
 
 def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
+    _require_schema_name(cfg, env_name=env_name)
     engine_type = (cfg.get("engine_type") or "local").strip().lower()
     echo_sql = _parse_bool(os.environ.get("ECHO_SQL"), default=False)
 
     host = str(cfg["host"]).strip()
+    hostaddr = str(cfg.get("hostaddr") or "").strip()
     port = int(str(cfg["port"]).strip())
     database = str(cfg["database"]).strip()
     user = str(cfg["user"]).strip()
@@ -207,7 +234,11 @@ def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
             host=host,
             port=port,
             database=database,
-            query={"sslmode": "verify-full", "sslrootcert": str(ca_path)},
+            query={
+                **({"hostaddr": hostaddr} if hostaddr else {}),
+                "sslmode": "verify-full",
+                "sslrootcert": str(ca_path),
+            },
         )
         engine = _create_engine(url, echo_sql=echo_sql, env_name=env_name)
         _attach_aurora_password_provider(
@@ -234,29 +265,36 @@ def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
     return _create_engine(url, echo_sql=echo_sql, env_name=env_name)
 
 
-def get_engine_bundle(env_name: str) -> EngineBundle:
-    """Return (and cache) the shared engine bundle for an env."""
-    env = (env_name or "dev").strip().lower()
+def get_engine_bundle(env_name: str = "target") -> EngineBundle:
+    """Return (and cache) the shared engine bundle for the explicit target."""
+    _ = env_name
+    env = "target"
     with _engine_lock:
         cached = _bundles_by_env.get(env)
         if cached is not None:
             return cached
 
-        cfg = get_db_config_for_env(env)
+        cfg = get_db_config()
+        schema_name = _require_schema_name(cfg, env_name=env)
         engine = _build_engine_for_cfg(cfg, env_name=env)
         from admin.db_metrics import maybe_install_engine_metrics
 
         maybe_install_engine_metrics(engine, env_name=env)
         SessionFactory = sessionmaker(bind=engine)
         bundle = EngineBundle(
-            env_name=env, engine=engine, SessionFactory=SessionFactory, cfg=cfg
+            env_name=env,
+            engine=engine,
+            SessionFactory=SessionFactory,
+            cfg=cfg,
+            schema_name=schema_name,
         )
         _bundles_by_env[env] = bundle
         return bundle
 
 
-def get_db_connection(env_name: str) -> AdminDBConnection:
+def get_db_connection(env_name: str = "target") -> AdminDBConnection:
     """Create a per-request AdminDBConnection backed by the cached Engine."""
+    _ = env_name
     return AdminDBConnection(get_engine_bundle(env_name))
 
 

@@ -8,7 +8,7 @@ from sqlalchemy import select, text
 from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.outbox import outbox_event
-from daylily_tapdb.outbox import list_by_destination, lookup_by_machine_uuid
+from daylily_tapdb.outbox import list_events_by_destination, lookup_by_machine_uuid
 from daylily_tapdb.outbox.repository import (
     claim_events,
     enqueue_event,
@@ -22,6 +22,20 @@ from tests.test_integration import (
     _seed_identity_prefixes,
     _seed_templates,
 )
+
+
+def _conn_kwargs(**overrides):
+    values = {
+        "db_user": "tapdb",
+        "app_username": "pytest",
+        "domain_code": "T",
+        "owner_repo_name": "daylily-tapdb",
+        "echo_sql": False,
+        "engine_type": "local",
+    }
+    values.update(overrides)
+    return values
+
 
 # Minimal message template definition for tests
 _MSG_TEMPLATE = {
@@ -51,7 +65,7 @@ def _setup_schema(pytestconfig, suffix="outbox"):
     _install_schema(dsn, schema_name, schema_sql_path)
 
     # Seed identity prefixes and message template
-    conn = TAPDBConnection(db_url=dsn, app_username="pytest")
+    conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
     with conn.session_scope(commit=True) as session:
         session.execute(text(f"SET search_path TO {schema_name}"))
         _seed_identity_prefixes(session, prefix="TST")
@@ -65,7 +79,7 @@ def test_postgres_outbox_enqueue_creates_message_instance(pytestconfig):
     dsn, schema_name = _setup_schema(pytestconfig)
 
     try:
-        conn = TAPDBConnection(db_url=dsn, app_username="pytest")
+        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
         with conn.session_scope(commit=False) as session:
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
 
@@ -125,16 +139,20 @@ def test_postgres_outbox_domain_scoping_isolates_dedupe_and_queries(pytestconfig
     try:
         tenant_id = uuid.uuid4()
         conn_a = TAPDBConnection(
-            db_url=dsn,
-            app_username="pytest-a",
-            domain_code="A",
-            issuer_app_code="APPA",
+            **_conn_kwargs(
+                db_url=dsn,
+                app_username="pytest-a",
+                domain_code="A",
+                owner_repo_name="appa",
+            )
         )
         conn_b = TAPDBConnection(
-            db_url=dsn,
-            app_username="pytest-b",
-            domain_code="B",
-            issuer_app_code="APPB",
+            **_conn_kwargs(
+                db_url=dsn,
+                app_username="pytest-b",
+                domain_code="B",
+                owner_repo_name="appb",
+            )
         )
 
         with conn_a.session_scope(commit=True) as session:
@@ -165,7 +183,7 @@ def test_postgres_outbox_domain_scoping_isolates_dedupe_and_queries(pytestconfig
 
         with conn_a.session_scope(commit=False) as session:
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
-            rows = list_by_destination(
+            rows = list_events_by_destination(
                 session,
                 "https://tenant.example.com/webhook",
                 domain_code="A",
@@ -192,7 +210,7 @@ def test_postgres_outbox_domain_scoping_isolates_dedupe_and_queries(pytestconfig
 
         with conn_b.session_scope(commit=False) as session:
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
-            rows = list_by_destination(
+            rows = list_events_by_destination(
                 session,
                 "https://tenant.example.com/webhook",
                 domain_code="B",
@@ -225,7 +243,7 @@ def test_postgres_outbox_claim_and_deliver(pytestconfig):
     dsn, schema_name = _setup_schema(pytestconfig, suffix="claim")
 
     try:
-        conn = TAPDBConnection(db_url=dsn, app_username="pytest")
+        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
         with conn.session_scope(commit=False) as session:
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
 
@@ -266,7 +284,7 @@ def test_postgres_outbox_fanout_multiple_destinations(pytestconfig):
     dsn, schema_name = _setup_schema(pytestconfig, suffix="fanout")
 
     try:
-        conn = TAPDBConnection(db_url=dsn, app_username="pytest")
+        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
         with conn.session_scope(commit=False) as session:
             session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
 

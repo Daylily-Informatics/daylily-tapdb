@@ -100,9 +100,12 @@ class TapdbSchemaInventory:
     def add_table(self, table_name: str) -> None:
         table_name = _normalize_identifier(table_name)
         self.tables.add(table_name)
-        self.columns.setdefault(table_name, set())
-        self.triggers.setdefault(table_name, set())
-        self.indexes.setdefault(table_name, set())
+        if table_name not in self.columns:
+            self.columns[table_name] = set()
+        if table_name not in self.triggers:
+            self.triggers[table_name] = set()
+        if table_name not in self.indexes:
+            self.indexes[table_name] = set()
 
     def add_column(self, table_name: str, column_name: str) -> None:
         table_name = _normalize_identifier(table_name)
@@ -227,7 +230,14 @@ def load_live_schema_inventory(
 ) -> TapdbSchemaInventory:
     """Inspect the deployed TAPDB schema from PostgreSQL catalogs."""
 
-    resolved_schema = schema_name or discover_tapdb_schema_name(session)
+    if schema_name is None:
+        resolved_schema = discover_tapdb_schema_name(session)
+    else:
+        resolved_schema = str(schema_name).strip()
+        if not resolved_schema:
+            raise SchemaDriftOperationalError(
+                "Explicit TAPDB schema name must not be empty."
+            )
     inventory = TapdbSchemaInventory(schema_name=resolved_schema)
     if not resolved_schema:
         return inventory
@@ -423,21 +433,6 @@ def schema_asset_files(schema_root: Path) -> list[Path]:
     if migrations_dir.exists():
         asset_paths.extend(sorted(migrations_dir.glob("*.sql")))
     return asset_paths
-
-
-def build_expected_schema_inventory(
-    schema_paths: Sequence[Path], *, dynamic_sequence_name: str
-) -> TapdbSchemaInventory:
-    """Compatibility wrapper for expected inventory construction."""
-    return load_expected_schema_inventory(
-        schema_paths,
-        dynamic_sequence_name=dynamic_sequence_name,
-    )
-
-
-def inventory_counts(inventory: TapdbSchemaInventory) -> dict[str, int]:
-    """Compatibility helper returning inventory category counts."""
-    return inventory.counts()
 
 
 def drift_entry_counts(entries: dict[str, list[str]]) -> dict[str, int]:

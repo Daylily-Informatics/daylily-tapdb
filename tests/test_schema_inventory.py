@@ -4,13 +4,15 @@ import random
 import time
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from daylily_tapdb.schema_inventory import (
+    SchemaDriftOperationalError,
     TapdbSchemaInventory,
-    build_expected_schema_inventory,
     diff_schema_inventory,
+    load_expected_schema_inventory,
     load_live_schema_inventory,
     schema_asset_files,
 )
@@ -23,7 +25,7 @@ def _repo_schema_root() -> Path:
 
 
 def test_build_expected_schema_inventory_parses_repo_assets():
-    inventory = build_expected_schema_inventory(
+    inventory = load_expected_schema_inventory(
         schema_asset_files(_repo_schema_root()),
         dynamic_sequence_name="AGX_INSTANCE_SEQ",
     )
@@ -117,7 +119,7 @@ def test_live_inventory_and_diff_against_real_postgres(pytestconfig):
                 )
             )
 
-        expected = build_expected_schema_inventory(
+        expected = load_expected_schema_inventory(
             schema_asset_files(schema_root),
             dynamic_sequence_name="agx_instance_seq",
         )
@@ -158,3 +160,34 @@ def test_live_inventory_and_diff_against_real_postgres(pytestconfig):
     finally:
         engine.dispose()
         _drop_schema(dsn, schema_name)
+
+
+def test_explicit_live_inventory_schema_bypasses_multi_schema_discovery(
+    pytestconfig,
+):
+    dsn = resolve_tapdb_test_dsn(pytestconfig)
+
+    schema_sql_path = _repo_schema_root() / "tapdb_schema.sql"
+    suffix = f"{int(time.time())}_{random.randint(1, 1_000_000)}"
+    first_schema = f"tapdb_drift_a_{suffix}"
+    second_schema = f"tapdb_drift_b_{suffix}"
+    _install_schema(dsn, first_schema, schema_sql_path)
+    _install_schema(dsn, second_schema, schema_sql_path)
+
+    engine = create_engine(dsn)
+    try:
+        with Session(engine) as session:
+            explicit = load_live_schema_inventory(session, schema_name=second_schema)
+        assert explicit.schema_name == second_schema
+        assert "generic_template" in explicit.tables
+
+        with Session(engine) as session:
+            with pytest.raises(
+                SchemaDriftOperationalError,
+                match="Multiple TAPDB schemas detected",
+            ):
+                load_live_schema_inventory(session)
+    finally:
+        engine.dispose()
+        _drop_schema(dsn, first_schema)
+        _drop_schema(dsn, second_schema)

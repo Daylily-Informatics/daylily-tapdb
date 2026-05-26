@@ -207,7 +207,7 @@ if [ ! -x "${_tapdb_tapdb}" ] || ! _tapdb_distribution_is_editable_from_repo "${
     fi
 fi
 
-_tapdb_cli_core_yo_version="2.1.0"
+_tapdb_cli_core_yo_version="2.1.1"
 if ! _tapdb_distribution_is_published "cli-core-yo" "${_tapdb_cli_core_yo_version}"; then
     if [ "${_tapdb_smoke}" = "1" ]; then
         printf "${_tapdb_yellow}⚠${_tapdb_reset} cli-core-yo must be installed as published %s.\n" "${_tapdb_cli_core_yo_version}"
@@ -272,25 +272,25 @@ printf "\n"
 
 # Print available commands dynamically
 printf "${_tapdb_bold}Available Commands:${_tapdb_reset}\n"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg init <env>" "Initialize local PostgreSQL data dir"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg start-local <env>" "Start local PostgreSQL (dev/test)"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg stop-local <env>" "Stop local PostgreSQL"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg init" "Initialize configured local PostgreSQL data dir"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg start-local" "Start configured local PostgreSQL"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg stop-local" "Stop configured local PostgreSQL"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb pg start|stop|status" "Manage system PostgreSQL"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb bootstrap local" "One-command local bootstrap"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db create <env>" "Create empty database"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db delete <env>" "Delete database (⚠️ destructive)"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db schema apply <env>" "Apply TAPDB schema"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db data seed <env>" "Seed templates from config/"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db schema status <env>" "Check schema status"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db schema reset <env>" "Drop schema objects (⚠️ destructive)"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db data backup <env>" "Backup database data"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb cognito setup <env>" "Setup Cognito pool + bind pool-id"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb cognito add-user <env> <email>" "Create Cognito user"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb bootstrap local --no-gui" "Bootstrap the configured local target"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db create" "Create configured database"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db delete" "Delete configured database (⚠️ destructive)"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db schema apply" "Apply TAPDB schema to configured target"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db data seed" "Seed templates from config/"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db schema status" "Check configured schema status"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db schema reset" "Drop configured schema objects (⚠️ destructive)"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db data backup" "Backup configured database data"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb cognito setup" "Setup configured Cognito pool binding"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb cognito add-user <email>" "Create Cognito user"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb ui start|stop|status" "Manage admin UI server"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb --help" "Full help"
 printf "\n"
-printf "${_tapdb_bold}Environments:${_tapdb_reset} dev | test | prod\n"
-printf "${_tapdb_bold}Quick Start:${_tapdb_reset}  tapdb --env dev --config ~/.config/tapdb/tapdb/tapdb/tapdb-config.yaml bootstrap local\n"
+printf "${_tapdb_bold}Target:${_tapdb_reset} one explicit --config path resolves client_id, database_name, schema_name, and physical database\n"
+printf "${_tapdb_bold}Quick Start:${_tapdb_reset}  tapdb --config ~/.config/tapdb/<client>/<database>/tapdb-config.yaml bootstrap local --no-gui\n"
 printf "\n"
 
 # Show UI status if running

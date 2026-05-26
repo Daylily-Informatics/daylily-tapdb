@@ -164,26 +164,6 @@ def list_events_by_destination(
     return list(session.execute(q).scalars().all())
 
 
-def list_by_destination(
-    session: Session,
-    destination: str,
-    *,
-    domain_code: str | None = None,
-    issuer_app_code: str | None = None,
-    status: str | None = None,
-    limit: int = 100,
-) -> list[outbox_event]:
-    """Spec-compatible alias for ``list_events_by_destination``."""
-    return list_events_by_destination(
-        session,
-        destination,
-        domain_code=domain_code,
-        issuer_app_code=issuer_app_code,
-        status=status,
-        limit=limit,
-    )
-
-
 def get_outbox_event_by_receipt_uuid(
     session: Session,
     receipt_machine_uuid,

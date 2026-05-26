@@ -44,7 +44,7 @@ source ./activate
 The canonical operational form for runtime commands is:
 
 ```bash
-tapdb --config <path> --env <name> ...
+tapdb --config <path> ...
 ```
 
 Smoke the installed CLI surface first:
@@ -59,23 +59,25 @@ For a fuller local bootstrap, use the namespaced config flow and then bring up t
 
 ```bash
 tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml \
-  db-config init \
+  config init \
   --client-id <client-id> \
   --database-name <database-name> \
   --owner-repo-name <repo-name> \
-  --env dev \
-  --domain-code dev=<domain-code> \
+  --domain-code <domain-code> \
   --domain-registry-path /abs/path/to/domain_code_registry.json \
   --prefix-ownership-registry-path /abs/path/to/prefix_ownership_registry.json \
-  --db-port dev=5533 \
-  --ui-port dev=8911
+  --engine-type local \
+  --host localhost \
+  --port 5533 \
+  --ui-port 8911 \
+  --user tapdb \
+  --database tapdb_<client-id>_<database-name> \
+  --schema-name tapdb_<client-id>_<database-name>
 
 tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml \
-  --env dev \
   bootstrap local --no-gui
 
 tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml \
-  --env dev \
   --json info
 ```
 

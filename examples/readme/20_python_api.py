@@ -8,7 +8,8 @@ import os
 from pathlib import Path
 
 from daylily_tapdb import InstanceFactory, TAPDBConnection, TemplateManager
-from daylily_tapdb.cli.db_config import get_db_config_for_env
+from daylily_tapdb.cli.context import set_cli_context
+from daylily_tapdb.cli.db_config import get_db_config
 
 TEMPLATE_CODE = "MSG/message/webhook_event/1.0/"
 
@@ -33,7 +34,6 @@ def _default_config_path() -> Path:
 
 def main() -> None:
     config_path = _default_config_path()
-    env_name = os.environ.get("TAPDB_DOCS_ENV", "dev")
     instance_name = os.environ.get(
         "TAPDB_DOCS_INSTANCE_NAME",
         "README Webhook Event",
@@ -45,7 +45,8 @@ def main() -> None:
             "Run examples/readme/10_bootstrap_local.sh first or set TAPDB_DOCS_CONFIG."
         )
 
-    cfg = get_db_config_for_env(env_name, config_path=config_path)
+    set_cli_context(config_path=config_path)
+    cfg = get_db_config()
     domain_code = os.environ.get("TAPDB_DOCS_DOMAIN_CODE", str(cfg["domain_code"]))
     owner_repo_name = os.environ.get(
         "TAPDB_DOCS_OWNER_REPO_NAME",
@@ -56,6 +57,7 @@ def main() -> None:
         db_user=cfg["user"],
         db_pass=cfg["password"],
         db_name=cfg["database"],
+        schema_name=cfg["schema_name"],
         app_username="tapdb_readme_example",
         domain_code=domain_code,
         owner_repo_name=owner_repo_name,
@@ -89,7 +91,6 @@ def main() -> None:
 
             payload = {
                 "config_path": str(config_path),
-                "env": env_name,
                 "template_code": TEMPLATE_CODE,
                 "template_euid": template.euid,
                 "instance_uid": int(instance.uid),
