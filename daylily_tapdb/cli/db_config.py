@@ -49,6 +49,7 @@ DEFAULT_DB_POOL_TIMEOUT = 30
 DEFAULT_DB_POOL_RECYCLE = 1800
 _POSTGRES_IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 _SAFE_POSTGRES_IDENTIFIER_COMPONENT_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
+_SUPPORTED_ENGINE_TYPES = {"aurora", "compose", "local"}
 
 
 def normalize_postgres_identifier_component(value: str) -> str:
@@ -220,13 +221,12 @@ def _validate_meta_for_context(root: dict[str, Any], ctx: TapdbContext) -> None:
         )
 
 
-def get_db_config(
+def _resolve_common_config(
     *,
     config_path: Optional[str | Path] = None,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
-) -> dict[str, str]:
-    """Resolve the single explicit TapDB target from the active config."""
+) -> tuple[TapdbContext, dict[str, Any], Path]:
     ctx = resolve_context(
         require_keys=True,
         client_id=client_id,
@@ -245,7 +245,46 @@ def get_db_config(
             f"No TAPDB config found at {resolved_config_path}. "
             "Run: tapdb config init --client-id <id> --database-name <name>"
         )
-    _validate_target_meta_for_context(root, ctx, resolved_config_path)
+    return ctx, root, resolved_config_path
+
+
+def _read_safety(root: dict[str, Any], resolved_config_path: Path) -> tuple[str, str]:
+    safety = root.get("safety")
+    if not isinstance(safety, dict):
+        raise RuntimeError(f"Config {resolved_config_path} is missing safety mapping.")
+    safety_tier = _require_section_str(
+        safety,
+        "safety_tier",
+        resolved_config_path,
+        section_name="safety",
+    ).lower()
+    destructive_operations = _require_section_str(
+        safety,
+        "destructive_operations",
+        resolved_config_path,
+        section_name="safety",
+    ).lower()
+    if safety_tier not in {"local", "shared", "production"}:
+        raise RuntimeError(
+            "TapDB config safety.safety_tier must be one of: local, shared, production."
+        )
+    if destructive_operations not in {"blocked", "confirm_required", "allowed"}:
+        raise RuntimeError(
+            "TapDB config safety.destructive_operations must be one of: "
+            "blocked, confirm_required, allowed."
+        )
+    return safety_tier, destructive_operations
+
+
+def _build_db_config_from_section(
+    *,
+    ctx: TapdbContext,
+    root: dict[str, Any],
+    resolved_config_path: Path,
+    file_cfg: dict[str, Any],
+    section_name: str,
+    target_name: str,
+) -> dict[str, str]:
     meta = root.get("meta") if isinstance(root, dict) else None
     if not isinstance(meta, dict):
         raise RuntimeError(f"Config metadata is required in {resolved_config_path}.")
@@ -264,58 +303,67 @@ def get_db_config(
         _require_file_str(meta, "prefix_ownership_registry_path", resolved_config_path)
     ).expanduser()
 
-    file_cfg = root.get("target") if isinstance(root, dict) else None
-    if not isinstance(file_cfg, dict) or not file_cfg:
-        raise RuntimeError(
-            f"TapDB target is not configured in {resolved_config_path}. "
-            "Run: tapdb config init --client-id <id> --database-name <name>."
-        )
-
     def _file_str(key: str) -> str | None:
         val = file_cfg.get(key)
         if val is None:
             return None
         return str(val)
 
-    engine_type = _require_file_str(
-        file_cfg, "engine_type", resolved_config_path
+    engine_type = _require_section_str(
+        file_cfg,
+        "engine_type",
+        resolved_config_path,
+        section_name=section_name,
     ).lower()
+    if engine_type not in _SUPPORTED_ENGINE_TYPES:
+        raise RuntimeError(
+            f"Unsupported TAPDB engine_type {engine_type!r} for {section_name}. "
+            "Expected one of: aurora, compose, local."
+        )
     try:
         schema_name = validate_postgres_identifier_component(
             _file_str("schema_name") or "",
-            field_name="target.schema_name",
+            field_name=f"{section_name}.schema_name",
         )
     except RuntimeError as exc:
         raise RuntimeError(f"Config {resolved_config_path}: {exc}") from exc
 
-    safety = root.get("safety")
-    if not isinstance(safety, dict):
-        raise RuntimeError(f"Config {resolved_config_path} is missing safety mapping.")
-    safety_tier = _require_file_str(safety, "safety_tier", resolved_config_path).lower()
-    destructive_operations = _require_file_str(
-        safety,
-        "destructive_operations",
-        resolved_config_path,
-    ).lower()
-    if safety_tier not in {"local", "shared", "production"}:
-        raise RuntimeError(
-            "TapDB config safety.safety_tier must be one of: local, shared, production."
-        )
-    if destructive_operations not in {"blocked", "confirm_required", "allowed"}:
-        raise RuntimeError(
-            "TapDB config safety.destructive_operations must be one of: "
-            "blocked, confirm_required, allowed."
-        )
+    safety_tier, destructive_operations = _read_safety(root, resolved_config_path)
 
     cfg: dict[str, str] = {
         "engine_type": engine_type,
-        "host": _require_file_str(file_cfg, "host", resolved_config_path),
-        "port": _require_file_str(file_cfg, "port", resolved_config_path),
-        "ui_port": _require_file_str(file_cfg, "ui_port", resolved_config_path),
-        "user": _require_file_str(file_cfg, "user", resolved_config_path),
+        "host": _require_section_str(
+            file_cfg,
+            "host",
+            resolved_config_path,
+            section_name=section_name,
+        ),
+        "port": _require_section_str(
+            file_cfg,
+            "port",
+            resolved_config_path,
+            section_name=section_name,
+        ),
+        "ui_port": _require_section_str(
+            file_cfg,
+            "ui_port",
+            resolved_config_path,
+            section_name=section_name,
+        ),
+        "user": _require_section_str(
+            file_cfg,
+            "user",
+            resolved_config_path,
+            section_name=section_name,
+        ),
         "password": _file_str("password") or "",
         "secret_arn": _file_str("secret_arn") or "",
-        "database": _require_file_str(file_cfg, "database", resolved_config_path),
+        "database": _require_section_str(
+            file_cfg,
+            "database",
+            resolved_config_path,
+            section_name=section_name,
+        ),
         "schema_name": schema_name,
         "cognito_user_pool_id": _file_str("cognito_user_pool_id") or "",
         "cognito_app_client_id": _file_str("cognito_app_client_id") or "",
@@ -332,14 +380,19 @@ def get_db_config(
         "iam_auth": _file_str("iam_auth") or "",
         "ssl": _file_str("ssl") or "",
         "sslrootcert": _file_str("sslrootcert") or "",
-        "domain_code": _require_file_str(file_cfg, "domain_code", resolved_config_path),
+        "domain_code": _require_section_str(
+            file_cfg,
+            "domain_code",
+            resolved_config_path,
+            section_name=section_name,
+        ),
         "safety_tier": safety_tier,
         "destructive_operations": destructive_operations,
+        "target_name": target_name,
     }
 
-    if ctx:
-        cfg["client_id"] = ctx.client_id
-        cfg["database_name"] = ctx.database_name
+    cfg["client_id"] = ctx.client_id
+    cfg["database_name"] = ctx.database_name
     cfg["owner_repo_name"] = owner_repo_name
     cfg["domain_registry_path"] = str(domain_registry_path)
     cfg["prefix_ownership_registry_path"] = str(prefix_ownership_registry_path)
@@ -352,7 +405,12 @@ def get_db_config(
 
     if engine_type == "aurora":
         for key in ("region", "cluster_identifier", "iam_auth", "ssl"):
-            _require_file_str(file_cfg, key, resolved_config_path)
+            _require_section_str(
+                file_cfg,
+                key,
+                resolved_config_path,
+                section_name=section_name,
+            )
         hostaddr = _file_str("hostaddr")
         if hostaddr:
             try:
@@ -362,7 +420,7 @@ def get_db_config(
                     f"Config {resolved_config_path}: target.hostaddr must be an IP address."
                 ) from exc
             cfg["hostaddr"] = hostaddr
-    else:
+    elif engine_type == "local":
         if _file_str("hostaddr"):
             raise RuntimeError(
                 f"Config {resolved_config_path}: target.hostaddr is only supported "
@@ -379,6 +437,31 @@ def get_db_config(
                 f"Invalid local host {cfg['host']!r} for explicit target. "
                 "Local TAPDB must use host 'localhost'."
             )
+    else:
+        required_fields = (
+            "host",
+            "port",
+            "ui_port",
+            "user",
+            "database",
+            "schema_name",
+            "domain_code",
+        )
+        missing_required = [
+            field
+            for field in required_fields
+            if not str(file_cfg.get(field) or "").strip()
+        ]
+        if missing_required:
+            raise RuntimeError(
+                f"Config {resolved_config_path} is missing required field(s) for "
+                f"{section_name}: {', '.join(missing_required)}"
+            )
+        if _file_str("hostaddr"):
+            raise RuntimeError(
+                f"Config {resolved_config_path}: {section_name}.hostaddr is only "
+                "supported for aurora explicit targets."
+            )
 
     governance = GovernanceContext.load(
         domain_code=str(cfg["domain_code"]),
@@ -389,6 +472,35 @@ def get_db_config(
     cfg["domain_code"] = governance.domain_code
 
     return cfg
+
+
+def get_db_config(
+    *,
+    config_path: Optional[str | Path] = None,
+    client_id: Optional[str] = None,
+    database_name: Optional[str] = None,
+) -> dict[str, str]:
+    """Resolve the single explicit TapDB target from the active config."""
+    ctx, root, resolved_config_path = _resolve_common_config(
+        config_path=config_path,
+        client_id=client_id,
+        database_name=database_name,
+    )
+    _validate_target_meta_for_context(root, ctx, resolved_config_path)
+    file_cfg = root.get("target") if isinstance(root, dict) else None
+    if not isinstance(file_cfg, dict) or not file_cfg:
+        raise RuntimeError(
+            f"TapDB target is not configured in {resolved_config_path}. "
+            "Run: tapdb config init --client-id <id> --database-name <name>."
+        )
+    return _build_db_config_from_section(
+        ctx=ctx,
+        root=root,
+        resolved_config_path=resolved_config_path,
+        file_cfg=file_cfg,
+        section_name="target",
+        target_name="target",
+    )
 
 
 def _validate_target_meta_for_context(
@@ -409,9 +521,26 @@ def _validate_target_meta_for_context(
 def _require_file_str(
     file_cfg: dict[str, Any], key: str, resolved_config_path: Path
 ) -> str:
+    return _require_section_str(
+        file_cfg,
+        key,
+        resolved_config_path,
+        section_name="target",
+    )
+
+
+def _require_section_str(
+    file_cfg: dict[str, Any],
+    key: str,
+    resolved_config_path: Path,
+    *,
+    section_name: str,
+) -> str:
     val = file_cfg.get(key)
     if val is None or not str(val).strip():
-        raise RuntimeError(f"Config {resolved_config_path} is missing target.{key}.")
+        raise RuntimeError(
+            f"Config {resolved_config_path} is missing {section_name}.{key}."
+        )
     return str(val).strip()
 
 
@@ -517,7 +646,7 @@ def get_admin_settings(
 
     return {
         "config_path": str(resolved_config_path),
-        "target_name": "target",
+        "target_name": _string(cfg.get("target_name"), default="target"),
         "support_email": _string(
             cfg.get("support_email"),
             default=DEFAULT_SUPPORT_EMAIL,

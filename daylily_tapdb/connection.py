@@ -88,8 +88,9 @@ class TAPDBConnection:
             max_overflow: Max connections above pool_size
             pool_timeout: Seconds to wait for connection
             pool_recycle: Seconds before connection recycled
-            engine_type: Connection type — "local" for local PG,
-                "aurora" for Aurora PostgreSQL with SSL + IAM auth.
+            engine_type: Connection type — "local" for local PG, "compose" for
+                explicit Docker Compose PostgreSQL, or "aurora" for Aurora
+                PostgreSQL with SSL + IAM auth.
             region: AWS region (only used when engine_type="aurora").
             iam_auth: Use IAM database authentication (Aurora only).
             secret_arn: Secrets Manager ARN for Aurora password retrieval.
@@ -114,8 +115,8 @@ class TAPDBConnection:
 
         if echo_sql is None:
             raise ValueError("echo_sql is required")
-        if engine_type not in {"local", "aurora"}:
-            raise ValueError("engine_type must be 'local' or 'aurora'")
+        if engine_type not in {"local", "compose", "aurora"}:
+            raise ValueError("engine_type must be 'local', 'compose', or 'aurora'")
 
         # Build database URL
         if db_url:
@@ -146,15 +147,17 @@ class TAPDBConnection:
                 password=db_pass,
                 hostaddr=db_hostaddr,
             )
-        elif engine_type == "local":
+        elif engine_type in {"local", "compose"}:
             if not db_hostname:
-                raise ValueError("db_hostname is required when engine_type='local'")
+                raise ValueError(
+                    f"db_hostname is required when engine_type={engine_type!r}"
+                )
             if db_pass is None:
-                raise ValueError("db_pass is required when engine_type='local'")
+                raise ValueError(f"db_pass is required when engine_type={engine_type!r}")
             if not db_user:
-                raise ValueError("db_user is required when engine_type='local'")
+                raise ValueError(f"db_user is required when engine_type={engine_type!r}")
             if not db_name:
-                raise ValueError("db_name is required when engine_type='local'")
+                raise ValueError(f"db_name is required when engine_type={engine_type!r}")
             self._db_url = f"{db_url_prefix}{db_user}:{db_pass}@{db_hostname}/{db_name}"
 
         # Create engine with connection pooling

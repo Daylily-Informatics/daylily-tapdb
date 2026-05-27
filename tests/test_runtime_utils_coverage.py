@@ -108,11 +108,13 @@ def test_admin_server_context_file_helpers_round_trip(tmp_path: Path) -> None:
         config_path=str(cfg_path),
         host="localhost",
         port=8911,
+        tls_mode="https",
     )
 
     assert written.parent == cfg_path.parent / "runtime" / "ui"
     payload = json.loads(written.read_text(encoding="utf-8"))
     assert payload["target"] == "explicit"
+    assert payload["tls_mode"] == "https"
     assert payload["config_path"] == str(cfg_path.resolve())
 
 
