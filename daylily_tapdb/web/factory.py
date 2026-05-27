@@ -89,6 +89,11 @@ class TapdbHostBridgeMount:
             await self.app(scope, receive, send)
             return
 
+        path = str(scope.get("path") or "")
+        if path in {"/healthz", "/readyz"}:
+            await self.app(scope, receive, send)
+            return
+
         request = Request(scope, receive)
         user = normalize_host_user(
             self.bridge.resolve_user(request)
@@ -96,7 +101,6 @@ class TapdbHostBridgeMount:
             else None
         )
         if user is None:
-            path = str(scope.get("path") or "")
             if path.startswith("/api/"):
                 await JSONResponse(
                     status_code=401,

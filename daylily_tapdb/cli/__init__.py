@@ -415,6 +415,8 @@ def build_app():
             host,
             "--port",
             str(port),
+            "--tls-mode",
+            "https",
             "--ssl-keyfile",
             str(key_path),
             "--ssl-certfile",

@@ -7,10 +7,13 @@ import importlib
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from daylily_tapdb.cli.context import resolve_context, set_cli_context
 
 _CONTEXT_FILENAME = "context.json"
+_TLS_MODES = {"http", "https"}
+_HTTP_CONTEXT_ENV = "TAPDB_ADMIN_HTTP_CONTEXT"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -21,8 +24,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", required=True, help="TapDB config file path")
     parser.add_argument("--host", required=True, help="UI bind host")
     parser.add_argument("--port", required=True, type=int, help="UI bind port")
-    parser.add_argument("--ssl-keyfile", required=True, help="TLS key file")
-    parser.add_argument("--ssl-certfile", required=True, help="TLS cert file")
+    parser.add_argument(
+        "--tls-mode",
+        choices=sorted(_TLS_MODES),
+        default=None,
+        help="Explicit admin TLS mode; or set TAPDB_ADMIN_TLS_MODE=http|https",
+    )
+    parser.add_argument("--ssl-keyfile", default=None, help="TLS key file")
+    parser.add_argument("--ssl-certfile", default=None, help="TLS cert file")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
     return parser
 
@@ -31,7 +40,13 @@ def _context_file_path() -> Path:
     return Path.cwd() / _CONTEXT_FILENAME
 
 
-def _write_context_file(*, config_path: str, host: str, port: int) -> Path:
+def _write_context_file(
+    *,
+    config_path: str,
+    host: str,
+    port: int,
+    tls_mode: str,
+) -> Path:
     ctx = resolve_context(
         require_keys=True,
         config_path=config_path,
@@ -46,6 +61,7 @@ def _write_context_file(*, config_path: str, host: str, port: int) -> Path:
                 "target": "explicit",
                 "host": host,
                 "port": port,
+                "tls_mode": tls_mode,
             },
             indent=2,
             sort_keys=True,
@@ -75,18 +91,76 @@ def load_admin_app(*, config_path: str):
     admin_main = importlib.import_module("admin.main")
     admin_main = importlib.reload(admin_main)
     admin_main.app.state.tapdb_admin_module = admin_main
+    from daylily_tapdb.admin_health import install_tapdb_admin_health_routes
+
+    install_tapdb_admin_health_routes(
+        admin_main.app,
+        config_path=config_path,
+    )
     return admin_main.app
 
 
-def main() -> None:
-    args = _build_parser().parse_args()
+def _resolve_tls_mode(explicit_mode: str | None) -> str:
+    raw = explicit_mode or os.environ.get("TAPDB_ADMIN_TLS_MODE")
+    mode = str(raw or "").strip().lower()
+    if not mode:
+        raise RuntimeError(
+            "TAPDB_ADMIN_TLS_MODE is required and must be one of: http, https."
+        )
+    if mode not in _TLS_MODES:
+        raise RuntimeError(
+            f"Invalid TAPDB_ADMIN_TLS_MODE {raw!r}; expected one of: http, https."
+        )
+    if mode == "http":
+        http_context = str(os.environ.get(_HTTP_CONTEXT_ENV) or "").strip()
+        if http_context != "local-compose":
+            raise RuntimeError(
+                "TAPDB_ADMIN_TLS_MODE=http is only allowed for local Compose. "
+                f"Set {_HTTP_CONTEXT_ENV}=local-compose for that runtime."
+            )
+    return mode
+
+
+def _uvicorn_tls_kwargs(
+    *,
+    tls_mode: str,
+    ssl_keyfile: str | None,
+    ssl_certfile: str | None,
+) -> dict[str, str]:
+    if tls_mode == "http":
+        if ssl_keyfile or ssl_certfile:
+            raise RuntimeError("HTTP admin mode must not include TLS key/cert files.")
+        return {}
+
+    raw_keyfile = str(ssl_keyfile or "").strip()
+    raw_certfile = str(ssl_certfile or "").strip()
+    if not raw_keyfile or not raw_certfile:
+        raise RuntimeError("HTTPS admin mode requires --ssl-keyfile and --ssl-certfile.")
+    key_path = Path(raw_keyfile).expanduser()
+    cert_path = Path(raw_certfile).expanduser()
+    missing = [str(path) for path in (key_path, cert_path) if not path.exists()]
+    if missing:
+        raise RuntimeError(
+            "HTTPS admin mode requires existing TLS file(s): " + ", ".join(missing)
+        )
+    return {"ssl_keyfile": str(key_path), "ssl_certfile": str(cert_path)}
+
+
+def run_admin_server(args: Any) -> None:
+    tls_mode = _resolve_tls_mode(getattr(args, "tls_mode", None))
     context_file = _write_context_file(
         config_path=args.config,
         host=args.host,
         port=args.port,
+        tls_mode=tls_mode,
     )
     os.chdir(context_file.parent)
     set_cli_context(config_path=args.config)
+    tls_kwargs = _uvicorn_tls_kwargs(
+        tls_mode=tls_mode,
+        ssl_keyfile=getattr(args, "ssl_keyfile", None),
+        ssl_certfile=getattr(args, "ssl_certfile", None),
+    )
 
     import uvicorn
 
@@ -96,9 +170,16 @@ def main() -> None:
         host=args.host,
         port=args.port,
         reload=args.reload,
-        ssl_keyfile=args.ssl_keyfile,
-        ssl_certfile=args.ssl_certfile,
+        **tls_kwargs,
     )
+
+
+def main() -> None:
+    args = _build_parser().parse_args()
+    try:
+        run_admin_server(args)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def build_app():
