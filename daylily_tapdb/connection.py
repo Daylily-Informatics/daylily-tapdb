@@ -65,7 +65,7 @@ class TAPDBConnection:
         pool_recycle: int = 1800,
         engine_type: Optional[str] = None,
         region: str = "us-west-2",
-        iam_auth: bool = True,
+        iam_auth: bool = False,
         secret_arn: Optional[str] = None,
         domain_code: Optional[str] = None,
         owner_repo_name: Optional[str] = None,

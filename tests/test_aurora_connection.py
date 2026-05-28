@@ -291,6 +291,35 @@ def test_tapdb_connection_aurora_passes_hostaddr(_ca_bundle, monkeypatch):
     assert "hostaddr=127.0.0.1" in conn._db_url
 
 
+def test_tapdb_connection_aurora_defaults_to_explicit_password_auth(
+    _ca_bundle, monkeypatch
+):
+    from daylily_tapdb import connection as m
+
+    class FakeEngine:
+        def dispose(self):
+            return None
+
+    monkeypatch.setattr(m, "create_engine", lambda url, **kw: FakeEngine())
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+
+    conn = m.TAPDBConnection(
+        engine_type="aurora",
+        db_hostname="mydb.cluster-xyz.us-east-1.rds.amazonaws.com:15432",
+        db_user="tapdb_admin",
+        db_pass="plain-pw",
+        db_name="tapdb_dev",
+        app_username="test-admin",
+        echo_sql=False,
+        region="us-east-1",
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        schema_name="tapdb_test",
+    )
+
+    assert "plain-pw" in conn._db_url
+
+
 def test_tapdb_connection_aurora_requires_hostname(monkeypatch):
     """engine_type='aurora' without db_hostname raises ValueError."""
     from daylily_tapdb import connection as m

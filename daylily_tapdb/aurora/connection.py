@@ -216,7 +216,7 @@ class AuroraConnectionBuilder:
         """Build a SQLAlchemy PostgreSQL URL with SSL for Aurora.
 
         Authentication priority:
-        1. ``iam_auth=True`` → generate IAM token (default).
+        1. ``iam_auth=True`` → generate IAM token.
         2. ``secret_arn`` provided → fetch from Secrets Manager.
         3. ``password`` provided → use directly.
 
