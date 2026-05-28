@@ -9,8 +9,8 @@ import sysconfig
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from urllib.parse import urlencode
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import typer
 from cli_core_yo import ccyo_out
@@ -25,6 +25,7 @@ from daylily_tapdb.euid import (
     GENERIC_INSTANCE_LINEAGE_PREFIX,
     GENERIC_TEMPLATE_PREFIX,
 )
+from daylily_tapdb.governance import GovernanceContext
 from daylily_tapdb.schema_inventory import (
     diff_schema_inventory,
     drift_entry_counts,
@@ -62,7 +63,6 @@ console = Console()
 
 _MERIDIAN_PREFIX_RE = re.compile(r"^[0-9A-HJ-KMNP-TV-Z]{1,4}$")
 _RESERVED_PREFIXES = {"GX", "TGX", "WX", "WSX", "XX", "AY"}
-_TAPDB_CORE_OWNER_REPO_NAME = "daylily-tapdb"
 
 
 def _normalize_instance_prefix(prefix: str) -> str:
@@ -118,9 +118,23 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
     """Persist required identity prefix config and ensure backing sequences."""
     cfg = _get_db_config(env)
     prefixes = _required_identity_prefixes(env)
-    domain_code = str(cfg["domain_code"])
+    governance = GovernanceContext.load(
+        domain_code=str(cfg["domain_code"]),
+        owner_repo_name=str(cfg["owner_repo_name"]),
+        domain_registry_path=str(cfg["domain_registry_path"]),
+        prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
+    )
+    for prefix in prefixes.values():
+        governance.require_prefix(prefix)
+    domain_code = governance.domain_code
+    owner_repo_name = governance.owner_repo_name
     values_sql = ",\n        ".join(
-        f"('{entity}', '{domain_code}', '{_TAPDB_CORE_OWNER_REPO_NAME}', '{prefix}')"
+        "("
+        f"{_quoted_sql_literal(entity)}, "
+        f"{_quoted_sql_literal(domain_code)}, "
+        f"{_quoted_sql_literal(owner_repo_name)}, "
+        f"{_quoted_sql_literal(prefix)}"
+        ")"
         for entity, prefix in prefixes.items()
     )
     sequences_sql = "\n    ".join(

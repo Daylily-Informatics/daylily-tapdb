@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -13,8 +14,15 @@ import daylily_tapdb.cli.user as user_mod
 from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 
 
-def _write_config(path: Path, *, engine_type: str = "local") -> Path:
+def _write_config(
+    path: Path,
+    *,
+    engine_type: str = "local",
+    owner_repo_name: str = "daylily-tapdb",
+    prefix_owner_repo_name: str | None = None,
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    prefix_owner = prefix_owner_repo_name or owner_repo_name
     domain_registry = path.parent / "domain_code_registry.json"
     prefix_registry = path.parent / "prefix_ownership_registry.json"
     domain_registry.write_text(
@@ -22,14 +30,22 @@ def _write_config(path: Path, *, engine_type: str = "local") -> Path:
         encoding="utf-8",
     )
     prefix_registry.write_text(
-        (
-            '{"version":"0.4.0","ownership":{"Z":{'
-            '"TPX":{"issuer_app_code":"daylily-tapdb"},'
-            '"EDG":{"issuer_app_code":"daylily-tapdb"},'
-            '"ADT":{"issuer_app_code":"daylily-tapdb"},'
-            '"SYS":{"issuer_app_code":"daylily-tapdb"},'
-            '"MSG":{"issuer_app_code":"daylily-tapdb"}}}}\n'
-        ),
+        json.dumps(
+            {
+                "version": "0.4.0",
+                "ownership": {
+                    "Z": {
+                        "TPX": {"issuer_app_code": prefix_owner},
+                        "EDG": {"issuer_app_code": prefix_owner},
+                        "ADT": {"issuer_app_code": prefix_owner},
+                        "SYS": {"issuer_app_code": prefix_owner},
+                        "MSG": {"issuer_app_code": prefix_owner},
+                    }
+                },
+            },
+            separators=(",", ":"),
+        )
+        + "\n",
         encoding="utf-8",
     )
     path.write_text(
@@ -37,7 +53,7 @@ def _write_config(path: Path, *, engine_type: str = "local") -> Path:
         "  config_version: 4\n"
         "  client_id: testclient\n"
         "  database_name: testdb\n"
-        "  owner_repo_name: daylily-tapdb\n"
+        f"  owner_repo_name: {owner_repo_name}\n"
         f"  domain_registry_path: {domain_registry}\n"
         f"  prefix_ownership_registry_path: {prefix_registry}\n"
         "target:\n"
@@ -90,6 +106,44 @@ def test_identity_prefix_sync_writes_expected_config(
     assert "TPX" in joined
     assert "EDG" in joined
     assert "ADT" in joined
+    assert "daylily-tapdb" in joined
+
+
+def test_identity_prefix_sync_uses_configured_owner_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg_path = _write_config(
+        tmp_path / "zebra-tapdb-config.yaml",
+        owner_repo_name="zebra-day",
+    )
+    set_cli_context(config_path=cfg_path)
+    sql_calls: list[str] = []
+    monkeypatch.setattr(
+        db_mod,
+        "_run_psql",
+        lambda env, sql, **kwargs: sql_calls.append(sql) or (True, ""),
+    )
+
+    db_mod._sync_identity_prefix_config(db_mod.Environment.target)
+
+    joined = "\n".join(sql_calls)
+    assert "zebra-day" in joined
+    assert "daylily-tapdb" not in joined
+
+
+def test_identity_prefix_sync_requires_owner_registry_claim(
+    tmp_path: Path,
+) -> None:
+    cfg_path = _write_config(
+        tmp_path / "bad-owner-tapdb-config.yaml",
+        owner_repo_name="zebra-day",
+        prefix_owner_repo_name="daylily-tapdb",
+    )
+    set_cli_context(config_path=cfg_path)
+
+    with pytest.raises(ValueError, match="owned by 'daylily-tapdb', not 'zebra-day'"):
+        db_mod._sync_identity_prefix_config(db_mod.Environment.target)
 
 
 def test_identity_prefix_sync_raises_on_psql_failure(
