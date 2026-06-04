@@ -33,7 +33,11 @@ def test_production_like_admin_settings_fail_closed() -> None:
         admin_main._validate_production_admin_settings({"auth_mode": "tapdb"})
 
     admin_main._validate_production_admin_settings(
-        {"auth_mode": "shared_host", "session_secret": "secret", "shared_host_session_secret": "host-secret"}
+        {
+            "auth_mode": "shared_host",
+            "session_secret": "secret",
+            "shared_host_session_secret": "host-secret",
+        }
     )
 
 

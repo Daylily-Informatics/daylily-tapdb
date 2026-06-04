@@ -190,7 +190,9 @@ def _resolve_instance(session: Any, euid: str, *, label: str) -> generic_instanc
     return obj
 
 
-def _object_relationships(obj: Any, record_type: str) -> dict[str, list[dict[str, Any]]]:
+def _object_relationships(
+    obj: Any, record_type: str
+) -> dict[str, list[dict[str, Any]]]:
     parent_of: list[dict[str, Any]] = []
     child_of: list[dict[str, Any]] = []
     if record_type != "instance":
@@ -297,7 +299,9 @@ def _parse_json_object(raw: str, *, label: str) -> dict[str, Any]:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail=f"{label} invalid JSON: {exc}") from exc
+        raise HTTPException(
+            status_code=400, detail=f"{label} invalid JSON: {exc}"
+        ) from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail=f"{label} must be a JSON object")
     return payload
@@ -316,16 +320,16 @@ async def _read_urlencoded_form(request: Request) -> dict[str, str]:
 
 
 def _template_code(template: Any) -> str:
-    return (
-        f"{template.category}/{template.type}/{template.subtype}/{template.version}/"
-    )
+    return f"{template.category}/{template.type}/{template.subtype}/{template.version}/"
 
 
 def _validate_template_payload(payload: dict[str, Any]) -> list[ConfigIssue]:
     issues: list[ConfigIssue] = []
     templates = payload.get("templates")
     if not isinstance(templates, list) or not templates:
-        return [ConfigIssue(level="error", message="templates must be a non-empty array")]
+        return [
+            ConfigIssue(level="error", message="templates must be a non-empty array")
+        ]
 
     required = (
         "name",
@@ -519,7 +523,9 @@ def _create_instance_from_template(
         .first()
     )
     if template is None:
-        raise HTTPException(status_code=404, detail=f"Template not found: {template_euid}")
+        raise HTTPException(
+            status_code=404, detail=f"Template not found: {template_euid}"
+        )
     factory = InstanceFactory(TemplateManager(), domain_code=str(cfg["domain_code"]))
     instance = factory.create_instance(
         session,
@@ -536,7 +542,9 @@ def _create_instance_from_template(
     }
 
 
-def _update_object_json(session: Any, *, euid: str, json_addl: dict[str, Any]) -> dict[str, Any]:
+def _update_object_json(
+    session: Any, *, euid: str, json_addl: dict[str, Any]
+) -> dict[str, Any]:
     obj, record_type = find_object_by_euid(session, euid)
     if obj is None or record_type is None:
         raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
@@ -664,7 +672,10 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
         with conn.session_scope() as session:
             external_template = _external_link_template(session)
             template_count = (
-                session.query(generic_template).filter_by(is_deleted=False).limit(500).all()
+                session.query(generic_template)
+                .filter_by(is_deleted=False)
+                .limit(500)
+                .all()
             )
     checks.append(
         {
@@ -744,7 +755,9 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_user),
     ):
         if record_type not in SEARCH_RECORD_TYPES:
-            raise HTTPException(status_code=400, detail=f"Invalid record_type: {record_type}")
+            raise HTTPException(
+                status_code=400, detail=f"Invalid record_type: {record_type}"
+            )
         cfg = get_db_config(config_path=resolved_config_path)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
@@ -786,7 +799,9 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_user),
     ):
         if record_type not in SEARCH_RECORD_TYPES:
-            raise HTTPException(status_code=400, detail=f"Invalid record_type: {record_type}")
+            raise HTTPException(
+                status_code=400, detail=f"Invalid record_type: {record_type}"
+            )
         cfg = get_db_config(config_path=resolved_config_path)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
@@ -1000,7 +1015,9 @@ def create_tapdb_gui_router(
         name = str(form.get("name") or "")
         properties_json = str(form.get("properties_json") or "{}")
         create_children = str(form.get("create_children") or "")
-        properties = _parse_json_object(properties_json or "{}", label="properties_json")
+        properties = _parse_json_object(
+            properties_json or "{}", label="properties_json"
+        )
         cfg = get_db_config(config_path=resolved_config_path)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
@@ -1015,7 +1032,9 @@ def create_tapdb_gui_router(
                 )
                 instance_euid = created["instance_euid"]
         return RedirectResponse(
-            gui_url_with_query(request, f"/object/{instance_euid}", notice="instance_created"),
+            gui_url_with_query(
+                request, f"/object/{instance_euid}", notice="instance_created"
+            ),
             status_code=303,
         )
 
@@ -1033,7 +1052,9 @@ def create_tapdb_gui_router(
             )
         properties = payload.get("properties") or {}
         if not isinstance(properties, dict):
-            raise HTTPException(status_code=400, detail="properties must be a JSON object")
+            raise HTTPException(
+                status_code=400, detail="properties must be a JSON object"
+            )
         cfg = get_db_config(config_path=resolved_config_path)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
@@ -1062,7 +1083,9 @@ def create_tapdb_gui_router(
             with conn.session_scope() as session:
                 obj, record_type = find_object_by_euid(session, euid)
                 if obj is None or record_type is None:
-                    raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
+                    raise HTTPException(
+                        status_code=404, detail=f"Object not found: {euid}"
+                    )
                 graph = build_graph_payload(
                     obj,
                     record_type=record_type,
@@ -1091,7 +1114,9 @@ def create_tapdb_gui_router(
             with conn.session_scope() as session:
                 obj, record_type = find_object_by_euid(session, euid)
                 if obj is None or record_type is None:
-                    raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
+                    raise HTTPException(
+                        status_code=404, detail=f"Object not found: {euid}"
+                    )
                 return build_graph_payload(
                     obj,
                     record_type=record_type,
@@ -1161,7 +1186,9 @@ def create_tapdb_gui_router(
     ):
         payload = await request.json()
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="json_addl must be a JSON object")
+            raise HTTPException(
+                status_code=400, detail="json_addl must be a JSON object"
+            )
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
             with conn.session_scope(commit=True) as session:
@@ -1194,7 +1221,9 @@ def create_tapdb_gui_router(
     ):
         payload = await request.json()
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="status payload must be a JSON object")
+            raise HTTPException(
+                status_code=400, detail="status payload must be a JSON object"
+            )
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
             with conn.session_scope(commit=True) as session:
@@ -1239,7 +1268,9 @@ def create_tapdb_gui_router(
     ):
         payload = await request.json()
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="lineage payload must be a JSON object")
+            raise HTTPException(
+                status_code=400, detail="lineage payload must be a JSON object"
+            )
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
             with conn.session_scope(commit=True) as session:
@@ -1249,7 +1280,9 @@ def create_tapdb_gui_router(
                         euid=euid,
                         related_euid=str(payload.get("related_euid") or ""),
                         direction=str(payload.get("direction") or "parent"),
-                        relationship_type=str(payload.get("relationship_type") or "generic"),
+                        relationship_type=str(
+                            payload.get("relationship_type") or "generic"
+                        ),
                     )
                 )
 
@@ -1282,9 +1315,7 @@ def create_tapdb_gui_router(
         display_url = str(form.get("display_url") or "")
         graph_base_url = str(form.get("graph_base_url") or "")
         graph_data_path = str(form.get("graph_data_path") or "")
-        object_detail_path_template = str(
-            form.get("object_detail_path_template") or ""
-        )
+        object_detail_path_template = str(form.get("object_detail_path_template") or "")
         auth_mode = str(form.get("auth_mode") or "none")
         missing = [
             label
@@ -1319,7 +1350,9 @@ def create_tapdb_gui_router(
                 )
                 link_euid = created["link_euid"]
         return RedirectResponse(
-            gui_url_with_query(request, f"/object/{link_euid}", notice="external_link_created"),
+            gui_url_with_query(
+                request, f"/object/{link_euid}", notice="external_link_created"
+            ),
             status_code=303,
         )
 

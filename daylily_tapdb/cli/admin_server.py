@@ -135,7 +135,9 @@ def _uvicorn_tls_kwargs(
     raw_keyfile = str(ssl_keyfile or "").strip()
     raw_certfile = str(ssl_certfile or "").strip()
     if not raw_keyfile or not raw_certfile:
-        raise RuntimeError("HTTPS admin mode requires --ssl-keyfile and --ssl-certfile.")
+        raise RuntimeError(
+            "HTTPS admin mode requires --ssl-keyfile and --ssl-certfile."
+        )
     key_path = Path(raw_keyfile).expanduser()
     cert_path = Path(raw_certfile).expanduser()
     missing = [str(path) for path in (key_path, cert_path) if not path.exists()]

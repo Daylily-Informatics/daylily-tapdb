@@ -117,7 +117,9 @@ def test_template_ref_extraction_and_duplicate_keys():
     assert duplicates[("SMP", "sample", "tube", "1.0")] == ["a.json", "b.json"]
 
 
-def test_load_and_validate_template_configs_collects_errors(tmp_path: Path, monkeypatch):
+def test_load_and_validate_template_configs_collects_errors(
+    tmp_path: Path, monkeypatch
+):
     config = tmp_path / "config"
     _write_pack(config / "sample" / "valid.json", {"templates": [_template()]})
     _write_pack(config / "sample" / "bad-root.json", [])
@@ -153,7 +155,9 @@ def test_load_and_validate_template_configs_collects_errors(tmp_path: Path, monk
     assert "Field 'json_addl' must be an object/dict" in messages
     assert "Field 'json_addl_schema' must be an object/dict" in messages
     assert "Field 'is_singleton' must be boolean" in messages
-    assert "Client templates cannot persist reserved TapDB operational prefix" in messages
+    assert (
+        "Client templates cannot persist reserved TapDB operational prefix" in messages
+    )
 
 
 def test_validate_template_configs_missing_dirs_and_empty_input(tmp_path: Path):
@@ -166,13 +170,17 @@ def test_validate_template_configs_missing_dirs_and_empty_input(tmp_path: Path):
     assert no_templates == []
     assert no_dirs_issues[0].message == "No config directories provided"
     assert missing_templates == []
-    assert any("Config directory not found" in issue.message for issue in missing_issues)
+    assert any(
+        "Config directory not found" in issue.message for issue in missing_issues
+    )
     assert any("No templates found" in issue.message for issue in missing_issues)
 
 
 def test_prepare_seed_templates_rejects_bad_prefixes(tmp_path: Path):
     with pytest.raises(ValueError, match="must declare an instance_prefix"):
-        loader._prepare_seed_templates([_template(instance_prefix="")], core_config_dir=tmp_path)
+        loader._prepare_seed_templates(
+            [_template(instance_prefix="")], core_config_dir=tmp_path
+        )
     with pytest.raises(ValueError, match="same Meridian prefix"):
         loader._prepare_seed_templates(
             [_template(category="SMP", instance_prefix="BAD")],

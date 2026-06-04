@@ -24,7 +24,10 @@ def test_container_runtime_files_are_explicit() -> None:
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
     entrypoint = ROOT / "docker" / "entrypoint.sh"
 
-    assert "uv sync --frozen --no-dev --extra admin --extra cli --extra aurora" in dockerfile
+    assert (
+        "uv sync --frozen --no-dev --extra admin --extra cli --extra aurora"
+        in dockerfile
+    )
     assert "postgresql-client" in dockerfile
     assert 'CMD ["python", "-m", "daylily_tapdb.container_entry"]' in dockerfile
     assert "python:3.12-slim-bookworm" in dockerfile
@@ -92,7 +95,9 @@ def test_container_entry_rejects_missing_inputs_and_non_compose_http() -> None:
         )
 
 
-def test_admin_server_tls_mode_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_admin_server_tls_mode_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.delenv("TAPDB_ADMIN_TLS_MODE", raising=False)
     with pytest.raises(RuntimeError, match="TAPDB_ADMIN_TLS_MODE is required"):
         admin_server_mod._resolve_tls_mode(None)
@@ -170,9 +175,7 @@ def test_admin_health_routes_probe_explicit_config_and_db(
     monkeypatch.setattr(
         admin_health_mod,
         "get_runtime_db",
-        lambda config_path: (
-            calls.update({"runtime": config_path}) or _Conn()
-        ),
+        lambda config_path: calls.update({"runtime": config_path}) or _Conn(),
     )
 
     admin_health_mod.install_tapdb_admin_health_routes(

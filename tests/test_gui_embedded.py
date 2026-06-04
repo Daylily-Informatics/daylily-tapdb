@@ -25,7 +25,9 @@ class _Related:
             [
                 row
                 for row in self._rows
-                if all(getattr(row, key, None) == value for key, value in kwargs.items())
+                if all(
+                    getattr(row, key, None) == value for key, value in kwargs.items()
+                )
             ]
         )
 
@@ -45,7 +47,9 @@ class _Query:
             [
                 row
                 for row in self._rows
-                if all(getattr(row, key, None) == value for key, value in kwargs.items())
+                if all(
+                    getattr(row, key, None) == value for key, value in kwargs.items()
+                )
             ]
         )
 
@@ -380,7 +384,9 @@ def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
         def __init__(self, template_manager, *, domain_code):
             self.domain_code = domain_code
 
-        def create_instance(self, session, template_code, name, properties, create_children):
+        def create_instance(
+            self, session, template_code, name, properties, create_children
+        ):
             calls.append(
                 {
                     "template_code": template_code,
@@ -439,7 +445,9 @@ def test_gui_create_api_passes_child_instantiation_flag(monkeypatch):
         def __init__(self, template_manager, *, domain_code):
             self.domain_code = domain_code
 
-        def create_instance(self, session, template_code, name, properties, create_children):
+        def create_instance(
+            self, session, template_code, name, properties, create_children
+        ):
             assert template_code == "PLT/container/example_plate/1.0/"
             assert name == "Plate API"
             assert properties == {"plate_type": "96-well"}
@@ -649,7 +657,9 @@ def test_gui_external_link_creates_typed_object_and_lineage(monkeypatch):
         def __init__(self, template_manager, *, domain_code):
             self.domain_code = domain_code
 
-        def create_instance(self, session, template_code, name, properties, create_children):
+        def create_instance(
+            self, session, template_code, name, properties, create_children
+        ):
             assert template_code == "XRF/external_identifier/tapdb_object/1.0/"
             assert name == "bloom:M-123"
             assert properties["foreign_uid"] == "M-123"
@@ -672,8 +682,7 @@ def test_gui_external_link_creates_typed_object_and_lineage(monkeypatch):
 
     assert response.status_code == 303
     assert (
-        response.headers["location"]
-        == "/object/Z-XRF-2Q?notice=external_link_created"
+        response.headers["location"] == "/object/Z-XRF-2Q?notice=external_link_created"
     )
     assert len(session.added) == 1
     assert session.added[0].parent_instance_uid == len("Z-SMP-1Q")
@@ -699,11 +708,15 @@ def test_gui_external_link_api_creates_typed_object_and_lineage(monkeypatch):
         def __init__(self, template_manager, *, domain_code):
             self.domain_code = domain_code
 
-        def create_instance(self, session, template_code, name, properties, create_children):
+        def create_instance(
+            self, session, template_code, name, properties, create_children
+        ):
             assert template_code == "XRF/external_identifier/tapdb_object/1.0/"
             assert name == "dewey:M-456"
             assert properties["external_identifier"]["target_euid"] == "M-456"
-            assert properties["external_identifier"]["base_url"] == "https://dewey.example"
+            assert (
+                properties["external_identifier"]["base_url"] == "https://dewey.example"
+            )
             assert create_children is False
             return created
 

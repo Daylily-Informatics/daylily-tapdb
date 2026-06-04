@@ -18,7 +18,9 @@ def _required_port(value: str) -> int:
     try:
         port = int(value)
     except ValueError as exc:
-        raise RuntimeError(f"TAPDB_ADMIN_PORT must be an integer, got {value!r}.") from exc
+        raise RuntimeError(
+            f"TAPDB_ADMIN_PORT must be an integer, got {value!r}."
+        ) from exc
     if port <= 0 or port > 65535:
         raise RuntimeError(f"TAPDB_ADMIN_PORT must be between 1 and 65535, got {port}.")
     return port
@@ -74,7 +76,8 @@ def build_admin_server_argv(env: Mapping[str, str] | None = None) -> list[str]:
 
 def main() -> None:
     argv = build_admin_server_argv()
-    os.execv(sys.executable, argv)
+    # Re-exec uses the current Python executable with fixed admin-server argv.
+    os.execv(sys.executable, argv)  # nosec B606
 
 
 if __name__ == "__main__":
