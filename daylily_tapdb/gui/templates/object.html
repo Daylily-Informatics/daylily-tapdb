@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}{{ obj.euid }}{% endblock %}
+{% block content %}
+<section class="band">
+  <div class="split">
+    <h1>{{ obj.euid }}</h1>
+    <div class="actions">
+      <a class="button" href="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/graph') }}">Graph</a>
+      {% if obj.record_type == "template" %}
+      <a class="button" href="{{ tapdb_gui_url(request, '/create/' ~ obj.euid) }}">Create Instance</a>
+      {% else %}
+      <a class="button" href="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/external-links/new') }}">External Link</a>
+      {% endif %}
+    </div>
+  </div>
+  {% if notice %}
+  <div class="notice ok">
+    {% if notice == "json_saved" %}JSON saved.
+    {% elif notice == "status_updated" %}Status updated.
+    {% elif notice == "lineage_added" %}Lineage added.
+    {% elif notice == "external_link_created" %}External link created.
+    {% elif notice == "instance_created" %}Instance created.
+    {% else %}{{ notice }}
+    {% endif %}
+  </div>
+  {% endif %}
+  <table>
+    <tr><th>UID</th><td>{{ obj.uid }}</td></tr>
+    <tr><th>Kind</th><td>{{ obj.record_type }}</td></tr>
+    <tr><th>Name</th><td>{{ obj.name or "-" }}</td></tr>
+    <tr><th>Type</th><td>{{ obj.category }}/{{ obj.type }}/{{ obj.subtype }}/{{ obj.version }}</td></tr>
+    <tr><th>Status</th><td>{{ obj.bstatus or "-" }}</td></tr>
+    <tr><th>Created</th><td>{{ obj.created_dt or "-" }}</td></tr>
+    <tr><th>Modified</th><td>{{ obj.modified_dt or "-" }}</td></tr>
+  </table>
+</section>
+
+{% if obj.record_type != "template" %}
+<section class="band">
+  <h2>Edit</h2>
+  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/status') }}" class="toolbar">
+    <input name="bstatus" value="{{ obj.bstatus or '' }}" placeholder="status">
+    <button type="submit">Set Status</button>
+  </form>
+  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/lineage') }}" class="toolbar">
+    <input name="related_euid" placeholder="related EUID">
+    <select name="direction"><option value="parent">related is parent</option><option value="child">related is child</option></select>
+    <input name="relationship_type" value="generic">
+    <button type="submit">Add Lineage</button>
+  </form>
+  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/edit-json') }}" class="editor">
+    <textarea name="json_addl" spellcheck="false">{{ json_text }}</textarea>
+    <button type="submit">Save JSON</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="band grid2">
+  <div>
+    <h2>Children</h2>
+    <table><thead><tr><th>Lineage</th><th>Object</th><th>Relationship</th></tr></thead><tbody>
+    {% for row in relationships.parent_of %}
+    <tr><td>{{ row.lineage_euid }}</td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.related_euid) }}">{{ row.related_euid }}</a> {{ row.related_name or "" }}</td><td>{{ row.relationship_type }}</td></tr>
+    {% endfor %}
+    </tbody></table>
+  </div>
+  <div>
+    <h2>Parents</h2>
+    <table><thead><tr><th>Lineage</th><th>Object</th><th>Relationship</th></tr></thead><tbody>
+    {% for row in relationships.child_of %}
+    <tr><td>{{ row.lineage_euid }}</td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.related_euid) }}">{{ row.related_euid }}</a> {{ row.related_name or "" }}</td><td>{{ row.relationship_type }}</td></tr>
+    {% endfor %}
+    </tbody></table>
+  </div>
+</section>
+
+<section class="band">
+  <h2>External References</h2>
+  <table><thead><tr><th>Label</th><th>System</th><th>Remote EUID</th><th>Status</th></tr></thead><tbody>
+  {% for ref in external_refs %}
+  <tr><td>{{ ref.label }}</td><td>{{ ref.system }}</td><td>{{ ref.root_euid }}</td><td>{{ "graph-ready" if ref.graph_expandable else ref.reason }}</td></tr>
+  {% endfor %}
+  {% if not external_refs %}<tr><td colspan="4">No external refs rendered for this object.</td></tr>{% endif %}
+  </tbody></table>
+</section>
+
+<section class="band">
+  <h2>Audit</h2>
+  <table><thead><tr><th>When</th><th>Who</th><th>Operation</th><th>Column</th><th>New</th></tr></thead><tbody>
+  {% for row in audit_rows %}
+  <tr><td>{{ row.changed_at }}</td><td>{{ row.changed_by }}</td><td>{{ row.operation }}</td><td>{{ row.column }}</td><td>{{ row.new_value }}</td></tr>
+  {% endfor %}
+  {% if not audit_rows %}<tr><td colspan="5">No audit rows found.</td></tr>{% endif %}
+  </tbody></table>
+</section>
+{% endblock %}

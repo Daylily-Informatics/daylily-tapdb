@@ -30,6 +30,7 @@ def test_core_bundle_only_seeds_operational_templates():
     assert codes == {
         "SYS/actor/system_user/1.0",
         "MSG/message/webhook_event/1.0",
+        "XRF/external_identifier/tapdb_object/1.0",
     }
 
 

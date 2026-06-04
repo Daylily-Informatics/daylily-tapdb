@@ -44,6 +44,7 @@ dev = [
     "ruff>=0.1",
     "mypy>=1.0",
     "httpx",
+    "python-multipart",
     "pre-commit>=3.8.0",
     "bandit[toml]>=1.8.0",
     "detect-secrets>=1.4",
@@ -122,6 +123,17 @@ write_to_template = "__version__ = \"{version}\"\n"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["daylily_tapdb", "admin"]
+omit = [
+    "daylily_tapdb/cli/*",
+]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = true
 
 [tool.black]
 line-length = 88

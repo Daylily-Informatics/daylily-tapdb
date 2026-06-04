@@ -18,6 +18,7 @@ Current built-in core templates are:
 
 - `SYS/actor/system_user/1.0`
 - `MSG/message/webhook_event/1.0`
+- `XRF/external_identifier/tapdb_object/1.0`
 
 There is no passive inheritance of generic client-usable prefixes from TapDB
 core.
@@ -74,6 +75,7 @@ Examples:
 
 - `SYS/actor/system_user/1.0/`
 - `MSG/message/webhook_event/1.0/`
+- `XRF/external_identifier/tapdb_object/1.0/`
 - `AGX/logistics/shipment/1.0/`
 
 In TapDB, `category` is the Meridian prefix. Domain is separate and required.

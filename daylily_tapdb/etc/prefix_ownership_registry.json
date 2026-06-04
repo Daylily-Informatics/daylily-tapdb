@@ -16,6 +16,9 @@
       },
       "MSG": {
         "issuer_app_code": "daylily-tapdb"
+      },
+      "XRF": {
+        "issuer_app_code": "daylily-tapdb"
       }
     }
   }

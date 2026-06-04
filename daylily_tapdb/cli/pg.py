@@ -311,12 +311,15 @@ def pg_status():
     socket_dir = _get_postgres_socket_dir(env)
     lock_file = _get_instance_lock_file(env)
 
-    ready = subprocess.run(
-        ["pg_isready", "-h", host, "-p", str(port), "-q"],
-        capture_output=True,
-        timeout=5,
-    )
-    if ready.returncode == 0:
+    try:
+        ready_code = subprocess.run(
+            ["pg_isready", "-h", host, "-p", str(port), "-q"],
+            capture_output=True,
+            timeout=5,
+        ).returncode
+    except FileNotFoundError:
+        ready_code = 1
+    if ready_code == 0:
         ccyo_out.success("Local PostgreSQL is running")
     else:
         ccyo_out.error("○ Local PostgreSQL is not running")

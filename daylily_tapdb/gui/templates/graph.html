@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ euid }} Graph{% endblock %}
+{% block content %}
+<section class="band">
+  <h1>Graph: {{ euid }}</h1>
+  <form method="get" action="{{ tapdb_gui_url(request, '/object/' ~ euid ~ '/graph') }}" class="toolbar">
+    <input type="number" min="0" max="10" name="depth" value="{{ depth }}">
+    <button type="submit">Load</button>
+  </form>
+</section>
+<section class="band grid2">
+  <div>
+    <h2>Nodes</h2>
+    <table><thead><tr><th>EUID</th><th>Name</th><th>Type</th></tr></thead><tbody>
+    {% for node in graph.elements.nodes %}
+    <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ node.data.euid) }}">{{ node.data.euid }}</a></td><td>{{ node.data.name }}</td><td>{{ node.data.category }}/{{ node.data.type }}</td></tr>
+    {% endfor %}
+    </tbody></table>
+  </div>
+  <div>
+    <h2>Edges</h2>
+    <table><thead><tr><th>EUID</th><th>Child</th><th>Parent</th><th>Type</th></tr></thead><tbody>
+    {% for edge in graph.elements.edges %}
+    <tr><td>{{ edge.data.euid }}</td><td>{{ edge.data.source }}</td><td>{{ edge.data.target }}</td><td>{{ edge.data.relationship_type }}</td></tr>
+    {% endfor %}
+    </tbody></table>
+  </div>
+</section>
+<section class="band">
+  <h2>Payload</h2>
+  <pre>{{ graph | tojson(indent=2) }}</pre>
+</section>
+{% endblock %}

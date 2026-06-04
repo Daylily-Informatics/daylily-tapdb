@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Meridian{% endblock %}
+{% block content %}
+<section class="band">
+  <h1>Meridian</h1>
+  <table>
+    <tr><th>Domain</th><td>{{ governance.domain_code }}</td></tr>
+    <tr><th>Owner Repo</th><td>{{ governance.owner_repo_name }}</td></tr>
+    <tr><th>Domain Registry</th><td>{{ governance.domain_registry_path }}</td></tr>
+    <tr><th>Prefix Registry</th><td>{{ governance.prefix_ownership_registry_path }}</td></tr>
+  </table>
+  <form method="get" action="{{ tapdb_gui_url(request, '/admin/meridian') }}" class="toolbar">
+    <input name="euid" value="{{ euid }}" placeholder="EUID">
+    <input name="prefix" value="{{ prefix }}" placeholder="prefix">
+    <button type="submit">Validate</button>
+  </form>
+  {% if euid %}<div class="notice {{ 'ok' if euid_valid else 'bad' }}">EUID valid for {{ governance.domain_code }}: {{ euid_valid }}</div>{% endif %}
+  {% if prefix_owner %}<div class="notice ok">Prefix owner: {{ prefix_owner }}</div>{% endif %}
+  {% if prefix_error %}<div class="notice bad">{{ prefix_error }}</div>{% endif %}
+</section>
+{% endblock %}

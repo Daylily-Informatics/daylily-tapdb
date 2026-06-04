@@ -13,6 +13,7 @@
   },
   "euid_prefixes": {
     "system_user": "SYS",
-    "system_message": "MSG"
+    "system_message": "MSG",
+    "external_reference": "XRF"
   }
 }

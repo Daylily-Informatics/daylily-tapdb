@@ -9,12 +9,12 @@ choose an auth strategy. For the broader FastAPI + Jinja2 host-app pattern, see
 ## 1) Basic Inclusion
 
 Install TapDB admin support in the host environment, then mount the reusable
-TapDB web app:
+TapDB GUI app:
 
 ```python
 from fastapi import FastAPI
 
-from daylily_tapdb.web import TapdbHostBridge, create_tapdb_web_app
+from daylily_tapdb.web import TapdbHostBridge, create_tapdb_gui_app
 
 app = FastAPI()
 bridge = TapdbHostBridge(
@@ -28,15 +28,17 @@ bridge = TapdbHostBridge(
 )
 app.mount(
     "/tapdb",
-    create_tapdb_web_app(
+    create_tapdb_gui_app(
         config_path="/abs/path/to/tapdb-config.yaml",
         host_bridge=bridge,
     ),
 )
 ```
 
-The same TapDB package also exposes `create_tapdb_dag_router(...)` for
-root-level `/api/dag/*` routes.
+The same TapDB package also exposes `create_tapdb_gui_router(...)` for hosts
+that want to include the router directly, `create_tapdb_web_app(...)` for the
+legacy full admin surface, and `create_tapdb_dag_router(...)` for root-level
+`/api/dag/*` routes.
 
 ## 2) Auth Modes
 
@@ -98,16 +100,28 @@ Use this only for local development or diagnostics.
 
 ## 3) Recommended Client Pattern
 
-1. Mount TapDB HTML at `/tapdb` with `create_tapdb_web_app(...)`.
+1. Mount TapDB V1 GUI at `/tapdb` with `create_tapdb_gui_app(...)`.
 2. Publish canonical DAG routes at root `/api/dag/*` with `create_tapdb_dag_router(...)`.
 3. Use `TapdbHostBridge(auth_mode="host_session", ...)` when the host owns auth.
 4. Use TapDB-native auth only when TapDB should manage its own login flow.
+
+The V1 GUI includes generic search, object detail, graph, create-from-template,
+template validate/save, typed external object links, Meridian validation, and
+readiness/metrics pages. Mutating routes are admin-only. Hosts can also call
+JSON APIs for reusable primitives, including `/tapdb/api/object/{euid}`,
+`/tapdb/api/create/{template_euid}`, `/tapdb/api/templates/validate`,
+`/tapdb/api/object/{euid}/edit-json`, `/tapdb/api/object/{euid}/status`,
+`/tapdb/api/object/{euid}/lineage`,
+`/tapdb/api/object/{euid}/external-links`, `/tapdb/api/admin/readiness`,
+`/tapdb/api/admin/meridian/validate`, and `/tapdb/api/admin/metrics`.
 
 ## 4) Runtime Checks
 
 - `GET /tapdb/` should render through host auth when the bridge resolves a user.
 - `GET /tapdb/` should redirect to the host login when the bridge does not
   resolve a user.
+- `GET /tapdb/admin/readiness` should show config, governance, external-link
+  template, and template-inventory readiness checks for operators.
 - `GET /api/dag/object/{euid}` should be guarded by the host app's chosen API
   dependency, not by TapDB browser auth.
 

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Readiness{% endblock %}
+{% block content %}
+<section class="band">
+  <h1>Readiness</h1>
+  <div class="notice {{ 'ok' if readiness.ready else 'bad' }}">
+    TapDB GUI ready: {{ readiness.ready }}
+  </div>
+  <table>
+    <tr><th>Config Path</th><td>{{ readiness.config_path }}</td></tr>
+    <tr><th>Client</th><td>{{ readiness.client_id or "-" }}</td></tr>
+    <tr><th>Domain</th><td>{{ readiness.domain_code }}</td></tr>
+    <tr><th>Owner Repo</th><td>{{ readiness.owner_repo_name }}</td></tr>
+  </table>
+</section>
+
+<section class="band">
+  <h2>Checks</h2>
+  <table>
+    <thead><tr><th>Check</th><th>OK</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for check in readiness.checks %}
+    <tr>
+      <td>{{ check.name }}</td>
+      <td>{{ check.ok }}</td>
+      <td>{{ check.detail }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

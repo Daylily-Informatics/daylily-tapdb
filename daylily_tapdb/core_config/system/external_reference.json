@@ -1,0 +1,35 @@
+{
+  "$comment": "TapDB reserved operational template for typed external object links",
+  "templates": [
+    {
+      "name": "External Object Reference",
+      "polymorphic_discriminator": "generic_template",
+      "category": "XRF",
+      "type": "external_identifier",
+      "subtype": "tapdb_object",
+      "version": "1.0",
+      "instance_prefix": "XRF",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Reserved TapDB operational object for linking local instances to non-local object identifiers through lineage.",
+        "properties": {
+          "system": "",
+          "foreign_uid": "",
+          "root_euid": "",
+          "href": "",
+          "external_identifier": {
+            "system": "",
+            "target_euid": "",
+            "href": "",
+            "base_url": "",
+            "graph_data_path": "",
+            "object_detail_path_template": "",
+            "auth_mode": "none"
+          }
+        },
+        "instantiation_layouts": []
+      }
+    }
+  ]
+}
