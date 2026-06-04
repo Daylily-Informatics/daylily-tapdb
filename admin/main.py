@@ -157,16 +157,21 @@ def _is_production_like(env_name: str, settings: dict[str, Any]) -> bool:
 def _validate_production_admin_settings(settings: dict[str, Any]) -> None:
     auth_mode = str(settings.get("auth_mode") or "").strip().lower()
     if auth_mode == "disabled":
-        raise RuntimeError("Refusing to start production-like TapDB admin with disabled auth")
-    if auth_mode == "shared_host" and not str(
-        settings.get("shared_host_session_secret") or ""
-    ).strip():
+        raise RuntimeError(
+            "Refusing to start production-like TapDB admin with disabled auth"
+        )
+    if (
+        auth_mode == "shared_host"
+        and not str(settings.get("shared_host_session_secret") or "").strip()
+    ):
         raise RuntimeError(
             "Refusing to start production-like TapDB admin shared_host auth without "
             "admin.auth.shared_host.session_secret"
         )
     if not str(settings.get("session_secret") or "").strip():
-        raise RuntimeError("Refusing to start production-like TapDB admin without admin.session.secret")
+        raise RuntimeError(
+            "Refusing to start production-like TapDB admin without admin.session.secret"
+        )
 
 
 IS_PROD = _is_production_like(APP_ENV, ADMIN_SETTINGS)

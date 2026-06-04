@@ -87,6 +87,22 @@ For a repo-local smoke path, this repo ships example registry fixtures under
 `daylily_tapdb/etc/`. Those files are suitable for single-repo local runs and
 for the README example scripts.
 
+Meridian domain-code allocation is governed by the public
+[`lsmc-bio/meridian-registry`](https://github.com/lsmc-bio/meridian-registry)
+repository. TAPDB consumes `meridian-euid==0.4.7`, which pins that public
+domain registry at `0.1.1` and exposes explicit domain-availability checks:
+
+```bash
+meridian-euid domain-check Q \
+  --registry-index /abs/path/to/meridian-registry/registry/generated/domains.json
+```
+
+The TapDB `domain_registry_path` and `prefix_ownership_registry_path` values
+remain explicit local runtime inputs. They validate the domain and prefix claims
+used by a concrete TapDB deployment; they do not replace the public domain
+registry, and prefix assignment remains owned by domain holders rather than
+centralized in `meridian-registry`.
+
 If optional workflow packs are present in the config, add `--include-workflow` to the bootstrap command. If you want the generated scripts rather than inline commands, use the companion examples under `examples/readme/`:
 
 - `examples/readme/00_smoke.sh`

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" data-lsmc-service="tapdb" data-theme="original">
+<head>
+  {% set shell = tapdb_gui_host_shell(request) %}
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}TapDB{% endblock %}</title>
+  <link rel="stylesheet" href="{{ tapdb_gui_url(request, '/static/tapdb-gui.css') }}">
+  {% for stylesheet in shell.extra_stylesheets %}
+  <link rel="stylesheet" href="{{ stylesheet }}">
+  {% endfor %}
+  <script>window.TAPDB_BASE_PATH = "{{ request.scope.get('root_path', '') }}";</script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ tapdb_gui_url(request, '/') }}">
+      {% if shell.active and shell.app_name %}{{ shell.app_name }} / {% endif %}TapDB
+    </a>
+    <nav>
+      {% for nav in shell.nav_links %}
+      <a href="{{ nav.href }}">{{ nav.label }}</a>
+      {% endfor %}
+      <a href="{{ tapdb_gui_url(request, '/search') }}">Search</a>
+      <a href="{{ tapdb_gui_url(request, '/templates') }}">Templates</a>
+      <a href="{{ tapdb_gui_url(request, '/admin/readiness') }}">Readiness</a>
+      <a href="{{ tapdb_gui_url(request, '/admin/meridian') }}">Meridian</a>
+      <a href="{{ tapdb_gui_url(request, '/admin/metrics') }}">Metrics</a>
+    </nav>
+    <div class="user">{{ user.display_name or user.username }} · {{ user.role }}</div>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>TapDB {{ tapdb_version }}</footer>
+  <script src="{{ tapdb_gui_url(request, '/static/lsmc-ui.js') }}"></script>
+</body>
+</html>

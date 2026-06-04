@@ -20,6 +20,7 @@ GENERIC_INSTANCE_LINEAGE_PREFIX = "EDG"
 AUDIT_LOG_PREFIX = "ADT"
 SYSTEM_USER_PREFIX = "SYS"
 SYSTEM_MESSAGE_PREFIX = "MSG"
+EXTERNAL_REFERENCE_PREFIX = "XRF"
 
 _ALPHABET_32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _VALUE_32 = {char: index for index, char in enumerate(_ALPHABET_32)}
@@ -179,6 +180,7 @@ _CANONICAL_CORE_PREFIXES = MappingProxyType(
         "audit_log": AUDIT_LOG_PREFIX,
         "system_user_instance": SYSTEM_USER_PREFIX,
         "system_message_instance": SYSTEM_MESSAGE_PREFIX,
+        "external_reference_instance": EXTERNAL_REFERENCE_PREFIX,
     }
 )
 

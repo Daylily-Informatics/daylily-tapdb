@@ -23,9 +23,20 @@ TapDB now exposes a reusable library surface in
 [`daylily_tapdb.web`](../daylily_tapdb/web):
 
 - `create_tapdb_web_app(...)` for the full mounted HTML/UI surface
+- `create_tapdb_gui_app(...)` for the new embeddable GUI V1 surface
+- `create_tapdb_gui_router(...)` when a host app wants to include only the GUI router
 - `create_tapdb_dag_router(...)` for canonical root-level `/api/dag/*` routes
 - `TapdbHostBridge` for host auth, shell links, template overrides, and host CSS
 - `build_dag_capability_advertisement(...)` for `obs_services`-style discovery
+
+Install the GUI extra before importing the V1 embeddable GUI in a host app:
+
+```bash
+pip install "daylily-tapdb[gui]"
+```
+
+Use `daylily-tapdb[admin]` instead when the host also needs the legacy TapDB
+admin UI or TapDB-native browser auth.
 
 The supported embedding pattern is:
 
@@ -36,6 +47,7 @@ from daylily_tapdb.web import (
     TapdbHostBridge,
     TapdbHostNavLink,
     create_tapdb_dag_router,
+    create_tapdb_gui_app,
     create_tapdb_web_app,
 )
 
@@ -54,7 +66,7 @@ bridge = TapdbHostBridge(
 
 app.mount(
     "/tapdb",
-    create_tapdb_web_app(
+    create_tapdb_gui_app(
         config_path="/abs/path/to/tapdb-config.yaml",
         host_bridge=bridge,
     ),
@@ -68,7 +80,33 @@ app.include_router(
 )
 ```
 
+`create_tapdb_web_app(...)` remains available for the legacy full admin surface.
+Use `create_tapdb_gui_app(...)` for the V1 client-embeddable GUI pages.
+
 The standalone `tapdb ui start` path also builds on this same factory.
+
+## V1 Embedded GUI Routes
+
+When mounted at `/tapdb`, the V1 GUI exposes both HTML pages and JSON APIs:
+
+- `GET /tapdb/search` and `GET /tapdb/api/search`
+- `GET /tapdb/object/{euid}` and `GET /tapdb/api/object/{euid}`
+- `GET /tapdb/object/{euid}/graph` and `GET /tapdb/api/object/{euid}/graph`
+- `POST /tapdb/api/object/{euid}/edit-json`
+- `POST /tapdb/api/object/{euid}/status`
+- `POST /tapdb/api/object/{euid}/lineage`
+- `POST /tapdb/api/object/{euid}/external-links`
+- `GET /tapdb/templates`, `GET /tapdb/templates/new`, and
+  `POST /tapdb/api/templates/validate`
+- `POST /tapdb/api/create/{template_euid}`
+- `GET /tapdb/admin/readiness` and `GET /tapdb/api/admin/readiness`
+- `GET /tapdb/admin/meridian` and
+  `GET /tapdb/api/admin/meridian/validate`
+- `GET /tapdb/admin/metrics` and `GET /tapdb/api/admin/metrics`
+
+The external-link API creates the same first-class typed TapDB external
+reference object as the HTML form, then links it to the source object by
+lineage. It does not create inline-only external references.
 
 ## Auth Modes
 
@@ -143,6 +181,66 @@ Dewey is the reference adopter for this embedding model:
 - root-level DAG contract at `/api/dag/*`
 - Dewey session or bearer-token auth guarding the root DAG API
 - host shell link and CSS integration through `TapdbHostBridge`
+
+## Dayhoff-Style Host Example
+
+This is a TapDB-side example only. It does not require mutating a Dayhoff repo.
+
+```python
+from fastapi import Depends, FastAPI, Request
+
+from daylily_tapdb.web import (
+    TapdbHostBridge,
+    TapdbHostNavLink,
+    create_tapdb_dag_router,
+    create_tapdb_gui_app,
+)
+
+
+def resolve_operator(request: Request) -> dict | None:
+    user = request.session.get("operator")
+    if not user:
+        return None
+    return {
+        "username": user["email"],
+        "email": user["email"],
+        "display_name": user.get("name") or user["email"],
+        "role": user.get("role", "user"),
+    }
+
+
+def require_dayhoff_api_user():
+    ...
+
+
+app = FastAPI()
+bridge = TapdbHostBridge(
+    auth_mode="host_session",
+    service_name="dayhoff",
+    app_name="Dayhoff",
+    home_url="/",
+    login_url="/login",
+    logout_url="/logout",
+    nav_links=(TapdbHostNavLink(label="Dashboard", href="/"),),
+    extra_stylesheets=("/static/dayhoff.css",),
+    resolve_user=resolve_operator,
+)
+
+app.mount(
+    "/tapdb",
+    create_tapdb_gui_app(
+        config_path="/abs/path/to/tapdb-config.yaml",
+        host_bridge=bridge,
+    ),
+)
+app.include_router(
+    create_tapdb_dag_router(
+        config_path="/abs/path/to/tapdb-config.yaml",
+        service_name="dayhoff",
+    ),
+    dependencies=[Depends(require_dayhoff_api_user)],
+)
+```
 
 ## Related Materials
 

@@ -153,11 +153,17 @@ class TAPDBConnection:
                     f"db_hostname is required when engine_type={engine_type!r}"
                 )
             if db_pass is None:
-                raise ValueError(f"db_pass is required when engine_type={engine_type!r}")
+                raise ValueError(
+                    f"db_pass is required when engine_type={engine_type!r}"
+                )
             if not db_user:
-                raise ValueError(f"db_user is required when engine_type={engine_type!r}")
+                raise ValueError(
+                    f"db_user is required when engine_type={engine_type!r}"
+                )
             if not db_name:
-                raise ValueError(f"db_name is required when engine_type={engine_type!r}")
+                raise ValueError(
+                    f"db_name is required when engine_type={engine_type!r}"
+                )
             self._db_url = f"{db_url_prefix}{db_user}:{db_pass}@{db_hostname}/{db_name}"
 
         # Create engine with connection pooling
@@ -196,7 +202,9 @@ class TAPDBConnection:
         def _on_checkout(dbapi_connection, _connection_record, _connection_proxy):
             cursor = dbapi_connection.cursor()
             try:
-                cursor.execute("SELECT set_config('search_path', %s, false)", (schema_name,))
+                cursor.execute(
+                    "SELECT set_config('search_path', %s, false)", (schema_name,)
+                )
                 cursor.execute(
                     "SET session.current_domain_code = %s",
                     (domain_code,),

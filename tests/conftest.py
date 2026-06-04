@@ -186,6 +186,7 @@ def pg_instance(tmp_path_factory):
                         "ADT": {"issuer_app_code": "daylily-tapdb"},
                         "SYS": {"issuer_app_code": "daylily-tapdb"},
                         "MSG": {"issuer_app_code": "daylily-tapdb"},
+                        "XRF": {"issuer_app_code": "daylily-tapdb"},
                     }
                 },
             },

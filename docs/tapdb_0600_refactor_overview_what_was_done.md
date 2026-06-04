@@ -129,6 +129,7 @@ TapDB-owned fixed internal prefixes were normalized around:
 - `ADT` for audit rows
 - `SYS` for `system_user`
 - `MSG` for system messages
+- `XRF` for typed external object links
 
 Bundled default template surface was reduced to TapDB-internal operational templates only.
 

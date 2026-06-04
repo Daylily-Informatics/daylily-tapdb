@@ -117,6 +117,20 @@ For local single-repo runs, TAPDB also ships packaged example registry fixtures
 under [`daylily_tapdb/etc`](../daylily_tapdb/etc). They are useful for docs
 examples, tests, and isolated TapDB-only bootstrap flows.
 
+Public Meridian domain-code allocation now lives in
+[`lsmc-bio/meridian-registry`](https://github.com/lsmc-bio/meridian-registry).
+TapDB depends on `meridian-euid==0.4.7`, which pins `meridian-registry` at
+`0.1.1` and provides the explicit checker:
+
+```bash
+meridian-euid domain-check <DOMAIN> \
+  --registry-index /abs/path/to/meridian-registry/registry/generated/domains.json
+```
+
+Do not use that public registry as a prefix registry. Prefix claims remain
+domain-holder governed and are still supplied to TapDB through the explicit
+`meta.prefix_ownership_registry_path` config key.
+
 ### Schema and Seed Flow
 
 Schema work is separated from data seeding:

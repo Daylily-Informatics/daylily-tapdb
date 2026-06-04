@@ -87,6 +87,15 @@ The config metadata must include:
 There is no client-code-derived prefix behavior, no passive prefix inheritance,
 and no compatibility path for missing governance metadata.
 
+The public Meridian domain-code authority is
+[`lsmc-bio/meridian-registry`](https://github.com/lsmc-bio/meridian-registry).
+TapDB consumes it through `meridian-euid==0.4.7`, which pins public registry
+version `0.1.1` and exposes `meridian-euid domain-check ... --registry-index`.
+The configured `meta.domain_registry_path` is still a local runtime fixture used
+to assert that the selected deployment domain is registered for that runtime.
+The configured `meta.prefix_ownership_registry_path` remains the only prefix
+ownership input; `meridian-registry` does not centralize prefixes.
+
 ### PostgreSQL Session Context
 
 The Python connection layer sets session values before work begins:

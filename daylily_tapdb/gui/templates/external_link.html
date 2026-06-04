@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}External Link{% endblock %}
+{% block content %}
+<section class="band">
+  <h1>Create External Object Link</h1>
+  <p>Creates a typed TapDB object storing the foreign UID, then links it to {{ euid }} by lineage.</p>
+  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ euid ~ '/external-links/new') }}" class="stack">
+    <label>System <input name="system" required></label>
+    <label>Foreign UID <input name="foreign_uid" required></label>
+    <label>Relationship <input name="relationship_type" value="external_ref" required></label>
+    <label>Display URL <input name="display_url"></label>
+    <label>Graph Base URL <input name="graph_base_url"></label>
+    <label>Graph Data Path <input name="graph_data_path"></label>
+    <label>Object Detail Path Template <input name="object_detail_path_template"></label>
+    <label>Auth Mode <input name="auth_mode" value="none" required></label>
+    <button type="submit">Create Link</button>
+  </form>
+</section>
+{% endblock %}

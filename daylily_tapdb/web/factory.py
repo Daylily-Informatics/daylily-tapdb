@@ -77,6 +77,17 @@ def _requested_path(request: Request) -> str:
     return target
 
 
+def _is_api_scope(scope) -> bool:
+    path = str(scope.get("path") or "")
+    if path == "/api" or path.startswith("/api/"):
+        return True
+    root_path = str(scope.get("root_path") or "").rstrip("/")
+    if not root_path:
+        return False
+    mounted_api = f"{root_path}/api"
+    return path == mounted_api or path.startswith(f"{mounted_api}/")
+
+
 class TapdbHostBridgeMount:
     """ASGI wrapper that gates mounted TapDB UIs through host auth."""
 
@@ -101,7 +112,7 @@ class TapdbHostBridgeMount:
             else None
         )
         if user is None:
-            if path.startswith("/api/"):
+            if _is_api_scope(scope):
                 await JSONResponse(
                     status_code=401,
                     content={"detail": "host_session_required"},

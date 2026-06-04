@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}TapDB Search{% endblock %}
+{% block content %}
+<section class="band">
+  <h1>Search</h1>
+  <form method="get" action="{{ tapdb_gui_url(request, '/search') }}" class="toolbar">
+    <input name="q" value="{{ query.q }}" placeholder="EUID, name, type, status">
+    <select name="record_type">
+      {% for kind in ["all", "template", "instance", "lineage"] %}
+      <option value="{{ kind }}" {% if query.record_type == kind %}selected{% endif %}>{{ kind }}</option>
+      {% endfor %}
+    </select>
+    <input name="category" value="{{ query.category }}" placeholder="category">
+    <input name="type" value="{{ query.type }}" placeholder="type">
+    <input name="subtype" value="{{ query.subtype }}" placeholder="subtype">
+    <button type="submit">Search</button>
+  </form>
+</section>
+
+<section class="band">
+  <h2>Results</h2>
+  <table>
+    <thead><tr><th>EUID</th><th>Kind</th><th>Name</th><th>Type</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for item in results["items"] %}
+      <tr>
+        <td><a href="{{ tapdb_gui_url(request, '/object/' ~ item.euid) }}">{{ item.euid }}</a></td>
+        <td>{{ item.record_type }}</td>
+        <td>{{ item.name or "-" }}</td>
+        <td>{{ item.category }}/{{ item.type }}/{{ item.subtype }}</td>
+        <td>{{ item.bstatus or "-" }}</td>
+      </tr>
+      {% endfor %}
+      {% if not results["items"] %}
+      <tr><td colspan="5">No matching TapDB objects.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

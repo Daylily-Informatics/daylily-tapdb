@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Metrics{% endblock %}
+{% block content %}
+<section class="band">
+  <h1>DB Metrics</h1>
+  {% if metrics.metrics_message %}<div class="notice">{{ metrics.metrics_message }}</div>{% endif %}
+  <table>
+    <tr><th>Enabled</th><td>{{ metrics.metrics_enabled }}</td></tr>
+    <tr><th>File</th><td>{{ metrics.metrics_file }}</td></tr>
+    <tr><th>Dropped</th><td>{{ metrics.dropped_count }}</td></tr>
+  </table>
+</section>
+<section class="band">
+  <table>
+    <thead><tr><th>Path</th><th>Method</th><th>Count</th><th>Total Seconds</th></tr></thead>
+    <tbody>
+    {% for row in metrics.summary.by_path %}
+    <tr><td>{{ row.path }}</td><td>{{ row.method }}</td><td>{{ row.count }}</td><td>{{ row.total_seconds }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

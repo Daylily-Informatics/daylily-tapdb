@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}TapDB Templates{% endblock %}
+{% block content %}
+<section class="band">
+  <div class="split">
+    <div>
+      <h1>Templates</h1>
+      <p>Loaded templates are read-only. Admins can validate and load new template packs.</p>
+    </div>
+      {% if user.role == "admin" %}
+      <a class="button" href="{{ tapdb_gui_url(request, '/templates/new') }}">New Template Pack</a>
+      {% endif %}
+  </div>
+  <form method="get" action="{{ tapdb_gui_url(request, '/templates') }}" class="toolbar">
+    <input name="category" value="{{ category }}" placeholder="category">
+    <button type="submit">Filter</button>
+  </form>
+</section>
+<section class="band">
+  <table>
+    <thead><tr><th>EUID</th><th>Name</th><th>Code</th><th>Instance Prefix</th><th></th></tr></thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td><a href="{{ tapdb_gui_url(request, '/object/' ~ item.euid) }}">{{ item.euid }}</a></td>
+        <td>{{ item.name }}</td>
+        <td>{{ item.category }}/{{ item.type }}/{{ item.subtype }}/{{ item.version }}</td>
+        <td>{{ item.instance_prefix }}</td>
+        <td>{% if user.role == "admin" %}<a href="{{ tapdb_gui_url(request, '/create/' ~ item.euid) }}">Create</a>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
