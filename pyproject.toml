@@ -32,7 +32,7 @@ dependencies = [
     "pyyaml",
     "uuid6>=2024.1.12",
     "cli-core-yo==2.1.1",
-    "meridian-euid==0.4.5",
+    "meridian-euid==0.4.7",
 ]
 
 [project.optional-dependencies]

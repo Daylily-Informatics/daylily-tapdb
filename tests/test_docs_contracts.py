@@ -18,6 +18,8 @@ def test_readme_exists_and_points_to_examples() -> None:
     assert "source ./activate" in text
     assert "tapdb --config <path> ..." in text
     assert "--json info" in text
+    assert "lsmc-bio/meridian-registry" in text
+    assert "meridian-euid domain-check Q" in text
 
 
 def test_examples_contain_the_canonical_commands() -> None:

@@ -536,11 +536,19 @@ def test_gui_readiness_page_and_api_report_seeded_external_template(monkeypatch)
     payload = api.json()
     assert payload["ready"] is True
     assert payload["domain_code"] == "Z"
+    assert payload["public_domain_registry"]["repository"].endswith(
+        "lsmc-bio/meridian-registry"
+    )
+    assert payload["public_domain_registry"]["version"] == "0.1.1"
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["governance"]["ok"] is True
+    assert "public registry 0.1.1" in checks["governance"]["detail"]
     assert {
         "name": "external_link_template",
         "ok": True,
         "detail": "XRF/external_identifier/tapdb_object/1.0/",
     } in payload["checks"]
+    assert "meridian-registry" in page.text
 
 
 def test_gui_meridian_validation_api_reports_prefix(monkeypatch):
@@ -553,6 +561,7 @@ def test_gui_meridian_validation_api_reports_prefix(monkeypatch):
     assert payload["domain_code"] == "Z"
     assert payload["prefix"] == "XRF"
     assert payload["prefix_owner"] == "daylily-tapdb"
+    assert payload["public_domain_registry"]["version"] == "0.1.1"
 
 
 def test_gui_status_redirect_adds_success_notice(monkeypatch):

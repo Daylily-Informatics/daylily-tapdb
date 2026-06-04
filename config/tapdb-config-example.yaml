@@ -11,7 +11,11 @@ meta:
   client_id: local
   database_name: tapdb
   owner_repo_name: daylily-tapdb
+  # Local runtime registry fixture. Public domain-code allocation is governed by
+  # meridian-registry 0.1.1 through meridian-euid 0.4.7.
   domain_registry_path: ~/.config/tapdb/domain_code_registry.json
+  # Prefix claims remain domain-holder governed and are not centralized in
+  # meridian-registry.
   prefix_ownership_registry_path: ~/.config/tapdb/prefix_ownership_registry.json
 
 admin:

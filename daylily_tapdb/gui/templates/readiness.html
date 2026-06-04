@@ -11,6 +11,8 @@
     <tr><th>Client</th><td>{{ readiness.client_id or "-" }}</td></tr>
     <tr><th>Domain</th><td>{{ readiness.domain_code }}</td></tr>
     <tr><th>Owner Repo</th><td>{{ readiness.owner_repo_name }}</td></tr>
+    <tr><th>Public Registry</th><td>{{ readiness.public_domain_registry.repository }}</td></tr>
+    <tr><th>Public Registry Version</th><td>{{ readiness.public_domain_registry.version }}</td></tr>
   </table>
 </section>
 

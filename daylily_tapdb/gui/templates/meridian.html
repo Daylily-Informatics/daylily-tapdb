@@ -8,6 +8,8 @@
     <tr><th>Owner Repo</th><td>{{ governance.owner_repo_name }}</td></tr>
     <tr><th>Domain Registry</th><td>{{ governance.domain_registry_path }}</td></tr>
     <tr><th>Prefix Registry</th><td>{{ governance.prefix_ownership_registry_path }}</td></tr>
+    <tr><th>Public Registry</th><td>{{ governance.public_domain_registry_repository }}</td></tr>
+    <tr><th>Public Registry Version</th><td>{{ governance.public_domain_registry_version }}</td></tr>
   </table>
   <form method="get" action="{{ tapdb_gui_url(request, '/admin/meridian') }}" class="toolbar">
     <input name="euid" value="{{ euid }}" placeholder="EUID">

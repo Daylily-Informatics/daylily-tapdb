@@ -6,8 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from meridian_euid import (
+    MERIDIAN_REGISTRY_INDEX_URL,
+    MERIDIAN_REGISTRY_REPOSITORY,
+    MERIDIAN_REGISTRY_VERSION,
+)
 from meridian_euid import assert_registered_domain as meridian_assert_registered_domain
 from meridian_euid import load_domain_registry as meridian_load_domain_registry
+from meridian_euid import (
+    load_domain_registry_metadata as meridian_load_domain_registry_metadata,
+)
 from meridian_euid import (
     load_prefix_ownership_registry as meridian_load_prefix_ownership_registry,
 )
@@ -40,6 +48,11 @@ def load_domain_registry(path: str | Path) -> frozenset[str]:
     return meridian_load_domain_registry(resolved)
 
 
+def load_domain_registry_metadata(path: str | Path) -> dict[str, dict[str, object]]:
+    resolved = _resolved_path(path)
+    return meridian_load_domain_registry_metadata(resolved)
+
+
 def load_prefix_ownership_registry(
     path: str | Path,
 ) -> dict[tuple[str, str], str]:
@@ -66,15 +79,26 @@ def assert_registered_domain(
     domain_code: str,
     *,
     registry: frozenset[str] | None = None,
+    registry_metadata: Mapping[str, Mapping[str, object]] | None = None,
     path: str | Path | None = None,
 ) -> str:
     normalized_domain_code = _validate_domain_code(domain_code)
+    if registry is None and registry_metadata is None:
+        resolved_path = _resolved_path(path)
+    else:
+        resolved_path = _resolved_path(path) if path is not None else None
     if registry is None:
         return meridian_assert_registered_domain(
             normalized_domain_code,
-            path=_resolved_path(path),
+            registry_metadata=registry_metadata,
+            path=resolved_path,
         )
-    return meridian_assert_registered_domain(normalized_domain_code, registry=registry)
+    return meridian_assert_registered_domain(
+        normalized_domain_code,
+        registry=registry,
+        registry_metadata=registry_metadata,
+        path=resolved_path,
+    )
 
 
 def resolve_prefix_owner_repo_name(
@@ -129,7 +153,11 @@ class GovernanceContext:
     domain_registry_path: Path
     prefix_ownership_registry_path: Path
     registered_domains: frozenset[str]
+    domain_registry_metadata: Mapping[str, Mapping[str, object]]
     prefix_ownership: Mapping[tuple[str, str], str]
+    public_domain_registry_repository: str = MERIDIAN_REGISTRY_REPOSITORY
+    public_domain_registry_version: str = MERIDIAN_REGISTRY_VERSION
+    public_domain_registry_index_url: str = MERIDIAN_REGISTRY_INDEX_URL
 
     @classmethod
     def load(
@@ -148,13 +176,17 @@ class GovernanceContext:
             domain_registry_path=resolved_domain_registry_path,
             prefix_ownership_registry_path=resolved_prefix_ownership_registry_path,
         )
-        registered_domains = load_domain_registry(resolved_domain_registry_path)
+        domain_registry_metadata = load_domain_registry_metadata(
+            resolved_domain_registry_path
+        )
+        registered_domains = frozenset(domain_registry_metadata)
         prefix_ownership = load_prefix_ownership_registry(
             resolved_prefix_ownership_registry_path
         )
         normalized_domain_code = assert_registered_domain(
             domain_code,
             registry=registered_domains,
+            registry_metadata=domain_registry_metadata,
             path=resolved_domain_registry_path,
         )
         normalized_owner_repo_name = normalize_owner_repo_name(owner_repo_name)
@@ -164,6 +196,7 @@ class GovernanceContext:
             domain_registry_path=resolved_domain_registry_path,
             prefix_ownership_registry_path=resolved_prefix_ownership_registry_path,
             registered_domains=registered_domains,
+            domain_registry_metadata=domain_registry_metadata,
             prefix_ownership=prefix_ownership,
         )
 

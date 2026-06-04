@@ -626,6 +626,11 @@ def _meridian_validation_payload(
         "prefix": prefix,
         "prefix_owner": prefix_owner,
         "prefix_error": prefix_error,
+        "public_domain_registry": {
+            "repository": governance.public_domain_registry_repository,
+            "version": governance.public_domain_registry_version,
+            "index_url": governance.public_domain_registry_index_url,
+        },
     }
 
 
@@ -650,7 +655,8 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
             "ok": True,
             "detail": (
                 f"Domain {governance.domain_code}; owner "
-                f"{governance.owner_repo_name}"
+                f"{governance.owner_repo_name}; public registry "
+                f"{governance.public_domain_registry_version}"
             ),
         }
     )
@@ -684,6 +690,11 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
         "client_id": cfg.get("client_id"),
         "domain_code": cfg.get("domain_code"),
         "owner_repo_name": cfg.get("owner_repo_name"),
+        "public_domain_registry": {
+            "repository": governance.public_domain_registry_repository,
+            "version": governance.public_domain_registry_version,
+            "index_url": governance.public_domain_registry_index_url,
+        },
         "checks": checks,
     }
 
