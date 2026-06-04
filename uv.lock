@@ -565,8 +565,13 @@ dev = [
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "python-multipart" },
     { name = "ruff" },
     { name = "setuptools-scm" },
+]
+gui = [
+    { name = "fastapi" },
+    { name = "jinja2" },
 ]
 
 [package.metadata]
@@ -582,11 +587,13 @@ requires-dist = [
     { name = "detect-secrets", marker = "extra == 'dev'", specifier = ">=1.4" },
     { name = "fastapi", marker = "extra == 'admin'" },
     { name = "fastapi", marker = "extra == 'api'" },
+    { name = "fastapi", marker = "extra == 'gui'" },
     { name = "httpx", marker = "extra == 'dev'" },
     { name = "itsdangerous", marker = "extra == 'admin'" },
     { name = "jinja2", marker = "extra == 'admin'" },
+    { name = "jinja2", marker = "extra == 'gui'" },
     { name = "jsonschema", specifier = ">=4.0" },
-    { name = "meridian-euid", specifier = "==0.4.5" },
+    { name = "meridian-euid", specifier = "==0.4.7" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "passlib", extras = ["bcrypt"], marker = "extra == 'admin'" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.8.0" },
@@ -595,6 +602,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "python-multipart", marker = "extra == 'admin'" },
+    { name = "python-multipart", marker = "extra == 'dev'" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1" },
@@ -604,7 +612,7 @@ requires-dist = [
     { name = "uuid6", specifier = ">=2024.1.12" },
     { name = "uvicorn", marker = "extra == 'admin'" },
 ]
-provides-extras = ["dev", "cli", "aurora", "api", "admin"]
+provides-extras = ["dev", "cli", "aurora", "api", "gui", "admin"]
 
 [[package]]
 name = "detect-secrets"
@@ -987,11 +995,11 @@ wheels = [
 
 [[package]]
 name = "meridian-euid"
-version = "0.4.5"
+version = "0.4.7"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9e/ae/2e51a25fd422f39d0b8cc7b65ad9f32309efad6cadaaa15ab16f29585a98/meridian_euid-0.4.5.tar.gz", hash = "sha256:5423d40c4a200d86dc1e0b5df47d3d1aecdf5a30f9668849e4f857deb956e218", size = 15247, upload-time = "2026-05-16T11:47:36.548Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7c/ea/eff4b7b442f20fa5aa968735ee17f43f9d8e9621da89230426a43203ef5b/meridian_euid-0.4.7.tar.gz", hash = "sha256:27b65eba282a904a876c7df16b48a8329900190cf5830a5fd61776f89d98a62a", size = 19238, upload-time = "2026-06-04T09:47:05.716Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0e/8d/02dc20a37f126beca0ca197796be8ee44db463c9417efa350715046915d0/meridian_euid-0.4.5-py3-none-any.whl", hash = "sha256:c07d760f26d47a7cee489b71fe11a4df69a9ba094cde57aad2fca8415a05bee8", size = 12073, upload-time = "2026-05-16T11:47:35.645Z" },
+    { url = "https://files.pythonhosted.org/packages/21/53/8c9b0dd4f9ec901b0289e6f7fc20163d588d20019edd6f437233cf834c91/meridian_euid-0.4.7-py3-none-any.whl", hash = "sha256:a369a21b4bc7835848ea424bc0a9b1f8273afb13e7ab0c9e83bdd9111a7dd1c8", size = 15316, upload-time = "2026-06-04T09:47:04.808Z" },
 ]
 
 [[package]]
