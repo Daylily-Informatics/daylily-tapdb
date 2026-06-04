@@ -6,10 +6,12 @@
     <h1>{{ obj.euid }}</h1>
     <div class="actions">
       <a class="button" href="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/graph') }}">Graph</a>
+      {% if user.role == "admin" %}
       {% if obj.record_type == "template" %}
       <a class="button" href="{{ tapdb_gui_url(request, '/create/' ~ obj.euid) }}">Create Instance</a>
       {% else %}
       <a class="button" href="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/external-links/new') }}">External Link</a>
+      {% endif %}
       {% endif %}
     </div>
   </div>
@@ -35,7 +37,7 @@
   </table>
 </section>
 
-{% if obj.record_type != "template" %}
+{% if obj.record_type != "template" and user.role == "admin" %}
 <section class="band">
   <h2>Edit</h2>
   <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/status') }}" class="toolbar">

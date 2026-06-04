@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-lsmc-service="tapdb" data-theme="original">
 <head>
   {% set shell = tapdb_gui_host_shell(request) %}
   <meta charset="utf-8">
@@ -32,5 +32,6 @@
     {% block content %}{% endblock %}
   </main>
   <footer>TapDB {{ tapdb_version }}</footer>
+  <script src="{{ tapdb_gui_url(request, '/static/lsmc-ui.js') }}"></script>
 </body>
 </html>

@@ -8,8 +8,15 @@ choose an auth strategy. For the broader FastAPI + Jinja2 host-app pattern, see
 
 ## 1) Basic Inclusion
 
-Install TapDB admin support in the host environment, then mount the reusable
+Install TapDB GUI support in the host environment, then mount the reusable
 TapDB GUI app:
+
+```bash
+pip install "daylily-tapdb[gui]"
+```
+
+Use `daylily-tapdb[admin]` instead when the host also needs the legacy full
+admin UI or TapDB-native browser auth.
 
 ```python
 from fastapi import FastAPI

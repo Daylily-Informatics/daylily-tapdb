@@ -7,7 +7,9 @@
       <h1>Templates</h1>
       <p>Loaded templates are read-only. Admins can validate and load new template packs.</p>
     </div>
-    <a class="button" href="{{ tapdb_gui_url(request, '/templates/new') }}">New Template Pack</a>
+      {% if user.role == "admin" %}
+      <a class="button" href="{{ tapdb_gui_url(request, '/templates/new') }}">New Template Pack</a>
+      {% endif %}
   </div>
   <form method="get" action="{{ tapdb_gui_url(request, '/templates') }}" class="toolbar">
     <input name="category" value="{{ category }}" placeholder="category">
@@ -24,7 +26,7 @@
         <td>{{ item.name }}</td>
         <td>{{ item.category }}/{{ item.type }}/{{ item.subtype }}/{{ item.version }}</td>
         <td>{{ item.instance_prefix }}</td>
-        <td><a href="{{ tapdb_gui_url(request, '/create/' ~ item.euid) }}">Create</a></td>
+        <td>{% if user.role == "admin" %}<a href="{{ tapdb_gui_url(request, '/create/' ~ item.euid) }}">Create</a>{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>

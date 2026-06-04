@@ -69,6 +69,12 @@ api = [
     "fastapi",
 ]
 
+# Optional embeddable GUI surface for host-session FastAPI apps.
+gui = [
+    "fastapi",
+    "jinja2",
+]
+
 # Optional Admin UI (FastAPI). Keep out of core installs.
 admin = [
     "fastapi",
@@ -101,6 +107,9 @@ daylily_tapdb = [
     "core_config/_metadata.json",
     "core_config/*/*.json",
     "etc/*.json",
+    "gui/static/css/*.css",
+    "gui/static/js/*.js",
+    "gui/templates/*.html",
     "templates/schema/*.json",
 ]
 # Admin UI ships HTML templates + static assets.

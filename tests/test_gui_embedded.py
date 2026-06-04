@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import tomllib
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from daylily_tapdb.gui import create_tapdb_gui_app
@@ -207,6 +210,28 @@ def test_gui_mount_redirects_unauthenticated_html_and_blocks_api():
     assert response.json()["detail"] == "host_session_required"
 
 
+def test_gui_mounted_api_blocks_unauthenticated_with_json_401():
+    bridge = TapdbHostBridge(
+        auth_mode="host_session",
+        login_url="/login",
+        resolve_user=lambda _request: None,
+    )
+    host = FastAPI()
+    host.mount(
+        "/tapdb",
+        create_tapdb_gui_app(config_path="/tmp/tapdb-config.yaml", host_bridge=bridge),
+    )
+    client = TestClient(host, base_url="https://localhost")
+
+    html_response = client.get("/tapdb/search", follow_redirects=False)
+    api_response = client.get("/tapdb/api/search", follow_redirects=False)
+
+    assert html_response.status_code == 302
+    assert html_response.headers["location"] == "/login"
+    assert api_response.status_code == 401
+    assert api_response.json()["detail"] == "host_session_required"
+
+
 def test_gui_search_page_uses_host_css_and_root_safe_links(monkeypatch):
     client = _client(monkeypatch)
 
@@ -248,6 +273,24 @@ def test_gui_admin_pages_require_admin(monkeypatch):
 
     assert response.status_code == 403
     assert response.json()["detail"] == "tapdb_gui_admin_required"
+
+
+def test_gui_create_routes_require_admin(monkeypatch):
+    client = _client(monkeypatch, role="user")
+
+    page = client.get("/create/Z-XRF-1Q")
+    post_page = client.post(
+        "/create/Z-XRF-1Q",
+        data={"name": "Link", "properties_json": "{}"},
+    )
+    post_api = client.post(
+        "/api/create/Z-XRF-1Q",
+        json={"name": "Link", "properties": {}},
+    )
+
+    assert page.status_code == 403
+    assert post_page.status_code == 403
+    assert post_api.status_code == 403
 
 
 def test_gui_template_validation_api_reports_valid_level2_template(monkeypatch):
@@ -680,8 +723,55 @@ def test_gui_external_link_api_creates_typed_object_and_lineage(monkeypatch):
     assert session.added[0].child_instance_uid == 201
 
 
+def test_gui_external_link_creation_rejects_legacy_template_shape(monkeypatch):
+    session = _Session(
+        {
+            generic_template: [
+                _template(
+                    category="external_identifier",
+                    type_name="tapdb",
+                    subtype="object",
+                    prefix="XID",
+                )
+            ],
+            generic_instance: [_instance("Z-SMP-1Q", "Sample 1")],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.post(
+        "/api/object/Z-SMP-1Q/external-links",
+        json={
+            "system": "dewey",
+            "foreign_uid": "M-456",
+            "relationship_type": "external_ref",
+        },
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]
+        == "No XRF/external_identifier/tapdb_object external link template is seeded."
+    )
+    assert session.added == []
+
+
 def test_gui_exports_are_available_from_web_package():
     from daylily_tapdb.web import create_tapdb_gui_app, create_tapdb_gui_router
 
     assert callable(create_tapdb_gui_app)
     assert callable(create_tapdb_gui_router)
+
+
+def test_gui_extra_and_package_data_contracts_are_declared():
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    optional = pyproject["project"]["optional-dependencies"]
+    assert set(optional["gui"]) >= {"fastapi", "jinja2"}
+
+    package_data = set(pyproject["tool"]["setuptools"]["package-data"]["daylily_tapdb"])
+    assert "gui/static/css/*.css" in package_data
+    assert "gui/static/js/*.js" in package_data
+    assert "gui/templates/*.html" in package_data

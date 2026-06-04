@@ -29,6 +29,15 @@ TapDB now exposes a reusable library surface in
 - `TapdbHostBridge` for host auth, shell links, template overrides, and host CSS
 - `build_dag_capability_advertisement(...)` for `obs_services`-style discovery
 
+Install the GUI extra before importing the V1 embeddable GUI in a host app:
+
+```bash
+pip install "daylily-tapdb[gui]"
+```
+
+Use `daylily-tapdb[admin]` instead when the host also needs the legacy TapDB
+admin UI or TapDB-native browser auth.
+
 The supported embedding pattern is:
 
 ```python

@@ -396,27 +396,17 @@ def _validate_template_payload(payload: dict[str, Any]) -> list[ConfigIssue]:
 
 
 def _external_link_template(session: Any) -> generic_template | None:
-    candidates = [
-        ("XRF", "external_identifier", "tapdb_object"),
-        ("external_identifier", "tapdb", "object"),
-        ("tapdb_external_identifier", "tapdb", "object"),
-        ("external_reference", "tapdb", "object"),
-    ]
-    for category, type_name, subtype in candidates:
-        template = (
-            session.query(generic_template)
-            .filter_by(
-                category=category,
-                type=type_name,
-                subtype=subtype,
-                is_deleted=False,
-            )
-            .order_by(generic_template.version.desc())
-            .first()
+    return (
+        session.query(generic_template)
+        .filter_by(
+            category="XRF",
+            type="external_identifier",
+            subtype="tapdb_object",
+            is_deleted=False,
         )
-        if template is not None:
-            return template
-    return None
+        .order_by(generic_template.version.desc())
+        .first()
+    )
 
 
 def _external_link_properties(
@@ -480,8 +470,8 @@ def _create_external_link(
         raise HTTPException(
             status_code=422,
             detail=(
-                "No external link template is seeded. Seed a template "
-                "with category external_identifier, type tapdb, subtype object."
+                "No XRF/external_identifier/tapdb_object external link "
+                "template is seeded."
             ),
         )
     factory = InstanceFactory(TemplateManager(), domain_code=str(cfg["domain_code"]))
@@ -715,6 +705,13 @@ def create_tapdb_gui_router(
     async def gui_css():
         css_path = BASE_DIR / "static" / "css" / "tapdb-gui.css"
         return HTMLResponse(css_path.read_text(encoding="utf-8"), media_type="text/css")
+
+    @router.get("/static/lsmc-ui.js")
+    async def gui_lsmc_ui_js():
+        js_path = BASE_DIR / "static" / "js" / "lsmc-ui.js"
+        return HTMLResponse(
+            js_path.read_text(encoding="utf-8"), media_type="application/javascript"
+        )
 
     @router.get("/", response_class=HTMLResponse)
     async def home(
@@ -953,7 +950,7 @@ def create_tapdb_gui_router(
     async def create_page(
         request: Request,
         template_euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
@@ -986,7 +983,7 @@ def create_tapdb_gui_router(
     async def create_submit(
         request: Request,
         template_euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         form = await _read_urlencoded_form(request)
         name = str(form.get("name") or "")
@@ -1015,7 +1012,7 @@ def create_tapdb_gui_router(
     async def create_api(
         request: Request,
         template_euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         payload = await request.json()
         if not isinstance(payload, dict):
