@@ -170,14 +170,15 @@ Rules:
 - registry paths and `owner_repo_name` must be present in `meta`.
 
 ## Native Tenant Policy
-1. TAPDB stores tenant scope in native nullable `tenant_id` (`UUID`) columns on:
+1. TAPDB stores tenant scope in native `tenant_id` (`UUID`) columns on:
    - `generic_template`
    - `generic_instance`
    - `generic_instance_lineage`
    - `audit_log`
    - `outbox_event`
-2. Use native columns for tenancy filters/authorization whenever possible.
-3. JSON tenant keys (`json_addl.tenant_id`) may exist for payload compatibility but are not canonical.
+2. Use native columns for tenancy filters/authorization.
+3. Do not write canonical tenant IDs into `json_addl`, including `json_addl.tenant_id` or `json_addl.properties.tenant_id`.
+4. Legacy rows or external payloads that carry JSON tenant keys must be reported by audit/repair tooling and migrated to the native column before they are considered compliant.
 
 ## Python Library Usage
 Prefer TAPDB APIs over low-level SQL.

@@ -170,7 +170,7 @@ def test_create_instance_sets_tenant_id_column_and_json_when_provided():
     )
 
     assert inst.tenant_id == tenant_id
-    assert inst.json_addl["properties"]["tenant_id"] == str(tenant_id)
+    assert "tenant_id" not in inst.json_addl["properties"]
 
 
 def test_create_instance_system_user_normalizes_login_identifier_and_top_level_keys():

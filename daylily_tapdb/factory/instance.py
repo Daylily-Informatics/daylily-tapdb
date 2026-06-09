@@ -176,8 +176,8 @@ class InstanceFactory:
             create_children: Whether to create child objects from instantiation_layouts.
             _depth: Internal recursion depth tracker.
             _visited: Internal visited set for cycle detection.
-            tenant_id: Optional tenant UUID; if provided, persists to the real column
-                and also to json_addl["properties"]["tenant_id"].
+            tenant_id: Optional tenant UUID; if provided, persists only to the
+                canonical generic_instance.tenant_id column.
 
         Returns:
             The created instance.
@@ -218,8 +218,6 @@ class InstanceFactory:
         # Build json_addl
         json_addl = self._build_json_addl(session, template, properties)
         self._normalize_system_user_json_addl(template, json_addl)
-        if tenant_id is not None:
-            json_addl["properties"]["tenant_id"] = str(tenant_id)
 
         # Create instance
         instance = generic_instance(
