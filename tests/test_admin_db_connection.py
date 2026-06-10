@@ -24,7 +24,7 @@ def test_admin_get_db_reuses_single_engine_bundle(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        metrics_mod, "_admin_settings", lambda: {"metrics_enabled": False}
+        metrics_mod, "_admin_settings", lambda **_kwargs: {"metrics_enabled": False}
     )
     monkeypatch.setattr(
         pool_mod,
