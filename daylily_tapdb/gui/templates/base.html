@@ -32,6 +32,7 @@
     {% block content %}{% endblock %}
   </main>
   <footer>TapDB {{ tapdb_version }}</footer>
+  <script src="{{ tapdb_gui_url(request, '/static/tapdb-json-editor.js') }}"></script>
   <script src="{{ tapdb_gui_url(request, '/static/lsmc-ui.js') }}"></script>
 </body>
 </html>

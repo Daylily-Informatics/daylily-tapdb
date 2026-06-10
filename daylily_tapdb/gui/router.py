@@ -52,6 +52,22 @@ from daylily_tapdb.web.runtime import get_db
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 SEARCH_RECORD_TYPES = {"all", "template", "instance", "lineage"}
+IMMUTABLE_OBJECT_FIELDS = {
+    "kind",
+    "record_type",
+    "uid",
+    "euid",
+    "created_dt",
+    "modified_dt",
+    "category",
+    "type",
+    "subtype",
+    "version",
+    "template_uid",
+    "template_ref",
+    "template_euid",
+    "polymorphic_discriminator",
+}
 
 
 def _build_templates(bridge: TapdbHostBridge | None) -> Environment:
@@ -307,6 +323,18 @@ def _parse_json_object(raw: str, *, label: str) -> dict[str, Any]:
     return payload
 
 
+def _reject_immutable_object_fields(payload: dict[str, Any]) -> None:
+    immutable = sorted(IMMUTABLE_OBJECT_FIELDS.intersection(payload))
+    if immutable:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Immutable object field(s) cannot be edited through TapDB GUI/API: "
+                + ", ".join(immutable)
+            ),
+        )
+
+
 async def _read_urlencoded_form(request: Request) -> dict[str, str]:
     content_type = str(request.headers.get("content-type") or "").split(";", 1)[0]
     if content_type and content_type != "application/x-www-form-urlencoded":
@@ -321,6 +349,21 @@ async def _read_urlencoded_form(request: Request) -> dict[str, str]:
 
 def _template_code(template: Any) -> str:
     return f"{template.category}/{template.type}/{template.subtype}/{template.version}/"
+
+
+def _template_row(template: generic_template) -> dict[str, Any]:
+    return {
+        "uid": template.uid,
+        "euid": template.euid,
+        "name": template.name,
+        "category": template.category,
+        "type": template.type,
+        "subtype": template.subtype,
+        "version": template.version,
+        "instance_prefix": template.instance_prefix,
+        "bstatus": template.bstatus,
+        "code": _template_code(template),
+    }
 
 
 def _validate_template_payload(payload: dict[str, Any]) -> list[ConfigIssue]:
@@ -500,6 +543,7 @@ def _create_external_link(
         relationship_type=relationship_type,
     )
     session.add(lineage)
+    session.flush()
     return {
         "source_euid": source.euid,
         "link_euid": link.euid,
@@ -552,6 +596,19 @@ def _update_object_json(
         raise HTTPException(status_code=403, detail="Templates are read-only")
     obj.json_addl = json_addl
     return {"euid": euid, "json_addl": json_addl}
+
+
+def _update_object_name(session: Any, *, euid: str, name: str) -> dict[str, Any]:
+    value = str(name or "").strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="name is required")
+    obj, record_type = find_object_by_euid(session, euid)
+    if obj is None or record_type is None:
+        raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
+    if record_type == "template":
+        raise HTTPException(status_code=403, detail="Templates are read-only")
+    obj.name = value
+    return {"euid": euid, "name": value}
 
 
 def _update_object_status(session: Any, *, euid: str, bstatus: str) -> dict[str, Any]:
@@ -671,7 +728,12 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
     with get_db(config_path) as conn:
         with conn.session_scope() as session:
             external_template = _external_link_template(session)
-            template_count = (
+            external_template_detail = (
+                _template_code(external_template)
+                if external_template is not None
+                else "No XRF external link template found"
+            )
+            template_count = len(
                 session.query(generic_template)
                 .filter_by(is_deleted=False)
                 .limit(500)
@@ -681,18 +743,14 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
         {
             "name": "external_link_template",
             "ok": external_template is not None,
-            "detail": (
-                _template_code(external_template)
-                if external_template is not None
-                else "No XRF external link template found"
-            ),
+            "detail": external_template_detail,
         }
     )
     checks.append(
         {
             "name": "template_inventory",
             "ok": bool(template_count),
-            "detail": f"{len(template_count)} active template(s) visible",
+            "detail": f"{template_count} active template(s) visible",
         }
     )
     return {
@@ -735,13 +793,29 @@ def create_tapdb_gui_router(
             js_path.read_text(encoding="utf-8"), media_type="application/javascript"
         )
 
+    @router.get("/static/tapdb-json-editor.js")
+    async def gui_json_editor_js():
+        js_path = BASE_DIR / "static" / "js" / "tapdb-json-editor.js"
+        return HTMLResponse(
+            js_path.read_text(encoding="utf-8"), media_type="application/javascript"
+        )
+
     @router.get("/", response_class=HTMLResponse)
     async def home(
         request: Request,
         q: str = "",
         user: dict[str, Any] = Depends(require_tapdb_gui_user),
     ):
-        return await search_page(request, q=q, user=user)
+        return await search_page(
+            request,
+            q=q,
+            record_type="all",
+            category="",
+            type="",
+            subtype="",
+            limit=25,
+            user=user,
+        )
 
     @router.get("/search", response_class=HTMLResponse)
     async def search_page(
@@ -839,12 +913,13 @@ def create_tapdb_gui_router(
                     .limit(500)
                     .all()
                 )
+                rows = [_template_row(item) for item in items]
         return _render(
             templates,
             request,
             "templates.html",
             user=user,
-            items=items,
+            items=rows,
             category=category,
         )
 
@@ -860,6 +935,26 @@ def create_tapdb_gui_router(
             user=user,
             raw_json=json.dumps(_example_template_pack(), indent=2),
             issues=[],
+            saved=None,
+        )
+
+    @router.get("/templates/validate", response_class=HTMLResponse)
+    async def template_validate_get_page(
+        request: Request,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        return _render(
+            templates,
+            request,
+            "template_editor.html",
+            user=user,
+            raw_json=json.dumps(_example_template_pack(), indent=2),
+            issues=[
+                ConfigIssue(
+                    level="info",
+                    message="Use Validate after editing the template pack JSON.",
+                )
+            ],
             saved=None,
         )
 
@@ -950,18 +1045,30 @@ def create_tapdb_gui_router(
                                 f"{_template_code(existing)}"
                             ),
                         )
-                summary = seed_templates(
-                    session,
-                    [dict(item) for item in payload["templates"]],
-                    overwrite=False,
-                    core_config_dir=find_tapdb_core_config_dir(),
-                    domain_code=str(cfg["domain_code"]),
-                    owner_repo_name=str(cfg["owner_repo_name"]),
-                    domain_registry_path=Path(str(cfg["domain_registry_path"])),
-                    prefix_registry_path=Path(
-                        str(cfg["prefix_ownership_registry_path"])
-                    ),
-                )
+                try:
+                    summary = seed_templates(
+                        session,
+                        [dict(item) for item in payload["templates"]],
+                        overwrite=False,
+                        core_config_dir=find_tapdb_core_config_dir(),
+                        domain_code=str(cfg["domain_code"]),
+                        owner_repo_name=str(cfg["owner_repo_name"]),
+                        domain_registry_path=Path(str(cfg["domain_registry_path"])),
+                        prefix_registry_path=Path(
+                            str(cfg["prefix_ownership_registry_path"])
+                        ),
+                    )
+                except ValueError as exc:
+                    issues = [ConfigIssue(level="error", message=str(exc))]
+                    return _render(
+                        templates,
+                        request,
+                        "template_editor.html",
+                        user=user,
+                        raw_json=json.dumps(payload, indent=2, sort_keys=True),
+                        issues=issues,
+                        saved=None,
+                    )
         return _render(
             templates,
             request,
@@ -1178,6 +1285,46 @@ def create_tapdb_gui_router(
             status_code=303,
         )
 
+    @router.post("/object/{euid}/name")
+    async def edit_name(
+        request: Request,
+        euid: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        form = await _read_urlencoded_form(request)
+        name = str(form.get("name") or "")
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope(commit=True) as session:
+                _update_object_name(session, euid=euid, name=name)
+        return RedirectResponse(
+            gui_url_with_query(request, f"/object/{euid}", notice="name_updated"),
+            status_code=303,
+        )
+
+    @router.post("/api/object/{euid}/name")
+    async def edit_name_api(
+        request: Request,
+        euid: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400, detail="name payload must be a JSON object"
+            )
+        _reject_immutable_object_fields(payload)
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope(commit=True) as session:
+                return jsonable_encoder(
+                    _update_object_name(
+                        session,
+                        euid=euid,
+                        name=str(payload.get("name") or ""),
+                    )
+                )
+
     @router.post("/api/object/{euid}/edit-json")
     async def edit_json_api(
         request: Request,
@@ -1224,6 +1371,7 @@ def create_tapdb_gui_router(
             raise HTTPException(
                 status_code=400, detail="status payload must be a JSON object"
             )
+        _reject_immutable_object_fields(payload)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
             with conn.session_scope(commit=True) as session:
@@ -1463,7 +1611,9 @@ def create_tapdb_gui_router(
         limit: int = Query(5000, ge=1, le=50000),
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
-        metrics = build_metrics_page_context("target", limit=limit)
+        metrics = build_metrics_page_context(
+            "target", limit=limit, config_path=resolved_config_path
+        )
         return _render(
             templates,
             request,
@@ -1479,7 +1629,11 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         del user
-        return jsonable_encoder(build_metrics_page_context("target", limit=limit))
+        return jsonable_encoder(
+            build_metrics_page_context(
+                "target", limit=limit, config_path=resolved_config_path
+            )
+        )
 
     return router
 

@@ -99,7 +99,7 @@ def test_db_metrics_helpers_cover_parse_extract_tail_and_summary(tmp_path, monke
     monkeypatch.setattr(
         metrics_mod,
         "get_admin_settings",
-        lambda: {"metrics_enabled": False, "metrics_queue_max": 7},
+        lambda **_kwargs: {"metrics_enabled": False, "metrics_queue_max": 7},
     )
     assert metrics_mod._admin_settings()["metrics_queue_max"] == 7
     assert metrics_mod.metrics_enabled() is False
@@ -110,7 +110,7 @@ def test_db_metrics_helpers_cover_parse_extract_tail_and_summary(tmp_path, monke
     monkeypatch.setattr(
         metrics_mod,
         "_admin_settings",
-        lambda: {"metrics_enabled": "true"},
+        lambda **_kwargs: {"metrics_enabled": "true"},
     )
     assert metrics_mod.metrics_enabled() is True
 
@@ -135,7 +135,9 @@ def test_db_metrics_helpers_cover_parse_extract_tail_and_summary(tmp_path, monke
     assert metrics_mod._tail_lines(tmp_path / "missing.tsv", max_lines=5) == []
 
     monkeypatch.setattr(
-        metrics_mod, "current_metrics_path", lambda env_name, now_utc=None: metrics_file
+        metrics_mod,
+        "current_metrics_path",
+        lambda env_name, now_utc=None, config_path=None: metrics_file,
     )
     rows = metrics_mod.read_recent_metrics("dev", max_lines=10)
     assert rows[0]["ok"] is True
@@ -148,14 +150,14 @@ def test_db_metrics_helpers_cover_parse_extract_tail_and_summary(tmp_path, monke
     assert summary["max_ms"] == 9.5
     assert summary["by_table"][0]["table_hint"] == "generic_template"
 
-    monkeypatch.setattr(metrics_mod, "metrics_enabled", lambda: True)
+    monkeypatch.setattr(metrics_mod, "metrics_enabled", lambda **_kwargs: True)
     monkeypatch.setattr(metrics_mod, "get_dropped_count", lambda env_name: 3)
     page = metrics_mod.build_metrics_page_context("dev", limit=99999)
     assert page["limit"] == 20000
     assert page["dropped_count"] == 3
     assert page["summary"]["count"] == 2
 
-    monkeypatch.setattr(metrics_mod, "metrics_enabled", lambda: False)
+    monkeypatch.setattr(metrics_mod, "metrics_enabled", lambda **_kwargs: False)
     disabled = metrics_mod.build_metrics_page_context("dev", limit=5)
     assert disabled["metrics_enabled"] is False
     assert "disabled" in disabled["metrics_message"]
@@ -181,7 +183,7 @@ def test_db_metrics_writer_cache_and_engine_metrics_callbacks(monkeypatch):
         def stop(self):
             self.stopped += 1
 
-    monkeypatch.setattr(metrics_mod, "metrics_enabled", lambda: True)
+    monkeypatch.setattr(metrics_mod, "metrics_enabled", lambda **_kwargs: True)
     monkeypatch.setattr(
         metrics_mod,
         "TSVMetricsWriter",

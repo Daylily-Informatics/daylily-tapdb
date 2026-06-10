@@ -144,7 +144,7 @@ def test_runtime_connection_sets_search_path_and_audit_username(
         target_name="target",
         engine=SimpleNamespace(),
         SessionFactory=lambda: FakeSession(),
-        cfg={},
+        cfg={"domain_code": "Z", "owner_repo_name": "lsmc-atlas"},
         schema_name="tapdb_testdb",
     )
     conn = runtime_mod.RuntimeDBConnection(bundle)
@@ -155,6 +155,8 @@ def test_runtime_connection_sets_search_path_and_audit_username(
 
     assert ("commit", None) in events
     assert any(item == ("execute", {"schema_name": "tapdb_testdb"}) for item in events)
+    assert any(item == ("execute", {"code": "Z"}) for item in events)
+    assert any(item == ("execute", {"owner": "lsmc-atlas"}) for item in events)
     assert any(
         item == ("execute", {"username": "alice@example.com"}) for item in events
     )

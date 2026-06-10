@@ -3,7 +3,7 @@
 {% block content %}
 <section class="band">
   <h1>Create External Object Link</h1>
-  <p>Creates a typed TapDB object storing the foreign UID, then links it to {{ euid }} by lineage.</p>
+  <p>Creates a typed TapDB object storing the foreign UID, then links it to <a href="{{ tapdb_gui_url(request, '/object/' ~ euid) }}">{{ euid }}</a> by lineage.</p>
   <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ euid ~ '/external-links/new') }}" class="stack">
     <label>System <input name="system" required></label>
     <label>Foreign UID <input name="foreign_uid" required></label>

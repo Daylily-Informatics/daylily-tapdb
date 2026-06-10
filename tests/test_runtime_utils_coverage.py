@@ -161,7 +161,7 @@ def test_runtime_db_connection_session_scope_sets_search_path_and_audit_username
         target_name="target",
         engine=SimpleNamespace(),
         SessionFactory=lambda: FakeSession(),
-        cfg={},
+        cfg={"domain_code": "Z", "owner_repo_name": "lsmc-atlas"},
         schema_name="tapdb_testdb",
     )
     conn = runtime_mod.RuntimeDBConnection(bundle)
@@ -172,7 +172,44 @@ def test_runtime_db_connection_session_scope_sets_search_path_and_audit_username
 
     assert ("commit", None) in events
     assert ("execute", {"schema_name": "tapdb_testdb"}) in events
+    assert ("execute", {"code": "Z"}) in events
+    assert ("execute", {"owner": "lsmc-atlas"}) in events
     assert ("execute", {"username": "alice@example.com"}) in events
+
+
+def test_runtime_db_connection_requires_identity_scope_for_postgres():
+    class FakeTx:
+        def commit(self):
+            raise AssertionError("commit must not run")
+
+        def rollback(self):
+            pass
+
+    class FakeSession:
+        bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+        def begin(self):
+            return FakeTx()
+
+        def execute(self, stmt, params=None):
+            del stmt, params
+
+        def close(self):
+            pass
+
+    bundle = runtime_mod.RuntimeBundle(
+        config_path="/tmp/tapdb-config.yaml",
+        target_name="target",
+        engine=SimpleNamespace(),
+        SessionFactory=lambda: FakeSession(),
+        cfg={"domain_code": "Z"},
+        schema_name="tapdb_testdb",
+    )
+    conn = runtime_mod.RuntimeDBConnection(bundle)
+
+    with pytest.raises(RuntimeError, match="owner_repo_name"):
+        with conn.session_scope(commit=True):
+            pass
 
 
 def test_runtime_engine_cache_key_includes_schema(monkeypatch):

@@ -68,6 +68,38 @@ def _set_search_path(session: Session, schema_name: str) -> None:
     )
 
 
+def _set_identity_scope(session: Session, cfg: dict[str, str]) -> None:
+    """Set per-transaction TapDB identity scope required by EUID triggers."""
+    bind = getattr(session, "bind", None)
+    dialect = getattr(bind, "dialect", None)
+    dialect_name = str(getattr(dialect, "name", "") or "").strip().lower()
+    if dialect_name != "postgresql":
+        return
+    domain_code = str(cfg.get("domain_code") or "").strip()
+    owner_repo_name = str(cfg.get("owner_repo_name") or "").strip()
+    missing = [
+        label
+        for label, value in (
+            ("domain_code", domain_code),
+            ("owner_repo_name", owner_repo_name),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            "TapDB target config is missing required identity scope field(s): "
+            + ", ".join(missing)
+        )
+    session.execute(
+        text("SET LOCAL session.current_domain_code = :code"),
+        {"code": domain_code},
+    )
+    session.execute(
+        text("SET LOCAL session.current_owner_repo_name = :owner"),
+        {"owner": owner_repo_name},
+    )
+
+
 @dataclass(frozen=True)
 class RuntimeBundle:
     config_path: str
@@ -97,6 +129,7 @@ class RuntimeDBConnection:
         trans = session.begin()
         try:
             _set_search_path(session, self._bundle.schema_name)
+            _set_identity_scope(session, self._bundle.cfg)
             _set_audit_username(session, self.app_username)
             yield session
             if commit:

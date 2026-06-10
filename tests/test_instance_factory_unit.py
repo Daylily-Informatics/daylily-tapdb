@@ -370,6 +370,62 @@ def test_create_children_handles_string_and_object_child_templates_and_creates_l
     assert len(lineages) == 3
 
 
+def test_create_children_supports_96_well_plate_layout(monkeypatch):
+    from daylily_tapdb.factory.instance import InstanceFactory
+    from daylily_tapdb.models.lineage import generic_instance_lineage
+
+    sess = _FakeSession()
+    parent = SimpleNamespace(
+        uid=uuid.uuid4(),
+        euid="Z-PLT-1Q",
+        name="codex evidence plate",
+        polymorphic_discriminator="generic_instance",
+    )
+    tmpl = SimpleNamespace(
+        json_addl={
+            "instantiation_layouts": [
+                {
+                    "relationship_type": "contains",
+                    "name_pattern": "{parent_name}_well_{index}",
+                    "child_templates": [
+                        {"template_code": "WEL/container/well/1.0", "count": 96}
+                    ],
+                }
+            ]
+        }
+    )
+    created = []
+
+    def fake_create_instance(*, session, template_code, name, **kwargs):
+        created.append((template_code, name))
+        return SimpleNamespace(
+            uid=uuid.uuid4(),
+            euid=f"Z-WEL-{len(created)}Q",
+            polymorphic_discriminator="generic_instance",
+        )
+
+    factory = InstanceFactory(
+        template_manager=SimpleNamespace(get_template=lambda *a, **k: None),
+        domain_code="Z",
+    )
+    monkeypatch.setattr(
+        factory,
+        "_resolve_template_code_pattern",
+        lambda session, template_code: f"{template_code}/",
+    )
+    monkeypatch.setattr(factory, "create_instance", fake_create_instance)
+
+    factory._create_children(sess, parent=parent, template=tmpl, depth=0, visited=set())
+
+    assert len(created) == 96
+    assert created[0] == ("WEL/container/well/1.0/", "codex evidence plate_well_1")
+    assert created[-1] == ("WEL/container/well/1.0/", "codex evidence plate_well_96")
+    lineages = [
+        item for item in sess.added if isinstance(item, generic_instance_lineage)
+    ]
+    assert len(lineages) == 96
+
+
 def test_get_or_create_singleton_instance_existing_is_returned_and_filters_is_deleted():
     from daylily_tapdb.factory.instance import InstanceFactory
 

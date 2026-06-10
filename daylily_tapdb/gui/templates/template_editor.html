@@ -54,7 +54,7 @@
 
 <section class="band">
   <form method="post" class="editor">
-    <textarea id="template-json" name="template_json" spellcheck="false">{{ raw_json }}</textarea>
+    <textarea id="template-json" name="template_json" spellcheck="false" data-tapdb-json-editor data-json-editor-label="Template pack JSON">{{ raw_json }}</textarea>
     <div class="toolbar">
       <button formaction="{{ tapdb_gui_url(request, '/templates/validate') }}" type="submit">Validate</button>
       <button formaction="{{ tapdb_gui_url(request, '/templates/save') }}" type="submit">Save</button>

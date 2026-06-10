@@ -99,7 +99,10 @@ def teardown_function() -> None:
     clear_cli_context()
 
 
-def test_resolve_context_uses_explicit_config_metadata_and_runtime_dir(tmp_path: Path):
+def test_resolve_context_uses_explicit_config_metadata_and_runtime_dir(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     cfg_path = _write_config(
         tmp_path / ".config" / "tapdb" / "alpha" / "beta" / "tapdb-config.yaml"
     )
@@ -156,7 +159,8 @@ def test_runtime_command_requires_explicit_config_and_rejects_env(tmp_path: Path
     assert "beta" in result.output
 
 
-def test_metrics_runtime_dir_follows_explicit_config_parent(tmp_path: Path):
+def test_metrics_runtime_dir_follows_explicit_config_parent(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     cfg_path = _write_config(
         tmp_path / ".config" / "tapdb" / "alpha" / "beta" / "tapdb-config.yaml"
     )
@@ -165,3 +169,18 @@ def test_metrics_runtime_dir_follows_explicit_config_parent(tmp_path: Path):
     metrics_path = current_metrics_path("ignored")
 
     assert metrics_path.parent == cfg_path.parent / "runtime" / "metrics"
+
+
+def test_metrics_runtime_dir_honors_xdg_state_home(monkeypatch, tmp_path: Path):
+    cfg_path = _write_config(
+        tmp_path / ".config" / "tapdb" / "alpha" / "beta" / "tapdb-config.yaml"
+    )
+    xdg_state_home = tmp_path / "xdg-state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg_state_home))
+
+    set_cli_context(config_path=cfg_path)
+    ctx = resolve_context(require_keys=True)
+    metrics_path = current_metrics_path("ignored")
+
+    assert ctx.runtime_dir() == xdg_state_home / "tapdb" / "alpha" / "beta" / "runtime"
+    assert metrics_path.parent == ctx.runtime_dir() / "metrics"

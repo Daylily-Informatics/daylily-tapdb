@@ -73,6 +73,54 @@ button, .button {
 .secondary { background: #fff; color: var(--tapdb-primary); }
 textarea { width: 100%; min-height: 14rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .editor textarea { min-height: 28rem; }
+.tapdb-json-source[hidden] { display: none !important; }
+.tapdb-json-editor {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.75rem;
+  border: 1px solid var(--tapdb-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--tapdb-panel) 92%, var(--tapdb-bg));
+}
+.tapdb-json-editor-title { font-weight: 700; color: var(--tapdb-muted); }
+.tapdb-json-editor-root,
+.tapdb-json-node,
+.tapdb-json-children {
+  display: grid;
+  gap: 0.55rem;
+}
+.tapdb-json-node {
+  padding: 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--tapdb-border) 70%, transparent);
+  border-radius: 7px;
+  background: var(--tapdb-panel);
+}
+.tapdb-json-node-toolbar {
+  display: flex;
+  justify-content: flex-start;
+  gap: 0.5rem;
+}
+.tapdb-json-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.35fr) minmax(14rem, 1fr) auto;
+  gap: 0.5rem;
+  align-items: start;
+}
+.tapdb-json-key,
+.tapdb-json-primitive { width: 100%; }
+.tapdb-json-index,
+.tapdb-json-null {
+  padding: 0.48rem 0;
+  color: var(--tapdb-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.tapdb-json-editor-error {
+  padding: 0.55rem;
+  border: 1px solid var(--tapdb-danger);
+  border-radius: 6px;
+  color: var(--tapdb-danger);
+}
+.danger { color: var(--tapdb-danger); border-color: var(--tapdb-danger); }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 0.5rem; border-bottom: 1px solid var(--tapdb-border); text-align: left; vertical-align: top; }
 th { color: var(--tapdb-muted); font-weight: 650; }

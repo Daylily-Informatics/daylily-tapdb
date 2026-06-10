@@ -270,6 +270,36 @@ def test_gui_object_api_returns_detail_relationships_audit_and_refs(monkeypatch)
     assert payload["external_refs"] == []
 
 
+def test_gui_object_page_links_visible_euids_to_canonical_details(monkeypatch):
+    source = _instance("Z-SMP-1Q", "Sample 1")
+    child = _instance("Z-CHD-2Q", "Child 1")
+    lineage = SimpleNamespace(
+        euid="Z-LIN-3Q",
+        relationship_type="contains",
+        is_deleted=False,
+        child_instance=child,
+        parent_instance=source,
+    )
+    source.parent_of_lineages = _Related([lineage])
+    child.child_of_lineages = _Related([lineage])
+    session = _Session(
+        {
+            generic_template: [_template()],
+            generic_instance: [source, child],
+            generic_instance_lineage: [lineage],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.get("/object/Z-SMP-1Q")
+
+    assert response.status_code == 200
+    assert 'href="/object/Z-SMP-1Q"' in response.text
+    assert 'href="/object/Z-LIN-3Q"' in response.text
+    assert 'href="/object/Z-CHD-2Q"' in response.text
+
+
 def test_gui_admin_pages_require_admin(monkeypatch):
     client = _client(monkeypatch, role="user")
 
@@ -347,6 +377,99 @@ def test_gui_template_editor_includes_simple_builder(monkeypatch):
     assert 'id="builder-generate-json"' in response.text
     assert 'value="WEL/container/example_well/1.0"' in response.text
     assert "Child Instantiation" in response.text
+    assert "data-tapdb-json-editor" in response.text
+    assert 'data-json-editor-label="Template pack JSON"' in response.text
+
+
+def test_gui_json_editor_asset_is_served_and_base_loads_it(monkeypatch):
+    client = _client(monkeypatch)
+
+    asset = client.get("/static/tapdb-json-editor.js")
+    page = client.get("/templates/new")
+
+    assert asset.status_code == 200
+    assert "tapdb-json-editor" in asset.text
+    assert "/static/tapdb-json-editor.js" in page.text
+
+
+def test_gui_template_validate_get_renders_explicit_editor(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get("/templates/validate")
+
+    assert response.status_code == 200
+    assert "Use Validate after editing the template pack JSON." in response.text
+    assert 'data-testid="template-builder"' in response.text
+
+
+def test_gui_templates_page_renders_template_rows(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get("/templates")
+
+    assert response.status_code == 200
+    assert "External Object Reference" in response.text
+    assert "Z-XRF-1Q" in response.text
+    assert "/object/Z-XRF-1Q" in response.text
+    assert "/create/Z-XRF-1Q" in response.text
+
+
+def test_gui_template_save_renders_seed_validation_error(monkeypatch):
+    client = _client(monkeypatch)
+
+    def fail_seed(*_args, **_kwargs):
+        raise ValueError("prefix ZZZ is not claimed by atlas")
+
+    monkeypatch.setattr("daylily_tapdb.gui.router.seed_templates", fail_seed)
+
+    response = client.post(
+        "/templates/save",
+        data={
+            "template_json": (
+                '{"templates":[{"name":"Bad","polymorphic_discriminator":"generic_template",'
+                '"category":"ZZZ","type":"container","subtype":"bad","version":"1.0",'
+                '"instance_prefix":"ZZZ","instance_polymorphic_identity":"generic_instance",'
+                '"json_addl":{}}]}'
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert "prefix ZZZ is not claimed by atlas" in response.text
+
+
+def test_gui_template_save_renders_success(monkeypatch):
+    client = _client(monkeypatch)
+
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.seed_templates",
+        lambda *_args, **_kwargs: SimpleNamespace(inserted=1, skipped=0),
+    )
+
+    response = client.post(
+        "/templates/save",
+        data={
+            "template_json": (
+                '{"templates":[{"name":"Good","polymorphic_discriminator":"generic_template",'
+                '"category":"GUD","type":"container","subtype":"thing","version":"1.0",'
+                '"instance_prefix":"GUD","instance_polymorphic_identity":"generic_instance",'
+                '"json_addl":{}}]}'
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Saved 1 template(s); skipped 0." in response.text
+
+
+def test_gui_home_uses_concrete_search_defaults(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Search" in response.text
+    assert "Z-XRF-1Q" in response.text
 
 
 def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
@@ -422,6 +545,23 @@ def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
     ]
 
 
+def test_gui_create_non_template_euid_returns_clear_404(monkeypatch):
+    session = _Session(
+        {
+            generic_template: [],
+            generic_instance: [_instance("Z-AGX-2N", "Instance not template")],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.get("/create/Z-AGX-2N")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Template not found: Z-AGX-2N"
+
+
 def test_gui_create_api_passes_child_instantiation_flag(monkeypatch):
     template = _template(
         "Z-PLT-T1Q",
@@ -476,9 +616,13 @@ def test_gui_create_api_passes_child_instantiation_flag(monkeypatch):
 
 
 def test_gui_metrics_page_reuses_metrics_context(monkeypatch):
-    monkeypatch.setattr(
-        "daylily_tapdb.gui.router.build_metrics_page_context",
-        lambda target, limit: SimpleNamespace(
+    calls = {}
+
+    def fake_metrics_context(target, *, limit, config_path):
+        calls["target"] = target
+        calls["limit"] = limit
+        calls["config_path"] = config_path
+        return SimpleNamespace(
             metrics_message="",
             metrics_enabled=True,
             metrics_file="tapdb-metrics.tsv",
@@ -493,7 +637,11 @@ def test_gui_metrics_page_reuses_metrics_context(monkeypatch):
                     )
                 ]
             ),
-        ),
+        )
+
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.build_metrics_page_context",
+        fake_metrics_context,
     )
     client = _client(monkeypatch)
 
@@ -502,12 +650,21 @@ def test_gui_metrics_page_reuses_metrics_context(monkeypatch):
     assert response.status_code == 200
     assert "DB Metrics" in response.text
     assert "/tapdb/search" in response.text
+    assert calls == {
+        "target": "target",
+        "limit": 5000,
+        "config_path": "/tmp/tapdb-config.yaml",
+    }
 
 
 def test_gui_metrics_api_reuses_metrics_context(monkeypatch):
-    monkeypatch.setattr(
-        "daylily_tapdb.gui.router.build_metrics_page_context",
-        lambda target, limit: {
+    calls = {}
+
+    def fake_metrics_context(target, *, limit, config_path):
+        calls["target"] = target
+        calls["limit"] = limit
+        calls["config_path"] = config_path
+        return {
             "metrics_enabled": True,
             "metrics_file": "tapdb-metrics.tsv",
             "dropped_count": 0,
@@ -521,7 +678,11 @@ def test_gui_metrics_api_reuses_metrics_context(monkeypatch):
                     }
                 ]
             },
-        },
+        }
+
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.build_metrics_page_context",
+        fake_metrics_context,
     )
     client = _client(monkeypatch)
 
@@ -529,6 +690,11 @@ def test_gui_metrics_api_reuses_metrics_context(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["summary"]["by_path"][0]["path"] == "/tapdb/search"
+    assert calls == {
+        "target": "target",
+        "limit": 100,
+        "config_path": "/tmp/tapdb-config.yaml",
+    }
 
 
 def test_gui_readiness_page_and_api_report_seeded_external_template(monkeypatch):
@@ -596,6 +762,30 @@ def test_gui_status_redirect_adds_success_notice(monkeypatch):
     assert "Status updated." in notice_page.text
 
 
+def test_gui_name_redirect_adds_success_notice(monkeypatch):
+    session = _Session(
+        {
+            generic_template: [_template()],
+            generic_instance: [_instance("Z-SMP-1Q", "Sample 1")],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.post(
+        "/object/Z-SMP-1Q/name",
+        data={"name": "Updated Sample"},
+        follow_redirects=False,
+    )
+    notice_page = client.get("/object/Z-SMP-1Q?notice=name_updated")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/object/Z-SMP-1Q?notice=name_updated"
+    assert session.rows[generic_instance][0].name == "Updated Sample"
+    assert "Name updated." in notice_page.text
+
+
 def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
     source = _instance("Z-SMP-1Q", "Sample 1")
     parent = _instance("Z-PAR-22Q", "Parent 1")
@@ -613,6 +803,10 @@ def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
         "/api/object/Z-SMP-1Q/edit-json",
         json={"properties": {"color": "red"}},
     )
+    name_response = client.post(
+        "/api/object/Z-SMP-1Q/name",
+        json={"name": "Sample 1 renamed"},
+    )
     status_response = client.post(
         "/api/object/Z-SMP-1Q/status",
         json={"bstatus": "paused"},
@@ -629,6 +823,9 @@ def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
     assert json_response.status_code == 200
     assert json_response.json()["json_addl"] == {"properties": {"color": "red"}}
     assert source.json_addl == {"properties": {"color": "red"}}
+    assert name_response.status_code == 200
+    assert name_response.json() == {"euid": "Z-SMP-1Q", "name": "Sample 1 renamed"}
+    assert source.name == "Sample 1 renamed"
     assert status_response.status_code == 200
     assert status_response.json() == {"euid": "Z-SMP-1Q", "bstatus": "paused"}
     assert source.bstatus == "paused"
@@ -636,6 +833,29 @@ def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
     assert lineage_response.json()["parent_euid"] == "Z-PAR-22Q"
     assert lineage_response.json()["child_euid"] == "Z-SMP-1Q"
     assert lineage_response.json()["relationship_type"] == "contains"
+
+
+def test_gui_object_mutation_api_rejects_immutable_fields(monkeypatch):
+    session = _Session(
+        {
+            generic_template: [_template()],
+            generic_instance: [_instance("Z-SMP-1Q", "Sample 1")],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.post(
+        "/api/object/Z-SMP-1Q/name",
+        json={"name": "New", "uid": 999, "template_euid": "Z-XRF-1Q"},
+    )
+
+    assert response.status_code == 400
+    assert "Immutable object field(s)" in response.json()["detail"]
+    assert "uid" in response.json()["detail"]
+    assert "template_euid" in response.json()["detail"]
+    assert session.rows[generic_instance][0].name == "Sample 1"
 
 
 def test_gui_external_link_creates_typed_object_and_lineage(monkeypatch):
@@ -734,12 +954,11 @@ def test_gui_external_link_api_creates_typed_object_and_lineage(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "source_euid": "Z-SMP-1Q",
-        "link_euid": "Z-XRF-2Q",
-        "lineage_euid": None,
-        "relationship_type": "external_ref",
-    }
+    payload = response.json()
+    assert payload["source_euid"] == "Z-SMP-1Q"
+    assert payload["link_euid"] == "Z-XRF-2Q"
+    assert payload["lineage_euid"]
+    assert payload["relationship_type"] == "external_ref"
     assert len(session.added) == 1
     assert session.added[0].parent_instance_uid == len("Z-SMP-1Q")
     assert session.added[0].child_instance_uid == 201
