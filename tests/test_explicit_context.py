@@ -159,7 +159,9 @@ def test_runtime_command_requires_explicit_config_and_rejects_env(tmp_path: Path
     assert "beta" in result.output
 
 
-def test_metrics_runtime_dir_follows_explicit_config_parent(monkeypatch, tmp_path: Path):
+def test_metrics_runtime_dir_follows_explicit_config_parent(
+    monkeypatch, tmp_path: Path
+):
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     cfg_path = _write_config(
         tmp_path / ".config" / "tapdb" / "alpha" / "beta" / "tapdb-config.yaml"
