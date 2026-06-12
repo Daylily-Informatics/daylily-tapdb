@@ -19,6 +19,15 @@
       },
       "XRF": {
         "issuer_app_code": "daylily-tapdb"
+      },
+      "ACT": {
+        "issuer_app_code": "daylily-tapdb"
+      },
+      "WEN": {
+        "issuer_app_code": "daylily-tapdb"
+      },
+      "PAT": {
+        "issuer_app_code": "daylily-tapdb"
       }
     }
   }

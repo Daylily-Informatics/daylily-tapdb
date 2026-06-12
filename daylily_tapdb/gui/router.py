@@ -85,6 +85,7 @@ def _build_templates(bridge: TapdbHostBridge | None) -> Environment:
         autoescape=select_autoescape(["html", "htm", "xml"]),
     )
     env.globals["tapdb_gui_url"] = gui_url
+    env.globals["tapdb_gui_nav_links"] = gui_nav_links
     env.globals["tapdb_gui_host_shell"] = lambda request: resolve_host_shell(
         bridge, request
     )
@@ -102,6 +103,35 @@ def gui_base_path(request: Request) -> str:
 def gui_url(request: Request, path: str) -> str:
     suffix = "/" + str(path or "/").lstrip("/")
     return f"{gui_base_path(request)}{suffix}"
+
+
+def gui_nav_links(request: Request, shell: dict[str, Any]) -> list[dict[str, str]]:
+    """Merge host shell navigation with TapDB's built-in GUI links."""
+
+    built_in = [
+        {"label": "Search", "href": gui_url(request, "/search")},
+        {"label": "Templates", "href": gui_url(request, "/templates")},
+        {"label": "Readiness", "href": gui_url(request, "/admin/readiness")},
+        {"label": "Meridian", "href": gui_url(request, "/admin/meridian")},
+        {"label": "Metrics", "href": gui_url(request, "/admin/metrics")},
+    ]
+    candidates = list(shell.get("nav_links") or []) + built_in
+    seen_labels: set[str] = set()
+    seen_hrefs: set[str] = set()
+    links: list[dict[str, str]] = []
+    for item in candidates:
+        label = str(item.get("label") or "").strip()
+        href = str(item.get("href") or "").strip()
+        if not label or not href:
+            continue
+        label_key = label.casefold()
+        href_key = href.rstrip("/") or href
+        if label_key in seen_labels or href_key in seen_hrefs:
+            continue
+        seen_labels.add(label_key)
+        seen_hrefs.add(href_key)
+        links.append({"label": label, "href": href})
+    return links
 
 
 def gui_url_with_query(request: Request, path: str, **query: str) -> str:
@@ -364,6 +394,15 @@ def _template_row(template: generic_template) -> dict[str, Any]:
         "bstatus": template.bstatus,
         "code": _template_code(template),
     }
+
+
+def _template_payload_and_code(template: generic_template) -> tuple[dict[str, Any], str]:
+    payload = _record_to_dict(template, "template")
+    code = (
+        f"{payload['category']}/{payload['type']}/"
+        f"{payload['subtype']}/{payload['version']}/"
+    )
+    return payload, code
 
 
 def _validate_template_payload(payload: dict[str, Any]) -> list[ConfigIssue]:
@@ -1020,32 +1059,32 @@ def create_tapdb_gui_router(
                 issues=issues,
                 saved=None,
             )
-        cfg = get_db_config(config_path=resolved_config_path)
-        with get_db(resolved_config_path) as conn:
-            conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
-                for template in payload["templates"]:
-                    existing = (
-                        session.query(generic_template)
-                        .filter_by(
-                            domain_code=cfg["domain_code"],
-                            category=str(template["category"]),
-                            type=str(template["type"]),
-                            subtype=str(template["subtype"]),
-                            version=str(template["version"]),
-                            is_deleted=False,
+        try:
+            cfg = get_db_config(config_path=resolved_config_path)
+            with get_db(resolved_config_path) as conn:
+                conn.app_username = user.get("username")
+                with conn.session_scope(commit=True) as session:
+                    for template in payload["templates"]:
+                        existing = (
+                            session.query(generic_template)
+                            .filter_by(
+                                domain_code=cfg["domain_code"],
+                                category=str(template["category"]),
+                                type=str(template["type"]),
+                                subtype=str(template["subtype"]),
+                                version=str(template["version"]),
+                                is_deleted=False,
+                            )
+                            .first()
                         )
-                        .first()
-                    )
-                    if existing is not None:
-                        raise HTTPException(
-                            status_code=409,
-                            detail=(
-                                "Template already exists and is read-only: "
-                                f"{_template_code(existing)}"
-                            ),
-                        )
-                try:
+                        if existing is not None:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=(
+                                    "Template already exists and is read-only: "
+                                    f"{_template_code(existing)}"
+                                ),
+                            )
                     summary = seed_templates(
                         session,
                         [dict(item) for item in payload["templates"]],
@@ -1058,17 +1097,19 @@ def create_tapdb_gui_router(
                             str(cfg["prefix_ownership_registry_path"])
                         ),
                     )
-                except ValueError as exc:
-                    issues = [ConfigIssue(level="error", message=str(exc))]
-                    return _render(
-                        templates,
-                        request,
-                        "template_editor.html",
-                        user=user,
-                        raw_json=json.dumps(payload, indent=2, sort_keys=True),
-                        issues=issues,
-                        saved=None,
-                    )
+        except HTTPException:
+            raise
+        except (json.JSONDecodeError, KeyError, OSError, RuntimeError, ValueError) as exc:
+            issues = [ConfigIssue(level="error", message=f"Template save failed: {exc}")]
+            return _render(
+                templates,
+                request,
+                "template_editor.html",
+                user=user,
+                raw_json=json.dumps(payload, indent=2, sort_keys=True),
+                issues=issues,
+                saved=None,
+            )
         return _render(
             templates,
             request,
@@ -1097,17 +1138,14 @@ def create_tapdb_gui_router(
                     raise HTTPException(
                         status_code=404, detail=f"Template not found: {template_euid}"
                     )
-                template_payload = _record_to_dict(template, "template")
+                template_payload, template_code = _template_payload_and_code(template)
         return _render(
             templates,
             request,
             "create.html",
             user=user,
             template=template_payload,
-            template_code=(
-                f"{template_payload['category']}/{template_payload['type']}/"
-                f"{template_payload['subtype']}/{template_payload['version']}/"
-            ),
+            template_code=template_code,
             error=None,
             form={},
         )
@@ -1126,18 +1164,53 @@ def create_tapdb_gui_router(
             properties_json or "{}", label="properties_json"
         )
         cfg = get_db_config(config_path=resolved_config_path)
-        with get_db(resolved_config_path) as conn:
-            conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
-                created = _create_instance_from_template(
-                    session,
-                    cfg=cfg,
-                    template_euid=template_euid,
-                    name=name.strip(),
-                    properties=properties,
-                    create_children=str(create_children).lower() in {"true", "1", "on"},
-                )
-                instance_euid = created["instance_euid"]
+        try:
+            with get_db(resolved_config_path) as conn:
+                conn.app_username = user.get("username")
+                with conn.session_scope(commit=True) as session:
+                    created = _create_instance_from_template(
+                        session,
+                        cfg=cfg,
+                        template_euid=template_euid,
+                        name=name.strip(),
+                        properties=properties,
+                        create_children=str(create_children).lower()
+                        in {"true", "1", "on"},
+                    )
+                    instance_euid = created["instance_euid"]
+        except ValueError as exc:
+            with get_db(resolved_config_path) as conn:
+                conn.app_username = user.get("username")
+                with conn.session_scope() as session:
+                    template = (
+                        session.query(generic_template)
+                        .filter_by(euid=template_euid, is_deleted=False)
+                        .first()
+                    )
+                    if template is None:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Template not found: {template_euid}",
+                        ) from exc
+                    template_payload, template_code = _template_payload_and_code(
+                        template
+                    )
+            return _render(
+                templates,
+                request,
+                "create.html",
+                user=user,
+                template=template_payload,
+                template_code=template_code,
+                error=str(exc),
+                form={
+                    "name": name,
+                    "properties_json": json.dumps(
+                        properties, indent=2, sort_keys=True
+                    ),
+                    "create_children": create_children,
+                },
+            )
         return RedirectResponse(
             gui_url_with_query(
                 request, f"/object/{instance_euid}", notice="instance_created"
@@ -1676,13 +1749,29 @@ def _example_template_pack() -> dict[str, Any]:
                 },
             },
             {
+                "name": "Example Well",
+                "polymorphic_discriminator": "generic_template",
+                "category": "WEN",
+                "type": "container",
+                "subtype": "example_well",
+                "version": "1.0",
+                "instance_prefix": "WEN",
+                "instance_polymorphic_identity": "generic_instance",
+                "json_addl": {
+                    "properties": {
+                        "position": "",
+                    },
+                    "instantiation_layouts": [],
+                },
+            },
+            {
                 "name": "Example Plate",
                 "polymorphic_discriminator": "generic_template",
-                "category": "PLT",
+                "category": "PAT",
                 "type": "container",
                 "subtype": "example_plate",
                 "version": "1.0",
-                "instance_prefix": "PLT",
+                "instance_prefix": "PAT",
                 "instance_polymorphic_identity": "generic_instance",
                 "json_addl": {
                     "properties": {
@@ -1694,7 +1783,7 @@ def _example_template_pack() -> dict[str, Any]:
                             "name_pattern": "{parent_name}_well_{index}",
                             "child_templates": [
                                 {
-                                    "template_code": "WEL/container/example_well/1.0",
+                                    "template_code": "WEN/container/example_well/1.0",
                                     "count": 2,
                                 }
                             ],

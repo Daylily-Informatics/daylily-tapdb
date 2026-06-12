@@ -47,11 +47,17 @@ def test_packaged_registry_fixtures_match_core_prefix_ownership():
 
     assert set(domain_registry["domains"]) == {"Z"}
     assert set(prefix_registry["ownership"]) == {"Z"}
-    assert {
+    owned_prefixes = {
         prefix
         for prefix, claim in prefix_registry["ownership"]["Z"].items()
         if claim.get("issuer_app_code") == "daylily-tapdb"
-    } == set(EUIDConfig().get_all_prefixes().values())
+    }
+    core_prefixes = set(EUIDConfig().get_all_prefixes().values())
+    example_prefixes = {"ACT", "PAT", "WEN"}
+
+    assert core_prefixes <= owned_prefixes
+    assert example_prefixes <= owned_prefixes
+    assert owned_prefixes == core_prefixes | example_prefixes
 
 
 def test_prepare_seed_templates_rejects_gx_placeholder():

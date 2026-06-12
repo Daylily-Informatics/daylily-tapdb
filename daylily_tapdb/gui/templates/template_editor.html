@@ -40,7 +40,7 @@
     <h3>Child Instantiation</h3>
     <div id="builder-children" class="stack compact">
       <div class="builder-row">
-        <input data-builder-child-code value="WEL/container/example_well/1.0">
+        <input data-builder-child-code value="WEN/container/example_well/1.0">
         <input data-builder-child-count type="number" min="1" value="2">
         <input data-builder-child-relation value="contains">
       </div>
@@ -77,7 +77,7 @@
   byId("builder-add-child").addEventListener("click", () => {
     addRow(
       "builder-children",
-      '<input data-builder-child-code placeholder="WEL/container/example_well/1.0"><input data-builder-child-count type="number" min="1" value="1"><input data-builder-child-relation value="contains">'
+      '<input data-builder-child-code placeholder="WEN/container/example_well/1.0"><input data-builder-child-count type="number" min="1" value="1"><input data-builder-child-relation value="contains">'
     );
   });
   byId("builder-generate-json").addEventListener("click", () => {
@@ -114,7 +114,9 @@
         json_addl: { properties, instantiation_layouts: layouts },
       }],
     };
-    byId("template-json").value = JSON.stringify(payload, null, 2);
+    const templateJson = byId("template-json");
+    templateJson.value = JSON.stringify(payload, null, 2);
+    window.TapdbJsonEditor?.setValue(templateJson, templateJson.value);
   });
 })();
 </script>

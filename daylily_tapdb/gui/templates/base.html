@@ -5,11 +5,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}TapDB{% endblock %}</title>
-  <link rel="stylesheet" href="{{ tapdb_gui_url(request, '/static/tapdb-gui.css') }}">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsoneditor@10.4.3/dist/jsoneditor.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ tapdb_gui_url(request, '/static/tapdb-gui.css') }}?v=jsoneditor-10.4.3">
   {% for stylesheet in shell.extra_stylesheets %}
   <link rel="stylesheet" href="{{ stylesheet }}">
   {% endfor %}
   <script>window.TAPDB_BASE_PATH = "{{ request.scope.get('root_path', '') }}";</script>
+  {% block head %}{% endblock %}
 </head>
 <body>
   <header class="topbar">
@@ -17,14 +19,9 @@
       {% if shell.active and shell.app_name %}{{ shell.app_name }} / {% endif %}TapDB
     </a>
     <nav>
-      {% for nav in shell.nav_links %}
+      {% for nav in tapdb_gui_nav_links(request, shell) %}
       <a href="{{ nav.href }}">{{ nav.label }}</a>
       {% endfor %}
-      <a href="{{ tapdb_gui_url(request, '/search') }}">Search</a>
-      <a href="{{ tapdb_gui_url(request, '/templates') }}">Templates</a>
-      <a href="{{ tapdb_gui_url(request, '/admin/readiness') }}">Readiness</a>
-      <a href="{{ tapdb_gui_url(request, '/admin/meridian') }}">Meridian</a>
-      <a href="{{ tapdb_gui_url(request, '/admin/metrics') }}">Metrics</a>
     </nav>
     <div class="user">{{ user.display_name or user.username }} · {{ user.role }}</div>
   </header>
@@ -32,7 +29,9 @@
     {% block content %}{% endblock %}
   </main>
   <footer>TapDB {{ tapdb_version }}</footer>
-  <script src="{{ tapdb_gui_url(request, '/static/tapdb-json-editor.js') }}"></script>
-  <script src="{{ tapdb_gui_url(request, '/static/lsmc-ui.js') }}"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsoneditor@10.4.3/dist/jsoneditor.min.js" crossorigin="anonymous"></script>
+  <script src="{{ tapdb_gui_url(request, '/static/tapdb-json-editor.js') }}?v=jsoneditor-10.4.3"></script>
+  <script src="{{ tapdb_gui_url(request, '/static/lsmc-ui.js') }}?v=jsoneditor-10.4.3"></script>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

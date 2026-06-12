@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import tomllib
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,7 +15,7 @@ from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
-from daylily_tapdb.web.bridge import TapdbHostBridge
+from daylily_tapdb.web.bridge import TapdbHostBridge, TapdbHostNavLink
 
 
 class _Related:
@@ -157,7 +159,7 @@ def _template(
     )
 
 
-def _client(monkeypatch, *, role="admin", session=None):
+def _client(monkeypatch, *, role="admin", session=None, nav_links=()):
     if session is None:
         session = _Session(
             {
@@ -185,6 +187,7 @@ def _client(monkeypatch, *, role="admin", session=None):
         auth_mode="host_session",
         login_url="/login",
         extra_stylesheets=("/static/host.css",),
+        nav_links=tuple(nav_links),
         resolve_user=lambda _request: {
             "username": f"{role}@example.com",
             "email": f"{role}@example.com",
@@ -245,6 +248,96 @@ def test_gui_search_page_uses_host_css_and_root_safe_links(monkeypatch):
     assert "/static/host.css" in response.text
     assert "/object/Z-SMP-1Q" in response.text
     assert "Sample 1" in response.text
+
+
+def test_gui_shell_deduplicates_host_and_builtin_nav_links(monkeypatch):
+    client = _client(
+        monkeypatch,
+        nav_links=(
+            TapdbHostNavLink("Search", "/search"),
+            TapdbHostNavLink("Templates", "/templates"),
+            TapdbHostNavLink("Support", "/support"),
+            TapdbHostNavLink("Meridian", "/admin/meridian"),
+            TapdbHostNavLink("Metrics", "/admin/metrics"),
+        ),
+    )
+
+    response = client.get("/search")
+
+    assert response.status_code == 200
+    nav = re.search(r"<nav>(.*?)</nav>", response.text, re.DOTALL)
+    assert nav is not None
+    nav_html = nav.group(1)
+    assert nav_html.count(">Search</a>") == 1
+    assert nav_html.count(">Templates</a>") == 1
+    assert nav_html.count(">Meridian</a>") == 1
+    assert nav_html.count(">Metrics</a>") == 1
+    assert 'href="/support">Support</a>' in nav_html
+    assert 'href="/admin/readiness">Readiness</a>' in nav_html
+
+
+def test_gui_graph_page_includes_visual_viewer(monkeypatch):
+    root = _instance("Z-SMP-1Q", "Sample 1")
+    child = _instance("Z-CHD-2Q", "Child 1")
+
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.find_object_by_euid",
+        lambda session, euid: (root if euid == root.euid else None, "instance"),
+    )
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.build_graph_payload",
+        lambda obj, record_type, service_name, depth: {
+            "elements": {
+                "nodes": [
+                    {
+                        "data": {
+                            "id": root.euid,
+                            "euid": root.euid,
+                            "display_label": root.name,
+                            "name": root.name,
+                            "category": root.category,
+                            "type": root.type,
+                            "subtype": root.subtype,
+                            "bstatus": root.bstatus,
+                        }
+                    },
+                    {
+                        "data": {
+                            "id": child.euid,
+                            "euid": child.euid,
+                            "display_label": child.name,
+                            "name": child.name,
+                            "category": child.category,
+                            "type": child.type,
+                            "subtype": child.subtype,
+                            "bstatus": child.bstatus,
+                        }
+                    },
+                ],
+                "edges": [
+                    {
+                        "data": {
+                            "id": "Z-LIN-3Q",
+                            "euid": "Z-LIN-3Q",
+                            "source": child.euid,
+                            "target": root.euid,
+                            "relationship_type": "contains",
+                        }
+                    }
+                ],
+            }
+        },
+    )
+    client = _client(monkeypatch)
+
+    response = client.get("/object/Z-SMP-1Q/graph")
+
+    assert response.status_code == 200
+    assert 'data-testid="tapdb-graph"' in response.text
+    assert "cytoscape@3.28.1" in response.text
+    assert 'id="tapdb-graph-payload"' in response.text
+    assert "<summary>Payload JSON</summary>" in response.text
+    assert "No selection" in response.text
 
 
 def test_gui_search_rejects_invalid_record_type(monkeypatch):
@@ -337,11 +430,11 @@ def test_gui_template_validation_api_reports_valid_level2_template(monkeypatch):
                 {
                     "name": "Plate Template",
                     "polymorphic_discriminator": "generic_template",
-                    "category": "PLT",
+                    "category": "PAT",
                     "type": "container",
                     "subtype": "example_plate",
                     "version": "1.0",
-                    "instance_prefix": "PLT",
+                    "instance_prefix": "PAT",
                     "instance_polymorphic_identity": "generic_instance",
                     "json_addl": {
                         "properties": {},
@@ -351,7 +444,7 @@ def test_gui_template_validation_api_reports_valid_level2_template(monkeypatch):
                                 "name_pattern": "{parent_name}_{index}",
                                 "child_templates": [
                                     {
-                                        "template_code": "WEL/container/example_well/1.0",
+                                        "template_code": "WEN/container/example_well/1.0",
                                         "count": 2,
                                     }
                                 ],
@@ -375,10 +468,41 @@ def test_gui_template_editor_includes_simple_builder(monkeypatch):
     assert response.status_code == 200
     assert 'data-testid="template-builder"' in response.text
     assert 'id="builder-generate-json"' in response.text
-    assert 'value="WEL/container/example_well/1.0"' in response.text
+    assert 'value="WEN/container/example_well/1.0"' in response.text
     assert "Child Instantiation" in response.text
     assert "data-tapdb-json-editor" in response.text
     assert 'data-json-editor-label="Template pack JSON"' in response.text
+
+
+def test_gui_example_template_pack_is_self_contained():
+    from daylily_tapdb.gui.router import (
+        _example_template_pack,
+        _validate_template_payload,
+    )
+
+    payload = _example_template_pack()
+    issues = _validate_template_payload(payload)
+    keys = {
+        (
+            item["category"],
+            item["type"],
+            item["subtype"],
+            item["version"],
+        )
+        for item in payload["templates"]
+    }
+    prefixes = {item["instance_prefix"] for item in payload["templates"]}
+    registry = json.loads(
+        Path("daylily_tapdb/etc/prefix_ownership_registry.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert issues == []
+    assert ("ACT", "actor", "example_actor", "1.0") in keys
+    assert ("WEN", "container", "example_well", "1.0") in keys
+    assert ("PAT", "container", "example_plate", "1.0") in keys
+    assert prefixes <= set(registry["ownership"]["Z"])
 
 
 def test_gui_json_editor_asset_is_served_and_base_loads_it(monkeypatch):
@@ -390,6 +514,8 @@ def test_gui_json_editor_asset_is_served_and_base_loads_it(monkeypatch):
     assert asset.status_code == 200
     assert "tapdb-json-editor" in asset.text
     assert "/static/tapdb-json-editor.js" in page.text
+    assert "jsoneditor@10.4.3/dist/jsoneditor.min.js" in page.text
+    assert "jsoneditor@10.4.3/dist/jsoneditor.min.css" in page.text
 
 
 def test_gui_template_validate_get_renders_explicit_editor(monkeypatch):
@@ -438,6 +564,30 @@ def test_gui_template_save_renders_seed_validation_error(monkeypatch):
     assert "prefix ZZZ is not claimed by atlas" in response.text
 
 
+def test_gui_template_save_renders_config_registry_error(monkeypatch):
+    client = _client(monkeypatch)
+
+    def fail_config(*_args, **_kwargs):
+        raise ValueError("prefix_ownership_registry.json is invalid JSON")
+
+    monkeypatch.setattr("daylily_tapdb.gui.router.get_db_config", fail_config)
+
+    response = client.post(
+        "/templates/save",
+        data={
+            "template_json": (
+                '{"templates":[{"name":"Good","polymorphic_discriminator":"generic_template",'
+                '"category":"GUD","type":"container","subtype":"thing","version":"1.0",'
+                '"instance_prefix":"GUD","instance_polymorphic_identity":"generic_instance",'
+                '"json_addl":{}}]}'
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Template save failed: prefix_ownership_registry.json is invalid JSON" in response.text
+
+
 def test_gui_template_save_renders_success(monkeypatch):
     client = _client(monkeypatch)
 
@@ -462,6 +612,48 @@ def test_gui_template_save_renders_success(monkeypatch):
     assert "Saved 1 template(s); skipped 0." in response.text
 
 
+def test_gui_create_form_renders_factory_validation_error(monkeypatch):
+    session = _Session(
+        {
+            generic_template: [
+                _template(
+                    euid="Z-SYS-1Q",
+                    name="System User",
+                    category="SYS",
+                    type_name="system_user",
+                    subtype="tapdb_user",
+                    prefix="USR",
+                )
+            ],
+            generic_instance: [],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+
+    class _Factory:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def create_instance(self, *_args, **_kwargs):
+            raise ValueError(
+                "system_user requires a non-empty login_identifier "
+                "(or email/cognito_username)."
+            )
+
+    monkeypatch.setattr("daylily_tapdb.gui.router.InstanceFactory", _Factory)
+    client = _client(monkeypatch, session=session)
+
+    response = client.post(
+        "/create/Z-SYS-1Q",
+        data={"name": "No Login", "properties_json": "{}", "create_children": "true"},
+    )
+
+    assert response.status_code == 200
+    assert "system_user requires a non-empty login_identifier" in response.text
+    assert 'value="No Login"' in response.text
+
+
 def test_gui_home_uses_concrete_search_defaults(monkeypatch):
     client = _client(monkeypatch)
 
@@ -474,19 +666,19 @@ def test_gui_home_uses_concrete_search_defaults(monkeypatch):
 
 def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
     template = _template(
-        "Z-PLT-T1Q",
+        "Z-PAT-T1Q",
         name="Plate Template",
-        category="PLT",
+        category="PAT",
         type_name="container",
         subtype="example_plate",
-        prefix="PLT",
+        prefix="PAT",
         json_addl={
             "properties": {},
             "instantiation_layouts": [
                 {
                     "relationship_type": "contains",
                     "child_templates": [
-                        {"template_code": "WEL/container/example_well/1.0", "count": 2}
+                        {"template_code": "WEN/container/example_well/1.0", "count": 2}
                     ],
                 }
             ],
@@ -500,7 +692,7 @@ def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
             audit_log: [],
         }
     )
-    created = SimpleNamespace(euid="Z-PLT-2Q")
+    created = SimpleNamespace(euid="Z-PAT-2Q")
     calls = []
 
     class _Factory:
@@ -524,7 +716,7 @@ def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
     client = _client(monkeypatch, session=session)
 
     response = client.post(
-        "/create/Z-PLT-T1Q",
+        "/create/Z-PAT-T1Q",
         data={
             "name": "Plate 1",
             "properties_json": '{"plate_type": "96-well"}',
@@ -534,10 +726,10 @@ def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/object/Z-PLT-2Q?notice=instance_created"
+    assert response.headers["location"] == "/object/Z-PAT-2Q?notice=instance_created"
     assert calls == [
         {
-            "template_code": "PLT/container/example_plate/1.0/",
+            "template_code": "PAT/container/example_plate/1.0/",
             "name": "Plate 1",
             "properties": {"plate_type": "96-well"},
             "create_children": True,
@@ -564,12 +756,12 @@ def test_gui_create_non_template_euid_returns_clear_404(monkeypatch):
 
 def test_gui_create_api_passes_child_instantiation_flag(monkeypatch):
     template = _template(
-        "Z-PLT-T1Q",
+        "Z-PAT-T1Q",
         name="Plate Template",
-        category="PLT",
+        category="PAT",
         type_name="container",
         subtype="example_plate",
-        prefix="PLT",
+        prefix="PAT",
     )
     session = _Session(
         {
@@ -579,7 +771,7 @@ def test_gui_create_api_passes_child_instantiation_flag(monkeypatch):
             audit_log: [],
         }
     )
-    created = SimpleNamespace(euid="Z-PLT-2Q")
+    created = SimpleNamespace(euid="Z-PAT-2Q")
 
     class _Factory:
         def __init__(self, template_manager, *, domain_code):
@@ -588,7 +780,7 @@ def test_gui_create_api_passes_child_instantiation_flag(monkeypatch):
         def create_instance(
             self, session, template_code, name, properties, create_children
         ):
-            assert template_code == "PLT/container/example_plate/1.0/"
+            assert template_code == "PAT/container/example_plate/1.0/"
             assert name == "Plate API"
             assert properties == {"plate_type": "96-well"}
             assert create_children is True
@@ -598,7 +790,7 @@ def test_gui_create_api_passes_child_instantiation_flag(monkeypatch):
     client = _client(monkeypatch, session=session)
 
     response = client.post(
-        "/api/create/Z-PLT-T1Q",
+        "/api/create/Z-PAT-T1Q",
         json={
             "name": "Plate API",
             "properties": {"plate_type": "96-well"},
@@ -608,9 +800,9 @@ def test_gui_create_api_passes_child_instantiation_flag(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {
-        "template_euid": "Z-PLT-T1Q",
-        "template_code": "PLT/container/example_plate/1.0/",
-        "instance_euid": "Z-PLT-2Q",
+        "template_euid": "Z-PAT-T1Q",
+        "template_code": "PAT/container/example_plate/1.0/",
+        "instance_euid": "Z-PAT-2Q",
         "create_children": True,
     }
 
