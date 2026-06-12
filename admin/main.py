@@ -106,7 +106,7 @@ def _active_tapdb_target() -> str:
 APP_ENV = _active_tapdb_target()
 DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
 DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/tapdb-core"
-_RESERVED_TEMPLATE_COORDS = {("generic", "actor", "system_user")}
+_RESERVED_TEMPLATE_COORDS = {("actor", "user", "system")}
 
 
 def _default_admin_settings() -> dict[str, Any]:

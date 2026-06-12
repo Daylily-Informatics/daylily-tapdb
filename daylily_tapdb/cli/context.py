@@ -7,6 +7,7 @@ isolate config, runtime state, and local services per namespace.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import tempfile
 from dataclasses import dataclass
@@ -84,6 +85,15 @@ class TapdbContext:
         return self.config_dir() / CONFIG_FILENAME
 
     def runtime_dir(self) -> Path:
+        xdg_state_home = os.environ.get("XDG_STATE_HOME")
+        if self.explicit_config_path is not None and xdg_state_home:
+            return (
+                Path(xdg_state_home).expanduser()
+                / "tapdb"
+                / self.client_id
+                / self.database_name
+                / RUNTIME_DIRNAME
+            )
         return self.config_dir() / RUNTIME_DIRNAME
 
     def ui_dir(self) -> Path:

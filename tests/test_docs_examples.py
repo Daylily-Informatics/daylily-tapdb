@@ -125,7 +125,7 @@ def test_readme_python_api_example_runs(docs_local_runtime: dict[str, object]) -
     assert result.returncode == 0, result.stderr or result.stdout
 
     payload = json.loads(result.stdout)
-    assert payload["template_code"] == "MSG/message/webhook_event/1.0/"
+    assert payload["template_code"] == "message/webhook/event/1.0/"
     assert payload["instance_euid"]
     assert payload["domain_code"] == "Z"
     assert payload["owner_repo_name"] == "daylily-tapdb"

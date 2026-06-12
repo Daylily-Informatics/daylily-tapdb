@@ -19,6 +19,10 @@ from daylily_tapdb.sequences import (
     ensure_instance_prefix_sequence,
 )
 from daylily_tapdb.templates.mutation import allow_template_mutations
+from daylily_tapdb.validation.governance import (
+    ensure_core_governance_objects,
+    normalize_validator_ref,
+)
 from daylily_tapdb.validation.instantiation_layouts import (
     format_validation_error,
     validate_instantiation_layouts,
@@ -57,7 +61,7 @@ TEMPLATE_MODEL_BY_DISCRIMINATOR = {
     "generic_template": generic_template,
 }
 
-_CORE_TEMPLATE_PREFIXES = {"SYS", "MSG", "XRF"}
+_CORE_TEMPLATE_PREFIXES = {"SYS", "MSG", "XRF", "GVR"}
 
 
 def _normalize_domain_scope(domain_code: str | None) -> str:
@@ -605,6 +609,18 @@ def validate_template_configs(
                 )
             )
 
+        if "validator_ref" in template:
+            validator_ref = template.get("validator_ref")
+            if not isinstance(validator_ref, str) or not validator_ref.strip():
+                issues.append(
+                    ConfigIssue(
+                        level="error",
+                        source_file=source_file,
+                        template_code=code,
+                        message="Field 'validator_ref' must be a non-empty string",
+                    )
+                )
+
         if template.get("json_addl_schema") is not None and not isinstance(
             template.get("json_addl_schema"), dict
         ):
@@ -650,23 +666,6 @@ def validate_template_configs(
                 )
                 normalized_instance_prefix = ""
             if normalized_instance_prefix:
-                normalized_category = (
-                    str(template.get("category") or "").strip().upper()
-                )
-                if normalized_category != normalized_instance_prefix:
-                    issues.append(
-                        ConfigIssue(
-                            level="error",
-                            source_file=source_file,
-                            template_code=code,
-                            message=(
-                                "Template category must match instance_prefix "
-                                f"for Meridian template identity ({normalized_category!r} "
-                                f"!= {normalized_instance_prefix!r})."
-                            ),
-                        )
-                    )
-
                 is_core_template = _is_source_under_dir(source_file, core_config_dir)
                 if (
                     is_core_template
@@ -784,6 +783,7 @@ def _upsert_template(
             )
             or None,
             json_addl=dict(template.get("json_addl") or {}),
+            validator_ref=normalize_validator_ref(template.get("validator_ref")),
             json_addl_schema=template.get("json_addl_schema"),
             bstatus=str(template.get("bstatus") or "active"),
             is_singleton=bool(template.get("is_singleton", False)),
@@ -809,13 +809,14 @@ def _upsert_template(
         )
         or None,
         "json_addl": dict(template.get("json_addl") or {}),
+        "validator_ref": normalize_validator_ref(template.get("validator_ref")),
         "json_addl_schema": template.get("json_addl_schema"),
         "bstatus": str(template.get("bstatus") or "active"),
         "is_singleton": bool(template.get("is_singleton", False)),
         "is_deleted": False,
     }
     for key, value in target_values.items():
-        if getattr(existing, key) != value:
+        if getattr(existing, key, None) != value:
             setattr(existing, key, value)
             changed = True
 
@@ -835,8 +836,8 @@ def _prepare_seed_templates(
     for template in templates:
         source_file = str(template.get("_source_file") or "") or None
         item = dict(template)
+        item["validator_ref"] = normalize_validator_ref(item.get("validator_ref"))
         instance_prefix = str(item.get("instance_prefix") or "").strip().upper()
-        category = str(item.get("category") or "").strip().upper()
         is_core_template = _is_source_under_dir(source_file, core_config_dir)
 
         if not instance_prefix:
@@ -845,13 +846,6 @@ def _prepare_seed_templates(
             )
 
         normalized_instance_prefix = _normalize_instance_prefix(instance_prefix)
-        if category != normalized_instance_prefix:
-            raise ValueError(
-                f"Template {_template_code(item)!r} must use the same Meridian "
-                f"prefix for category and instance_prefix ({category!r} != "
-                f"{normalized_instance_prefix!r})."
-            )
-
         if (
             is_core_template
             and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES
@@ -969,6 +963,12 @@ def seed_templates(
                 updated += 1
             else:
                 skipped += 1
+
+    if resolved_owner == "daylily-tapdb" and any(
+        str(template.get("category") or "") == "governance"
+        for template in prepared_templates
+    ):
+        ensure_core_governance_objects(session, domain_code=resolved_domain)
 
     return SeedSummary(
         templates_loaded=len(prepared_templates),

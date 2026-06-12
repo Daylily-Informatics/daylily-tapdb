@@ -3,7 +3,7 @@
 {% block content %}
 <section class="band">
   <div class="split">
-    <h1>{{ obj.euid }}</h1>
+    <h1><a href="{{ tapdb_gui_url(request, '/object/' ~ obj.euid) }}">{{ obj.euid }}</a></h1>
     <div class="actions">
       <a class="button" href="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/graph') }}">Graph</a>
       {% if user.role == "admin" %}
@@ -17,8 +17,9 @@
   </div>
   {% if notice %}
   <div class="notice ok">
-    {% if notice == "json_saved" %}JSON saved.
-    {% elif notice == "status_updated" %}Status updated.
+	    {% if notice == "repair_created" %}Repair evidence created.
+	    {% elif notice == "name_updated" %}Name updated.
+	    {% elif notice == "status_updated" %}Status updated.
     {% elif notice == "lineage_added" %}Lineage added.
     {% elif notice == "external_link_created" %}External link created.
     {% elif notice == "instance_created" %}Instance created.
@@ -37,23 +38,42 @@
   </table>
 </section>
 
+<section class="band">
+  <h2>Validation</h2>
+  <table>
+    <tr><th>Validator</th><td><code>{{ editor.validator_ref }}</code></td></tr>
+    <tr><th>State</th><td>{{ editor.assessment.state }}</td></tr>
+    <tr><th>Subject Mutated</th><td>{{ editor.assessment.subject_mutated }}</td></tr>
+    <tr><th>Persistence</th><td>Ephemeral assessment; repair evidence is explicit.</td></tr>
+  </table>
+</section>
+
 {% if obj.record_type != "template" and user.role == "admin" %}
 <section class="band">
-  <h2>Edit</h2>
-  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/status') }}" class="toolbar">
-    <input name="bstatus" value="{{ obj.bstatus or '' }}" placeholder="status">
-    <button type="submit">Set Status</button>
+	  <h2>Edit</h2>
+	  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/name') }}" class="toolbar">
+	    <input name="name" value="{{ obj.name or '' }}" placeholder="name">
+	    <button type="submit">Set Name</button>
+	  </form>
+	  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/status') }}" class="toolbar">
+	    <input name="bstatus" value="{{ obj.bstatus or '' }}" placeholder="status">
+	    <button type="submit">Set Status</button>
   </form>
   <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/lineage') }}" class="toolbar">
     <input name="related_euid" placeholder="related EUID">
     <select name="direction"><option value="parent">related is parent</option><option value="child">related is child</option></select>
     <input name="relationship_type" value="generic">
+    <input name="evidence_refs" placeholder="v0 evidence EUIDs">
+    <input name="correlation_id" placeholder="v0 correlation ID">
+    <input name="causation_id" placeholder="v0 causation ID">
+    <input name="edge_state" value="active" aria-label="v0 edge state">
     <button type="submit">Add Lineage</button>
-  </form>
-  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/edit-json') }}" class="editor">
-    <textarea name="json_addl" spellcheck="false">{{ json_text }}</textarea>
-    <button type="submit">Save JSON</button>
-  </form>
+	  </form>
+	  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/repairs') }}" class="editor">
+	    <input name="reason" placeholder="repair reason">
+	    <textarea name="repair_payload" spellcheck="false" data-tapdb-json-editor data-json-editor-label="Repair JSON payload">{{ json_text }}</textarea>
+	    <button type="submit">Create repair</button>
+	  </form>
 </section>
 {% endif %}
 
@@ -62,7 +82,7 @@
     <h2>Children</h2>
     <table><thead><tr><th>Lineage</th><th>Object</th><th>Relationship</th></tr></thead><tbody>
     {% for row in relationships.parent_of %}
-    <tr><td>{{ row.lineage_euid }}</td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.related_euid) }}">{{ row.related_euid }}</a> {{ row.related_name or "" }}</td><td>{{ row.relationship_type }}</td></tr>
+    <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.lineage_euid) }}">{{ row.lineage_euid }}</a></td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.related_euid) }}">{{ row.related_euid }}</a> {{ row.related_name or "" }}</td><td>{{ row.v0_edge.edge_type or row.relationship_type }} <small>{{ row.v0_edge.compliance_status }}</small></td></tr>
     {% endfor %}
     </tbody></table>
   </div>
@@ -70,7 +90,7 @@
     <h2>Parents</h2>
     <table><thead><tr><th>Lineage</th><th>Object</th><th>Relationship</th></tr></thead><tbody>
     {% for row in relationships.child_of %}
-    <tr><td>{{ row.lineage_euid }}</td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.related_euid) }}">{{ row.related_euid }}</a> {{ row.related_name or "" }}</td><td>{{ row.relationship_type }}</td></tr>
+    <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.lineage_euid) }}">{{ row.lineage_euid }}</a></td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.related_euid) }}">{{ row.related_euid }}</a> {{ row.related_name or "" }}</td><td>{{ row.v0_edge.edge_type or row.relationship_type }} <small>{{ row.v0_edge.compliance_status }}</small></td></tr>
     {% endfor %}
     </tbody></table>
   </div>
@@ -80,7 +100,7 @@
   <h2>External References</h2>
   <table><thead><tr><th>Label</th><th>System</th><th>Remote EUID</th><th>Status</th></tr></thead><tbody>
   {% for ref in external_refs %}
-  <tr><td>{{ ref.label }}</td><td>{{ ref.system }}</td><td>{{ ref.root_euid }}</td><td>{{ "graph-ready" if ref.graph_expandable else ref.reason }}</td></tr>
+  <tr><td>{{ ref.label }}</td><td>{{ ref.system }}</td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ ref.root_euid) }}">{{ ref.root_euid }}</a></td><td>{{ "graph-ready" if ref.graph_expandable else ref.reason }}</td></tr>
   {% endfor %}
   {% if not external_refs %}<tr><td colspan="4">No external refs rendered for this object.</td></tr>{% endif %}
   </tbody></table>

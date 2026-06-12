@@ -1643,7 +1643,7 @@ def _tapdb_connection_for_env(
         "on",
     }
     region = str(cfg["region"]).strip()
-    db_pass = cfg.get("password") or None
+    db_pass = cfg.get("password") if "password" in cfg else None
     secret_arn = cfg.get("secret_arn") or None
     return TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
@@ -1687,7 +1687,7 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
         "on",
     )
     region = str(cfg["region"]).strip()
-    db_pass = cfg.get("password") or None
+    db_pass = cfg.get("password") if "password" in cfg else None
     secret_arn = cfg.get("secret_arn") or None
 
     try:

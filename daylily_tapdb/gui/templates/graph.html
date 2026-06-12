@@ -2,32 +2,254 @@
 {% block title %}{{ euid }} Graph{% endblock %}
 {% block content %}
 <section class="band">
-  <h1>Graph: {{ euid }}</h1>
-  <form method="get" action="{{ tapdb_gui_url(request, '/object/' ~ euid ~ '/graph') }}" class="toolbar">
-    <input type="number" min="0" max="10" name="depth" value="{{ depth }}">
-    <button type="submit">Load</button>
-  </form>
-</section>
-<section class="band grid2">
-  <div>
-    <h2>Nodes</h2>
-    <table><thead><tr><th>EUID</th><th>Name</th><th>Type</th></tr></thead><tbody>
-    {% for node in graph.elements.nodes %}
-    <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ node.data.euid) }}">{{ node.data.euid }}</a></td><td>{{ node.data.name }}</td><td>{{ node.data.category }}/{{ node.data.type }}</td></tr>
-    {% endfor %}
-    </tbody></table>
-  </div>
-  <div>
-    <h2>Edges</h2>
-    <table><thead><tr><th>EUID</th><th>Child</th><th>Parent</th><th>Type</th></tr></thead><tbody>
-    {% for edge in graph.elements.edges %}
-    <tr><td>{{ edge.data.euid }}</td><td>{{ edge.data.source }}</td><td>{{ edge.data.target }}</td><td>{{ edge.data.relationship_type }}</td></tr>
-    {% endfor %}
-    </tbody></table>
+  <div class="split">
+    <div>
+      <h1>Graph: <a href="{{ tapdb_gui_url(request, '/object/' ~ euid) }}">{{ euid }}</a></h1>
+      <p>{{ graph.elements.nodes|length }} nodes / {{ graph.elements.edges|length }} edges</p>
+    </div>
+    <form method="get" action="{{ tapdb_gui_url(request, '/object/' ~ euid ~ '/graph') }}" class="toolbar">
+      <label>Depth <input type="number" min="0" max="10" name="depth" value="{{ depth }}"></label>
+      <button type="submit">Load</button>
+    </form>
   </div>
 </section>
+
+<section class="band tapdb-graph-shell">
+  <div class="toolbar tapdb-graph-toolbar">
+    <select id="tapdb-graph-layout-select" aria-label="Graph layout">
+      <option value="breadthfirst">DAG</option>
+      <option value="cose">Force</option>
+      <option value="concentric">Concentric</option>
+      <option value="circle">Circle</option>
+      <option value="grid">Grid</option>
+    </select>
+    <button type="button" id="tapdb-graph-fit" class="secondary">Fit</button>
+    <span id="tapdb-graph-counts"></span>
+  </div>
+  <div class="tapdb-graph-layout">
+    <div id="tapdb-graph" class="tapdb-graph-canvas" data-testid="tapdb-graph" aria-label="Object graph"></div>
+    <aside class="tapdb-graph-sidebar">
+      <h2>Selection</h2>
+      <div id="tapdb-graph-detail" class="tapdb-graph-detail">No selection</div>
+    </aside>
+  </div>
+</section>
+
 <section class="band">
-  <h2>Payload</h2>
-  <pre>{{ graph | tojson(indent=2) }}</pre>
+  <details>
+    <summary>Nodes and edges</summary>
+    <div class="grid2">
+      <div>
+        <h2>Nodes</h2>
+        <table><thead><tr><th>EUID</th><th>Name</th><th>Type</th></tr></thead><tbody>
+        {% for node in graph.elements.nodes %}
+        <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ node.data.euid) }}">{{ node.data.euid }}</a></td><td>{{ node.data.name }}</td><td>{{ node.data.category }}/{{ node.data.type }}</td></tr>
+        {% endfor %}
+        </tbody></table>
+      </div>
+      <div>
+        <h2>Edges</h2>
+        <table><thead><tr><th>EUID</th><th>Child</th><th>Parent</th><th>Type</th></tr></thead><tbody>
+        {% for edge in graph.elements.edges %}
+        <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ edge.data.euid) }}">{{ edge.data.euid }}</a></td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ edge.data.source) }}">{{ edge.data.source }}</a></td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ edge.data.target) }}">{{ edge.data.target }}</a></td><td>{{ edge.data.relationship_type }}</td></tr>
+        {% endfor %}
+        </tbody></table>
+      </div>
+    </div>
+  </details>
 </section>
+
+<section class="band">
+  <details>
+    <summary>Payload JSON</summary>
+    <pre>{{ graph | tojson(indent=2) }}</pre>
+  </details>
+</section>
+<script type="application/json" id="tapdb-graph-payload">{{ graph | tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js" crossorigin="anonymous"></script>
+<script>
+(function () {
+  const mount = document.getElementById("tapdb-graph");
+  const payloadEl = document.getElementById("tapdb-graph-payload");
+  const detail = document.getElementById("tapdb-graph-detail");
+  const counts = document.getElementById("tapdb-graph-counts");
+  const layoutSelect = document.getElementById("tapdb-graph-layout-select");
+  const fitButton = document.getElementById("tapdb-graph-fit");
+  const basePath = String(window.TAPDB_BASE_PATH || "").replace(/\/$/, "");
+
+  if (!mount || !payloadEl) return;
+  if (!window.cytoscape) {
+    mount.textContent = "Cytoscape failed to load. Check network access to cdn.jsdelivr.net.";
+    return;
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
+      return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"}[char];
+    });
+  }
+
+  function objectHref(euid) {
+    return basePath + "/object/" + encodeURIComponent(euid);
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(payloadEl.textContent || "{}");
+  } catch (error) {
+    mount.textContent = "Graph payload is not valid JSON.";
+    return;
+  }
+
+  const elements = payload.elements || {};
+  const nodes = (elements.nodes || []).map(function (node) {
+    const data = Object.assign({}, node.data || {});
+    data.id = String(data.id || data.euid || data.uid || "");
+    data.display_label = data.display_label || data.name || data.euid || data.id;
+    data.color = data.color || "#1f6feb";
+    return {data: data};
+  }).filter(function (node) {
+    return node.data.id;
+  });
+  const edges = (elements.edges || []).map(function (edge, index) {
+    const data = Object.assign({}, edge.data || {});
+    data.source = String(data.source || "");
+    data.target = String(data.target || "");
+    data.id = String(data.id || data.euid || data.source + "-" + data.target + "-" + index);
+    data.relationship_type = data.relationship_type || "related";
+    return {data: data};
+  }).filter(function (edge) {
+    return edge.data.source && edge.data.target;
+  });
+
+  if (counts) counts.textContent = nodes.length + " nodes / " + edges.length + " edges";
+  if (!nodes.length) {
+    mount.textContent = "No graph nodes returned.";
+    return;
+  }
+
+  const cy = cytoscape({
+    container: mount,
+    elements: nodes.concat(edges),
+    minZoom: 0.12,
+    maxZoom: 3,
+    wheelSensitivity: 0.18,
+    style: [
+      {
+        selector: "node",
+        style: {
+          "background-color": "data(color)",
+          "border-color": "#17202a",
+          "border-width": 1,
+          "color": "#17202a",
+          "font-size": 10,
+          "height": 38,
+          "label": "data(display_label)",
+          "overlay-opacity": 0,
+          "shape": "round-rectangle",
+          "text-background-color": "#ffffff",
+          "text-background-opacity": 0.88,
+          "text-background-padding": 2,
+          "text-halign": "center",
+          "text-max-width": 120,
+          "text-valign": "bottom",
+          "text-wrap": "wrap",
+          "width": 76
+        }
+      },
+      {
+        selector: "edge",
+        style: {
+          "curve-style": "bezier",
+          "font-size": 9,
+          "label": "data(relationship_type)",
+          "line-color": "#98a2b3",
+          "target-arrow-color": "#98a2b3",
+          "target-arrow-shape": "triangle",
+          "text-background-color": "#ffffff",
+          "text-background-opacity": 0.9,
+          "text-background-padding": 1,
+          "text-rotation": "autorotate",
+          "width": 2
+        }
+      },
+      {
+        selector: ":selected",
+        style: {
+          "border-color": "#b42318",
+          "border-width": 3,
+          "line-color": "#b42318",
+          "target-arrow-color": "#b42318"
+        }
+      }
+    ]
+  });
+
+  function showNode(data) {
+    if (!detail) return;
+    const euid = data.euid || data.id;
+    detail.innerHTML =
+      "<dl>" +
+      "<dt>EUID</dt><dd><a href=\"" + objectHref(euid) + "\">" + escapeHtml(euid) + "</a></dd>" +
+      "<dt>Name</dt><dd>" + escapeHtml(data.name || "") + "</dd>" +
+      "<dt>Type</dt><dd>" + escapeHtml([data.category, data.type, data.subtype].filter(Boolean).join("/")) + "</dd>" +
+      "<dt>Status</dt><dd>" + escapeHtml(data.bstatus || "") + "</dd>" +
+      "</dl>";
+  }
+
+  function showEdge(data) {
+    if (!detail) return;
+    detail.innerHTML =
+      "<dl>" +
+      "<dt>Lineage</dt><dd>" + escapeHtml(data.euid || data.id) + "</dd>" +
+      "<dt>Child</dt><dd><a href=\"" + objectHref(data.source) + "\">" + escapeHtml(data.source) + "</a></dd>" +
+      "<dt>Parent</dt><dd><a href=\"" + objectHref(data.target) + "\">" + escapeHtml(data.target) + "</a></dd>" +
+      "<dt>Relationship</dt><dd>" + escapeHtml(data.relationship_type || "") + "</dd>" +
+      "</dl>";
+  }
+
+  function runLayout(name) {
+    const layoutName = name || "breadthfirst";
+    const options = {name: layoutName, fit: true, padding: 42, animate: false};
+    if (layoutName === "breadthfirst") {
+      options.directed = true;
+      options.spacingFactor = 1.15;
+    }
+    if (layoutName === "cose") {
+      options.nodeRepulsion = 6500;
+      options.idealEdgeLength = 120;
+    }
+    cy.layout(options).run();
+  }
+
+  cy.on("tap", "node", function (event) {
+    showNode(event.target.data());
+  });
+  cy.on("tap", "edge", function (event) {
+    showEdge(event.target.data());
+  });
+  cy.on("tap", function (event) {
+    if (event.target === cy && detail) detail.textContent = "No selection";
+  });
+  if (layoutSelect) {
+    layoutSelect.addEventListener("change", function () {
+      runLayout(layoutSelect.value);
+    });
+  }
+  if (fitButton) {
+    fitButton.addEventListener("click", function () {
+      cy.fit(undefined, 36);
+    });
+  }
+
+  runLayout(layoutSelect ? layoutSelect.value : "breadthfirst");
+  setTimeout(function () {
+    cy.resize();
+    cy.fit(undefined, 36);
+  }, 50);
+})();
+</script>
 {% endblock %}

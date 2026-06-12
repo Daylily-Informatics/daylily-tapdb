@@ -77,6 +77,15 @@ def test_materialize_actions_skips_templates_without_action_definition(caplog):
     )
 
 
+def test_materialize_actions_requires_domain_code():
+    from daylily_tapdb.factory.instance import materialize_actions
+
+    tmpl = SimpleNamespace(json_addl={"action_imports": {}})
+
+    with pytest.raises(ValueError, match="domain_code is required"):
+        materialize_actions(_FakeSession(), tmpl, SimpleNamespace())
+
+
 def test_create_instance_errors_depth_cycle_and_missing_template():
     from daylily_tapdb.factory.instance import InstanceFactory
 
@@ -123,7 +132,7 @@ def test_create_instance_builds_json_addl_and_merges_properties():
     f = InstanceFactory(TM(), domain_code="T")
     inst = f.create_instance(
         sess,
-        template_code="SYS/actor/system_user/1.0",
+        template_code="actor/user/system/1.0",
         name="x",
         properties={"b": 2},
         create_children=False,
@@ -162,7 +171,7 @@ def test_create_instance_sets_tenant_id_column_and_json_when_provided():
     f = InstanceFactory(TM(), domain_code="T")
     inst = f.create_instance(
         sess,
-        template_code="SYS/actor/system_user/1.0",
+        template_code="actor/user/system/1.0",
         name="x",
         properties={},
         create_children=False,
@@ -170,7 +179,7 @@ def test_create_instance_sets_tenant_id_column_and_json_when_provided():
     )
 
     assert inst.tenant_id == tenant_id
-    assert inst.json_addl["properties"]["tenant_id"] == str(tenant_id)
+    assert "tenant_id" not in inst.json_addl["properties"]
 
 
 def test_create_instance_system_user_normalizes_login_identifier_and_top_level_keys():
@@ -183,9 +192,9 @@ def test_create_instance_system_user_normalizes_login_identifier_and_top_level_k
         is_singleton=False,
         instance_polymorphic_identity=None,
         polymorphic_discriminator="actor_template",
-        category="SYS",
-        type="actor",
-        subtype="system_user",
+        category="actor",
+        type="user",
+        subtype="system",
         version="1.0",
         json_addl={
             "properties": {
@@ -210,7 +219,7 @@ def test_create_instance_system_user_normalizes_login_identifier_and_top_level_k
     f = InstanceFactory(TM(), domain_code="T")
     inst = f.create_instance(
         sess,
-        template_code="SYS/actor/system_user/1.0",
+        template_code="actor/user/system/1.0",
         name="",
         properties={"email": "John@Example.com"},
         create_children=False,
@@ -231,9 +240,9 @@ def test_create_instance_system_user_requires_non_empty_login_identifier():
         is_singleton=False,
         instance_polymorphic_identity=None,
         polymorphic_discriminator="actor_template",
-        category="SYS",
-        type="actor",
-        subtype="system_user",
+        category="actor",
+        type="user",
+        subtype="system",
         version="1.0",
         json_addl={
             "properties": {
@@ -261,7 +270,56 @@ def test_create_instance_system_user_requires_non_empty_login_identifier():
     ):
         f.create_instance(
             sess,
-            template_code="SYS/actor/system_user/1.0",
+            template_code="actor/user/system/1.0",
+            name="",
+            create_children=False,
+        )
+
+
+def test_create_instance_system_user_rejects_invalid_role_and_parses_flags():
+    from daylily_tapdb.factory.instance import InstanceFactory
+
+    sess = _FakeSession()
+    tmpl = SimpleNamespace(
+        uid=uuid.uuid4(),
+        is_singleton=False,
+        instance_polymorphic_identity=None,
+        polymorphic_discriminator="actor_template",
+        category="actor",
+        type="user",
+        subtype="system",
+        version="1.0",
+        json_addl={
+            "properties": {
+                "login_identifier": "USER@EXAMPLE.COM",
+                "role": "admin",
+                "is_active": "off",
+                "require_password_change": "yes",
+            },
+            "action_imports": {},
+        },
+    )
+
+    class TM:
+        def get_template(self, session, template_code, **kwargs):
+            return tmpl
+
+    f = InstanceFactory(TM(), domain_code="T")
+    inst = f.create_instance(
+        sess,
+        template_code="actor/user/system/1.0",
+        name="",
+        create_children=False,
+    )
+    assert inst.json_addl["role"] == "admin"
+    assert inst.json_addl["is_active"] is False
+    assert inst.json_addl["require_password_change"] is True
+
+    tmpl.json_addl["properties"]["role"] = "owner"
+    with pytest.raises(ValueError, match="role must be"):
+        f.create_instance(
+            sess,
+            template_code="actor/user/system/1.0",
             name="",
             create_children=False,
         )
@@ -370,6 +428,176 @@ def test_create_children_handles_string_and_object_child_templates_and_creates_l
     assert len(lineages) == 3
 
 
+def test_create_children_supports_96_well_plate_layout(monkeypatch):
+    from daylily_tapdb.factory.instance import InstanceFactory
+    from daylily_tapdb.models.lineage import generic_instance_lineage
+
+    sess = _FakeSession()
+    parent = SimpleNamespace(
+        uid=uuid.uuid4(),
+        euid="Z-PLT-1Q",
+        name="codex evidence plate",
+        polymorphic_discriminator="generic_instance",
+    )
+    tmpl = SimpleNamespace(
+        json_addl={
+            "instantiation_layouts": [
+                {
+                    "relationship_type": "contains",
+                    "name_pattern": "{parent_name}_well_{index}",
+                    "child_templates": [
+                        {"template_code": "WEL/container/well/1.0", "count": 96}
+                    ],
+                }
+            ]
+        }
+    )
+    created = []
+
+    def fake_create_instance(*, session, template_code, name, **kwargs):
+        created.append((template_code, name))
+        return SimpleNamespace(
+            uid=uuid.uuid4(),
+            euid=f"Z-WEL-{len(created)}Q",
+            polymorphic_discriminator="generic_instance",
+        )
+
+    factory = InstanceFactory(
+        template_manager=SimpleNamespace(get_template=lambda *a, **k: None),
+        domain_code="Z",
+    )
+    monkeypatch.setattr(
+        factory,
+        "_resolve_template_code_pattern",
+        lambda session, template_code: f"{template_code}/",
+    )
+    monkeypatch.setattr(factory, "create_instance", fake_create_instance)
+
+    factory._create_children(sess, parent=parent, template=tmpl, depth=0, visited=set())
+
+    assert len(created) == 96
+    assert created[0] == ("WEL/container/well/1.0/", "codex evidence plate_well_1")
+    assert created[-1] == ("WEL/container/well/1.0/", "codex evidence plate_well_96")
+    lineages = [
+        item for item in sess.added if isinstance(item, generic_instance_lineage)
+    ]
+    assert len(lineages) == 96
+
+
+def test_create_children_uses_override_name_and_json_payload(monkeypatch):
+    from daylily_tapdb.factory.instance import InstanceFactory
+
+    sess = _FakeSession()
+    parent = SimpleNamespace(
+        uid=uuid.uuid4(),
+        euid="Z-PAT-1Q",
+        name="parent",
+        tenant_id=uuid.uuid4(),
+        polymorphic_discriminator="generic_instance",
+    )
+    tmpl = SimpleNamespace(
+        json_addl={
+            "instantiation_layouts": [
+                {
+                    "relationship_type": "contains",
+                    "child_templates": [
+                        {
+                            "template_code": "container/tube/1.5ml-eppi/1.0",
+                            "json_addl": {
+                                "properties": {
+                                    "name": "named from override",
+                                    "volume": "1.5ml",
+                                }
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    child_obj = SimpleNamespace(
+        uid=uuid.uuid4(),
+        euid="Z-TUB-1Q",
+        polymorphic_discriminator="generic_instance",
+        json_addl={"properties": {"existing": True}},
+    )
+    calls = []
+
+    def fake_create_instance(*, session, template_code, name, tenant_id, **kwargs):
+        del session, kwargs
+        calls.append((template_code, name, tenant_id))
+        return child_obj
+
+    factory = InstanceFactory(
+        template_manager=SimpleNamespace(get_template=lambda *a, **k: None),
+        domain_code="Z",
+    )
+    monkeypatch.setattr(factory, "create_instance", fake_create_instance)
+
+    factory._create_children(sess, parent=parent, template=tmpl, depth=0, visited=set())
+
+    assert calls == [
+        ("container/tube/1.5ml-eppi/1.0/", "named from override", parent.tenant_id)
+    ]
+    assert child_obj.json_addl == {
+        "properties": {"name": "named from override", "volume": "1.5ml"}
+    }
+    assert sess.flushed >= 2
+
+
+def test_resolve_template_code_pattern_handles_wildcards_and_errors():
+    from daylily_tapdb.factory.instance import InstanceFactory
+
+    class Q:
+        def __init__(self, matches):
+            self.matches = matches
+
+        def filter(self, *conds):
+            del conds
+            return self
+
+        def order_by(self, *args):
+            del args
+            return self
+
+        def all(self):
+            return self.matches
+
+    class Sess:
+        def __init__(self, matches):
+            self.matches = matches
+
+        def query(self, model):
+            del model
+            return Q(self.matches)
+
+    match = SimpleNamespace(
+        category="container",
+        type="tube",
+        subtype="1.5ml-eppi",
+        version="1.0",
+    )
+    factory = InstanceFactory(SimpleNamespace(), domain_code="Z")
+    assert (
+        factory._resolve_template_code_pattern(Sess([match]), "container/*/*/1.0")
+        == "container/tube/1.5ml-eppi/1.0/"
+    )
+    assert (
+        factory._resolve_template_code_pattern(
+            Sess([]), "container/tube/1.5ml-eppi/1.0"
+        )
+        == "container/tube/1.5ml-eppi/1.0/"
+    )
+
+    no_domain = InstanceFactory(SimpleNamespace(), domain_code=None)
+    with pytest.raises(ValueError, match="domain_code is required"):
+        no_domain._resolve_template_code_pattern(Sess([]), "container/*/*/1.0")
+    with pytest.raises(ValueError, match="exactly one"):
+        factory._resolve_template_code_pattern(Sess([]), "container/*/*/1.0")
+    with pytest.raises(ValueError, match="Invalid child template pattern"):
+        factory._resolve_template_code_pattern(Sess([]), "container/*/1.0")
+
+
 def test_get_or_create_singleton_instance_existing_is_returned_and_filters_is_deleted():
     from daylily_tapdb.factory.instance import InstanceFactory
 
@@ -408,3 +636,49 @@ def test_get_or_create_singleton_instance_existing_is_returned_and_filters_is_de
     got = f.get_or_create_singleton_instance(s, "SYS/generic/single/1.0", "n")
     assert got is existing
     assert any("is_deleted" in str(c) for c in s.q.filters)
+
+
+def test_get_or_create_singleton_instance_errors_and_creates(monkeypatch):
+    from daylily_tapdb.factory.instance import InstanceFactory
+
+    class Query:
+        def filter(self, *conds):
+            del conds
+            return self
+
+        def order_by(self, *args):
+            del args
+            return self
+
+        def first(self):
+            return None
+
+    class Sess:
+        def query(self, model):
+            del model
+            return Query()
+
+    class TM:
+        def __init__(self, template):
+            self.template = template
+
+        def get_template(self, session, template_code, **kwargs):
+            del session, template_code, kwargs
+            return self.template
+
+    factory = InstanceFactory(TM(None), domain_code="T")
+    with pytest.raises(ValueError, match="Template not found"):
+        factory.get_or_create_singleton_instance(Sess(), "a/b/c/1.0", "n")
+
+    factory = InstanceFactory(
+        TM(SimpleNamespace(uid=uuid.uuid4(), is_singleton=False)), domain_code="T"
+    )
+    with pytest.raises(ValueError, match="not singleton"):
+        factory.get_or_create_singleton_instance(Sess(), "a/b/c/1.0", "n")
+
+    created = SimpleNamespace(euid="Z-SYS-1Q")
+    factory = InstanceFactory(
+        TM(SimpleNamespace(uid=uuid.uuid4(), is_singleton=True)), domain_code="T"
+    )
+    monkeypatch.setattr(factory, "create_instance", lambda **kwargs: created)
+    assert factory.get_or_create_singleton_instance(Sess(), "a/b/c/1.0", "n") is created

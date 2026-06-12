@@ -40,6 +40,7 @@ dev = [
     "cli-core-yo==2.1.1",
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "playwright>=1.45",
     "black>=23.0",
     "ruff>=0.1",
     "mypy>=1.0",

@@ -3,6 +3,9 @@
 {% block content %}
 <section class="band">
   <h1>Template Pack</h1>
+  {% if seed_template %}
+  <p>Seed: <a href="{{ tapdb_gui_url(request, '/object/' ~ seed_template.euid) }}">{{ seed_template.euid }}</a> · {{ seed_template.code }}</p>
+  {% endif %}
   <p>Validate JSON first, then save. Save is insert-only; existing templates remain read-only.</p>
   {% if saved %}
   <div class="notice ok">Saved {{ saved.inserted }} template(s); skipped {{ saved.skipped }}.</div>
@@ -19,31 +22,35 @@
 <section class="band">
   <h2>Builder</h2>
   <div class="builder-grid" data-testid="template-builder">
-    <label>Name <input id="builder-name" value="Example Actor"></label>
-    <label>Category <input id="builder-category" value="ACT"></label>
-    <label>Type <input id="builder-type" value="actor"></label>
-    <label>Subtype <input id="builder-subtype" value="example_actor"></label>
-    <label>Version <input id="builder-version" value="1.0"></label>
-    <label>Instance Prefix <input id="builder-prefix" value="ACT"></label>
+    <label>Name <input id="builder-name" value="{{ builder_seed.name }}"></label>
+    <label>Category <input id="builder-category" value="{{ builder_seed.category }}"></label>
+    <label>Type <input id="builder-type" value="{{ builder_seed.type }}"></label>
+    <label>Subtype <input id="builder-subtype" value="{{ builder_seed.subtype }}"></label>
+    <label>Version <input id="builder-version" value="{{ builder_seed.version }}"></label>
+    <label>Instance Prefix <input id="builder-prefix" value="{{ builder_seed.instance_prefix }}"></label>
   </div>
   <div class="builder-panel">
     <h3>Properties</h3>
     <div id="builder-properties" class="stack compact">
+      {% for property in builder_seed.properties %}
       <div class="builder-row">
-        <input data-builder-property-key value="display_name">
-        <input data-builder-property-value value="">
+        <input data-builder-property-key value="{{ property.key }}">
+        <input data-builder-property-value value="{{ property.value }}">
       </div>
+      {% endfor %}
     </div>
     <button type="button" class="secondary" id="builder-add-property">Add Property</button>
   </div>
   <div class="builder-panel">
     <h3>Child Instantiation</h3>
     <div id="builder-children" class="stack compact">
+      {% for child in builder_seed.children %}
       <div class="builder-row">
-        <input data-builder-child-code value="WEL/container/example_well/1.0">
-        <input data-builder-child-count type="number" min="1" value="2">
-        <input data-builder-child-relation value="contains">
+        <input data-builder-child-code value="{{ child.template_code }}">
+        <input data-builder-child-count type="number" min="1" value="{{ child.count }}">
+        <input data-builder-child-relation value="{{ child.relationship_type }}">
       </div>
+      {% endfor %}
     </div>
     <button type="button" class="secondary" id="builder-add-child">Add Child Rule</button>
   </div>
@@ -54,7 +61,7 @@
 
 <section class="band">
   <form method="post" class="editor">
-    <textarea id="template-json" name="template_json" spellcheck="false">{{ raw_json }}</textarea>
+    <textarea id="template-json" name="template_json" spellcheck="false" data-tapdb-json-editor data-json-editor-label="Template pack JSON">{{ raw_json }}</textarea>
     <div class="toolbar">
       <button formaction="{{ tapdb_gui_url(request, '/templates/validate') }}" type="submit">Validate</button>
       <button formaction="{{ tapdb_gui_url(request, '/templates/save') }}" type="submit">Save</button>
@@ -71,20 +78,30 @@
     row.innerHTML = html;
     byId(targetId).appendChild(row);
   };
+  const parseBuilderPropertyValue = (raw) => {
+    const value = String(raw || "");
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    try {
+      return JSON.parse(trimmed);
+    } catch (_exc) {
+      return value;
+    }
+  };
   byId("builder-add-property").addEventListener("click", () => {
     addRow("builder-properties", '<input data-builder-property-key><input data-builder-property-value>');
   });
   byId("builder-add-child").addEventListener("click", () => {
     addRow(
       "builder-children",
-      '<input data-builder-child-code placeholder="WEL/container/example_well/1.0"><input data-builder-child-count type="number" min="1" value="1"><input data-builder-child-relation value="contains">'
+      '<input data-builder-child-code placeholder="container/well/generic/1.0"><input data-builder-child-count type="number" min="1" value="1"><input data-builder-child-relation value="contains">'
     );
   });
   byId("builder-generate-json").addEventListener("click", () => {
     const properties = {};
     document.querySelectorAll("#builder-properties .builder-row").forEach((row) => {
       const key = row.querySelector("[data-builder-property-key]").value.trim();
-      const value = row.querySelector("[data-builder-property-value]").value;
+      const value = parseBuilderPropertyValue(row.querySelector("[data-builder-property-value]").value);
       if (key) properties[key] = value;
     });
     const layouts = [];
@@ -114,7 +131,9 @@
         json_addl: { properties, instantiation_layouts: layouts },
       }],
     };
-    byId("template-json").value = JSON.stringify(payload, null, 2);
+    const templateJson = byId("template-json");
+    templateJson.value = JSON.stringify(payload, null, 2);
+    window.TapdbJsonEditor?.setValue(templateJson, templateJson.value);
   });
 })();
 </script>

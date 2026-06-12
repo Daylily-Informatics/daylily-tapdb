@@ -27,7 +27,7 @@ from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
 from daylily_tapdb.cli.context import resolve_context
-from daylily_tapdb.cli.db_config import get_admin_settings
+from daylily_tapdb.cli.db_config import get_admin_settings, get_db_config
 
 # Request attribution (set by middleware and session_scope).
 request_path_var: ContextVar[str] = ContextVar("tapdb_request_path", default="")
@@ -59,14 +59,20 @@ def _parse_bool(value: object, *, default: bool) -> bool:
     return default
 
 
-def _admin_settings() -> dict[str, object]:
-    return get_admin_settings()
+def _admin_settings(*, config_path: str | Path | None = None) -> dict[str, object]:
+    return get_admin_settings(config_path=config_path)
 
 
-def metrics_enabled() -> bool:
+def metrics_enabled(*, config_path: str | Path | None = None) -> bool:
     if "pytest" in sys.modules:
-        return _parse_bool(_admin_settings().get("metrics_enabled"), default=False)
-    return _parse_bool(_admin_settings().get("metrics_enabled"), default=True)
+        return _parse_bool(
+            _admin_settings(config_path=config_path).get("metrics_enabled"),
+            default=False,
+        )
+    return _parse_bool(
+        _admin_settings(config_path=config_path).get("metrics_enabled"),
+        default=True,
+    )
 
 
 def _sanitize_tsv(value: object) -> str:
@@ -109,9 +115,16 @@ def _extract_table_hint(statement: str, op: str) -> str:
     return hint
 
 
-def _metrics_root_dir(env_name: str) -> Path:
+def _metrics_root_dir(env_name: str, *, config_path: str | Path | None = None) -> Path:
     _ = env_name
-    ctx = resolve_context(require_keys=True)
+    context_kwargs = {"config_path": config_path}
+    if config_path is not None and str(config_path).strip():
+        cfg = get_db_config(config_path=config_path)
+        context_kwargs["client_id"] = str(cfg.get("client_id") or "").strip() or None
+        context_kwargs["database_name"] = (
+            str(cfg.get("database_name") or "").strip() or None
+        )
+    ctx = resolve_context(require_keys=True, **context_kwargs)
     return ctx.runtime_dir() / "metrics"
 
 
@@ -127,10 +140,15 @@ def two_week_period_start_utc(now_utc: datetime) -> datetime:
     )
 
 
-def current_metrics_path(env_name: str, *, now_utc: Optional[datetime] = None) -> Path:
+def current_metrics_path(
+    env_name: str,
+    *,
+    now_utc: Optional[datetime] = None,
+    config_path: str | Path | None = None,
+) -> Path:
     now = now_utc or datetime.now(timezone.utc)
     period_start = two_week_period_start_utc(now)
-    root = _metrics_root_dir(env_name)
+    root = _metrics_root_dir(env_name, config_path=config_path)
     root.mkdir(parents=True, exist_ok=True)
     return root / f"db_metrics_{period_start:%Y%m%d}.tsv"
 
@@ -371,8 +389,13 @@ def _tail_lines(path: Path, *, max_lines: int) -> list[str]:
         return []
 
 
-def read_recent_metrics(env_name: str, *, max_lines: int) -> list[dict]:
-    path = current_metrics_path(env_name)
+def read_recent_metrics(
+    env_name: str,
+    *,
+    max_lines: int,
+    config_path: str | Path | None = None,
+) -> list[dict]:
+    path = current_metrics_path(env_name, config_path=config_path)
     lines = _tail_lines(path, max_lines=max_lines + 1)  # include possible header
     rows: list[dict] = []
     for raw in lines:
@@ -463,15 +486,24 @@ def summarize_metrics(rows: Iterable[dict]) -> dict:
     }
 
 
-def build_metrics_page_context(env_name: str, *, limit: int = 5000) -> dict:
+def build_metrics_page_context(
+    env_name: str,
+    *,
+    limit: int = 5000,
+    config_path: str | Path | None = None,
+) -> dict:
     env = "target"
     clamped = max(1, min(int(limit), 20000))
     now = datetime.now(timezone.utc)
     period_start = two_week_period_start_utc(now)
-    path = current_metrics_path(env, now_utc=now)
+    path = current_metrics_path(env, now_utc=now, config_path=config_path)
 
-    enabled = metrics_enabled()
-    rows: list[dict] = read_recent_metrics(env, max_lines=clamped) if enabled else []
+    enabled = metrics_enabled(config_path=config_path)
+    rows: list[dict] = (
+        read_recent_metrics(env, max_lines=clamped, config_path=config_path)
+        if enabled
+        else []
+    )
     summary = summarize_metrics(rows)
     dropped = get_dropped_count(env)
 

@@ -228,6 +228,7 @@ def build_app():
     )
     from daylily_tapdb.cli.pg import pg_app, pg_init, pg_start_local
     from daylily_tapdb.cli.user import user_app
+    from daylily_tapdb.cli.validation import repair_app, validation_app
 
     app = typer.Typer(
         name="tapdb",
@@ -292,6 +293,8 @@ def build_app():
     app.add_typer(config_root_app, name="config")
     app.add_typer(db_app, name="db")
     app.add_typer(pg_app, name="pg")
+    app.add_typer(validation_app, name="validation")
+    app.add_typer(repair_app, name="repair")
     app.add_typer(user_app, name="users")
     app.add_typer(cognito_app, name="cognito")
 

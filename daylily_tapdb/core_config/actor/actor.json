@@ -4,9 +4,9 @@
     {
       "name": "System User Actor",
       "polymorphic_discriminator": "actor_template",
-      "category": "SYS",
-      "type": "actor",
-      "subtype": "system_user",
+      "category": "actor",
+      "type": "user",
+      "subtype": "system",
       "version": "1.0",
       "instance_prefix": "SYS",
       "is_singleton": false,

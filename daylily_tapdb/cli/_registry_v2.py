@@ -8,7 +8,12 @@ from typing import Any
 
 from cli_core_yo.spec import CommandPolicy
 
-JSON_COMMANDS: set[tuple[str | None, str]] = set()
+JSON_COMMANDS: set[tuple[str | None, str]] = {
+    ("validation", "assess"),
+    ("validation", "revalidate"),
+    ("validation", "editor-data"),
+    ("repair", "create"),
+}
 
 MUTATING_COMMANDS = {
     ("bootstrap", "local"),
@@ -27,6 +32,7 @@ MUTATING_COMMANDS = {
     ("db/schema", "migrate"),
     ("db/data", "restore"),
     ("db/data", "seed"),
+    ("repair", "create"),
     ("pg", "start"),
     ("pg", "stop"),
     ("pg", "restart"),

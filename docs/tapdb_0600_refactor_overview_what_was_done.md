@@ -50,7 +50,7 @@ TapDB uses Meridian terminology consistently:
 - `domain_code`
 - `owner_repo_name`
 - `prefix`
-- `category` in TapDB template taxonomy now means the Meridian prefix token
+- `instance_prefix` is the Meridian prefix token used for instance EUID minting
 
 ### 2. Runtime ownership moved from app-code semantics to repo ownership semantics
 
@@ -99,9 +99,10 @@ Template taxonomy remains:
 
 - `category/type/subtype/version`
 
-But the meaning is now:
+The meaning is:
 
-- `category == Meridian prefix`
+- `category` is the top-level object taxonomy bucket
+- `instance_prefix` is the Meridian prefix for instance EUIDs
 - domain is a separate required selector
 
 Effective identity is now:

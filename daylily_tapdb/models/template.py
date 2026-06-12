@@ -7,7 +7,7 @@ Phase 2 spec: ORM must match schema.
 
 from __future__ import annotations
 
-from sqlalchemy import Column, Text, event
+from sqlalchemy import Column, Text, event, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.orm import Session, relationship
@@ -18,6 +18,7 @@ from daylily_tapdb.templates.mutation import (
     template_mutation_error_message,
     template_mutations_allowed,
 )
+from daylily_tapdb.validation.governance import DEFAULT_VALIDATOR_REF
 
 
 class generic_template(tapdb_core):
@@ -26,7 +27,8 @@ class generic_template(tapdb_core):
 
     Templates define:
     - instance_prefix: EUID prefix for instances created from this template
-    - json_addl_schema: Optional JSON Schema for validating instance json_addl
+    - validator_ref: Governance validator reference used for assessment
+    - json_addl_schema: Optional JSON Shape Validator configuration
     - json_addl: Template-specific configuration (child_templates, action_imports, etc.)
 
     Polymorphic inheritance allows typed subclasses (workflow_template, etc.)
@@ -44,6 +46,12 @@ class generic_template(tapdb_core):
 
     instance_prefix = Column(Text, nullable=False)
     instance_polymorphic_identity = Column(Text, nullable=True)
+    validator_ref = Column(
+        Text,
+        nullable=False,
+        default=DEFAULT_VALIDATOR_REF,
+        server_default=text(f"'{DEFAULT_VALIDATOR_REF}'"),
+    )
     json_addl_schema = Column(JSONB, nullable=True)
 
     # Relationship to child instances

@@ -580,7 +580,7 @@ def _ensure_actor_user_row(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_hostaddr=cfg.get("hostaddr") or None,
         db_user=cfg["user"],
-        db_pass=cfg.get("password") or None,
+        db_pass=cfg.get("password") if "password" in cfg else None,
         secret_arn=cfg.get("secret_arn") or None,
         db_name=cfg["database"],
         engine_type=engine_type,

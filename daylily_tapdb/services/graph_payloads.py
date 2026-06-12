@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from daylily_tapdb.graph_contracts import describe_lineage_contract
 from daylily_tapdb.services.external_refs import external_ref_payloads
 
 _CATEGORY_COLORS = {
@@ -112,16 +113,22 @@ def _lineage_edge_payload(lineage: Any, *, service_name: str) -> dict[str, Any] 
     child = getattr(lineage, "child_instance", None)
     if parent is None or child is None:
         return None
+    contract = describe_lineage_contract(lineage)
     return {
         "data": {
             "id": getattr(lineage, "euid", None),
             "euid": getattr(lineage, "euid", None),
             "source": getattr(child, "euid", None),
             "target": getattr(parent, "euid", None),
+            "semantic_source_euid": contract.get("source_euid")
+            or getattr(parent, "euid", None),
+            "semantic_target_euid": contract.get("target_euid")
+            or getattr(child, "euid", None),
             "relationship_type": getattr(lineage, "relationship_type", None)
             or "related",
             "system": service_name,
             "record_type": "lineage",
+            "v0_edge": contract,
         }
     }
 

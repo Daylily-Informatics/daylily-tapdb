@@ -71,7 +71,7 @@ def test_get_template_uses_uuid_cache():
 
     tm = TemplateManager()
     tmpl = _FakeTemplate(uid="u1", euid="GT1", is_deleted=False)
-    code = "SYS/actor/system_user/1.0/"
+    code = "actor/user/system/1.0/"
     cache_key = f"T:{code}"
     tm._template_uid_cache[cache_key] = "u1"
 
@@ -87,7 +87,7 @@ def test_get_template_query_populates_caches():
 
     tm = TemplateManager()
     tmpl = _FakeTemplate(uid="u2", euid="GT2", is_deleted=False)
-    code = "SYS/actor/system_user/1.0/"
+    code = "actor/user/system/1.0/"
 
     sess = _FakeSession(query_first=tmpl)
     got = tm.get_template(sess, code, domain_code="t")
@@ -102,7 +102,7 @@ def test_get_template_cache_hit_deleted_falls_back_to_query():
     from daylily_tapdb.templates.manager import TemplateManager
 
     tm = TemplateManager()
-    code = "SYS/actor/system_user/1.0/"
+    code = "actor/user/system/1.0/"
 
     deleted = _FakeTemplate(uid="ud", euid="GTd", is_deleted=True)
     fresh = _FakeTemplate(uid="uf", euid="GTf", is_deleted=False)
@@ -124,7 +124,7 @@ def test_get_template_missing_domain_raises():
     tm = TemplateManager()
 
     with pytest.raises(ValueError, match="domain_code is required"):
-        tm.get_template(_FakeSession(), "SYS/actor/system_user/1.0/")
+        tm.get_template(_FakeSession(), "actor/user/system/1.0/")
 
 
 def test_get_template_by_euid_uses_cache():

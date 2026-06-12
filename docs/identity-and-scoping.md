@@ -123,7 +123,9 @@ Template taxonomy remains:
 category/type/subtype/version/
 ```
 
-In TapDB, `category` is the Meridian prefix. Domain is separate and mandatory.
+In TapDB, `category` is the top-level object taxonomy bucket. Domain is
+separate and mandatory; Meridian EUID minting is controlled by
+`instance_prefix`.
 The effective template identity is:
 
 ```text

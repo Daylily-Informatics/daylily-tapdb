@@ -4,9 +4,9 @@
     {
       "name": "Webhook Event Message",
       "polymorphic_discriminator": "generic_template",
-      "category": "MSG",
-      "type": "message",
-      "subtype": "webhook_event",
+      "category": "message",
+      "type": "webhook",
+      "subtype": "event",
       "version": "1.0",
       "instance_prefix": "MSG",
       "is_singleton": false,

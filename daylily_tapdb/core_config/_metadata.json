@@ -3,12 +3,12 @@
   "version": "2.0.0",
   "description": "TAPDB core template configuration schema",
   "field_mapping": {
-    "polymorphic_discriminator": "Path: category/type/subtype/version (e.g., SYS/actor/system_user/1.0)",
-    "category": "Meridian prefix selector for template identity",
-    "type": "Type within the prefix selector",
+    "polymorphic_discriminator": "Path: category/type/subtype/version (e.g., container/plate/96well-generic/1.0)",
+    "category": "Top-level object taxonomy bucket",
+    "type": "Type within the taxonomy bucket",
     "subtype": "Specific variant within the template family",
     "version": "Template version (e.g., 1.0)",
-    "instance_prefix": "EUID prefix for instances (bundled operational templates use their reserved TapDB prefix directly)",
+    "instance_prefix": "Meridian EUID prefix for instances minted from the template",
     "json_addl": "Flexible JSON data for template-specific properties"
   },
   "euid_prefixes": {

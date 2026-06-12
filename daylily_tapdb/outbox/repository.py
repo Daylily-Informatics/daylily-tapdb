@@ -24,7 +24,7 @@ from daylily_tapdb.models.outbox import outbox_event
 _OUTBOX_PENDING_STATUSES = ("pending", "failed", "delivering")
 
 # Template code for canonical webhook event messages
-MESSAGE_TEMPLATE_CODE = "MSG/message/webhook_event/1.0/"
+MESSAGE_TEMPLATE_CODE = "message/webhook/event/1.0/"
 
 
 def _build_enqueue_stmt(

@@ -36,6 +36,7 @@ class TestTapdbCore:
             "type",
             "subtype",
             "version",
+            "validator_ref",
             "bstatus",
             "json_addl",
             "is_singleton",

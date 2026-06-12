@@ -4,14 +4,17 @@
 <section class="band">
   <h1>Create Instance</h1>
   <table>
-    <tr><th>Template</th><td>{{ template.euid }} · {{ template.name }}</td></tr>
+    <tr><th>Template</th><td><a href="{{ tapdb_gui_url(request, '/object/' ~ template.euid) }}">{{ template.euid }}</a> · {{ template.name }}</td></tr>
     <tr><th>Code</th><td>{{ template_code }}</td></tr>
   </table>
+  {% if error %}
+  <div class="notice bad">{{ error }}</div>
+  {% endif %}
   <form method="post" action="{{ tapdb_gui_url(request, '/create/' ~ template.euid) }}" class="stack">
-    <label>Name <input name="name" value=""></label>
-    <label>Create children <input type="checkbox" name="create_children" value="true" checked></label>
+    <label>Name <input name="name" value="{{ form.get('name', '') }}"></label>
+    <label>Create children <input type="checkbox" name="create_children" value="true" {% if form.get('create_children', 'true') in ['true', '1', 'on'] %}checked{% endif %}></label>
     <label>Properties JSON
-      <textarea name="properties_json" spellcheck="false">{}</textarea>
+      <textarea name="properties_json" spellcheck="false" data-tapdb-json-editor data-json-editor-label="Instance properties JSON">{{ form.get('properties_json', '{}') }}</textarea>
     </label>
     <button type="submit">Create</button>
   </form>

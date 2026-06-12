@@ -68,10 +68,24 @@ def _build_instance_graph():
     lineage = SimpleNamespace(
         uid=3,
         euid="LG1",
-        relationship_type="contains",
+        relationship_type="HOLDS_MATERIAL",
         parent_instance=root,
         child_instance=child,
         is_deleted=False,
+        json_addl={
+            "properties": {
+                "v0_edge": {
+                    "edge_type": "HOLDS_MATERIAL",
+                    "source_euid": "GX1",
+                    "target_euid": "GX2",
+                    "asserted_by_system": "bloom",
+                    "evidence_refs": [{"euid": "EVD-1"}],
+                    "correlation_id": "corr-1",
+                    "causation_id": "cause-1",
+                    "edge_state": "active",
+                }
+            }
+        },
     )
     root.parent_of_lineages = _FakeRelatedQuery([lineage])
     root.child_of_lineages = _FakeRelatedQuery([])
@@ -151,6 +165,16 @@ def test_build_graph_payload_returns_instance_graph_and_singletons() -> None:
     assert node_ids == {"GX1", "GX2"}
     assert payload["elements"]["edges"][0]["data"]["source"] == "GX2"
     assert payload["elements"]["edges"][0]["data"]["target"] == "GX1"
+    assert payload["elements"]["edges"][0]["data"]["semantic_source_euid"] == "GX1"
+    assert payload["elements"]["edges"][0]["data"]["semantic_target_euid"] == "GX2"
+    assert (
+        payload["elements"]["edges"][0]["data"]["v0_edge"]["edge_type"]
+        == "HOLDS_MATERIAL"
+    )
+    assert (
+        payload["elements"]["edges"][0]["data"]["v0_edge"]["compliance_status"]
+        == "canonical"
+    )
     root_node = next(
         node["data"]
         for node in payload["elements"]["nodes"]

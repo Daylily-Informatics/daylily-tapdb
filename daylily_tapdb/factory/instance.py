@@ -19,7 +19,7 @@ from daylily_tapdb.validation.instantiation_layouts import (
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_USER_COORDS = ("SYS", "actor", "system_user")
+_SYSTEM_USER_COORDS = ("actor", "user", "system")
 
 
 def _normalize_domain_code(domain_code: Any) -> Optional[str]:
@@ -176,8 +176,8 @@ class InstanceFactory:
             create_children: Whether to create child objects from instantiation_layouts.
             _depth: Internal recursion depth tracker.
             _visited: Internal visited set for cycle detection.
-            tenant_id: Optional tenant UUID; if provided, persists to the real column
-                and also to json_addl["properties"]["tenant_id"].
+            tenant_id: Optional tenant UUID; if provided, persists only to the
+                canonical generic_instance.tenant_id column.
 
         Returns:
             The created instance.
@@ -218,8 +218,6 @@ class InstanceFactory:
         # Build json_addl
         json_addl = self._build_json_addl(session, template, properties)
         self._normalize_system_user_json_addl(template, json_addl)
-        if tenant_id is not None:
-            json_addl["properties"]["tenant_id"] = str(tenant_id)
 
         # Create instance
         instance = generic_instance(
@@ -249,7 +247,7 @@ class InstanceFactory:
     def _normalize_system_user_json_addl(
         self, template: generic_template, json_addl: Dict[str, Any]
     ) -> None:
-        """Normalize actor/system_user payload shape for auth/user-store compatibility."""
+        """Normalize actor/user/system payload shape for auth/user-store compatibility."""
         if (
             template.category,
             template.type,
