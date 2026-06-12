@@ -19,7 +19,7 @@ from daylily_tapdb.validation.instantiation_layouts import (
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_USER_COORDS = ("SYS", "actor", "system_user")
+_SYSTEM_USER_COORDS = ("actor", "user", "system")
 
 
 def _normalize_domain_code(domain_code: Any) -> Optional[str]:
@@ -247,7 +247,7 @@ class InstanceFactory:
     def _normalize_system_user_json_addl(
         self, template: generic_template, json_addl: Dict[str, Any]
     ) -> None:
-        """Normalize actor/system_user payload shape for auth/user-store compatibility."""
+        """Normalize actor/user/system payload shape for auth/user-store compatibility."""
         if (
             template.category,
             template.type,

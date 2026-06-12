@@ -480,7 +480,7 @@ def gui_server(monkeypatch):
         link = state.instance(
             state.next_instance_euid("XRF"),
             f"{system}:{foreign_uid}",
-            "XRF",
+            "reference",
             "external_identifier",
             "tapdb_object",
             json_addl={"external_identifier": {"system": system, "foreign_uid": foreign_uid}},

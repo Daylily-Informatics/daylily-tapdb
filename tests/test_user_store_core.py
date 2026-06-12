@@ -63,8 +63,9 @@ def test_select_user_columns_contains_expected_aliases_and_filters():
     assert "AS is_active" in sql
     assert "AS require_password_change" in sql
     assert "polymorphic_discriminator = 'actor_instance'" in sql
-    assert "gi.type = 'actor'" in sql
-    assert "gi.subtype = 'system_user'" in sql
+    assert "gi.category = 'actor'" in sql
+    assert "gi.type = 'user'" in sql
+    assert "gi.subtype = 'system'" in sql
 
 
 def test_get_system_user_template_uid_returns_uid_and_uses_expected_params():

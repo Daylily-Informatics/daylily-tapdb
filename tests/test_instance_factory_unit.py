@@ -123,7 +123,7 @@ def test_create_instance_builds_json_addl_and_merges_properties():
     f = InstanceFactory(TM(), domain_code="T")
     inst = f.create_instance(
         sess,
-        template_code="SYS/actor/system_user/1.0",
+        template_code="actor/user/system/1.0",
         name="x",
         properties={"b": 2},
         create_children=False,
@@ -162,7 +162,7 @@ def test_create_instance_sets_tenant_id_column_and_json_when_provided():
     f = InstanceFactory(TM(), domain_code="T")
     inst = f.create_instance(
         sess,
-        template_code="SYS/actor/system_user/1.0",
+        template_code="actor/user/system/1.0",
         name="x",
         properties={},
         create_children=False,
@@ -183,9 +183,9 @@ def test_create_instance_system_user_normalizes_login_identifier_and_top_level_k
         is_singleton=False,
         instance_polymorphic_identity=None,
         polymorphic_discriminator="actor_template",
-        category="SYS",
-        type="actor",
-        subtype="system_user",
+        category="actor",
+        type="user",
+        subtype="system",
         version="1.0",
         json_addl={
             "properties": {
@@ -210,7 +210,7 @@ def test_create_instance_system_user_normalizes_login_identifier_and_top_level_k
     f = InstanceFactory(TM(), domain_code="T")
     inst = f.create_instance(
         sess,
-        template_code="SYS/actor/system_user/1.0",
+        template_code="actor/user/system/1.0",
         name="",
         properties={"email": "John@Example.com"},
         create_children=False,
@@ -231,9 +231,9 @@ def test_create_instance_system_user_requires_non_empty_login_identifier():
         is_singleton=False,
         instance_polymorphic_identity=None,
         polymorphic_discriminator="actor_template",
-        category="SYS",
-        type="actor",
-        subtype="system_user",
+        category="actor",
+        type="user",
+        subtype="system",
         version="1.0",
         json_addl={
             "properties": {
@@ -261,7 +261,7 @@ def test_create_instance_system_user_requires_non_empty_login_identifier():
     ):
         f.create_instance(
             sess,
-            template_code="SYS/actor/system_user/1.0",
+            template_code="actor/user/system/1.0",
             name="",
             create_children=False,
         )

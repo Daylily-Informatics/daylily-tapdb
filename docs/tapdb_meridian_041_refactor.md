@@ -19,7 +19,7 @@
   `domain + category/type/subtype/version` for every template query.
 - Treat the Meridian registry leaf field `issuer_app_code` as the repo-name token value. The field name stays upstream-compatible; the stored value becomes `lsmc-atlas` or `daylily-tapdb`.
 - Give TapDB-owned operational prefixes fixed values and register them to `daylily-tapdb`: `TPX` for template rows, `EDG` for lineage rows, `ADT` for audit rows, `SYS` for `system_user` instances, `MSG` for system messages, and `XRF` for typed external object links.
-- Keep only these bundled templates: `SYS/actor/system_user/1.0/`, `MSG/message/webhook_event/1.0/`, and `XRF/external_identifier/tapdb_object/1.0/`. Do not auto-seed the old generic bundled templates.
+- Keep only these bundled templates: `actor/user/system/1.0/`, `message/webhook/event/1.0/`, and `reference/external_identifier/tapdb_object/1.0/`. Do not auto-seed the old generic bundled templates.
 - Create shared local registries in `~/.config/tapdb/` during migration and verification:
   - `domain_code_registry.json`: register `Z` as `localhost`
   - `prefix_ownership_registry.json`: under `Z`, claim `AGX -> lsmc-atlas` and `TPX/EDG/ADT/SYS/MSG/XRF -> daylily-tapdb`

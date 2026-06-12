@@ -28,10 +28,35 @@ def test_core_bundle_only_seeds_operational_templates():
     }
 
     assert codes == {
-        "SYS/actor/system_user/1.0",
-        "MSG/message/webhook_event/1.0",
-        "XRF/external_identifier/tapdb_object/1.0",
+        "actor/user/system/1.0",
+        "message/webhook/event/1.0",
+        "reference/external_identifier/tapdb_object/1.0",
     }
+
+
+def test_core_bundle_taxonomy_is_decoupled_from_instance_prefixes():
+    from daylily_tapdb.euid import EUIDConfig
+    from daylily_tapdb.templates.loader import (
+        find_tapdb_core_config_dir,
+        load_template_configs,
+    )
+
+    core_dir = find_tapdb_core_config_dir()
+    templates = load_template_configs(core_dir)
+    reserved_prefixes = set(EUIDConfig().get_all_prefixes().values())
+
+    offenders = [
+        (
+            f"{template['category']}/{template['type']}/"
+            f"{template['subtype']}/{template['version']}",
+            template["instance_prefix"],
+        )
+        for template in templates
+        if template["category"] in reserved_prefixes
+        or template["category"] == template["instance_prefix"]
+    ]
+
+    assert offenders == []
 
 
 def test_packaged_registry_fixtures_match_core_prefix_ownership():
@@ -88,9 +113,9 @@ def test_validate_seed_ownership_requires_registered_domain_and_claim(tmp_path):
         {
             "name": "System User Actor",
             "polymorphic_discriminator": "actor_template",
-            "category": "SYS",
-            "type": "actor",
-            "subtype": "system_user",
+            "category": "actor",
+            "type": "user",
+            "subtype": "system",
             "version": "1.0",
             "instance_prefix": "SYS",
         }

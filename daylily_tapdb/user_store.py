@@ -1,7 +1,7 @@
 """Actor-backed TAPDB auth user storage helpers.
 
 Auth users are stored as `generic_instance` rows using the dedicated
-`SYS/actor/system_user/1.0` template.
+`actor/user/system/1.0` template.
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ from daylily_tapdb.timezone_utils import (
     utc_now_iso,
 )
 
-SYSTEM_USER_TEMPLATE_CATEGORY = "SYS"
-SYSTEM_USER_TEMPLATE_TYPE = "actor"
-SYSTEM_USER_TEMPLATE_SUBTYPE = "system_user"
+SYSTEM_USER_TEMPLATE_CATEGORY = "actor"
+SYSTEM_USER_TEMPLATE_TYPE = "user"
+SYSTEM_USER_TEMPLATE_SUBTYPE = "system"
 SYSTEM_USER_TEMPLATE_VERSION = "1.0"
 SYSTEM_USER_TEMPLATE_CODE = (
     f"{SYSTEM_USER_TEMPLATE_CATEGORY}/{SYSTEM_USER_TEMPLATE_TYPE}/"
@@ -32,9 +32,9 @@ SYSTEM_USER_TEMPLATE_CODE = (
 _SYSTEM_USER_WHERE = """
     gi.is_deleted = FALSE
     AND gi.polymorphic_discriminator = 'actor_instance'
-    AND gi.category = 'SYS'
-    AND gi.type = 'actor'
-    AND gi.subtype = 'system_user'
+    AND gi.category = 'actor'
+    AND gi.type = 'user'
+    AND gi.subtype = 'system'
 """
 
 _ACTIVE_EXPR = "COALESCE(NULLIF(gi.json_addl->>'is_active', '')::boolean, TRUE)"

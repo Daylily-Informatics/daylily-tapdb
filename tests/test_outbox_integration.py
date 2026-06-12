@@ -41,9 +41,9 @@ def _conn_kwargs(**overrides):
 _MSG_TEMPLATE = {
     "name": "Webhook Event Message",
     "polymorphic_discriminator": "generic_template",
-    "category": "system",
-    "type": "message",
-    "subtype": "webhook_event",
+    "category": "message",
+    "type": "webhook",
+    "subtype": "event",
     "version": "1.0",
     "instance_prefix": "MSG",
     "is_singleton": False,

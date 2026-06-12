@@ -130,7 +130,7 @@ class TestTemplateCacheIsolation:
         tm = TemplateManager()
         mock_session = mock.MagicMock()
         # Template code must be 4-part: category/type/subtype/version
-        code = "SYS/actor/system_user/1.0"
+        code = "actor/user/system/1.0"
 
         # session.query(...).filter(...).first() returns None (no hit)
         mock_session.query.return_value.filter.return_value.filter.return_value.first.return_value = None

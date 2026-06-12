@@ -196,7 +196,7 @@ def test_prepare_seed_templates_rejects_bad_prefixes(tmp_path: Path):
         )
     with pytest.raises(ValueError, match="reserved TapDB operational prefix"):
         loader._prepare_seed_templates(
-            [_template(category="SYS", instance_prefix="SYS")],
+            [_template(category="actor", type="user", subtype="system", instance_prefix="SYS")],
             core_config_dir=tmp_path,
         )
 

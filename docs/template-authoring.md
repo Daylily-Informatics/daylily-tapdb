@@ -16,9 +16,9 @@ templates live outside this repository and are seeded explicitly.
 
 Current built-in core templates are:
 
-- `SYS/actor/system_user/1.0`
-- `MSG/message/webhook_event/1.0`
-- `XRF/external_identifier/tapdb_object/1.0`
+- `actor/user/system/1.0`
+- `message/webhook/event/1.0`
+- `reference/external_identifier/tapdb_object/1.0`
 
 There is no passive inheritance of generic client-usable prefixes from TapDB
 core.
@@ -35,9 +35,9 @@ Minimal shape:
     {
       "name": "System User",
       "polymorphic_discriminator": "actor_template",
-      "category": "SYS",
-      "type": "actor",
-      "subtype": "system_user",
+      "category": "actor",
+      "type": "user",
+      "subtype": "system",
       "version": "1.0",
       "instance_prefix": "SYS",
       "bstatus": "active",
@@ -73,9 +73,9 @@ category/type/subtype/version/
 
 Examples:
 
-- `SYS/actor/system_user/1.0/`
-- `MSG/message/webhook_event/1.0/`
-- `XRF/external_identifier/tapdb_object/1.0/`
+- `actor/user/system/1.0/`
+- `message/webhook/event/1.0/`
+- `reference/external_identifier/tapdb_object/1.0/`
 - `container/plate/96well-generic/1.0/`
 - `container/tube/1.5ml-eppi/1.0/`
 

@@ -615,7 +615,7 @@ def _external_link_template(session: Any) -> generic_template | None:
     return (
         session.query(generic_template)
         .filter_by(
-            category="XRF",
+            category="reference",
             type="external_identifier",
             subtype="tapdb_object",
             is_deleted=False,
@@ -686,7 +686,7 @@ def _create_external_link(
         raise HTTPException(
             status_code=422,
             detail=(
-                "No XRF/external_identifier/tapdb_object external link "
+                "No reference/external_identifier/tapdb_object external link "
                 "template is seeded."
             ),
         )
@@ -900,7 +900,7 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
             external_template_detail = (
                 _template_code(external_template)
                 if external_template is not None
-                else "No XRF external link template found"
+                else "No external link template found"
             )
             template_count = len(
                 session.query(generic_template)

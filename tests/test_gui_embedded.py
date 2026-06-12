@@ -134,7 +134,7 @@ def _template(
     euid="Z-XRF-1Q",
     *,
     name="External Object Reference",
-    category="XRF",
+    category="reference",
     type_name="external_identifier",
     subtype="tapdb_object",
     prefix="XRF",
@@ -680,9 +680,9 @@ def test_gui_create_form_renders_factory_validation_error(monkeypatch):
                 _template(
                     euid="Z-SYS-1Q",
                     name="System User",
-                    category="SYS",
-                    type_name="system_user",
-                    subtype="tapdb_user",
+                    category="actor",
+                    type_name="user",
+                    subtype="system",
                     prefix="USR",
                 )
             ],
@@ -973,7 +973,7 @@ def test_gui_readiness_page_and_api_report_seeded_external_template(monkeypatch)
     assert {
         "name": "external_link_template",
         "ok": True,
-        "detail": "XRF/external_identifier/tapdb_object/1.0/",
+        "detail": "reference/external_identifier/tapdb_object/1.0/",
     } in payload["checks"]
     assert "meridian-registry" in page.text
 
@@ -1133,7 +1133,7 @@ def test_gui_external_link_creates_typed_object_and_lineage(monkeypatch):
         def create_instance(
             self, session, template_code, name, properties, create_children
         ):
-            assert template_code == "XRF/external_identifier/tapdb_object/1.0/"
+            assert template_code == "reference/external_identifier/tapdb_object/1.0/"
             assert name == "bloom:M-123"
             assert properties["foreign_uid"] == "M-123"
             assert create_children is False
@@ -1184,7 +1184,7 @@ def test_gui_external_link_api_creates_typed_object_and_lineage(monkeypatch):
         def create_instance(
             self, session, template_code, name, properties, create_children
         ):
-            assert template_code == "XRF/external_identifier/tapdb_object/1.0/"
+            assert template_code == "reference/external_identifier/tapdb_object/1.0/"
             assert name == "dewey:M-456"
             assert properties["external_identifier"]["target_euid"] == "M-456"
             assert (
@@ -1247,7 +1247,7 @@ def test_gui_external_link_creation_rejects_legacy_template_shape(monkeypatch):
     assert response.status_code == 422
     assert (
         response.json()["detail"]
-        == "No XRF/external_identifier/tapdb_object external link template is seeded."
+        == "No reference/external_identifier/tapdb_object external link template is seeded."
     )
     assert session.added == []
 

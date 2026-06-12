@@ -4,7 +4,7 @@
     {
       "name": "External Object Reference",
       "polymorphic_discriminator": "generic_template",
-      "category": "XRF",
+      "category": "reference",
       "type": "external_identifier",
       "subtype": "tapdb_object",
       "version": "1.0",

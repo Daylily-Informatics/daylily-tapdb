@@ -350,9 +350,9 @@ def test_prepare_seed_templates_accepts_core_operational_templates(tmp_path: Pat
             {
                 "name": "System User",
                 "polymorphic_discriminator": "generic_template",
-                "category": "SYS",
-                "type": "actor",
-                "subtype": "system_user",
+                "category": "actor",
+                "type": "user",
+                "subtype": "system",
                 "version": "1.0",
                 "instance_prefix": "SYS",
                 "_source_file": str(core_file),
@@ -382,7 +382,7 @@ def test_prepare_seed_templates_rejects_client_reserved_prefix(tmp_path: Path):
             [
                 {
                     **_template_payload(),
-                    "category": "SYS",
+                    "category": "actor",
                     "instance_prefix": "SYS",
                     "_source_file": str(client_file),
                 }

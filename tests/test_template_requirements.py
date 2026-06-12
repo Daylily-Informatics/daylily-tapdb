@@ -35,14 +35,14 @@ def test_require_seeded_template_raises_when_missing():
     with pytest.raises(m.MissingSeededTemplateError, match="Missing seeded TapDB"):
         m.require_seeded_template(
             session,
-            "generic/actor/system_user/1.0",
+            "actor/user/system/1.0",
             domain_code="T",
             app_name="atlas",
             template_manager=manager,
         )
 
     assert manager.calls == [
-        (session, "generic/actor/system_user/1.0", {"domain_code": "T"})
+        (session, "actor/user/system/1.0", {"domain_code": "T"})
     ]
 
 
