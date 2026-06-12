@@ -63,7 +63,7 @@ def test_packaged_registry_fixtures_match_core_prefix_ownership():
 def test_prepare_seed_templates_rejects_gx_placeholder():
     from daylily_tapdb.templates.loader import _prepare_seed_templates
 
-    with pytest.raises(ValueError, match="same Meridian prefix"):
+    with pytest.raises(ValueError, match="reserved prefixes"):
         _prepare_seed_templates(
             [
                 {

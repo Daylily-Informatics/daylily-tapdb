@@ -181,9 +181,17 @@ def test_prepare_seed_templates_rejects_bad_prefixes(tmp_path: Path):
         loader._prepare_seed_templates(
             [_template(instance_prefix="")], core_config_dir=tmp_path
         )
-    with pytest.raises(ValueError, match="same Meridian prefix"):
+
+    prepared = loader._prepare_seed_templates(
+        [_template(category="container", type="tube", instance_prefix="SMP")],
+        core_config_dir=tmp_path,
+    )
+    assert prepared[0]["category"] == "container"
+    assert prepared[0]["instance_prefix"] == "SMP"
+
+    with pytest.raises(ValueError, match="Invalid TAPDB instance prefix"):
         loader._prepare_seed_templates(
-            [_template(category="SMP", instance_prefix="BAD")],
+            [_template(category="container", instance_prefix="ABCDE")],
             core_config_dir=tmp_path,
         )
     with pytest.raises(ValueError, match="reserved TapDB operational prefix"):

@@ -5,7 +5,8 @@
 - Make TapDB a hard cut to canonical Meridian `DOMAIN-PREFIX-BODYCHECKSUM`.
 - Replace passive core-prefix inheritance with repo-owned prefix governance checked against the shared registries in `~/.config/tapdb/`.
 - Use repo name as the sole ownership token for prefix claims. Atlas becomes `lsmc-atlas`; TapDB internal ownership becomes `daylily-tapdb`.
-- Keep templates as `category/type/subtype/version`, but treat `category` as the Meridian prefix token and require domain on every template lookup.
+- Keep templates as `category/type/subtype/version`, require domain on every
+  template lookup, and keep Meridian prefix governance on `instance_prefix`.
 - Remove Atlas-generated user-facing business numbers for TapDB-owned objects. If an object has an EUID, the EUID is the displayed and routable identifier.
 
 ## Multi-Agent Execution
@@ -14,7 +15,8 @@
 3. Agent 3 owns CLI/config and Atlas migration: change TapDB config to require `meta.owner_repo_name`, `meta.domain_registry_path`, `meta.prefix_ownership_registry_path`, and env `domain_code`; remove environment prefix overrides and client-code-derived core prefixes; migrate Atlas activation, settings, TapDB runtime wiring, template seeding, and tests to `lsmc-atlas` / `TAPDB_OWNER_REPO`, update all old-shape EUID expectations to canonical `Z-AGX-*`, and remove generated identifiers like `MAN-*`, `REL-*`, `EXC-*`, and shipment/ticket-style Atlas numbers where the record already has an EUID.
 
 ## Key Changes
-- Keep TapDB template taxonomy (`category/type/subtype/version`), but make `category` the Meridian prefix token and require `domain + category/type/subtype/version` for every template query.
+- Keep TapDB template taxonomy (`category/type/subtype/version`) and require
+  `domain + category/type/subtype/version` for every template query.
 - Treat the Meridian registry leaf field `issuer_app_code` as the repo-name token value. The field name stays upstream-compatible; the stored value becomes `lsmc-atlas` or `daylily-tapdb`.
 - Give TapDB-owned operational prefixes fixed values and register them to `daylily-tapdb`: `TPX` for template rows, `EDG` for lineage rows, `ADT` for audit rows, `SYS` for `system_user` instances, `MSG` for system messages, and `XRF` for typed external object links.
 - Keep only these bundled templates: `SYS/actor/system_user/1.0/`, `MSG/message/webhook_event/1.0/`, and `XRF/external_identifier/tapdb_object/1.0/`. Do not auto-seed the old generic bundled templates.

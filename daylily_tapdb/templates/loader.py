@@ -650,23 +650,6 @@ def validate_template_configs(
                 )
                 normalized_instance_prefix = ""
             if normalized_instance_prefix:
-                normalized_category = (
-                    str(template.get("category") or "").strip().upper()
-                )
-                if normalized_category != normalized_instance_prefix:
-                    issues.append(
-                        ConfigIssue(
-                            level="error",
-                            source_file=source_file,
-                            template_code=code,
-                            message=(
-                                "Template category must match instance_prefix "
-                                f"for Meridian template identity ({normalized_category!r} "
-                                f"!= {normalized_instance_prefix!r})."
-                            ),
-                        )
-                    )
-
                 is_core_template = _is_source_under_dir(source_file, core_config_dir)
                 if (
                     is_core_template
@@ -836,7 +819,6 @@ def _prepare_seed_templates(
         source_file = str(template.get("_source_file") or "") or None
         item = dict(template)
         instance_prefix = str(item.get("instance_prefix") or "").strip().upper()
-        category = str(item.get("category") or "").strip().upper()
         is_core_template = _is_source_under_dir(source_file, core_config_dir)
 
         if not instance_prefix:
@@ -845,13 +827,6 @@ def _prepare_seed_templates(
             )
 
         normalized_instance_prefix = _normalize_instance_prefix(instance_prefix)
-        if category != normalized_instance_prefix:
-            raise ValueError(
-                f"Template {_template_code(item)!r} must use the same Meridian "
-                f"prefix for category and instance_prefix ({category!r} != "
-                f"{normalized_instance_prefix!r})."
-            )
-
         if (
             is_core_template
             and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES

@@ -405,6 +405,136 @@ def _template_payload_and_code(template: generic_template) -> tuple[dict[str, An
     return payload, code
 
 
+def _template_seed_pack(template: generic_template) -> dict[str, Any]:
+    return {
+        "templates": [
+            {
+                "name": template.name,
+                "polymorphic_discriminator": getattr(
+                    template, "polymorphic_discriminator", "generic_template"
+                ),
+                "category": template.category,
+                "type": template.type,
+                "subtype": template.subtype,
+                "version": template.version,
+                "instance_prefix": template.instance_prefix,
+                "instance_polymorphic_identity": getattr(
+                    template,
+                    "instance_polymorphic_identity",
+                    "generic_instance",
+                ),
+                "json_addl": template.json_addl or {},
+            }
+        ]
+    }
+
+
+def _builder_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, sort_keys=True)
+
+
+def _default_builder_seed() -> dict[str, Any]:
+    return {
+        "seed_euid": "",
+        "name": "96 Well Generic Plate",
+        "category": "container",
+        "type": "plate",
+        "subtype": "96well-generic",
+        "version": "1.0",
+        "instance_prefix": "PAT",
+        "properties": [{"key": "plate_format", "value": "96"}],
+        "children": [
+            {
+                "template_code": "container/well/generic/1.0",
+                "count": 96,
+                "relationship_type": "contains",
+            }
+        ],
+    }
+
+
+def _builder_seed_from_template(
+    template: dict[str, Any],
+    *,
+    seed_euid: str = "",
+) -> dict[str, Any]:
+    json_addl = template.get("json_addl") if isinstance(template, dict) else {}
+    json_addl = json_addl if isinstance(json_addl, dict) else {}
+    properties = json_addl.get("properties") if isinstance(json_addl, dict) else {}
+    properties = properties if isinstance(properties, dict) else {}
+    property_rows = [
+        {"key": str(key), "value": _builder_value(value)}
+        for key, value in properties.items()
+    ] or [{"key": "", "value": ""}]
+
+    child_rows: list[dict[str, Any]] = []
+    layouts = json_addl.get("instantiation_layouts")
+    if isinstance(layouts, list):
+        for layout in layouts:
+            if not isinstance(layout, dict):
+                continue
+            relationship_type = str(layout.get("relationship_type") or "contains")
+            child_templates = layout.get("child_templates")
+            if not isinstance(child_templates, list):
+                continue
+            for child in child_templates:
+                if not isinstance(child, dict):
+                    continue
+                template_code = str(child.get("template_code") or "").strip()
+                count = child.get("count")
+                child_rows.append(
+                    {
+                        "template_code": template_code,
+                        "count": count if isinstance(count, int) and count > 0 else 1,
+                        "relationship_type": relationship_type,
+                    }
+                )
+    if not child_rows:
+        child_rows = [{"template_code": "", "count": 1, "relationship_type": "contains"}]
+
+    return {
+        "seed_euid": seed_euid,
+        "name": str(template.get("name") or ""),
+        "category": str(template.get("category") or ""),
+        "type": str(template.get("type") or ""),
+        "subtype": str(template.get("subtype") or ""),
+        "version": str(template.get("version") or "1.0"),
+        "instance_prefix": str(template.get("instance_prefix") or ""),
+        "properties": property_rows,
+        "children": child_rows,
+    }
+
+
+def _template_editor_context(
+    payload: dict[str, Any],
+    *,
+    seed_template: dict[str, Any] | None = None,
+    use_default_builder: bool = False,
+) -> dict[str, Any]:
+    templates = payload.get("templates") if isinstance(payload, dict) else None
+    first_template = templates[0] if isinstance(templates, list) and templates else None
+
+    if use_default_builder and seed_template is None:
+        builder_seed = _default_builder_seed()
+    elif isinstance(first_template, dict):
+        builder_seed = _builder_seed_from_template(
+            first_template,
+            seed_euid=str(seed_template.get("euid") or "") if seed_template else "",
+        )
+    else:
+        builder_seed = _default_builder_seed()
+
+    return {
+        "raw_json": json.dumps(payload, indent=2, sort_keys=True),
+        "builder_seed": builder_seed,
+        "seed_template": seed_template,
+    }
+
+
 def _validate_template_payload(payload: dict[str, Any]) -> list[ConfigIssue]:
     issues: list[ConfigIssue] = []
     templates = payload.get("templates")
@@ -965,14 +1095,40 @@ def create_tapdb_gui_router(
     @router.get("/templates/new", response_class=HTMLResponse)
     async def template_new_page(
         request: Request,
+        seed_euid: str = "",
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
+        payload = _example_template_pack()
+        seed_template = None
+        if str(seed_euid or "").strip():
+            with get_db(resolved_config_path) as conn:
+                conn.app_username = user.get("username")
+                with conn.session_scope() as session:
+                    template = (
+                        session.query(generic_template)
+                        .filter_by(
+                            euid=str(seed_euid).strip(),
+                            is_deleted=False,
+                        )
+                        .first()
+                    )
+                    if template is None:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Template seed not found: {seed_euid}",
+                        )
+                    payload = _template_seed_pack(template)
+                    seed_template = _template_row(template)
         return _render(
             templates,
             request,
             "template_editor.html",
             user=user,
-            raw_json=json.dumps(_example_template_pack(), indent=2),
+            **_template_editor_context(
+                payload,
+                seed_template=seed_template,
+                use_default_builder=True,
+            ),
             issues=[],
             saved=None,
         )
@@ -987,7 +1143,10 @@ def create_tapdb_gui_router(
             request,
             "template_editor.html",
             user=user,
-            raw_json=json.dumps(_example_template_pack(), indent=2),
+            **_template_editor_context(
+                _example_template_pack(),
+                use_default_builder=True,
+            ),
             issues=[
                 ConfigIssue(
                     level="info",
@@ -1011,7 +1170,7 @@ def create_tapdb_gui_router(
             request,
             "template_editor.html",
             user=user,
-            raw_json=json.dumps(payload, indent=2, sort_keys=True),
+            **_template_editor_context(payload),
             issues=issues,
             saved=None,
         )
@@ -1055,7 +1214,7 @@ def create_tapdb_gui_router(
                 request,
                 "template_editor.html",
                 user=user,
-                raw_json=json.dumps(payload, indent=2, sort_keys=True),
+                **_template_editor_context(payload),
                 issues=issues,
                 saved=None,
             )
@@ -1106,7 +1265,7 @@ def create_tapdb_gui_router(
                 request,
                 "template_editor.html",
                 user=user,
-                raw_json=json.dumps(payload, indent=2, sort_keys=True),
+                **_template_editor_context(payload),
                 issues=issues,
                 saved=None,
             )
@@ -1115,7 +1274,7 @@ def create_tapdb_gui_router(
             request,
             "template_editor.html",
             user=user,
-            raw_json=json.dumps(payload, indent=2, sort_keys=True),
+            **_template_editor_context(payload),
             issues=[],
             saved=summary,
         )
@@ -1734,8 +1893,8 @@ def _example_template_pack() -> dict[str, Any]:
             {
                 "name": "Example Actor",
                 "polymorphic_discriminator": "generic_template",
-                "category": "ACT",
-                "type": "actor",
+                "category": "actor",
+                "type": "person",
                 "subtype": "example_actor",
                 "version": "1.0",
                 "instance_prefix": "ACT",
@@ -1751,9 +1910,9 @@ def _example_template_pack() -> dict[str, Any]:
             {
                 "name": "Example Well",
                 "polymorphic_discriminator": "generic_template",
-                "category": "WEN",
-                "type": "container",
-                "subtype": "example_well",
+                "category": "container",
+                "type": "well",
+                "subtype": "generic",
                 "version": "1.0",
                 "instance_prefix": "WEN",
                 "instance_polymorphic_identity": "generic_instance",
@@ -1767,9 +1926,9 @@ def _example_template_pack() -> dict[str, Any]:
             {
                 "name": "Example Plate",
                 "polymorphic_discriminator": "generic_template",
-                "category": "PAT",
-                "type": "container",
-                "subtype": "example_plate",
+                "category": "container",
+                "type": "plate",
+                "subtype": "96well-generic",
                 "version": "1.0",
                 "instance_prefix": "PAT",
                 "instance_polymorphic_identity": "generic_instance",
@@ -1783,8 +1942,8 @@ def _example_template_pack() -> dict[str, Any]:
                             "name_pattern": "{parent_name}_well_{index}",
                             "child_templates": [
                                 {
-                                    "template_code": "WEN/container/example_well/1.0",
-                                    "count": 2,
+                                    "template_code": "container/well/generic/1.0",
+                                    "count": 96,
                                 }
                             ],
                         }

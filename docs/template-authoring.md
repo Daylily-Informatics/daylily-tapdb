@@ -76,9 +76,11 @@ Examples:
 - `SYS/actor/system_user/1.0/`
 - `MSG/message/webhook_event/1.0/`
 - `XRF/external_identifier/tapdb_object/1.0/`
-- `AGX/logistics/shipment/1.0/`
+- `container/plate/96well-generic/1.0/`
+- `container/tube/1.5ml-eppi/1.0/`
 
-In TapDB, `category` is the Meridian prefix. Domain is separate and required.
+In TapDB, `category` is the top-level object taxonomy bucket. Domain is
+separate and required.
 The effective template identity is:
 
 ```text
@@ -97,7 +99,8 @@ Rules:
 - It must be an approved Meridian prefix.
 - It must be registered for the active domain.
 - Its registered owner must match the calling repo name.
-- It should match the template `category` used for that template family.
+- It is independent of template taxonomy. For example, a
+  `container/plate/96well-generic/1.0/` template may mint `PAT` instance EUIDs.
 
 There is no placeholder `GX` rewrite behavior and no client-scoped prefix
 derivation during seeding.

@@ -100,16 +100,16 @@ class _GuiState:
             self.template(
                 "Z-ACT-T1",
                 "Actor Template",
-                "ACT",
                 "actor",
+                "person",
                 "browser_actor",
                 "ACT",
             ),
             self.template(
                 "Z-PAT-T1",
                 "Plate Template",
-                "PAT",
                 "container",
+                "plate",
                 "browser_plate",
                 "PAT",
                 json_addl={
@@ -120,7 +120,7 @@ class _GuiState:
                             "name_pattern": "{parent_name}_well_{index}",
                             "child_templates": [
                                 {
-                                    "template_code": "WEN/container/browser_well/1.0",
+                                    "template_code": "container/well/browser_well/1.0",
                                     "count": 2,
                                 }
                             ],
@@ -131,8 +131,8 @@ class _GuiState:
             self.template(
                 "Z-WEN-T1",
                 "Well Template",
-                "WEN",
                 "container",
+                "well",
                 "browser_well",
                 "WEN",
             ),
@@ -418,13 +418,13 @@ def gui_server(monkeypatch):
             json_addl={"properties": properties},
         )
         state.instances.append(instance)
-        if create_children and template.category == "PAT":
+        if create_children and template.category == "container" and template.type == "plate":
             for index in range(1, 3):
                 child = state.instance(
                     state.next_instance_euid("WEN"),
                     f"{name}_well_{index}",
-                    "WEN",
                     "container",
+                    "well",
                     "browser_well",
                 )
                 state.instances.append(child)
@@ -621,8 +621,8 @@ def test_playwright_template_editor_keeps_focus_and_saves(browser, gui_server):
                 {
                     "name": "Browser Actor",
                     "polymorphic_discriminator": "generic_template",
-                    "category": "ACT",
-                    "type": "actor",
+                    "category": "actor",
+                    "type": "person",
                     "subtype": "browser_actor_saved",
                     "version": "1.0",
                     "instance_prefix": "ACT",

@@ -430,9 +430,9 @@ def test_gui_template_validation_api_reports_valid_level2_template(monkeypatch):
                 {
                     "name": "Plate Template",
                     "polymorphic_discriminator": "generic_template",
-                    "category": "PAT",
-                    "type": "container",
-                    "subtype": "example_plate",
+                    "category": "container",
+                    "type": "plate",
+                    "subtype": "96well-generic",
                     "version": "1.0",
                     "instance_prefix": "PAT",
                     "instance_polymorphic_identity": "generic_instance",
@@ -444,8 +444,8 @@ def test_gui_template_validation_api_reports_valid_level2_template(monkeypatch):
                                 "name_pattern": "{parent_name}_{index}",
                                 "child_templates": [
                                     {
-                                        "template_code": "WEN/container/example_well/1.0",
-                                        "count": 2,
+                                        "template_code": "container/well/generic/1.0",
+                                        "count": 96,
                                     }
                                 ],
                             }
@@ -468,10 +468,59 @@ def test_gui_template_editor_includes_simple_builder(monkeypatch):
     assert response.status_code == 200
     assert 'data-testid="template-builder"' in response.text
     assert 'id="builder-generate-json"' in response.text
-    assert 'value="WEN/container/example_well/1.0"' in response.text
+    assert 'value="container/well/generic/1.0"' in response.text
     assert "Child Instantiation" in response.text
     assert "data-tapdb-json-editor" in response.text
     assert 'data-json-editor-label="Template pack JSON"' in response.text
+
+
+def test_gui_template_editor_can_seed_builder_from_template_euid(monkeypatch):
+    seeded_template = _template(
+        euid="Z-TPX-SEED",
+        name="Seeded Plate",
+        category="container",
+        type_name="plate",
+        subtype="seeded_plate",
+        prefix="PAT",
+        json_addl={
+            "properties": {
+                "display_name": "",
+                "dimensions": {"rows": 8, "columns": 12},
+            },
+            "instantiation_layouts": [
+                {
+                    "relationship_type": "contains",
+                    "child_templates": [
+                        {
+                            "template_code": "container/well/seeded/1.0",
+                            "count": 96,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    session = _Session(
+        {
+            generic_template: [seeded_template],
+            generic_instance: [],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.get("/templates/new?seed_euid=Z-TPX-SEED")
+
+    assert response.status_code == 200
+    assert "Seeded Plate" in response.text
+    assert 'id="builder-category" value="container"' in response.text
+    assert 'id="builder-subtype" value="seeded_plate"' in response.text
+    assert 'data-builder-property-key value="dimensions"' in response.text
+    assert "{&#34;columns&#34;: 12, &#34;rows&#34;: 8}" in response.text
+    assert 'value="container/well/seeded/1.0"' in response.text
+    assert 'type="number" min="1" value="96"' in response.text
+    assert "Z-TPX-SEED" in response.text
 
 
 def test_gui_example_template_pack_is_self_contained():
@@ -499,9 +548,9 @@ def test_gui_example_template_pack_is_self_contained():
     )
 
     assert issues == []
-    assert ("ACT", "actor", "example_actor", "1.0") in keys
-    assert ("WEN", "container", "example_well", "1.0") in keys
-    assert ("PAT", "container", "example_plate", "1.0") in keys
+    assert ("actor", "person", "example_actor", "1.0") in keys
+    assert ("container", "well", "generic", "1.0") in keys
+    assert ("container", "plate", "96well-generic", "1.0") in keys
     assert prefixes <= set(registry["ownership"]["Z"])
 
 
@@ -538,6 +587,18 @@ def test_gui_templates_page_renders_template_rows(monkeypatch):
     assert "Z-XRF-1Q" in response.text
     assert "/object/Z-XRF-1Q" in response.text
     assert "/create/Z-XRF-1Q" in response.text
+    assert "New Template Pack" not in response.text
+    assert "Build New Template" in response.text
+    assert "/templates/new?seed_euid=Z-XRF-1Q" in response.text
+
+
+def test_gui_template_seed_requires_existing_template(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get("/templates/new?seed_euid=Z-NONE-1Q")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Template seed not found: Z-NONE-1Q"
 
 
 def test_gui_template_save_renders_seed_validation_error(monkeypatch):
@@ -668,9 +729,9 @@ def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
     template = _template(
         "Z-PAT-T1Q",
         name="Plate Template",
-        category="PAT",
-        type_name="container",
-        subtype="example_plate",
+        category="container",
+        type_name="plate",
+        subtype="96well-generic",
         prefix="PAT",
         json_addl={
             "properties": {},
@@ -678,7 +739,7 @@ def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
                 {
                     "relationship_type": "contains",
                     "child_templates": [
-                        {"template_code": "WEN/container/example_well/1.0", "count": 2}
+                        {"template_code": "container/well/generic/1.0", "count": 96}
                     ],
                 }
             ],
@@ -729,7 +790,7 @@ def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
     assert response.headers["location"] == "/object/Z-PAT-2Q?notice=instance_created"
     assert calls == [
         {
-            "template_code": "PAT/container/example_plate/1.0/",
+            "template_code": "container/plate/96well-generic/1.0/",
             "name": "Plate 1",
             "properties": {"plate_type": "96-well"},
             "create_children": True,
@@ -758,9 +819,9 @@ def test_gui_create_api_passes_child_instantiation_flag(monkeypatch):
     template = _template(
         "Z-PAT-T1Q",
         name="Plate Template",
-        category="PAT",
-        type_name="container",
-        subtype="example_plate",
+        category="container",
+        type_name="plate",
+        subtype="96well-generic",
         prefix="PAT",
     )
     session = _Session(
@@ -780,7 +841,7 @@ def test_gui_create_api_passes_child_instantiation_flag(monkeypatch):
         def create_instance(
             self, session, template_code, name, properties, create_children
         ):
-            assert template_code == "PAT/container/example_plate/1.0/"
+            assert template_code == "container/plate/96well-generic/1.0/"
             assert name == "Plate API"
             assert properties == {"plate_type": "96-well"}
             assert create_children is True
@@ -801,7 +862,7 @@ def test_gui_create_api_passes_child_instantiation_flag(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {
         "template_euid": "Z-PAT-T1Q",
-        "template_code": "PAT/container/example_plate/1.0/",
+        "template_code": "container/plate/96well-generic/1.0/",
         "instance_euid": "Z-PAT-2Q",
         "create_children": True,
     }
