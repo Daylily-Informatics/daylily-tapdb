@@ -103,6 +103,8 @@ def test_cli_registry_exposes_v2_command_tree_and_policies() -> None:
         ["config", "path"],
         ["db-config", "init"],
         ["ui", "status"],
+        ["validation", "assess"],
+        ["repair", "create"],
         ["db", "schema", "drift-check"],
         ["pg", "status"],
         ["users", "delete"],
@@ -115,6 +117,8 @@ def test_cli_registry_exposes_v2_command_tree_and_policies() -> None:
     info_cmd = registry.get_command(("info",))
     db_config_init_cmd = registry.get_command(("db-config", "init"))
     ui_start_cmd = registry.get_command(("ui", "start"))
+    validation_assess_cmd = registry.get_command(("validation", "assess"))
+    repair_create_cmd = registry.get_command(("repair", "create"))
     user_delete_cmd = registry.get_command(("users", "delete"))
 
     assert version_cmd is not None
@@ -129,6 +133,14 @@ def test_cli_registry_exposes_v2_command_tree_and_policies() -> None:
 
     assert ui_start_cmd is not None
     assert ui_start_cmd.policy.long_running is True
+
+    assert validation_assess_cmd is not None
+    assert validation_assess_cmd.policy.supports_json is True
+    assert validation_assess_cmd.policy.mutates_state is False
+
+    assert repair_create_cmd is not None
+    assert repair_create_cmd.policy.supports_json is True
+    assert repair_create_cmd.policy.mutates_state is True
 
     assert user_delete_cmd is not None
     assert user_delete_cmd.policy.interactive is True

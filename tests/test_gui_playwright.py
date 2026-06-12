@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import socket
 import threading
 import time
@@ -173,6 +172,7 @@ class _GuiState:
             subtype=subtype,
             version="1.0",
             instance_prefix=prefix,
+            validator_ref="UNIVERSAL_PASS@1",
             bstatus="active",
             is_deleted=False,
             json_addl=json_addl
@@ -188,6 +188,7 @@ class _GuiState:
             uid=len(self.instances) + 10 if hasattr(self, "instances") else 10,
             euid=euid,
             name=name,
+            template_uid=1,
             category=category,
             type=type_name,
             subtype=subtype,
@@ -282,6 +283,7 @@ def _object_context(state, euid):
                     "related_euid": lineage.child_euid,
                     "related_name": getattr(child, "name", ""),
                     "relationship_type": lineage.relationship_type,
+                    "v0_edge": {"edge_type": None, "compliance_status": "missing"},
                 }
             )
         if lineage.child_euid == euid:
@@ -292,6 +294,7 @@ def _object_context(state, euid):
                     "related_euid": lineage.parent_euid,
                     "related_name": getattr(parent, "name", ""),
                     "relationship_type": lineage.relationship_type,
+                    "v0_edge": {"edge_type": None, "compliance_status": "missing"},
                 }
             )
     return {
@@ -299,6 +302,13 @@ def _object_context(state, euid):
         "relationships": {"parent_of": parent_of, "child_of": child_of},
         "audit_rows": state.audit_rows,
         "external_refs": [],
+        "editor": {
+            "validator_ref": "UNIVERSAL_PASS@1",
+            "assessment": {
+                "state": "valid_current",
+                "subject_mutated": False,
+            },
+        },
     }
 
 
@@ -436,11 +446,30 @@ def gui_server(monkeypatch):
             "create_children": create_children,
         }
 
-    def update_json(session, *, euid, json_addl):
-        del session
-        obj, record_type = state.lookup(euid)
-        obj.json_addl = json_addl
-        return _record_to_item(obj, record_type)
+    def create_repair(session, *, cfg, euid, actor, reason, repair_payload):
+        del session, cfg, actor, reason
+        repair = state.instance(
+            state.next_instance_euid("GVR"),
+            f"Repair record for {euid}",
+            "evidence",
+            "repair",
+            "record",
+            json_addl={
+                "properties": {
+                    "subject_euid": euid,
+                    "repair_payload": repair_payload,
+                    "subject_mutated": False,
+                }
+            },
+        )
+        state.instances.append(repair)
+        return {
+            "repair_euid": repair.euid,
+            "subject_euid": euid,
+            "subject_mutated": False,
+            "template_code": "evidence/repair/record/1.0/",
+            "properties": repair.json_addl["properties"],
+        }
 
     def update_name(session, *, euid, name):
         del session
@@ -454,7 +483,16 @@ def gui_server(monkeypatch):
         obj.bstatus = bstatus
         return _record_to_item(obj, record_type)
 
-    def add_lineage(session, *, euid, related_euid, direction, relationship_type):
+    def add_lineage(
+        session,
+        *,
+        euid,
+        related_euid,
+        direction,
+        relationship_type,
+        v0_edge=None,
+    ):
+        del v0_edge
         del session
         if direction == "child":
             row = state.lineage(euid, related_euid, relationship_type)
@@ -496,7 +534,7 @@ def gui_server(monkeypatch):
 
     monkeypatch.setattr(router_mod, "seed_templates", seed_templates)
     monkeypatch.setattr(router_mod, "_create_instance_from_template", create_instance)
-    monkeypatch.setattr(router_mod, "_update_object_json", update_json)
+    monkeypatch.setattr(router_mod, "_create_object_repair", create_repair)
     monkeypatch.setattr(router_mod, "_update_object_name", update_name)
     monkeypatch.setattr(router_mod, "_update_object_status", update_status)
     monkeypatch.setattr(router_mod, "_add_object_lineage", add_lineage)
@@ -675,11 +713,12 @@ def test_playwright_create_detail_graph_and_object_mutations(browser, gui_server
 
     _set_json_editor(
         page,
-        "textarea[name='json_addl']",
+        "textarea[name='repair_payload']",
         {"properties": {"edited": True, "plate_type": "2-well"}},
     )
-    page.get_by_role("button", name="Save JSON").click()
-    sync_api.expect(page.get_by_text("JSON saved.")).to_be_visible()
+    page.locator("form[action$='/repairs'] input[name='reason']").fill("browser edit")
+    page.get_by_role("button", name="Create repair").click()
+    sync_api.expect(page.get_by_text("Repair evidence created.")).to_be_visible()
 
     page.locator("form[action$='/lineage'] input[name='related_euid']").fill("Z-SMP-1Q")
     page.locator("form[action$='/lineage'] input[name='relationship_type']").fill("derived_from")

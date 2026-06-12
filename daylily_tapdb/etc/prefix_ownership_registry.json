@@ -20,6 +20,9 @@
       "XRF": {
         "issuer_app_code": "daylily-tapdb"
       },
+      "GVR": {
+        "issuer_app_code": "daylily-tapdb"
+      },
       "ACT": {
         "issuer_app_code": "daylily-tapdb"
       },

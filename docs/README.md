@@ -6,6 +6,7 @@ This directory holds the support material for the TAPDB substrate. The root [REA
 
 - [../README.md](../README.md): overview, philosophy, quickstart, and core mental model
 - [architecture.md](architecture.md): deeper architecture, object model, and write-path explanation
+- [architecture/evidence_vs_governance.md](architecture/evidence_vs_governance.md): validator, assessment, repair, and governance doctrine
 - [tapdb_gui_inclusion.md](tapdb_gui_inclusion.md): admin GUI embedding and auth-mode guidance
 
 ## Current Focus
@@ -38,4 +39,5 @@ as the current operator quickstart:
 
 1. Read the root README for the framing and the top-level quickstart.
 2. Read [architecture.md](architecture.md) for the structural model and write path.
-3. Read the deeper docs when you need a focused topic such as identity, template packs, runtime, or integration boundaries.
+3. Read [architecture/evidence_vs_governance.md](architecture/evidence_vs_governance.md) before changing validators, repairs, terminology, relationship constraints, or editor governance.
+4. Read the deeper docs when you need a focused topic such as identity, template packs, runtime, or integration boundaries.

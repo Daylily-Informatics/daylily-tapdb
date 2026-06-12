@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS generic_template (
     subtype TEXT NOT NULL,
     version TEXT NOT NULL,
 
-    CONSTRAINT unique_template_code UNIQUE (domain_code, category, type, subtype, version),
+    CONSTRAINT unique_template_code UNIQUE (domain_code, issuer_app_code, category, type, subtype, version),
 
     -- Instance configuration
     instance_prefix TEXT NOT NULL,
@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS generic_template (
 
     -- Flexible data storage
     json_addl JSONB NOT NULL DEFAULT '{}'::jsonb,
+    validator_ref TEXT NOT NULL DEFAULT 'UNIVERSAL_PASS@1',
     json_addl_schema JSONB,
 
     -- Status and lifecycle
@@ -805,7 +806,19 @@ BEGIN
     NEW.issuer_app_code := tapdb_current_owner_repo_name();
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
-        prefix := tapdb_validate_meridian_prefix(NEW.category);
+        SELECT t.instance_prefix INTO prefix
+          FROM generic_template t
+         WHERE t.uid = NEW.template_uid
+           AND t.domain_code = NEW.domain_code
+           AND t.issuer_app_code = NEW.issuer_app_code
+           AND t.is_deleted IS FALSE;
+
+        IF prefix IS NULL THEN
+            RAISE EXCEPTION
+                'Missing template instance_prefix for generic_instance template_uid % (domain=%, owner_repo=%)',
+                NEW.template_uid, NEW.domain_code, NEW.issuer_app_code;
+        END IF;
+
         prefix := tapdb_validate_meridian_prefix(prefix);
         seq_name := lower(prefix) || '_instance_seq';
 

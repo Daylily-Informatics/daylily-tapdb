@@ -142,6 +142,30 @@ Schema work is separated from data seeding:
 
 That separation matters because TAPDB uses the database as the runtime source of truth for templates, while JSON packs are just input material for seeding and validation. The schema and seed commands are part of the CLI contract and are exercised against a real ephemeral PostgreSQL instance in [`tests/test_pg_integration.py`](../tests/test_pg_integration.py).
 
+### Evidence Validation And Repair
+
+Validation commands assess stored evidence and do not persist assessment rows:
+
+```bash
+tapdb --config <path> validation assess <EUID>
+tapdb --config <path> validation revalidate <EUID>
+tapdb --config <path> validation editor-data <EUID>
+```
+
+Repairs are explicit evidence objects. Creating a repair does not mutate the
+subject object:
+
+```bash
+tapdb --config <path> repair create <EUID> \
+  --reason "correct observed metadata" \
+  --payload-json '{"properties":{"example":"value"}}'
+```
+
+Template validator lookup is taxonomy-first through the database template row.
+`generic_template.validator_ref` is physical schema state; validator behavior is
+governed evidence and assessment output remains ephemeral unless a future
+regulated report is explicitly published.
+
 ## Status And Info
 
 `tapdb info` is the operator-facing status surface. It reports:

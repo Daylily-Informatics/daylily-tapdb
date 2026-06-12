@@ -6,9 +6,11 @@ import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from fastapi import FastAPI, HTTPException
+from sqlalchemy.engine import URL
 from starlette.requests import Request
 
 import daylily_tapdb.cli.admin_server as admin_server_mod
@@ -212,6 +214,63 @@ def test_runtime_db_connection_requires_identity_scope_for_postgres():
             pass
 
 
+def test_runtime_helpers_handle_non_postgres_and_rollback_paths(caplog):
+    assert runtime_mod._parse_bool(None, default=True) is True
+    assert runtime_mod._parse_bool("off", default=True) is False
+    assert runtime_mod._parse_bool("wat", default=True) is True
+    assert runtime_mod._audit_username_for_session("  ") == "unknown"
+    assert runtime_mod._require_schema_name({"schema_name": " tapdb_x "}) == "tapdb_x"
+    with pytest.raises(RuntimeError, match="schema_name"):
+        runtime_mod._require_schema_name({})
+
+    events: list[str] = []
+
+    class FakeTx:
+        def commit(self):
+            events.append("commit")
+
+        def rollback(self):
+            events.append("rollback")
+
+    class FakeSession:
+        bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
+        def begin(self):
+            return FakeTx()
+
+        def execute(self, stmt, params=None):
+            del stmt, params
+            raise AssertionError("sqlite session should not receive search path or identity")
+
+        def close(self):
+            events.append("close")
+
+    bundle = runtime_mod.RuntimeBundle(
+        config_path="/tmp/tapdb-config.yaml",
+        target_name="target",
+        engine=SimpleNamespace(),
+        SessionFactory=lambda: FakeSession(),
+        cfg={},
+        schema_name="tapdb_testdb",
+    )
+    conn = runtime_mod.RuntimeDBConnection(bundle)
+    with conn.session_scope(commit=False):
+        pass
+    assert events == ["rollback", "close"]
+
+    class AuditFailSession(FakeSession):
+        bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+        def execute(self, stmt, params=None):
+            if params and "username" in params:
+                raise RuntimeError("audit unavailable")
+            events.append("execute")
+
+    caplog.set_level("WARNING")
+    runtime_mod._set_audit_username(AuditFailSession(), "user@example.com")
+    assert "Could not set session audit username" in caplog.text
+
+
 def test_runtime_engine_cache_key_includes_schema(monkeypatch):
     builds: list[str] = []
 
@@ -243,6 +302,191 @@ def test_runtime_engine_cache_key_includes_schema(monkeypatch):
     runtime_mod.get_db("/tmp/a.yaml")
 
     assert builds == ["schema_a", "schema_b"]
+
+
+def test_runtime_create_engine_uses_admin_pool_settings(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(
+        runtime_mod,
+        "get_admin_settings",
+        lambda config_path: {
+            "db_pool_size": "7",
+            "db_max_overflow": "8",
+            "db_pool_timeout": "9",
+            "db_pool_recycle": "10",
+        },
+    )
+    monkeypatch.setattr(
+        runtime_mod,
+        "create_engine",
+        lambda url, **kwargs: captured.update({"url": url, **kwargs}) or "engine",
+    )
+
+    engine = runtime_mod._create_engine(
+        URL.create("postgresql+psycopg2", host="localhost", database="tapdb"),
+        config_path="/tmp/tapdb-config.yaml",
+        echo_sql=True,
+    )
+
+    assert engine == "engine"
+    assert captured["pool_size"] == 7
+    assert captured["max_overflow"] == 8
+    assert captured["pool_timeout"] == 9
+    assert captured["pool_recycle"] == 10
+    assert captured["pool_pre_ping"] is True
+    assert captured["echo"] is True
+
+
+def test_runtime_aurora_password_provider_paths(monkeypatch):
+    listeners = []
+    monkeypatch.setattr(
+        runtime_mod.event,
+        "listen",
+        lambda engine, name, callback: listeners.append((engine, name, callback)),
+    )
+    monkeypatch.setattr(
+        runtime_mod.AuroraConnectionBuilder,
+        "get_iam_auth_token",
+        lambda **kwargs: f"iam:{kwargs['user']}@{kwargs['host']}",
+    )
+    monkeypatch.setattr(
+        runtime_mod.AuroraConnectionBuilder,
+        "get_secret_password",
+        lambda **kwargs: f"secret:{kwargs['secret_arn']}",
+    )
+
+    engine = object()
+    runtime_mod._attach_aurora_password_provider(
+        engine,
+        region="us-west-2",
+        host="db.example",
+        port=5432,
+        user="tapdb",
+        aws_profile="dev",
+        iam_auth=True,
+        secret_arn=None,
+        password="",
+    )
+    params = {}
+    listeners[-1][2](None, None, [], params)
+    assert params["password"] == "iam:tapdb@db.example"
+
+    runtime_mod._attach_aurora_password_provider(
+        engine,
+        region="us-west-2",
+        host="db.example",
+        port=5432,
+        user="tapdb",
+        aws_profile=None,
+        iam_auth=False,
+        secret_arn="arn:secret",
+        password="",
+    )
+    params = {}
+    listeners[-1][2](None, None, [], params)
+    assert params["password"] == "secret:arn:secret"
+
+    runtime_mod._attach_aurora_password_provider(
+        engine,
+        region="us-west-2",
+        host="db.example",
+        port=5432,
+        user="tapdb",
+        aws_profile=None,
+        iam_auth=False,
+        secret_arn=None,
+        password="pw",
+    )
+    params = {}
+    listeners[-1][2](None, None, [], params)
+    assert params["password"] == "pw"
+
+    runtime_mod._attach_aurora_password_provider(
+        engine,
+        region="us-west-2",
+        host="db.example",
+        port=5432,
+        user="tapdb",
+        aws_profile=None,
+        iam_auth=False,
+        secret_arn=None,
+        password="",
+    )
+    with pytest.raises(ValueError, match="requires a password"):
+        listeners[-1][2](None, None, [], {})
+
+
+def test_runtime_build_engine_for_local_and_aurora(monkeypatch, tmp_path: Path):
+    calls = []
+    monkeypatch.setenv("ECHO_SQL", "true")
+    monkeypatch.setattr(
+        runtime_mod,
+        "_create_engine",
+        lambda url, *, config_path, echo_sql: (
+            calls.append((url, config_path, echo_sql)) or SimpleNamespace(url=url)
+        ),
+    )
+    monkeypatch.setattr(runtime_mod, "_attach_aurora_password_provider", mock.Mock())
+    monkeypatch.setattr(
+        runtime_mod.AuroraConnectionBuilder,
+        "ensure_ca_bundle",
+        lambda: tmp_path / "ca.pem",
+    )
+
+    local = runtime_mod._build_engine_for_cfg(
+        {
+            "schema_name": "tapdb_s",
+            "engine_type": "local",
+            "host": "localhost",
+            "port": "5432",
+            "database": "tapdb",
+            "user": "tapdb",
+            "password": "pw",
+        },
+        config_path="/tmp/local.yaml",
+    )
+    aurora = runtime_mod._build_engine_for_cfg(
+        {
+            "schema_name": "tapdb_s",
+            "engine_type": "aurora",
+            "host": "db.example",
+            "hostaddr": "10.0.0.1",
+            "port": "5432",
+            "database": "tapdb",
+            "user": "tapdb",
+            "password": "",
+            "region": "us-west-2",
+            "iam_auth": "yes",
+            "aws_profile": "dev",
+        },
+        config_path="/tmp/aurora.yaml",
+    )
+
+    assert local.url.get_backend_name() == "postgresql"
+    assert aurora.url.query["sslmode"] == "verify-full"
+    assert calls[0][2] is True
+    assert runtime_mod._attach_aurora_password_provider.call_count == 1
+
+
+def test_runtime_clear_cache_logs_dispose_errors(caplog):
+    class BadEngine:
+        def dispose(self):
+            raise RuntimeError("dispose failed")
+
+    runtime_mod._bundles[("/tmp/cfg.yaml", "tapdb_s")] = runtime_mod.RuntimeBundle(
+        config_path="/tmp/cfg.yaml",
+        target_name="target",
+        engine=BadEngine(),
+        SessionFactory=lambda: None,
+        cfg={"schema_name": "tapdb_s"},
+        schema_name="tapdb_s",
+    )
+
+    caplog.set_level("WARNING")
+    runtime_mod._clear_runtime_cache_for_tests()
+
+    assert "Error disposing DAG runtime engine" in caplog.text
 
 
 @pytest.mark.anyio

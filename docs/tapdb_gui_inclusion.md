@@ -114,13 +114,18 @@ Use this only for local development or diagnostics.
 
 The V1 GUI includes generic search, object detail, graph, create-from-template,
 template validate/save, typed external object links, Meridian validation, and
-readiness/metrics pages. Mutating routes are admin-only. Hosts can also call
-JSON APIs for reusable primitives, including `/tapdb/api/object/{euid}`,
-`/tapdb/api/create/{template_euid}`, `/tapdb/api/templates/validate`,
-`/tapdb/api/object/{euid}/edit-json`, `/tapdb/api/object/{euid}/status`,
-`/tapdb/api/object/{euid}/lineage`,
-`/tapdb/api/object/{euid}/external-links`, `/tapdb/api/admin/readiness`,
-`/tapdb/api/admin/meridian/validate`, and `/tapdb/api/admin/metrics`.
+readiness/metrics pages. Object detail pages expose ephemeral validation state,
+and JSON repair submissions create explicit repair evidence rather than
+overwriting the subject. Mutating routes are admin-only. Hosts can also call JSON
+APIs for reusable primitives, including `/tapdb/api/object/{euid}`,
+`/tapdb/api/object/{euid}/editor-data`, `/tapdb/api/object/{euid}/assess`,
+`/tapdb/api/object/{euid}/revalidate`,
+`/tapdb/api/object/{euid}/repair-recommendations`,
+`/tapdb/api/object/{euid}/repairs`, `/tapdb/api/create/{template_euid}`,
+`/tapdb/api/templates/validate`, `/tapdb/api/object/{euid}/status`,
+`/tapdb/api/object/{euid}/lineage`, `/tapdb/api/object/{euid}/external-links`,
+`/tapdb/api/admin/readiness`, `/tapdb/api/admin/meridian/validate`, and
+`/tapdb/api/admin/metrics`.
 
 ## 4) Runtime Checks
 

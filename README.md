@@ -113,7 +113,7 @@ If optional workflow packs are present in the config, add `--include-workflow` t
 
 TAPDB’s core model is deliberately small:
 
-- `template`: a blueprint, stored as a `generic_template` row and usually seeded from JSON packs
+- `template`: taxonomy and governance reference, stored as a `generic_template` row and usually seeded from JSON packs
 - `instance`: a concrete object, stored as a `generic_instance` row and created from a template
 - `lineage`: a directed relationship, stored as `generic_instance_lineage`
 - `audit`: immutable change history in `audit_log`
@@ -127,7 +127,7 @@ The library surface is built around those concepts:
 - lineage helpers traverse parent/child relationships
 - outbox helpers enqueue, claim, deliver, and record message attempts
 
-The important mental shift is that template packs describe shape, not business truth. Application repos own domain semantics and TAPDB stores the substrate that those semantics sit on.
+The important mental shift is that TapDB stores evidence while governance evolves around that evidence. Template packs describe seedable taxonomy and governance references, not business truth; validators assess and repairs add explicit evidence rather than rewriting history. See [docs/architecture/evidence_vs_governance.md](docs/architecture/evidence_vs_governance.md) before changing validation, repair, terminology, relationship constraints, or editor governance.
 
 ## Identity And Scope
 

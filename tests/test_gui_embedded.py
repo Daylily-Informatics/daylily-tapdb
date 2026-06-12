@@ -114,6 +114,7 @@ def _instance(euid, name, *, category="SMP", type_name="sample", subtype="tube")
         uid=len(euid),
         euid=euid,
         name=name,
+        template_uid=10,
         category=category,
         type=type_name,
         subtype=subtype,
@@ -139,16 +140,20 @@ def _template(
     subtype="tapdb_object",
     prefix="XRF",
     json_addl=None,
+    uid=10,
+    validator_ref="UNIVERSAL_PASS@1",
 ):
     return SimpleNamespace(
-        uid=10,
+        uid=uid,
         euid=euid,
         name=name,
+        domain_code="Z",
         category=category,
         type=type_name,
         subtype=subtype,
         version="1.0",
         instance_prefix=prefix,
+        validator_ref=validator_ref,
         bstatus="active",
         is_deleted=False,
         json_addl=json_addl or {"properties": {"external_identifier": {}}},
@@ -156,6 +161,19 @@ def _template(
         instance_polymorphic_identity="generic_instance",
         created_dt=None,
         modified_dt=None,
+    )
+
+
+def _repair_template():
+    return _template(
+        "Z-TPX-RPR1",
+        uid=99,
+        name="Repair Record",
+        category="evidence",
+        type_name="repair",
+        subtype="record",
+        prefix="GVR",
+        json_addl={"properties": {}},
     )
 
 
@@ -1080,7 +1098,7 @@ def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
     parent = _instance("Z-PAR-22Q", "Parent 1")
     session = _Session(
         {
-            generic_template: [_template()],
+            generic_template: [_template(), _repair_template()],
             generic_instance: [source, parent],
             generic_instance_lineage: [],
             audit_log: [],
@@ -1110,8 +1128,12 @@ def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
     )
 
     assert json_response.status_code == 200
-    assert json_response.json()["json_addl"] == {"properties": {"color": "red"}}
-    assert source.json_addl == {"properties": {"color": "red"}}
+    assert json_response.json()["subject_euid"] == "Z-SMP-1Q"
+    assert json_response.json()["subject_mutated"] is False
+    assert json_response.json()["properties"]["repair_payload"] == {
+        "properties": {"color": "red"}
+    }
+    assert source.json_addl == {"properties": {"color": "blue"}}
     assert name_response.status_code == 200
     assert name_response.json() == {"euid": "Z-SMP-1Q", "name": "Sample 1 renamed"}
     assert source.name == "Sample 1 renamed"
@@ -1122,6 +1144,168 @@ def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
     assert lineage_response.json()["parent_euid"] == "Z-PAR-22Q"
     assert lineage_response.json()["child_euid"] == "Z-SMP-1Q"
     assert lineage_response.json()["relationship_type"] == "contains"
+    assert lineage_response.json()["v0_edge"]["compliance_status"] == "legacy_alias"
+    assert lineage_response.json()["assessment"]["state"] == "valid_current"
+    assert lineage_response.json()["assessment"]["subject_mutated"] is False
+    assert session.added[0].json_addl["properties"]["subject_mutated"] is False
+
+
+def test_gui_object_editor_data_assessment_and_revalidation_are_ephemeral(monkeypatch):
+    source = _instance("Z-SMP-1Q", "Sample 1")
+    session = _Session(
+        {
+            generic_template: [_template(validator_ref="CUSTOM_VALIDATOR@1")],
+            generic_instance: [source],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    page = client.get("/object/Z-SMP-1Q")
+    editor = client.get("/api/object/Z-SMP-1Q/editor-data")
+    assessment = client.post("/api/object/Z-SMP-1Q/assess")
+    revalidation = client.post("/api/object/Z-SMP-1Q/revalidate")
+    recommendations = client.get("/api/object/Z-SMP-1Q/repair-recommendations")
+
+    assert page.status_code == 200
+    assert "Ephemeral assessment; repair evidence is explicit." in page.text
+    assert "Create repair" in page.text
+    assert editor.status_code == 200
+    assert editor.json()["validator_ref"] == "CUSTOM_VALIDATOR@1"
+    assert editor.json()["assessment"]["subject_mutated"] is False
+    assert assessment.status_code == 200
+    assert assessment.json()["state"] == "not_evaluated_current"
+    assert revalidation.status_code == 200
+    assert revalidation.json()["revalidated"] is True
+    assert recommendations.status_code == 200
+    assert recommendations.json()["subject_mutated"] is False
+    assert source.json_addl == {"properties": {"color": "blue"}}
+
+
+def test_gui_repair_api_creates_evidence_without_mutating_subject(monkeypatch):
+    source = _instance("Z-SMP-1Q", "Sample 1")
+    session = _Session(
+        {
+            generic_template: [_template(), _repair_template()],
+            generic_instance: [source],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.post(
+        "/api/object/Z-SMP-1Q/repairs",
+        json={
+            "reason": "correct color",
+            "repair_payload": {"properties": {"color": "green"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["subject_euid"] == "Z-SMP-1Q"
+    assert payload["subject_mutated"] is False
+    assert payload["template_code"] == "evidence/repair/record/1.0/"
+    assert session.added[0].json_addl["properties"]["repair_payload"] == {
+        "properties": {"color": "green"}
+    }
+    assert source.json_addl == {"properties": {"color": "blue"}}
+
+
+def test_gui_repair_form_redirects_with_notice(monkeypatch):
+    source = _instance("Z-SMP-1Q", "Sample 1")
+    session = _Session(
+        {
+            generic_template: [_template(), _repair_template()],
+            generic_instance: [source],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.post(
+        "/object/Z-SMP-1Q/repairs",
+        data={
+            "reason": "correct payload",
+            "repair_payload": '{"properties":{"color":"yellow"}}',
+        },
+        follow_redirects=False,
+    )
+    notice_page = client.get("/object/Z-SMP-1Q?notice=repair_created")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/object/Z-SMP-1Q?notice=repair_created"
+    assert "Repair evidence created." in notice_page.text
+    assert source.json_addl == {"properties": {"color": "blue"}}
+
+
+def test_gui_lineage_api_requires_v0_metadata_for_canonical_edges(monkeypatch):
+    source = _instance("Z-SMP-1Q", "Sample 1")
+    parent = _instance("Z-PAR-22Q", "Parent 1")
+    session = _Session(
+        {
+            generic_template: [_template()],
+            generic_instance: [source, parent],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.post(
+        "/api/object/Z-SMP-1Q/lineage",
+        json={
+            "related_euid": "Z-PAR-22Q",
+            "direction": "parent",
+            "relationship_type": "HOLDS_MATERIAL",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Canonical LSMC v0 edge writes require v0_edge metadata" in response.text
+
+
+def test_gui_lineage_api_creates_v0_edge_with_evidence(monkeypatch):
+    source = _instance("Z-SMP-1Q", "Sample 1")
+    parent = _instance("Z-PAR-22Q", "Parent 1")
+    session = _Session(
+        {
+            generic_template: [_template()],
+            generic_instance: [source, parent],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.post(
+        "/api/object/Z-SMP-1Q/lineage",
+        json={
+            "related_euid": "Z-PAR-22Q",
+            "direction": "parent",
+            "relationship_type": "HOLDS_MATERIAL",
+            "v0_edge": {
+                "asserted_by_system": "tapdb-test",
+                "evidence_refs": [{"euid": "Z-EVD-1Q"}],
+                "correlation_id": "corr-1",
+                "causation_id": "cause-1",
+                "edge_state": "active",
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["v0_edge"]["compliance_status"] == "canonical"
+    assert payload["v0_edge"]["edge_type"] == "HOLDS_MATERIAL"
+    assert payload["v0_edge"]["source_euid"] == "Z-PAR-22Q"
+    assert payload["v0_edge"]["target_euid"] == "Z-SMP-1Q"
+    assert session.added[0].json_addl["properties"]["v0_edge"]["evidence_refs"] == [
+        {"euid": "Z-EVD-1Q"}
+    ]
 
 
 def test_gui_object_mutation_api_rejects_immutable_fields(monkeypatch):

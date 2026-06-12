@@ -17,7 +17,7 @@
   </div>
   {% if notice %}
   <div class="notice ok">
-	    {% if notice == "json_saved" %}JSON saved.
+	    {% if notice == "repair_created" %}Repair evidence created.
 	    {% elif notice == "name_updated" %}Name updated.
 	    {% elif notice == "status_updated" %}Status updated.
     {% elif notice == "lineage_added" %}Lineage added.
@@ -38,6 +38,16 @@
   </table>
 </section>
 
+<section class="band">
+  <h2>Validation</h2>
+  <table>
+    <tr><th>Validator</th><td><code>{{ editor.validator_ref }}</code></td></tr>
+    <tr><th>State</th><td>{{ editor.assessment.state }}</td></tr>
+    <tr><th>Subject Mutated</th><td>{{ editor.assessment.subject_mutated }}</td></tr>
+    <tr><th>Persistence</th><td>Ephemeral assessment; repair evidence is explicit.</td></tr>
+  </table>
+</section>
+
 {% if obj.record_type != "template" and user.role == "admin" %}
 <section class="band">
 	  <h2>Edit</h2>
@@ -53,11 +63,16 @@
     <input name="related_euid" placeholder="related EUID">
     <select name="direction"><option value="parent">related is parent</option><option value="child">related is child</option></select>
     <input name="relationship_type" value="generic">
+    <input name="evidence_refs" placeholder="v0 evidence EUIDs">
+    <input name="correlation_id" placeholder="v0 correlation ID">
+    <input name="causation_id" placeholder="v0 causation ID">
+    <input name="edge_state" value="active" aria-label="v0 edge state">
     <button type="submit">Add Lineage</button>
 	  </form>
-	  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/edit-json') }}" class="editor">
-	    <textarea name="json_addl" spellcheck="false" data-tapdb-json-editor data-json-editor-label="Object JSON properties">{{ json_text }}</textarea>
-	    <button type="submit">Save JSON</button>
+	  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/repairs') }}" class="editor">
+	    <input name="reason" placeholder="repair reason">
+	    <textarea name="repair_payload" spellcheck="false" data-tapdb-json-editor data-json-editor-label="Repair JSON payload">{{ json_text }}</textarea>
+	    <button type="submit">Create repair</button>
 	  </form>
 </section>
 {% endif %}
@@ -67,7 +82,7 @@
     <h2>Children</h2>
     <table><thead><tr><th>Lineage</th><th>Object</th><th>Relationship</th></tr></thead><tbody>
     {% for row in relationships.parent_of %}
-    <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.lineage_euid) }}">{{ row.lineage_euid }}</a></td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.related_euid) }}">{{ row.related_euid }}</a> {{ row.related_name or "" }}</td><td>{{ row.relationship_type }}</td></tr>
+    <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.lineage_euid) }}">{{ row.lineage_euid }}</a></td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.related_euid) }}">{{ row.related_euid }}</a> {{ row.related_name or "" }}</td><td>{{ row.v0_edge.edge_type or row.relationship_type }} <small>{{ row.v0_edge.compliance_status }}</small></td></tr>
     {% endfor %}
     </tbody></table>
   </div>
@@ -75,7 +90,7 @@
     <h2>Parents</h2>
     <table><thead><tr><th>Lineage</th><th>Object</th><th>Relationship</th></tr></thead><tbody>
     {% for row in relationships.child_of %}
-    <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.lineage_euid) }}">{{ row.lineage_euid }}</a></td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.related_euid) }}">{{ row.related_euid }}</a> {{ row.related_name or "" }}</td><td>{{ row.relationship_type }}</td></tr>
+    <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.lineage_euid) }}">{{ row.lineage_euid }}</a></td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ row.related_euid) }}">{{ row.related_euid }}</a> {{ row.related_name or "" }}</td><td>{{ row.v0_edge.edge_type or row.relationship_type }} <small>{{ row.v0_edge.compliance_status }}</small></td></tr>
     {% endfor %}
     </tbody></table>
   </div>

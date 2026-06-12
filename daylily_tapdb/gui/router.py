@@ -24,6 +24,11 @@ from daylily_tapdb import InstanceFactory, TemplateManager, __version__
 from daylily_tapdb.cli.db_config import get_db_config
 from daylily_tapdb.euid import validate_euid
 from daylily_tapdb.governance import GovernanceContext
+from daylily_tapdb.graph_contracts import (
+    attach_v0_edge_metadata,
+    describe_lineage_contract,
+    is_strict_canonical_edge_type,
+)
 from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
@@ -36,6 +41,13 @@ from daylily_tapdb.templates.loader import (
     ConfigIssue,
     find_tapdb_core_config_dir,
     seed_templates,
+)
+from daylily_tapdb.validation.governance import (
+    assess_evidence,
+    assess_object,
+    create_repair_record,
+    editor_data_for_object,
+    normalize_validator_ref,
 )
 from daylily_tapdb.validation.instantiation_layouts import (
     format_validation_error,
@@ -206,9 +218,10 @@ def _new_lineage(
     parent: generic_instance,
     child: generic_instance,
     relationship_type: str,
+    v0_edge: dict[str, Any] | None = None,
 ) -> generic_instance_lineage:
     rel = (relationship_type or "").strip() or "generic"
-    return generic_instance_lineage(
+    lineage = generic_instance_lineage(
         name=f"{parent.euid}->{child.euid}:{rel}",
         polymorphic_discriminator="generic_instance_lineage",
         category="lineage",
@@ -223,6 +236,9 @@ def _new_lineage(
         child_type=child.polymorphic_discriminator,
         json_addl={},
     )
+    if v0_edge is not None:
+        attach_v0_edge_metadata(lineage, v0_edge)
+    return lineage
 
 
 def _resolve_instance(session: Any, euid: str, *, label: str) -> generic_instance:
@@ -251,6 +267,7 @@ def _object_relationships(
                 "related_euid": getattr(child, "euid", None),
                 "related_name": getattr(child, "name", None),
                 "relationship_type": lineage.relationship_type,
+                "v0_edge": describe_lineage_contract(lineage),
             }
         )
     for lineage in obj.child_of_lineages.filter_by(is_deleted=False).all():
@@ -261,6 +278,7 @@ def _object_relationships(
                 "related_euid": getattr(parent, "euid", None),
                 "related_name": getattr(parent, "name", None),
                 "relationship_type": lineage.relationship_type,
+                "v0_edge": describe_lineage_contract(lineage),
             }
         )
     return {"parent_of": parent_of, "child_of": child_of}
@@ -338,6 +356,7 @@ def _object_detail_context(
         "relationships": relationships,
         "audit_rows": _audit_rows(session, euid),
         "external_refs": refs,
+        "editor": editor_data_for_object(session, euid),
     }
 
 
@@ -351,6 +370,33 @@ def _parse_json_object(raw: str, *, label: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail=f"{label} must be a JSON object")
     return payload
+
+
+def _parse_evidence_refs(raw: str) -> list[dict[str, Any]]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = [
+            item.strip()
+            for line in text.splitlines()
+            for item in line.split(",")
+            if item.strip()
+        ]
+    if isinstance(parsed, list):
+        refs: list[dict[str, Any]] = []
+        for item in parsed:
+            if isinstance(item, dict):
+                refs.append(item)
+            else:
+                refs.append({"euid": str(item).strip()})
+        return refs
+    raise HTTPException(
+        status_code=400,
+        detail="evidence_refs must be JSON list or comma/newline separated EUIDs",
+    )
 
 
 def _reject_immutable_object_fields(payload: dict[str, Any]) -> None:
@@ -377,6 +423,21 @@ async def _read_urlencoded_form(request: Request) -> dict[str, str]:
     return {key: values[-1] if values else "" for key, values in parsed.items()}
 
 
+async def _read_optional_json_object(request: Request) -> dict[str, Any]:
+    body = await request.body()
+    if not body.strip():
+        return {}
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"JSON body invalid: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+    return payload
+
+
 def _template_code(template: Any) -> str:
     return f"{template.category}/{template.type}/{template.subtype}/{template.version}/"
 
@@ -391,6 +452,7 @@ def _template_row(template: generic_template) -> dict[str, Any]:
         "subtype": template.subtype,
         "version": template.version,
         "instance_prefix": template.instance_prefix,
+        "validator_ref": normalize_validator_ref(getattr(template, "validator_ref", None)),
         "bstatus": template.bstatus,
         "code": _template_code(template),
     }
@@ -432,6 +494,9 @@ def _template_seed_pack(template: generic_template) -> dict[str, Any]:
                     template,
                     "instance_polymorphic_identity",
                     "generic_instance",
+                ),
+                "validator_ref": normalize_validator_ref(
+                    getattr(template, "validator_ref", None)
                 ),
                 "json_addl": template.json_addl or {},
             }
@@ -765,16 +830,31 @@ def _create_instance_from_template(
     }
 
 
-def _update_object_json(
-    session: Any, *, euid: str, json_addl: dict[str, Any]
+def _create_object_repair(
+    session: Any,
+    *,
+    cfg: dict[str, Any],
+    euid: str,
+    actor: str,
+    reason: str,
+    repair_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    obj, record_type = find_object_by_euid(session, euid)
-    if obj is None or record_type is None:
-        raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
-    if record_type == "template":
-        raise HTTPException(status_code=403, detail="Templates are read-only")
-    obj.json_addl = json_addl
-    return {"euid": euid, "json_addl": json_addl}
+    try:
+        return create_repair_record(
+            session,
+            domain_code=str(cfg.get("domain_code") or ""),
+            subject_euid=euid,
+            actor=actor,
+            reason=reason,
+            repair_payload=repair_payload,
+            governance_context={"surface": "tapdb_gui"},
+        )
+    except LookupError as exc:
+        message = str(exc)
+        status = 404 if message.startswith("Object not found:") else 422
+        raise HTTPException(status_code=status, detail=message) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _update_object_name(session: Any, *, euid: str, name: str) -> dict[str, Any]:
@@ -810,6 +890,7 @@ def _add_object_lineage(
     related_euid: str,
     direction: str,
     relationship_type: str,
+    v0_edge: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     current = _resolve_instance(session, euid, label="Object")
     related = _resolve_instance(session, related_euid, label="Related object")
@@ -817,11 +898,32 @@ def _add_object_lineage(
         parent, child = current, related
     else:
         parent, child = related, current
-    lineage = _new_lineage(
-        parent=parent,
-        child=child,
-        relationship_type=relationship_type,
-    )
+    canonical = is_strict_canonical_edge_type(relationship_type)
+    metadata = v0_edge
+    if metadata is None and canonical:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Canonical LSMC v0 edge writes require v0_edge metadata with "
+                "evidence_refs, correlation_id, and causation_id"
+            ),
+        )
+    if metadata is not None:
+        metadata = {
+            **metadata,
+            "edge_type": metadata.get("edge_type") or relationship_type,
+            "source_euid": metadata.get("source_euid") or parent.euid,
+            "target_euid": metadata.get("target_euid") or child.euid,
+        }
+    try:
+        lineage = _new_lineage(
+            parent=parent,
+            child=child,
+            relationship_type=relationship_type,
+            v0_edge=metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     session.add(lineage)
     try:
         session.flush()
@@ -830,11 +932,22 @@ def _add_object_lineage(
             status_code=409,
             detail="Lineage already exists or violates a DB constraint",
         ) from exc
+    assessment = assess_evidence(
+        subject_ref=f"lineage:{parent.euid}->{child.euid}:{relationship_type}",
+        context={
+            "operation": "create_relationship",
+            "relationship_type": (relationship_type or "").strip() or "generic",
+            "parent_euid": parent.euid,
+            "child_euid": child.euid,
+        },
+    )
     return {
         "lineage_euid": getattr(lineage, "euid", None),
         "parent_euid": parent.euid,
         "child_euid": child.euid,
         "relationship_type": (relationship_type or "").strip() or "generic",
+        "v0_edge": describe_lineage_contract(lineage),
+        "assessment": assessment.to_dict(),
     }
 
 
@@ -1495,6 +1608,7 @@ def create_tapdb_gui_router(
             relationships=context["relationships"],
             audit_rows=context["audit_rows"],
             external_refs=context["external_refs"],
+            editor=context["editor"],
             notice=notice,
             json_text=json.dumps(
                 context["obj"]["json_addl"] or {}, indent=2, sort_keys=True
@@ -1511,6 +1625,143 @@ def create_tapdb_gui_router(
             with conn.session_scope() as session:
                 return jsonable_encoder(_object_detail_context(session, euid))
 
+    @router.get("/api/object/{euid}/editor-data")
+    async def object_editor_data_api(
+        euid: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+    ):
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope() as session:
+                try:
+                    return jsonable_encoder(editor_data_for_object(session, euid))
+                except LookupError as exc:
+                    raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/api/object/{euid}/assess")
+    async def object_assess_api(
+        request: Request,
+        euid: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+    ):
+        payload = await _read_optional_json_object(request)
+        context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope() as session:
+                try:
+                    assessment = assess_object(
+                        session,
+                        euid,
+                        validator_ref=str(payload.get("validator_ref") or ""),
+                        context=context,
+                    )
+                except LookupError as exc:
+                    raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return jsonable_encoder(assessment.to_dict())
+
+    @router.post("/api/object/{euid}/revalidate")
+    async def object_revalidate_api(
+        request: Request,
+        euid: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+    ):
+        payload = await _read_optional_json_object(request)
+        context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope() as session:
+                try:
+                    assessment = assess_object(
+                        session,
+                        euid,
+                        validator_ref=str(payload.get("validator_ref") or ""),
+                        context={**context, "operation": "revalidate"},
+                    )
+                except LookupError as exc:
+                    raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return jsonable_encoder({"revalidated": True, "assessment": assessment.to_dict()})
+
+    @router.get("/api/object/{euid}/repair-recommendations")
+    async def object_repair_recommendations_api(
+        euid: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+    ):
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope() as session:
+                try:
+                    assessment = assess_object(session, euid)
+                except LookupError as exc:
+                    raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return jsonable_encoder(
+            {
+                "subject_ref": assessment.subject_ref,
+                "validator_ref": assessment.validator_ref,
+                "repair_recommendations": [
+                    recommendation.__dict__
+                    for recommendation in assessment.repair_recommendations
+                ],
+                "subject_mutated": False,
+            }
+        )
+
+    @router.post("/object/{euid}/repairs")
+    async def create_repair(
+        request: Request,
+        euid: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        form = await _read_urlencoded_form(request)
+        payload = _parse_json_object(
+            str(form.get("repair_payload") or "{}"), label="repair_payload"
+        )
+        cfg = get_db_config(config_path=resolved_config_path)
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope(commit=True) as session:
+                _create_object_repair(
+                    session,
+                    cfg=cfg,
+                    euid=euid,
+                    actor=str(user.get("username") or ""),
+                    reason=str(form.get("reason") or ""),
+                    repair_payload=payload,
+                )
+        return RedirectResponse(
+            gui_url_with_query(request, f"/object/{euid}", notice="repair_created"),
+            status_code=303,
+        )
+
+    @router.post("/api/object/{euid}/repairs")
+    async def create_repair_api(
+        request: Request,
+        euid: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        payload = await _read_optional_json_object(request)
+        repair_payload = payload.get("repair_payload")
+        if repair_payload is None:
+            repair_payload = payload.get("json_addl")
+        if not isinstance(repair_payload, dict):
+            raise HTTPException(
+                status_code=400, detail="repair_payload must be a JSON object"
+            )
+        cfg = get_db_config(config_path=resolved_config_path)
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope(commit=True) as session:
+                return jsonable_encoder(
+                    _create_object_repair(
+                        session,
+                        cfg=cfg,
+                        euid=euid,
+                        actor=str(user.get("username") or ""),
+                        reason=str(payload.get("reason") or ""),
+                        repair_payload=repair_payload,
+                    )
+                )
+
     @router.post("/object/{euid}/edit-json")
     async def edit_json(
         request: Request,
@@ -1520,12 +1771,20 @@ def create_tapdb_gui_router(
         form = await _read_urlencoded_form(request)
         json_addl = str(form.get("json_addl") or "")
         payload = _parse_json_object(json_addl, label="json_addl")
+        cfg = get_db_config(config_path=resolved_config_path)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
             with conn.session_scope(commit=True) as session:
-                _update_object_json(session, euid=euid, json_addl=payload)
+                _create_object_repair(
+                    session,
+                    cfg=cfg,
+                    euid=euid,
+                    actor=str(user.get("username") or ""),
+                    reason="JSON repair submitted through legacy edit-json route",
+                    repair_payload=payload,
+                )
         return RedirectResponse(
-            gui_url_with_query(request, f"/object/{euid}", notice="json_saved"),
+            gui_url_with_query(request, f"/object/{euid}", notice="repair_created"),
             status_code=303,
         )
 
@@ -1580,11 +1839,21 @@ def create_tapdb_gui_router(
             raise HTTPException(
                 status_code=400, detail="json_addl must be a JSON object"
             )
+        cfg = get_db_config(config_path=resolved_config_path)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
             with conn.session_scope(commit=True) as session:
                 return jsonable_encoder(
-                    _update_object_json(session, euid=euid, json_addl=payload)
+                    _create_object_repair(
+                        session,
+                        cfg=cfg,
+                        euid=euid,
+                        actor=str(user.get("username") or ""),
+                        reason=(
+                            "JSON repair submitted through compatibility edit-json API"
+                        ),
+                        repair_payload=payload,
+                    )
                 )
 
     @router.post("/object/{euid}/status")
@@ -1637,6 +1906,19 @@ def create_tapdb_gui_router(
         related_euid = str(form.get("related_euid") or "")
         direction = str(form.get("direction") or "parent")
         relationship_type = str(form.get("relationship_type") or "generic")
+        evidence_refs = _parse_evidence_refs(str(form.get("evidence_refs") or ""))
+        v0_edge = None
+        if evidence_refs or is_strict_canonical_edge_type(relationship_type):
+            v0_edge = {
+                "edge_type": relationship_type,
+                "asserted_by_system": str(
+                    form.get("asserted_by_system") or "tapdb-gui"
+                ),
+                "evidence_refs": evidence_refs,
+                "correlation_id": str(form.get("correlation_id") or ""),
+                "causation_id": str(form.get("causation_id") or ""),
+                "edge_state": str(form.get("edge_state") or "active"),
+            }
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
             with conn.session_scope(commit=True) as session:
@@ -1646,6 +1928,7 @@ def create_tapdb_gui_router(
                     related_euid=related_euid,
                     direction=direction,
                     relationship_type=relationship_type,
+                    v0_edge=v0_edge,
                 )
         return RedirectResponse(
             gui_url_with_query(request, f"/object/{euid}", notice="lineage_added"),
@@ -1675,6 +1958,9 @@ def create_tapdb_gui_router(
                         relationship_type=str(
                             payload.get("relationship_type") or "generic"
                         ),
+                        v0_edge=payload.get("v0_edge")
+                        if isinstance(payload.get("v0_edge"), dict)
+                        else None,
                     )
                 )
 

@@ -15,15 +15,16 @@
 </section>
 <section class="band">
   <table>
-    <thead><tr><th>EUID</th><th>Name</th><th>Code</th><th>Instance Prefix</th><th></th><th></th></tr></thead>
+	    <thead><tr><th>EUID</th><th>Name</th><th>Code</th><th>Instance Prefix</th><th>Validator</th><th></th><th></th></tr></thead>
     <tbody>
       {% for item in items %}
       <tr>
         <td><a href="{{ tapdb_gui_url(request, '/object/' ~ item.euid) }}">{{ item.euid }}</a></td>
         <td>{{ item.name }}</td>
-        <td>{{ item.category }}/{{ item.type }}/{{ item.subtype }}/{{ item.version }}</td>
-        <td>{{ item.instance_prefix }}</td>
-        <td>{% if user.role == "admin" %}<a href="{{ tapdb_gui_url(request, '/create/' ~ item.euid) }}">Create</a>{% endif %}</td>
+	        <td>{{ item.category }}/{{ item.type }}/{{ item.subtype }}/{{ item.version }}</td>
+	        <td>{{ item.instance_prefix }}</td>
+	        <td><code>{{ item.validator_ref }}</code></td>
+	        <td>{% if user.role == "admin" %}<a href="{{ tapdb_gui_url(request, '/create/' ~ item.euid) }}">Create</a>{% endif %}</td>
         <td>{% if user.role == "admin" %}<a href="{{ tapdb_gui_url(request, '/templates/new') }}?seed_euid={{ item.euid }}">Build New Template</a>{% endif %}</td>
       </tr>
       {% endfor %}

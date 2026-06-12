@@ -178,7 +178,7 @@ Rules:
    - `outbox_event`
 2. Use native columns for tenancy filters/authorization.
 3. Do not write canonical tenant IDs into `json_addl`, including `json_addl.tenant_id` or `json_addl.properties.tenant_id`.
-4. Legacy rows or external payloads that carry JSON tenant keys must be reported by audit/repair tooling and migrated to the native column before they are considered compliant.
+4. Legacy rows or external payloads that carry JSON tenant keys must be reported by audit/repair tooling. Compliance repair must add explicit evidence or an approved regulated assessment report; revalidation must not rewrite stored evidence.
 
 ## Python Library Usage
 Prefer TAPDB APIs over low-level SQL.

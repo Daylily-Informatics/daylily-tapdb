@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -117,12 +118,32 @@ def test_template_ref_extraction_and_duplicate_keys():
     assert duplicates[("SMP", "sample", "tube", "1.0")] == ["a.json", "b.json"]
 
 
+def test_loader_helpers_cover_project_root_and_ignored_reference_shapes(tmp_path: Path, monkeypatch):
+    assert (loader._get_project_root() / "pyproject.toml").exists()
+    assert loader._extract_template_refs(["not-a-dict"]) == []
+
+    payload = _template(
+        json_addl={
+            "instantiation_layouts": [
+                "not-a-dict-layout",
+                {"child_templates": ["container/*/*/1.0"]},
+            ]
+        }
+    )
+    monkeypatch.setattr(loader, "find_tapdb_core_config_dir", lambda: tmp_path / "core")
+    _templates, issues = loader.validate_template_configs([_write_pack(tmp_path / "cfg" / "sample" / "pack.json", {"templates": [payload]}).parents[1]], strict=True)
+
+    assert loader._extract_template_refs(payload) == ["container/*/*/1.0"]
+    assert not any("Referenced template not found" in issue.message for issue in issues)
+
+
 def test_load_and_validate_template_configs_collects_errors(
     tmp_path: Path, monkeypatch
 ):
     config = tmp_path / "config"
     _write_pack(config / "sample" / "valid.json", {"templates": [_template()]})
     _write_pack(config / "sample" / "bad-root.json", [])
+    _write_pack(config / "sample" / "bad-template-list.json", {"templates": {}})
     _write_pack(config / "sample" / "bad-template.json", {"templates": ["bad"]})
     (config / "sample" / "invalid-json.json").write_text("{", encoding="utf-8")
     _write_pack(
@@ -158,6 +179,97 @@ def test_load_and_validate_template_configs_collects_errors(
     assert (
         "Client templates cannot persist reserved TapDB operational prefix" in messages
     )
+
+
+def test_validate_template_configs_collects_nested_reference_and_validator_errors(
+    tmp_path: Path, monkeypatch
+):
+    config = tmp_path / "config"
+    core = tmp_path / "core"
+    monkeypatch.setattr(loader, "find_tapdb_core_config_dir", lambda: core)
+
+    _write_pack(
+        config / "sample" / "bad-refs.json",
+        {
+            "templates": [
+                _template(
+                    validator_ref=" ",
+                    instance_prefix="BAD!",
+                    action_imports=[],
+                    expected_inputs="not-list",
+                    json_addl={
+                        "expected_outputs": "not-list",
+                        "instantiation_layouts": [
+                            {
+                                "relationship_type": "contains",
+                                "child_templates": [
+                                    {"template_code": "container/tube/missing/1.0", "count": 0}
+                                ],
+                            }
+                        ],
+                    },
+                ),
+                _template(
+                    name="Sample Duplicate",
+                    action_imports={"single": "bad-ref"},
+                ),
+            ]
+        },
+    )
+
+    templates, issues = loader.validate_template_configs([config], strict=False)
+
+    messages = "\n".join(issue.message for issue in issues)
+    assert len(templates) == 2
+    assert "Field 'validator_ref' must be a non-empty string" in messages
+    assert "Invalid TAPDB instance prefix" in messages
+    assert "Field 'action_imports' must be an object/dict" in messages
+    assert "Field 'expected_inputs' must be an array/list" in messages
+    assert "Field 'expected_outputs' must be an array/list" in messages
+    assert "Invalid instantiation_layouts" in messages
+    assert "Invalid template reference" in messages
+    assert "Duplicate template key" in messages
+
+
+def test_validate_template_configs_flags_core_prefix_violations(
+    tmp_path: Path, monkeypatch
+):
+    core = tmp_path / "core"
+    monkeypatch.setattr(loader, "find_tapdb_core_config_dir", lambda: core)
+    _write_pack(
+        core / "container" / "container.json",
+        {"templates": [_template(category="container", type="tube", instance_prefix="SMP")]},
+    )
+
+    _templates, issues = loader.validate_template_configs([core], strict=True)
+
+    assert any("TapDB bundled core templates must use reserved" in issue.message for issue in issues)
+
+
+def test_validate_json_schema_reports_missing_dependency(monkeypatch):
+    issues = []
+    monkeypatch.setattr(loader, "Draft202012Validator", None)
+
+    loader._validate_json_schema({}, source_file="pack.json", issues=issues)
+
+    assert issues[0].message == "jsonschema is required for TapDB template-pack validation"
+
+
+def test_apply_seed_session_scope_sets_postgres_identity():
+    calls = []
+
+    class Session:
+        bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+        def execute(self, stmt, params):
+            del stmt
+            calls.append(params)
+
+    loader._apply_seed_session_scope(
+        Session(), domain_code="Z", owner_repo_name="daylily-tapdb"
+    )
+
+    assert calls == [{"code": "Z"}, {"owner": "daylily-tapdb"}]
 
 
 def test_validate_template_configs_missing_dirs_and_empty_input(tmp_path: Path):
@@ -235,6 +347,143 @@ def test_seed_templates_rejects_missing_domain_and_owner(tmp_path: Path):
             domain_registry_path=tmp_path / "domain.json",
             prefix_registry_path=tmp_path / "prefix.json",
         )
+
+
+def test_upsert_template_inserts_updates_and_skips(monkeypatch):
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class Session:
+        def __init__(self, existing):
+            self.existing = list(existing)
+            self.added = []
+            self.flushed = 0
+
+        def execute(self, stmt):
+            del stmt
+            return Result(self.existing.pop(0))
+
+        def add(self, obj):
+            self.added.append(obj)
+
+        def flush(self):
+            self.flushed += 1
+
+    base = _template(
+        category="container",
+        type="tube",
+        subtype="1.5ml-eppi",
+        version="1.0",
+        instance_prefix="SMP",
+        validator_ref="CUSTOM@1",
+        bstatus="active",
+        is_singleton=True,
+    )
+    changed_existing = SimpleNamespace(
+        name="Old",
+        polymorphic_discriminator="generic_template",
+        domain_code="Z",
+        instance_prefix="OLD",
+        instance_polymorphic_identity=None,
+        json_addl={},
+        validator_ref="OLD@1",
+        json_addl_schema=None,
+        bstatus="old",
+        is_singleton=False,
+        is_deleted=True,
+    )
+    same_existing = SimpleNamespace(
+        name=base["name"],
+        polymorphic_discriminator=base["polymorphic_discriminator"],
+        domain_code="Z",
+        instance_prefix=base["instance_prefix"],
+        instance_polymorphic_identity=base["instance_polymorphic_identity"],
+        json_addl=base["json_addl"],
+        validator_ref=base["validator_ref"],
+        json_addl_schema=None,
+        bstatus=base["bstatus"],
+        is_singleton=base["is_singleton"],
+        is_deleted=False,
+    )
+    session = Session([None, changed_existing, same_existing, same_existing])
+
+    assert loader._template_model_for_discriminator("unknown") is loader.generic_template
+    inserted, created = loader._upsert_template(
+        session, base, domain_code="Z", overwrite=True
+    )
+    updated, updated_obj = loader._upsert_template(
+        session, base, domain_code="Z", overwrite=True
+    )
+    skipped, skipped_obj = loader._upsert_template(
+        session, base, domain_code="Z", overwrite=True
+    )
+    skipped_no_overwrite, _ = loader._upsert_template(
+        session, base, domain_code="Z", overwrite=False
+    )
+
+    assert inserted == "inserted"
+    assert created in session.added
+    assert updated == "updated"
+    assert updated_obj.name == base["name"]
+    assert skipped == "skipped"
+    assert skipped_obj is same_existing
+    assert skipped_no_overwrite == "skipped"
+    assert session.flushed >= 2
+
+
+def test_seed_templates_counts_outcomes_and_governance_hook(tmp_path: Path, monkeypatch):
+    outcomes = iter(["inserted", "updated", "skipped"])
+    ensured_prefixes = []
+    governance_calls = []
+
+    monkeypatch.setattr(loader, "_validate_seed_ownership", lambda *args, **kwargs: None)
+    monkeypatch.setattr(loader, "ensure_instance_prefix_sequence", lambda session, prefix: ensured_prefixes.append(prefix))
+    monkeypatch.setattr(
+        loader,
+        "_upsert_template",
+        lambda session, template, *, domain_code, overwrite: (
+            next(outcomes),
+            SimpleNamespace(),
+        ),
+    )
+    monkeypatch.setattr(
+        loader,
+        "ensure_core_governance_objects",
+        lambda session, *, domain_code: governance_calls.append(domain_code),
+    )
+
+    summary = loader.seed_templates(
+        SimpleNamespace(bind=SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))),
+        [
+            _template(
+                _source_file=str(tmp_path / "core" / "governance" / "governance.json"),
+                category="governance",
+                type="validator",
+                subtype="definition",
+                instance_prefix="GVR",
+            ),
+            _template(category="container", type="tube", subtype="small", instance_prefix="SMP"),
+            _template(category="container", type="tube", subtype="large", instance_prefix="SMP"),
+        ],
+        overwrite=True,
+        core_config_dir=tmp_path / "core",
+        domain_code="z",
+        owner_repo_name="daylily-tapdb",
+        domain_registry_path=tmp_path / "domain.json",
+        prefix_registry_path=tmp_path / "prefix.json",
+    )
+
+    assert summary.templates_loaded == 3
+    assert summary.inserted == 1
+    assert summary.updated == 1
+    assert summary.skipped == 1
+    assert summary.prefixes_ensured == 2
+    assert ensured_prefixes == ["GVR", "SMP"]
+    assert governance_calls == ["Z"]
     with pytest.raises(ValueError, match="owner_repo_name is required"):
         loader.seed_templates(
             object(),

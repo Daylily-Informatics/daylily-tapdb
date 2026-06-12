@@ -29,6 +29,11 @@ def test_core_bundle_only_seeds_operational_templates():
 
     assert codes == {
         "actor/user/system/1.0",
+        "evidence/repair/record/1.0",
+        "governance/position/scheme/1.0",
+        "governance/relationship/constraint/1.0",
+        "governance/terminology/set/1.0",
+        "governance/validator/definition/1.0",
         "message/webhook/event/1.0",
         "reference/external_identifier/tapdb_object/1.0",
     }
@@ -83,6 +88,27 @@ def test_packaged_registry_fixtures_match_core_prefix_ownership():
     assert core_prefixes <= owned_prefixes
     assert example_prefixes <= owned_prefixes
     assert owned_prefixes == core_prefixes | example_prefixes
+
+
+def test_prepare_seed_templates_materializes_default_validator_ref(tmp_path: Path):
+    from daylily_tapdb.templates.loader import _prepare_seed_templates
+
+    prepared = _prepare_seed_templates(
+        [
+            {
+                "name": "Plate",
+                "polymorphic_discriminator": "generic_template",
+                "category": "container",
+                "type": "plate",
+                "subtype": "96well-generic",
+                "version": "1.0",
+                "instance_prefix": "PAT",
+            }
+        ],
+        core_config_dir=tmp_path / "core",
+    )
+
+    assert prepared[0]["validator_ref"] == "UNIVERSAL_PASS@1"
 
 
 def test_prepare_seed_templates_rejects_gx_placeholder():

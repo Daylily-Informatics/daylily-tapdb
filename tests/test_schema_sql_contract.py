@@ -43,3 +43,26 @@ def test_orm_core_timestamps_are_timezone_aware():
     assert modified_dt.type.timezone is True
     assert created_dt.server_default is not None
     assert modified_dt.server_default is not None
+
+
+def test_template_validator_ref_is_physical_schema_and_orm_column():
+    from daylily_tapdb.models.template import generic_template
+
+    schema_path = Path(__file__).resolve().parents[1] / "schema" / "tapdb_schema.sql"
+    schema_sql = schema_path.read_text()
+
+    assert "validator_ref TEXT NOT NULL DEFAULT 'UNIVERSAL_PASS@1'" in schema_sql
+    assert "validator_ref" in generic_template.__table__.columns
+    assert generic_template.__table__.columns["validator_ref"].nullable is False
+
+
+def test_instance_euid_trigger_uses_template_instance_prefix_not_taxonomy():
+    schema_path = Path(__file__).resolve().parents[1] / "schema" / "tapdb_schema.sql"
+    schema_sql = schema_path.read_text()
+    function_body = schema_sql.split(
+        "CREATE OR REPLACE FUNCTION set_generic_instance_euid()", 1
+    )[1].split("$$ LANGUAGE plpgsql;", 1)[0]
+
+    assert "SELECT t.instance_prefix INTO prefix" in function_body
+    assert "t.uid = NEW.template_uid" in function_body
+    assert "tapdb_validate_meridian_prefix(NEW.category)" not in function_body

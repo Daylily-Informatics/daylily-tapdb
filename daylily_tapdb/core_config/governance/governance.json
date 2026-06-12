@@ -1,0 +1,114 @@
+{
+  "$comment": "TapDB governed objects for validators, terminology, relationship constraints, position schemes, and repair records.",
+  "templates": [
+    {
+      "name": "Validator Definition",
+      "polymorphic_discriminator": "generic_template",
+      "category": "governance",
+      "type": "validator",
+      "subtype": "definition",
+      "version": "1.0",
+      "instance_prefix": "GVR",
+      "instance_polymorphic_identity": "generic_instance",
+      "validator_ref": "UNIVERSAL_PASS@1",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Governed validator definition object. Validators observe evidence and do not mutate subjects.",
+        "properties": {
+          "governance_ref": "",
+          "validator_type": "",
+          "version": "",
+          "description": "",
+          "components": []
+        }
+      }
+    },
+    {
+      "name": "Terminology Set",
+      "polymorphic_discriminator": "generic_template",
+      "category": "governance",
+      "type": "terminology",
+      "subtype": "set",
+      "version": "1.0",
+      "instance_prefix": "GVR",
+      "instance_polymorphic_identity": "generic_instance",
+      "validator_ref": "UNIVERSAL_PASS@1",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Governed terminology object. Term validators assess values and do not replace stored terms.",
+        "properties": {
+          "governance_ref": "",
+          "terms": []
+        }
+      }
+    },
+    {
+      "name": "Relationship Constraint",
+      "polymorphic_discriminator": "generic_template",
+      "category": "governance",
+      "type": "relationship",
+      "subtype": "constraint",
+      "version": "1.0",
+      "instance_prefix": "GVR",
+      "instance_polymorphic_identity": "generic_instance",
+      "validator_ref": "UNIVERSAL_PASS@1",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Governed relationship constraint object. Constraints govern new assertions only.",
+        "properties": {
+          "governance_ref": "",
+          "allowed_relationship_types": []
+        }
+      }
+    },
+    {
+      "name": "Position Scheme",
+      "polymorphic_discriminator": "generic_template",
+      "category": "governance",
+      "type": "position",
+      "subtype": "scheme",
+      "version": "1.0",
+      "instance_prefix": "GVR",
+      "instance_polymorphic_identity": "generic_instance",
+      "validator_ref": "UNIVERSAL_PASS@1",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Governed position scheme object for containment and spatial relationships.",
+        "properties": {
+          "governance_ref": "",
+          "position_required": false,
+          "axes": []
+        }
+      }
+    },
+    {
+      "name": "Repair Record",
+      "polymorphic_discriminator": "generic_template",
+      "category": "evidence",
+      "type": "repair",
+      "subtype": "record",
+      "version": "1.0",
+      "instance_prefix": "GVR",
+      "instance_polymorphic_identity": "generic_instance",
+      "validator_ref": "UNIVERSAL_PASS@1",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Explicit repair evidence object. Repairs add evidence and do not represent validator-driven migration.",
+        "properties": {
+          "actor": "",
+          "reason": "",
+          "prior_evidence_ref": "",
+          "new_evidence_ref": "",
+          "governance_context": {},
+          "approval": {},
+          "repair_payload": {}
+        }
+      }
+    }
+  ]
+}
