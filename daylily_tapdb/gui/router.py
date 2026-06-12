@@ -452,13 +452,17 @@ def _template_row(template: generic_template) -> dict[str, Any]:
         "subtype": template.subtype,
         "version": template.version,
         "instance_prefix": template.instance_prefix,
-        "validator_ref": normalize_validator_ref(getattr(template, "validator_ref", None)),
+        "validator_ref": normalize_validator_ref(
+            getattr(template, "validator_ref", None)
+        ),
         "bstatus": template.bstatus,
         "code": _template_code(template),
     }
 
 
-def _template_payload_and_code(template: generic_template) -> tuple[dict[str, Any], str]:
+def _template_payload_and_code(
+    template: generic_template,
+) -> tuple[dict[str, Any], str]:
     payload = _record_to_dict(template, "template")
     code = (
         f"{payload['category']}/{payload['type']}/"
@@ -569,7 +573,9 @@ def _builder_seed_from_template(
                     }
                 )
     if not child_rows:
-        child_rows = [{"template_code": "", "count": 1, "relationship_type": "contains"}]
+        child_rows = [
+            {"template_code": "", "count": 1, "relationship_type": "contains"}
+        ]
 
     return {
         "seed_euid": seed_euid,
@@ -1381,8 +1387,16 @@ def create_tapdb_gui_router(
                     )
         except HTTPException:
             raise
-        except (json.JSONDecodeError, KeyError, OSError, RuntimeError, ValueError) as exc:
-            issues = [ConfigIssue(level="error", message=f"Template save failed: {exc}")]
+        except (
+            json.JSONDecodeError,
+            KeyError,
+            OSError,
+            RuntimeError,
+            ValueError,
+        ) as exc:
+            issues = [
+                ConfigIssue(level="error", message=f"Template save failed: {exc}")
+            ]
             return _render(
                 templates,
                 request,
@@ -1489,9 +1503,7 @@ def create_tapdb_gui_router(
                 error=str(exc),
                 form={
                     "name": name,
-                    "properties_json": json.dumps(
-                        properties, indent=2, sort_keys=True
-                    ),
+                    "properties_json": json.dumps(properties, indent=2, sort_keys=True),
                     "create_children": create_children,
                 },
             )
@@ -1645,7 +1657,9 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_user),
     ):
         payload = await _read_optional_json_object(request)
-        context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        context = (
+            payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        )
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
             with conn.session_scope() as session:
@@ -1667,7 +1681,9 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_user),
     ):
         payload = await _read_optional_json_object(request)
-        context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        context = (
+            payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        )
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
             with conn.session_scope() as session:
@@ -1680,7 +1696,9 @@ def create_tapdb_gui_router(
                     )
                 except LookupError as exc:
                     raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return jsonable_encoder({"revalidated": True, "assessment": assessment.to_dict()})
+        return jsonable_encoder(
+            {"revalidated": True, "assessment": assessment.to_dict()}
+        )
 
     @router.get("/api/object/{euid}/repair-recommendations")
     async def object_repair_recommendations_api(

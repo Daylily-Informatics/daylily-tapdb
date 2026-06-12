@@ -41,9 +41,7 @@ def test_require_seeded_template_raises_when_missing():
             template_manager=manager,
         )
 
-    assert manager.calls == [
-        (session, "actor/user/system/1.0", {"domain_code": "T"})
-    ]
+    assert manager.calls == [(session, "actor/user/system/1.0", {"domain_code": "T"})]
 
 
 def test_require_seeded_template_raises_on_prefix_mismatch():

@@ -700,7 +700,10 @@ def test_gui_template_save_renders_config_registry_error(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert "Template save failed: prefix_ownership_registry.json is invalid JSON" in response.text
+    assert (
+        "Template save failed: prefix_ownership_registry.json is invalid JSON"
+        in response.text
+    )
 
 
 def test_gui_template_save_renders_success(monkeypatch):

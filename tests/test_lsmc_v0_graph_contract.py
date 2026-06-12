@@ -127,7 +127,9 @@ def test_attach_and_describe_v0_metadata_edge_cases() -> None:
     )
 
     assert metadata["edge_type"] == "CONTAINS"
-    assert metadata["evidence_refs"] == [{"root_euid": "Z-EVD-1", "kind": "source", "euid": "Z-EVD-1"}]
+    assert metadata["evidence_refs"] == [
+        {"root_euid": "Z-EVD-1", "kind": "source", "euid": "Z-EVD-1"}
+    ]
     assert v0_edge_metadata_from_lineage(lineage)["edge_type"] == "CONTAINS"
     assert v0_edge_metadata_from_json_addl([]) is None
     assert v0_edge_metadata_from_json_addl({"properties": []}) is None
@@ -149,5 +151,10 @@ def test_attach_and_describe_v0_metadata_edge_cases() -> None:
         }
     )
     assert describe_lineage_contract(invalid)["compliance_status"] == "invalid"
-    assert describe_lineage_contract(_Lineage(relationship_type="unmapped"))["compliance_status"] == "generic"
+    assert (
+        describe_lineage_contract(_Lineage(relationship_type="unmapped"))[
+            "compliance_status"
+        ]
+        == "generic"
+    )
     assert canonical_edge_type(None) is None

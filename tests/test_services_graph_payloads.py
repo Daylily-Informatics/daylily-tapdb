@@ -167,8 +167,14 @@ def test_build_graph_payload_returns_instance_graph_and_singletons() -> None:
     assert payload["elements"]["edges"][0]["data"]["target"] == "GX1"
     assert payload["elements"]["edges"][0]["data"]["semantic_source_euid"] == "GX1"
     assert payload["elements"]["edges"][0]["data"]["semantic_target_euid"] == "GX2"
-    assert payload["elements"]["edges"][0]["data"]["v0_edge"]["edge_type"] == "HOLDS_MATERIAL"
-    assert payload["elements"]["edges"][0]["data"]["v0_edge"]["compliance_status"] == "canonical"
+    assert (
+        payload["elements"]["edges"][0]["data"]["v0_edge"]["edge_type"]
+        == "HOLDS_MATERIAL"
+    )
+    assert (
+        payload["elements"]["edges"][0]["data"]["v0_edge"]["compliance_status"]
+        == "canonical"
+    )
     root_node = next(
         node["data"]
         for node in payload["elements"]["nodes"]

@@ -385,7 +385,8 @@ def create_repair_record(
     }
     instance = generic_instance(
         template_uid=template.uid,
-        domain_code=str(domain_code or "").strip() or getattr(template, "domain_code", None),
+        domain_code=str(domain_code or "").strip()
+        or getattr(template, "domain_code", None),
         tenant_id=getattr(subject, "tenant_id", None),
         name=f"Repair record for {normalized_subject}",
         polymorphic_discriminator=(

@@ -30,7 +30,9 @@ class _Query:
             [
                 row
                 for row in self._rows
-                if all(getattr(row, key, None) == value for key, value in kwargs.items())
+                if all(
+                    getattr(row, key, None) == value for key, value in kwargs.items()
+                )
             ]
         )
 
@@ -428,7 +430,11 @@ def gui_server(monkeypatch):
             json_addl={"properties": properties},
         )
         state.instances.append(instance)
-        if create_children and template.category == "container" and template.type == "plate":
+        if (
+            create_children
+            and template.category == "container"
+            and template.type == "plate"
+        ):
             for index in range(1, 3):
                 child = state.instance(
                     state.next_instance_euid("WEN"),
@@ -521,7 +527,9 @@ def gui_server(monkeypatch):
             "reference",
             "external_identifier",
             "tapdb_object",
-            json_addl={"external_identifier": {"system": system, "foreign_uid": foreign_uid}},
+            json_addl={
+                "external_identifier": {"system": system, "foreign_uid": foreign_uid}
+            },
         )
         state.instances.append(link)
         row = state.lineage(source_euid, link.euid, relationship_type)
@@ -580,7 +588,16 @@ def gui_server(monkeypatch):
             "metrics_file": "memory",
             "metrics_message": "",
             "dropped_count": 0,
-            "summary": {"by_path": [{"path": "/tapdb/search", "method": "GET", "count": 3, "total_seconds": 0.1}]},
+            "summary": {
+                "by_path": [
+                    {
+                        "path": "/tapdb/search",
+                        "method": "GET",
+                        "count": 3,
+                        "total_seconds": 0.1,
+                    }
+                ]
+            },
         },
     )
 
@@ -602,7 +619,10 @@ def gui_server(monkeypatch):
     )
     host = FastAPI(title="TapDB Playwright Host")
     host.add_api_route("/", lambda: RedirectResponse("/tapdb/"), methods=["GET"])
-    host.mount("/tapdb", create_tapdb_gui_app(config_path="/tmp/tapdb.yaml", host_bridge=bridge))
+    host.mount(
+        "/tapdb",
+        create_tapdb_gui_app(config_path="/tmp/tapdb.yaml", host_bridge=bridge),
+    )
 
     port = _free_port()
     server = uvicorn.Server(
@@ -702,7 +722,9 @@ def test_playwright_create_detail_graph_and_object_mutations(browser, gui_server
     sync_api.expect(page.get_by_text("contains").first).to_be_visible()
 
     page.goto(plate_url, wait_until="networkidle")
-    page.locator("form[action$='/name'] input[name='name']").fill("Browser Plate Renamed")
+    page.locator("form[action$='/name'] input[name='name']").fill(
+        "Browser Plate Renamed"
+    )
     page.get_by_role("button", name="Set Name").click()
     sync_api.expect(page.get_by_text("Name updated.")).to_be_visible()
     sync_api.expect(page.get_by_text("Browser Plate Renamed")).to_be_visible()
@@ -721,7 +743,9 @@ def test_playwright_create_detail_graph_and_object_mutations(browser, gui_server
     sync_api.expect(page.get_by_text("Repair evidence created.")).to_be_visible()
 
     page.locator("form[action$='/lineage'] input[name='related_euid']").fill("Z-SMP-1Q")
-    page.locator("form[action$='/lineage'] input[name='relationship_type']").fill("derived_from")
+    page.locator("form[action$='/lineage'] input[name='relationship_type']").fill(
+        "derived_from"
+    )
     page.get_by_role("button", name="Add Lineage").click()
     sync_api.expect(page.get_by_text("Lineage added.")).to_be_visible()
     sync_api.expect(page.get_by_text("derived_from")).to_be_visible()

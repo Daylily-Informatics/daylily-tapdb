@@ -503,7 +503,12 @@ def test_create_children_uses_override_name_and_json_payload(monkeypatch):
                     "child_templates": [
                         {
                             "template_code": "container/tube/1.5ml-eppi/1.0",
-                            "json_addl": {"properties": {"name": "named from override", "volume": "1.5ml"}},
+                            "json_addl": {
+                                "properties": {
+                                    "name": "named from override",
+                                    "volume": "1.5ml",
+                                }
+                            },
                         }
                     ],
                 }
@@ -534,7 +539,9 @@ def test_create_children_uses_override_name_and_json_payload(monkeypatch):
     assert calls == [
         ("container/tube/1.5ml-eppi/1.0/", "named from override", parent.tenant_id)
     ]
-    assert child_obj.json_addl == {"properties": {"name": "named from override", "volume": "1.5ml"}}
+    assert child_obj.json_addl == {
+        "properties": {"name": "named from override", "volume": "1.5ml"}
+    }
     assert sess.flushed >= 2
 
 
@@ -576,7 +583,9 @@ def test_resolve_template_code_pattern_handles_wildcards_and_errors():
         == "container/tube/1.5ml-eppi/1.0/"
     )
     assert (
-        factory._resolve_template_code_pattern(Sess([]), "container/tube/1.5ml-eppi/1.0")
+        factory._resolve_template_code_pattern(
+            Sess([]), "container/tube/1.5ml-eppi/1.0"
+        )
         == "container/tube/1.5ml-eppi/1.0/"
     )
 
@@ -661,11 +670,15 @@ def test_get_or_create_singleton_instance_errors_and_creates(monkeypatch):
     with pytest.raises(ValueError, match="Template not found"):
         factory.get_or_create_singleton_instance(Sess(), "a/b/c/1.0", "n")
 
-    factory = InstanceFactory(TM(SimpleNamespace(uid=uuid.uuid4(), is_singleton=False)), domain_code="T")
+    factory = InstanceFactory(
+        TM(SimpleNamespace(uid=uuid.uuid4(), is_singleton=False)), domain_code="T"
+    )
     with pytest.raises(ValueError, match="not singleton"):
         factory.get_or_create_singleton_instance(Sess(), "a/b/c/1.0", "n")
 
     created = SimpleNamespace(euid="Z-SYS-1Q")
-    factory = InstanceFactory(TM(SimpleNamespace(uid=uuid.uuid4(), is_singleton=True)), domain_code="T")
+    factory = InstanceFactory(
+        TM(SimpleNamespace(uid=uuid.uuid4(), is_singleton=True)), domain_code="T"
+    )
     monkeypatch.setattr(factory, "create_instance", lambda **kwargs: created)
     assert factory.get_or_create_singleton_instance(Sess(), "a/b/c/1.0", "n") is created

@@ -964,12 +964,9 @@ def seed_templates(
             else:
                 skipped += 1
 
-    if (
-        resolved_owner == "daylily-tapdb"
-        and any(
-            str(template.get("category") or "") == "governance"
-            for template in prepared_templates
-        )
+    if resolved_owner == "daylily-tapdb" and any(
+        str(template.get("category") or "") == "governance"
+        for template in prepared_templates
     ):
         ensure_core_governance_objects(session, domain_code=resolved_domain)
 

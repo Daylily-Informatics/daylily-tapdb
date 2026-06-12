@@ -118,7 +118,9 @@ def test_template_ref_extraction_and_duplicate_keys():
     assert duplicates[("SMP", "sample", "tube", "1.0")] == ["a.json", "b.json"]
 
 
-def test_loader_helpers_cover_project_root_and_ignored_reference_shapes(tmp_path: Path, monkeypatch):
+def test_loader_helpers_cover_project_root_and_ignored_reference_shapes(
+    tmp_path: Path, monkeypatch
+):
     assert (loader._get_project_root() / "pyproject.toml").exists()
     assert loader._extract_template_refs(["not-a-dict"]) == []
 
@@ -131,7 +133,14 @@ def test_loader_helpers_cover_project_root_and_ignored_reference_shapes(tmp_path
         }
     )
     monkeypatch.setattr(loader, "find_tapdb_core_config_dir", lambda: tmp_path / "core")
-    _templates, issues = loader.validate_template_configs([_write_pack(tmp_path / "cfg" / "sample" / "pack.json", {"templates": [payload]}).parents[1]], strict=True)
+    _templates, issues = loader.validate_template_configs(
+        [
+            _write_pack(
+                tmp_path / "cfg" / "sample" / "pack.json", {"templates": [payload]}
+            ).parents[1]
+        ],
+        strict=True,
+    )
 
     assert loader._extract_template_refs(payload) == ["container/*/*/1.0"]
     assert not any("Referenced template not found" in issue.message for issue in issues)
@@ -203,7 +212,10 @@ def test_validate_template_configs_collects_nested_reference_and_validator_error
                             {
                                 "relationship_type": "contains",
                                 "child_templates": [
-                                    {"template_code": "container/tube/missing/1.0", "count": 0}
+                                    {
+                                        "template_code": "container/tube/missing/1.0",
+                                        "count": 0,
+                                    }
                                 ],
                             }
                         ],
@@ -238,12 +250,19 @@ def test_validate_template_configs_flags_core_prefix_violations(
     monkeypatch.setattr(loader, "find_tapdb_core_config_dir", lambda: core)
     _write_pack(
         core / "container" / "container.json",
-        {"templates": [_template(category="container", type="tube", instance_prefix="SMP")]},
+        {
+            "templates": [
+                _template(category="container", type="tube", instance_prefix="SMP")
+            ]
+        },
     )
 
     _templates, issues = loader.validate_template_configs([core], strict=True)
 
-    assert any("TapDB bundled core templates must use reserved" in issue.message for issue in issues)
+    assert any(
+        "TapDB bundled core templates must use reserved" in issue.message
+        for issue in issues
+    )
 
 
 def test_validate_json_schema_reports_missing_dependency(monkeypatch):
@@ -252,7 +271,9 @@ def test_validate_json_schema_reports_missing_dependency(monkeypatch):
 
     loader._validate_json_schema({}, source_file="pack.json", issues=issues)
 
-    assert issues[0].message == "jsonschema is required for TapDB template-pack validation"
+    assert (
+        issues[0].message == "jsonschema is required for TapDB template-pack validation"
+    )
 
 
 def test_apply_seed_session_scope_sets_postgres_identity():
@@ -308,7 +329,14 @@ def test_prepare_seed_templates_rejects_bad_prefixes(tmp_path: Path):
         )
     with pytest.raises(ValueError, match="reserved TapDB operational prefix"):
         loader._prepare_seed_templates(
-            [_template(category="actor", type="user", subtype="system", instance_prefix="SYS")],
+            [
+                _template(
+                    category="actor",
+                    type="user",
+                    subtype="system",
+                    instance_prefix="SYS",
+                )
+            ],
             core_config_dir=tmp_path,
         )
 
@@ -411,7 +439,9 @@ def test_upsert_template_inserts_updates_and_skips(monkeypatch):
     )
     session = Session([None, changed_existing, same_existing, same_existing])
 
-    assert loader._template_model_for_discriminator("unknown") is loader.generic_template
+    assert (
+        loader._template_model_for_discriminator("unknown") is loader.generic_template
+    )
     inserted, created = loader._upsert_template(
         session, base, domain_code="Z", overwrite=True
     )
@@ -435,13 +465,21 @@ def test_upsert_template_inserts_updates_and_skips(monkeypatch):
     assert session.flushed >= 2
 
 
-def test_seed_templates_counts_outcomes_and_governance_hook(tmp_path: Path, monkeypatch):
+def test_seed_templates_counts_outcomes_and_governance_hook(
+    tmp_path: Path, monkeypatch
+):
     outcomes = iter(["inserted", "updated", "skipped"])
     ensured_prefixes = []
     governance_calls = []
 
-    monkeypatch.setattr(loader, "_validate_seed_ownership", lambda *args, **kwargs: None)
-    monkeypatch.setattr(loader, "ensure_instance_prefix_sequence", lambda session, prefix: ensured_prefixes.append(prefix))
+    monkeypatch.setattr(
+        loader, "_validate_seed_ownership", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        loader,
+        "ensure_instance_prefix_sequence",
+        lambda session, prefix: ensured_prefixes.append(prefix),
+    )
     monkeypatch.setattr(
         loader,
         "_upsert_template",
@@ -466,8 +504,18 @@ def test_seed_templates_counts_outcomes_and_governance_hook(tmp_path: Path, monk
                 subtype="definition",
                 instance_prefix="GVR",
             ),
-            _template(category="container", type="tube", subtype="small", instance_prefix="SMP"),
-            _template(category="container", type="tube", subtype="large", instance_prefix="SMP"),
+            _template(
+                category="container",
+                type="tube",
+                subtype="small",
+                instance_prefix="SMP",
+            ),
+            _template(
+                category="container",
+                type="tube",
+                subtype="large",
+                instance_prefix="SMP",
+            ),
         ],
         overwrite=True,
         core_config_dir=tmp_path / "core",

@@ -29,7 +29,9 @@ class _Query:
             [
                 row
                 for row in self._rows
-                if all(getattr(row, key, None) == value for key, value in kwargs.items())
+                if all(
+                    getattr(row, key, None) == value for key, value in kwargs.items()
+                )
             ]
         )
 
@@ -140,8 +142,14 @@ def test_governance_helpers_cover_defaults_and_editor_data(monkeypatch):
     )
 
     assert normalize_validator_ref(None) == DEFAULT_VALIDATOR_REF
-    assert validator_ref_for_object(session, _template(validator_ref="V@2"), "template") == "V@2"
-    assert validator_ref_for_object(session, SimpleNamespace(), "instance") == DEFAULT_VALIDATOR_REF
+    assert (
+        validator_ref_for_object(session, _template(validator_ref="V@2"), "template")
+        == "V@2"
+    )
+    assert (
+        validator_ref_for_object(session, SimpleNamespace(), "instance")
+        == DEFAULT_VALIDATOR_REF
+    )
 
     payload = editor_data(
         subject_ref="Z-SMP-1Q",
@@ -157,7 +165,9 @@ def test_governance_helpers_cover_defaults_and_editor_data(monkeypatch):
 
     monkeypatch.setattr(
         "daylily_tapdb.services.object_lookup.find_object_by_euid",
-        lambda _session, euid: (subject, "instance") if euid == "Z-SMP-1Q" else (None, None),
+        lambda _session, euid: (
+            (subject, "instance") if euid == "Z-SMP-1Q" else (None, None)
+        ),
     )
     object_payload = editor_data_for_object(session, "Z-SMP-1Q", context={"ui": "test"})
     assert object_payload["assessment"]["context"]["ui"] == "test"
@@ -172,7 +182,11 @@ def test_ensure_core_governance_objects_inserts_and_skips_existing_refs():
     )
     session = _Session(
         {
-            generic_template: [_template(category="governance", type_name="validator", subtype="definition")],
+            generic_template: [
+                _template(
+                    category="governance", type_name="validator", subtype="definition"
+                )
+            ],
             generic_instance: [existing],
         }
     )

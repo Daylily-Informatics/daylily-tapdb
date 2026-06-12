@@ -240,7 +240,9 @@ def test_runtime_helpers_handle_non_postgres_and_rollback_paths(caplog):
 
         def execute(self, stmt, params=None):
             del stmt, params
-            raise AssertionError("sqlite session should not receive search path or identity")
+            raise AssertionError(
+                "sqlite session should not receive search path or identity"
+            )
 
         def close(self):
             events.append("close")
