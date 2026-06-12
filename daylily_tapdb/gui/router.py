@@ -405,6 +405,16 @@ def _template_payload_and_code(template: generic_template) -> tuple[dict[str, An
     return payload, code
 
 
+def _template_properties_form_json(template_payload: dict[str, Any]) -> str:
+    json_addl = template_payload.get("json_addl")
+    if not isinstance(json_addl, dict):
+        return "{}"
+    properties = json_addl.get("properties")
+    if not isinstance(properties, dict):
+        return "{}"
+    return json.dumps(properties, indent=2, sort_keys=True)
+
+
 def _template_seed_pack(template: generic_template) -> dict[str, Any]:
     return {
         "templates": [
@@ -1306,7 +1316,9 @@ def create_tapdb_gui_router(
             template=template_payload,
             template_code=template_code,
             error=None,
-            form={},
+            form={
+                "properties_json": _template_properties_form_json(template_payload),
+            },
         )
 
     @router.post("/create/{template_euid}")

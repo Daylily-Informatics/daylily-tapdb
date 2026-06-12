@@ -420,6 +420,42 @@ def test_gui_create_routes_require_admin(monkeypatch):
     assert post_api.status_code == 403
 
 
+def test_gui_create_form_prefills_template_properties(monkeypatch):
+    template = _template(
+        euid="Z-SYS-1Q",
+        name="System User",
+        category="actor",
+        type_name="user",
+        subtype="system",
+        prefix="SYS",
+        json_addl={
+            "properties": {
+                "login_identifier": "",
+                "email": "",
+                "role": "user",
+            }
+        },
+    )
+    session = _Session(
+        {
+            generic_template: [template],
+            generic_instance: [],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.get("/create/Z-SYS-1Q")
+
+    assert response.status_code == 200
+    assert "actor/user/system/1.0" in response.text
+    assert "login_identifier" in response.text
+    assert "email" in response.text
+    assert "role" in response.text
+    assert "user" in response.text
+
+
 def test_gui_template_validation_api_reports_valid_level2_template(monkeypatch):
     client = _client(monkeypatch)
 
