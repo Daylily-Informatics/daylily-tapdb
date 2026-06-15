@@ -69,13 +69,15 @@ def test_select_user_columns_contains_expected_aliases_and_filters():
 
 
 def test_get_system_user_template_uid_returns_uid_and_uses_expected_params():
-    session = _FakeSession(row=(42,))
+    session = _FakeSession(row=(42, "SYS"))
 
     uid = m._get_system_user_template_uid(session)
 
     assert uid == 42
     stmt, params = session.calls[0]
     assert "FROM generic_template" in stmt
+    assert "NULLIF(instance_prefix, '')" in stmt
+    assert "uid DESC" in stmt
     assert params == {
         "category": m.SYSTEM_USER_TEMPLATE_CATEGORY,
         "type": m.SYSTEM_USER_TEMPLATE_TYPE,
@@ -87,6 +89,13 @@ def test_get_system_user_template_uid_returns_uid_and_uses_expected_params():
 def test_get_system_user_template_uid_raises_when_template_missing():
     session = _FakeSession(row=None)
     with pytest.raises(RuntimeError, match="Run template seed first"):
+        m._get_system_user_template_uid(session)
+
+
+def test_get_system_user_template_uid_raises_when_template_prefix_missing():
+    session = _FakeSession(row=(187, None))
+
+    with pytest.raises(RuntimeError, match="missing instance_prefix"):
         m._get_system_user_template_uid(session)
 
 

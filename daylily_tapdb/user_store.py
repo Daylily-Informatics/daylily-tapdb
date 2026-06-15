@@ -148,13 +148,17 @@ def _get_system_user_template_uid(session: Session) -> int:
     row = session.execute(
         text(
             """
-            SELECT uid
+            SELECT uid, instance_prefix
             FROM generic_template
             WHERE is_deleted = FALSE
               AND category = :category
               AND type = :type
               AND subtype = :subtype
               AND version = :version
+            ORDER BY
+              CASE WHEN NULLIF(instance_prefix, '') IS NULL THEN 1 ELSE 0 END,
+              CASE WHEN bstatus = 'active' THEN 0 ELSE 1 END,
+              uid DESC
             LIMIT 1
             """
         ),
@@ -169,6 +173,12 @@ def _get_system_user_template_uid(session: Session) -> int:
         raise RuntimeError(
             "Missing required actor template "
             f"{SYSTEM_USER_TEMPLATE_CODE}. Run template seed first."
+        )
+    if not str(row[1] or "").strip():
+        raise RuntimeError(
+            "Required actor template "
+            f"{SYSTEM_USER_TEMPLATE_CODE} is missing instance_prefix. "
+            "Run template seed/refresh first."
         )
     return int(row[0])
 
