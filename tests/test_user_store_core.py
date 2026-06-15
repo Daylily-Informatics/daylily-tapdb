@@ -77,6 +77,8 @@ def test_get_system_user_template_uid_returns_uid_and_uses_expected_params():
     stmt, params = session.calls[0]
     assert "FROM generic_template" in stmt
     assert "NULLIF(instance_prefix, '')" in stmt
+    assert "upper(NULLIF(instance_prefix, '')) = 'SYS'" in stmt
+    assert "issuer_app_code = 'daylily-tapdb'" in stmt
     assert "uid DESC" in stmt
     assert params == {
         "category": m.SYSTEM_USER_TEMPLATE_CATEGORY,
