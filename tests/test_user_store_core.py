@@ -78,7 +78,7 @@ def test_get_system_user_template_uid_returns_uid_and_uses_expected_params():
     assert "FROM generic_template" in stmt
     assert "NULLIF(instance_prefix, '')" in stmt
     assert "upper(NULLIF(instance_prefix, '')) = 'SYS'" in stmt
-    assert "issuer_app_code = 'daylily-tapdb'" in stmt
+    assert "AND issuer_app_code = 'daylily-tapdb'" in stmt
     assert "uid DESC" in stmt
     assert params == {
         "category": m.SYSTEM_USER_TEMPLATE_CATEGORY,
@@ -99,6 +99,16 @@ def test_get_system_user_template_uid_raises_when_template_prefix_missing():
 
     with pytest.raises(RuntimeError, match="missing instance_prefix"):
         m._get_system_user_template_uid(session)
+
+
+def test_get_system_user_template_uid_filters_to_tapdb_owned_sys_template():
+    session = _FakeSession(row=(42, "SYS"))
+
+    assert m._get_system_user_template_uid(session) == 42
+
+    stmt, _ = session.calls[0]
+    assert "AND issuer_app_code = 'daylily-tapdb'" in stmt
+    assert "AND upper(NULLIF(instance_prefix, '')) = 'SYS'" in stmt
 
 
 def test_set_last_login_writes_timestamp_and_uid(monkeypatch: pytest.MonkeyPatch):

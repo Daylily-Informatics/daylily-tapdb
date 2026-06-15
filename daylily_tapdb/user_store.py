@@ -155,13 +155,9 @@ def _get_system_user_template_uid(session: Session) -> int:
               AND type = :type
               AND subtype = :subtype
               AND version = :version
+              AND issuer_app_code = 'daylily-tapdb'
+              AND upper(NULLIF(instance_prefix, '')) = 'SYS'
             ORDER BY
-              CASE
-                WHEN upper(NULLIF(instance_prefix, '')) = 'SYS' THEN 0
-                WHEN NULLIF(instance_prefix, '') IS NOT NULL THEN 1
-                ELSE 2
-              END,
-              CASE WHEN issuer_app_code = 'daylily-tapdb' THEN 0 ELSE 1 END,
               CASE WHEN bstatus = 'active' THEN 0 ELSE 1 END,
               uid DESC
             LIMIT 1
