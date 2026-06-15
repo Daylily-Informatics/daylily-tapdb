@@ -28,6 +28,7 @@ SYSTEM_USER_TEMPLATE_CODE = (
     f"{SYSTEM_USER_TEMPLATE_CATEGORY}/{SYSTEM_USER_TEMPLATE_TYPE}/"
     f"{SYSTEM_USER_TEMPLATE_SUBTYPE}/{SYSTEM_USER_TEMPLATE_VERSION}"
 )
+SYSTEM_USER_OWNER_REPO = "daylily-tapdb"
 
 _SYSTEM_USER_WHERE = """
     gi.is_deleted = FALSE
@@ -41,6 +42,49 @@ _ACTIVE_EXPR = "COALESCE(NULLIF(gi.json_addl->>'is_active', '')::boolean, TRUE)"
 _REQUIRE_PASSWORD_CHANGE_EXPR = (
     "COALESCE(NULLIF(gi.json_addl->>'require_password_change', '')::boolean, FALSE)"
 )
+
+
+def _is_postgresql_session(session: Session) -> bool:
+    bind = getattr(session, "bind", None)
+    if bind is None and hasattr(session, "get_bind"):
+        try:
+            bind = session.get_bind()
+        except Exception:
+            bind = None
+    dialect = getattr(bind, "dialect", None)
+    return str(getattr(dialect, "name", "") or "").strip().lower() == "postgresql"
+
+
+def _current_owner_repo_name(session: Session) -> str:
+    row = session.execute(
+        text("SELECT current_setting('session.current_owner_repo_name', true)")
+    ).fetchone()
+    if not row or row[0] is None:
+        return ""
+    return str(row[0])
+
+
+def _set_local_owner_repo_name(session: Session, owner_repo_name: str) -> None:
+    session.execute(
+        text("SELECT set_config('session.current_owner_repo_name', :owner, true)"),
+        {"owner": owner_repo_name},
+    )
+
+
+def _prepare_system_user_insert_owner(session: Session) -> str | None:
+    """Use TapDB ownership for shared system-user inserts, then restore caller scope."""
+    if not _is_postgresql_session(session):
+        return None
+    previous_owner = _current_owner_repo_name(session)
+    if previous_owner != SYSTEM_USER_OWNER_REPO:
+        _set_local_owner_repo_name(session, SYSTEM_USER_OWNER_REPO)
+    return previous_owner
+
+
+def _restore_system_user_insert_owner(session: Session, previous_owner: str | None) -> None:
+    if previous_owner is None:
+        return
+    _set_local_owner_repo_name(session, previous_owner)
 
 
 @dataclass
@@ -327,7 +371,9 @@ def create_or_get(
         RETURNING uid
         """
     )
+    previous_owner: str | None = None
     try:
+        previous_owner = _prepare_system_user_insert_owner(session)
         inserted = session.execute(
             insert_sql,
             {
@@ -343,6 +389,8 @@ def create_or_get(
     except IntegrityError:
         # Another session may have created this login identifier concurrently.
         pass
+    finally:
+        _restore_system_user_insert_owner(session, previous_owner)
 
     existing = get_by_login_identifier(session, normalized_login, include_inactive=True)
     if existing:

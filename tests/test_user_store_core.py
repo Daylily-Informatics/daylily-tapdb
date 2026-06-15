@@ -39,6 +39,21 @@ class _FakeSession:
         return _RowResult(self.row)
 
 
+class _QueuedPostgresSession:
+    bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+    def __init__(self, rows):
+        self.rows = list(rows)
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def execute(self, stmt, params=None):
+        captured_params = dict(params or {})
+        self.calls.append((str(stmt), captured_params))
+        if self.rows:
+            return _RowResult(self.rows.pop(0))
+        return _RowResult(None)
+
+
 def test_normalize_login_identifier_normalizes_case_and_whitespace():
     assert m.normalize_login_identifier("  John@Example.com  ") == "john@example.com"
 
@@ -379,6 +394,43 @@ def test_create_or_get_inserts_new_user(monkeypatch: pytest.MonkeyPatch):
     assert params["template_uid"] == 5
     assert "new@example.com" in params["json_addl"]
     assert lookup_calls == [("new@example.com", True)]
+
+
+def test_create_or_get_switches_to_tapdb_owner_for_system_user_insert(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    session = _QueuedPostgresSession(rows=[("bloom",), ("daylily-tapdb",), (77,), ("bloom",)])
+    created_user = SimpleNamespace(uid=77, username="new@example.com")
+
+    monkeypatch.setattr(
+        m,
+        "get_by_login_identifier",
+        lambda _session, _login, include_inactive=False: None,
+    )
+    monkeypatch.setattr(m, "_get_system_user_template_uid", lambda _session: 187)
+    monkeypatch.setattr(m, "utc_now_iso", lambda: "2026-03-29T13:00:00+00:00")
+    monkeypatch.setattr(
+        m,
+        "get_by_uid",
+        lambda _session, uid, include_inactive=False: created_user,
+    )
+
+    user, created = m.create_or_get(
+        session,
+        login_identifier="New@example.com",
+        email="New@example.com",
+        display_name="New User",
+    )
+
+    assert created is True
+    assert user is created_user
+    statements = [stmt for stmt, _params in session.calls]
+    assert "current_setting('session.current_owner_repo_name', true)" in statements[0]
+    assert "set_config('session.current_owner_repo_name', :owner, true)" in statements[1]
+    assert session.calls[1][1] == {"owner": "daylily-tapdb"}
+    assert "INSERT INTO generic_instance" in statements[2]
+    assert "set_config('session.current_owner_repo_name', :owner, true)" in statements[3]
+    assert session.calls[3][1] == {"owner": "bloom"}
 
 
 def test_create_or_get_retries_lookup_after_integrity_error(
