@@ -747,13 +747,18 @@ def _upsert_template(
     template: dict[str, Any],
     *,
     domain_code: str,
+    owner_repo_name: str,
     overwrite: bool,
 ) -> tuple[str, generic_template]:
+    owner = str(owner_repo_name or "").strip()
+    if not owner:
+        raise ValueError("owner_repo_name is required for template upsert")
     category, type_name, subtype, version = _template_key(template)
     stmt = (
         select(generic_template)
         .where(
             generic_template.domain_code == domain_code,
+            generic_template.issuer_app_code == owner,
             generic_template.category == category,
             generic_template.type == type_name,
             generic_template.subtype == subtype,
@@ -955,6 +960,7 @@ def seed_templates(
                 session,
                 template,
                 domain_code=resolved_domain,
+                owner_repo_name=resolved_owner,
                 overwrite=overwrite,
             )
             if outcome == "inserted":

@@ -114,15 +114,21 @@ def _lineage_edge_payload(lineage: Any, *, service_name: str) -> dict[str, Any] 
     if parent is None or child is None:
         return None
     contract = describe_lineage_contract(lineage)
+    semantic_source = contract.get("semantic_source")
+    semantic_target = contract.get("semantic_target")
     return {
         "data": {
             "id": getattr(lineage, "euid", None),
             "euid": getattr(lineage, "euid", None),
             "source": getattr(child, "euid", None),
             "target": getattr(parent, "euid", None),
-            "semantic_source_euid": contract.get("source_euid")
+            "semantic_source_euid": (
+                semantic_source.get("euid") if isinstance(semantic_source, dict) else None
+            )
             or getattr(parent, "euid", None),
-            "semantic_target_euid": contract.get("target_euid")
+            "semantic_target_euid": (
+                semantic_target.get("euid") if isinstance(semantic_target, dict) else None
+            )
             or getattr(child, "euid", None),
             "relationship_type": getattr(lineage, "relationship_type", None)
             or "related",

@@ -1,171 +1,77 @@
 # tapdb (Templated Abstract Polymorphic Database)
 
-> An important mental shift is that templates describe shape, not business truth. Application repos own domain semantics and _TAPDB stores the substrate that those semantics sit on_.
+## Overview
 
-`tapdb-core` is the repository for TAPDB, a reusable PostgreSQL-backed substrate for typed, versioned, auditable entities. The Python import package remains `daylily_tapdb` for now.
+TapDB is the shared substrate library for typed templates, generic instances, EUIDs, lineage, audit, external references, and embeddable object GUI/API surfaces. It is not a workflow engine, clinical decision engine, or service-specific application.
 
-It is intentionally not a domain application. TAPDB provides the generic persistence and runtime mechanics that higher-level repos use to model their own business objects. Bloom is a motivating example of the kind of system TAPDB supports, but Bloom-specific workflow semantics do not belong in TAPDB itself.
+Current Dayhoff pin: `9.0.4`.
 
-At a high level TAPDB combines:
-
-- SQLAlchemy polymorphic models over a small, schema-stable core
-- template packs that define object shape and behavior
-- concrete instances created from those templates
-- lineage edges that describe relationships and history
-- audit, outbox, and inbox tables that preserve change and delivery state
-- explicit domain, application, and tenant scoping
-
-```mermaid
-flowchart TB
-    App["Client application repo\n(Bloom or another domain app)"]
-    CLI["tapdb CLI"]
-    Lib["daylily_tapdb library"]
-    DB["PostgreSQL\nschema + triggers + RLS"]
-    Core["tapdb-core repository\nTAPDB core substrate\nTemplates / Instances / Lineage / Audit / Outbox / Inbox"]
-    Domain["App-owned domain code\nTemplates, workflows, UI, integrations"]
-
-    App --> Domain
-    Domain --> CLI
-    Domain --> Lib
-    CLI --> Core
-    Lib --> Core
-    Core --> DB
-    DB --> Core
-```
+Active clients mount TapDB with `TapdbHostBridge` and `create_tapdb_gui_app` at `/tapdb` when they need generic object/template/lineage UI.
 
 ## Quickstart
 
-The tapdb-core repo follows a CLI-first workflow. Start by activating the repo environment:
-
 ```bash
+cd /Users/jmajor/projects/mega_dayhoff/repos_work/daylily-tapdb
 source ./activate
-```
-
-The canonical operational form for runtime commands is:
-
-```bash
-tapdb --config <path> ...
-```
-
-Smoke the installed CLI surface first:
-
-```bash
 tapdb --help
-tapdb version
-bash examples/readme/00_smoke.sh
+tapdb --config /abs/path/to/tapdb-config.yaml db schema apply
+tapdb --config /abs/path/to/tapdb-config.yaml db data seed
 ```
 
-For a fuller local bootstrap, use the namespaced config flow and then bring up the local runtime:
+Always pass an explicit `--config`. Do not rely on ambient `TAPDB_*`, `PG*`, default database names, or implicit localhost/public-schema behavior.
+
+## CLI Interface
+
+The primary CLI is `tapdb`. It covers schema apply/migrate, template seed/load/validate, generic object operations, admin server helpers, and runtime diagnostics.
+
+Common command families:
+
+| Family | Purpose |
+|---|---|
+| `tapdb db schema ...` | Apply or migrate schema through supported migration files. |
+| `tapdb db data ...` | Seed template/data packs through explicit config. |
+| `tapdb templates ...` | Validate and load template packs. |
+| `tapdb objects/lineage ...` | Work with generic instances and lineage where exposed by CLI. |
+| `tapdb admin ...` | Start or inspect admin/embedded GUI support where configured. |
+
+For TapDB, the CLI, embeddable JSON/action APIs, and embeddable GUI are alternate surfaces over the same object/template/lineage/audit substrate. Client services decide which surfaces they expose.
+
+## GUI
+
+TapDB provides an embeddable FastAPI GUI. The client-safe pattern is:
+
+```python
+from daylily_tapdb.web import TapdbHostBridge, create_tapdb_gui_app
+
+app.mount("/tapdb", create_tapdb_gui_app(config_path="/abs/path/to/tapdb-config.yaml", host_bridge=bridge))
+```
+
+Current GUI routes include `/tapdb/`, `/tapdb/search`, `/tapdb/templates`, `/tapdb/templates/new`, `/tapdb/create/{template_euid}`, `/tapdb/object/{euid}`, `/tapdb/object/{euid}/graph`, `/tapdb/object/{euid}/external-links/new`, and admin readiness/metrics pages.
+
+## API
+
+TapDB exposes matching embedded APIs for search, object detail, graph, edit JSON, status, lineage, external links, template validate, create instance, readiness, Meridian validation, and metrics.
+
+TapDB stores v0 graph metadata on existing lineage records using `json_addl.properties.v0_edge` when canonical v0 edge metadata is present. It does not add v0-specific tables.
+
+## Testing Info
+
+Focused checks:
 
 ```bash
-tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml \
-  config init \
-  --client-id <client-id> \
-  --database-name <database-name> \
-  --owner-repo-name <repo-name> \
-  --domain-code <domain-code> \
-  --domain-registry-path /abs/path/to/domain_code_registry.json \
-  --prefix-ownership-registry-path /abs/path/to/prefix_ownership_registry.json \
-  --engine-type local \
-  --host localhost \
-  --port 5533 \
-  --ui-port 8911 \
-  --user tapdb \
-  --database tapdb_<client-id>_<database-name> \
-  --schema-name tapdb_<client-id>_<database-name>
-
-tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml \
-  bootstrap local --no-gui
-
-tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml \
-  --json info
+python -m pytest tests -q
+python -m pytest tests/test_gui_json_editor.py -q
 ```
 
-`--json` is a root-global flag in the CLI v2 contract, so it belongs before the subcommand name.
+Client integration tests should prove mounted `/tapdb` routes through the host service, host-session auth, admin role mapping, template creation, object detail/edit, audit, graph, and external-link behavior.
 
-For a repo-local smoke path, this repo ships example registry fixtures under
-`daylily_tapdb/etc/`. Those files are suitable for single-repo local runs and
-for the README example scripts.
+## Technical Details, History, And Linkouts
 
-Meridian domain-code allocation is governed by the public
-[`lsmc-bio/meridian-registry`](https://github.com/lsmc-bio/meridian-registry)
-repository. TAPDB consumes `meridian-euid==0.4.7`, which pins that public
-domain registry at `0.1.1` and exposes explicit domain-availability checks:
+- [`docs/runtime-and-cli.md`](docs/runtime-and-cli.md): runtime and CLI details.
+- [`docs/integration-and-embedding.md`](docs/integration-and-embedding.md): service embedding guide.
+- [`docs/template-authoring.md`](docs/template-authoring.md): template authoring.
+- [`docs/dag_spec.md`](docs/dag_spec.md): DAG/lineage model.
+- [`docs/identity-and-scoping.md`](docs/identity-and-scoping.md): identity, EUID, tenant, and scope model.
+- [`docs/plans/`](docs/plans/): TapDB ledgers.
 
-```bash
-meridian-euid domain-check Q \
-  --registry-index /abs/path/to/meridian-registry/registry/generated/domains.json
-```
-
-The TapDB `domain_registry_path` and `prefix_ownership_registry_path` values
-remain explicit local runtime inputs. They validate the domain and prefix claims
-used by a concrete TapDB deployment; they do not replace the public domain
-registry, and prefix assignment remains owned by domain holders rather than
-centralized in `meridian-registry`.
-
-If optional workflow packs are present in the config, add `--include-workflow` to the bootstrap command. If you want the generated scripts rather than inline commands, use the companion examples under `examples/readme/`:
-
-- `examples/readme/00_smoke.sh`
-- `examples/readme/10_bootstrap_local.sh`
-- `examples/readme/20_python_api.py`
-
-## Mental Model
-
-TAPDB’s core model is deliberately small:
-
-- `template`: taxonomy and governance reference, stored as a `generic_template` row and usually seeded from JSON packs
-- `instance`: a concrete object, stored as a `generic_instance` row and created from a template
-- `lineage`: a directed relationship, stored as `generic_instance_lineage`
-- `audit`: immutable change history in `audit_log`
-- `outbox`: durable dispatch state for cross-service delivery
-- `inbox`: durable receipt state for inbound messages
-
-The library surface is built around those concepts:
-
-- `TemplateManager` resolves template codes to seeded templates
-- `InstanceFactory` materializes instances from templates
-- lineage helpers traverse parent/child relationships
-- outbox helpers enqueue, claim, deliver, and record message attempts
-
-The important mental shift is that TapDB stores evidence while governance evolves around that evidence. Template packs describe seedable taxonomy and governance references, not business truth; validators assess and repairs add explicit evidence rather than rewriting history. See [docs/architecture/evidence_vs_governance.md](docs/architecture/evidence_vs_governance.md) before changing validation, repair, terminology, relationship constraints, or editor governance.
-
-## Identity And Scope
-
-TAPDB uses multiple identity layers on purpose:
-
-- `uid` is the internal BIGINT primary key
-- `euid` is the external Meridian identifier used on labels, links, APIs, and human-facing references
-- `domain_code` scopes a row or identifier to a Meridian domain
-- `issuer_app_code` stores the persisted repo-owner token and is not part of the EUID string
-- `tenant_id` is the database tenancy scope and is separate from Meridian domain scoping
-
-Do not infer business meaning from an EUID prefix. EUIDs are opaque by design. The string helps validation and transport; the real meaning lives in database lookup and application context.
-
-## Boundaries
-
-TAPDB owns:
-
-- template seeding and validation
-- polymorphic persistence
-- lineage and graph traversal
-- audit and soft-delete behavior
-- outbox/inbox delivery state
-- CLI-managed runtime and database lifecycle
-
-Application repos own:
-
-- domain semantics
-- domain template packs
-- workflow rules and business policy
-- UI and API affordances on top of TAPDB
-- integration-specific behavior
-
-That boundary is the point of the project. TAPDB is the substrate, not the business system.
-
-## Docs
-
-- [docs/README.md](docs/README.md)
-- [docs/architecture.md](docs/architecture.md)
-- [docs/identity-and-scoping.md](docs/identity-and-scoping.md)
-- [docs/runtime-and-cli.md](docs/runtime-and-cli.md)
-- [docs/tapdb_gui_inclusion.md](docs/tapdb_gui_inclusion.md)
+TapDB remains substrate-first. Service-specific workflow rules belong in the owning service.

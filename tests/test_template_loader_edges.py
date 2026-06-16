@@ -443,16 +443,32 @@ def test_upsert_template_inserts_updates_and_skips(monkeypatch):
         loader._template_model_for_discriminator("unknown") is loader.generic_template
     )
     inserted, created = loader._upsert_template(
-        session, base, domain_code="Z", overwrite=True
+        session,
+        base,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        overwrite=True,
     )
     updated, updated_obj = loader._upsert_template(
-        session, base, domain_code="Z", overwrite=True
+        session,
+        base,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        overwrite=True,
     )
     skipped, skipped_obj = loader._upsert_template(
-        session, base, domain_code="Z", overwrite=True
+        session,
+        base,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        overwrite=True,
     )
     skipped_no_overwrite, _ = loader._upsert_template(
-        session, base, domain_code="Z", overwrite=False
+        session,
+        base,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        overwrite=False,
     )
 
     assert inserted == "inserted"
@@ -483,7 +499,7 @@ def test_seed_templates_counts_outcomes_and_governance_hook(
     monkeypatch.setattr(
         loader,
         "_upsert_template",
-        lambda session, template, *, domain_code, overwrite: (
+        lambda session, template, *, domain_code, owner_repo_name, overwrite: (
             next(outcomes),
             SimpleNamespace(),
         ),

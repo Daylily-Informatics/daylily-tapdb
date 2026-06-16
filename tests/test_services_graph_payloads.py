@@ -76,8 +76,8 @@ def _build_instance_graph():
             "properties": {
                 "v0_edge": {
                     "edge_type": "HOLDS_MATERIAL",
-                    "source_euid": "GX1",
-                    "target_euid": "GX2",
+                    "semantic_source": {"euid": "GX1", "role": "container"},
+                    "semantic_target": {"euid": "GX2", "role": "material"},
                     "asserted_by_system": "bloom",
                     "evidence_refs": [{"euid": "EVD-1"}],
                     "correlation_id": "corr-1",
