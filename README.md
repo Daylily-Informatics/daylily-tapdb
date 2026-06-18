@@ -1,12 +1,36 @@
-# tapdb (Templated Abstract Polymorphic Database)
+<p align="center">
+  <strong>TapDB</strong><br>
+  Templated Abstract Polymorphic Database for Dayhoff objects, EUIDs, lineage, audit, and embeddable GUI/API surfaces.
+</p>
+
+<p align="center">
+  <a href="docs/runtime-and-cli.md">Runtime</a> ·
+  <a href="docs/integration-and-embedding.md">Embedding</a> ·
+  <a href="docs/template-authoring.md">Templates</a> ·
+  <a href="docs/dag_spec.md">DAG</a>
+</p>
 
 ## Overview
 
 TapDB is the shared substrate library for typed templates, generic instances, EUIDs, lineage, audit, external references, and embeddable object GUI/API surfaces. It is not a workflow engine, clinical decision engine, or service-specific application.
 
-Current Dayhoff pin: `9.0.4`.
+Current Dayhoff pin: `9.0.5`.
 
 Active clients mount TapDB with `TapdbHostBridge` and `create_tapdb_gui_app` at `/tapdb` when they need generic object/template/lineage UI.
+
+## What It Does
+
+| Capability | Current surface |
+|---|---|
+| Templates and generic instances | CLI, Python APIs, embedded GUI, embedded JSON/action APIs |
+| EUID object detail | `/tapdb/object/{euid}` plus object APIs |
+| Lineage and external references | Graph/detail pages and lineage/external-link APIs |
+| Template creation and validation | GUI/API routes and template tests |
+| Audit and metrics | Object audit/admin readiness/metrics pages where configured |
+
+## How It Works
+
+TapDB provides substrate primitives only. Host services supply auth, styling, config path, and app identity through `TapdbHostBridge`; TapDB supplies mount-aware pages and actions over templates, generic instances, lineage, audit, and external refs. Business workflows, clinical policy, and service-specific validation stay in the owning service.
 
 ## Quickstart
 
