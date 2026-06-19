@@ -36,7 +36,7 @@ def _template_payload():
     return {
         "name": "x",
         "polymorphic_discriminator": "generic_template",
-        "category": "AGX",
+        "category": "container",
         "type": "tube",
         "subtype": "micro",
         "version": "1.0",
@@ -72,7 +72,7 @@ def test_upsert_template_inserts_when_missing(monkeypatch):
     assert outcome == "inserted"
     assert created in session.added
     assert created.instance_prefix == "AGX"
-    assert created.category == "AGX"
+    assert created.category == "container"
     assert created.domain_code == "Z"
     assert created.type == "tube"
     assert created.subtype == "micro"
@@ -125,7 +125,7 @@ def test_upsert_template_overwrite_false_skips_existing():
         name="existing",
         polymorphic_discriminator="generic_template",
         domain_code="Z",
-        category="AGX",
+        category="container",
         type="tube",
         subtype="micro",
         version="1.0",
@@ -160,7 +160,7 @@ def test_upsert_template_overwrite_true_updates_existing():
         name="existing",
         polymorphic_discriminator="generic_template",
         domain_code="Z",
-        category="AGX",
+        category="container",
         type="tube",
         subtype="micro",
         version="1.0",

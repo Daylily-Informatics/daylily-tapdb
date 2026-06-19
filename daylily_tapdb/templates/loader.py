@@ -666,6 +666,19 @@ def validate_template_configs(
                 )
                 normalized_instance_prefix = ""
             if normalized_instance_prefix:
+                category = str(template.get("category") or "").strip()
+                if category.upper() == normalized_instance_prefix:
+                    issues.append(
+                        ConfigIssue(
+                            level="error",
+                            source_file=source_file,
+                            template_code=code,
+                            message=(
+                                "Template category must be semantic; it cannot "
+                                "equal instance_prefix."
+                            ),
+                        )
+                    )
                 is_core_template = _is_source_under_dir(source_file, core_config_dir)
                 if (
                     is_core_template
@@ -851,6 +864,12 @@ def _prepare_seed_templates(
             )
 
         normalized_instance_prefix = _normalize_instance_prefix(instance_prefix)
+        category = str(item.get("category") or "").strip()
+        if category.upper() == normalized_instance_prefix:
+            raise ValueError(
+                f"Template {_template_code(item)!r} must use a semantic category; "
+                "category cannot equal instance_prefix."
+            )
         if (
             is_core_template
             and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES

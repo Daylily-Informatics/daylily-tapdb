@@ -2,14 +2,29 @@
   const themes = ["original", "light", "dark", "cbf"];
   const themeLabels = { cbf: "CBF" };
   const storageKey = "lsmc.ui.theme";
+  const serviceDefaults = {
+    "kahlo": "dark",
+    "bloom": "dark",
+    "dewey": "dark",
+    "qeo": "dark",
+    "ursa": "original",
+    "atlas": "original",
+    "zebra-day": "original",
+    "tapdb": "original",
+  };
+
+  function defaultTheme() {
+    const service = document.documentElement.dataset.lsmcService || "tapdb";
+    return serviceDefaults[service] || "original";
+  }
 
   function currentTheme() {
     const stored = window.localStorage.getItem(storageKey);
-    return themes.includes(stored) ? stored : "original";
+    return themes.includes(stored) ? stored : defaultTheme();
   }
 
   function applyTheme(theme) {
-    const value = themes.includes(theme) ? theme : "original";
+    const value = themes.includes(theme) ? theme : defaultTheme();
     document.documentElement.dataset.theme = value;
     window.localStorage.setItem(storageKey, value);
   }
