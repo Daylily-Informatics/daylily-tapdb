@@ -86,7 +86,7 @@ def test_core_bundle_includes_substrate_generic_set_template():
 
     assert len(rows) == 1
     row = rows[0]
-    assert row["instance_prefix"] == "SET"
+    assert row["instance_prefix"] == "GSE"
     assert row["instance_polymorphic_identity"] == "generic_instance"
     assert "workflow" not in json.dumps(row["json_addl"]).lower()
 

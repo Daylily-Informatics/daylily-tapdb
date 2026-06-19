@@ -61,7 +61,7 @@ TEMPLATE_MODEL_BY_DISCRIMINATOR = {
     "generic_template": generic_template,
 }
 
-_CORE_TEMPLATE_PREFIXES = {"SYS", "MSG", "XRF", "GVR", "SET"}
+_CORE_TEMPLATE_PREFIXES = {"SYS", "MSG", "XRF", "GVR", "GSE"}
 
 
 def _normalize_domain_scope(domain_code: str | None) -> str:

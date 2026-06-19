@@ -8,7 +8,7 @@
       "type": "generic",
       "subtype": "generic",
       "version": "1.0",
-      "instance_prefix": "SET",
+      "instance_prefix": "GSE",
       "instance_polymorphic_identity": "generic_instance",
       "validator_ref": "UNIVERSAL_PASS@1",
       "is_singleton": false,
