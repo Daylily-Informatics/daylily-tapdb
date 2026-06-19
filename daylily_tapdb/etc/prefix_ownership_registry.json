@@ -23,6 +23,9 @@
       "GVR": {
         "issuer_app_code": "daylily-tapdb"
       },
+      "SET": {
+        "issuer_app_code": "daylily-tapdb"
+      },
       "ACT": {
         "issuer_app_code": "daylily-tapdb"
       },

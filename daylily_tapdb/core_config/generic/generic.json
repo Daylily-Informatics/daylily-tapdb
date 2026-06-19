@@ -1,4 +1,29 @@
 {
-  "$comment": "Reserved placeholder pack. Generic templates were removed from the hard-cut core bundle.",
-  "templates": []
+  "$comment": "TapDB substrate-level generic objects. These templates are intentionally non-workflow-specific.",
+  "templates": [
+    {
+      "name": "Generic Set",
+      "polymorphic_discriminator": "generic_template",
+      "category": "set",
+      "type": "generic",
+      "subtype": "generic",
+      "version": "1.0",
+      "instance_prefix": "SET",
+      "instance_polymorphic_identity": "generic_instance",
+      "validator_ref": "UNIVERSAL_PASS@1",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Substrate-level collection of EUIDs or external references. Membership is represented by lineage records.",
+        "properties": {
+          "name": "",
+          "description": "",
+          "set_kind": "generic",
+          "members": [],
+          "external_members": [],
+          "metadata": {}
+        }
+      }
+    }
+  ]
 }

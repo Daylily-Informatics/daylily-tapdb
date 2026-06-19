@@ -36,6 +36,7 @@ def test_core_bundle_only_seeds_operational_templates():
         "governance/validator/definition/1.0",
         "message/webhook/event/1.0",
         "reference/external_identifier/tapdb_object/1.0",
+        "set/generic/generic/1.0",
     }
 
 
@@ -62,6 +63,32 @@ def test_core_bundle_taxonomy_is_decoupled_from_instance_prefixes():
     ]
 
     assert offenders == []
+
+
+def test_core_bundle_includes_substrate_generic_set_template():
+    from daylily_tapdb.templates.loader import (
+        find_tapdb_core_config_dir,
+        load_template_configs,
+    )
+
+    templates = load_template_configs(find_tapdb_core_config_dir())
+    rows = [
+        template
+        for template in templates
+        if (
+            template["category"],
+            template["type"],
+            template["subtype"],
+            template["version"],
+        )
+        == ("set", "generic", "generic", "1.0")
+    ]
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["instance_prefix"] == "SET"
+    assert row["instance_polymorphic_identity"] == "generic_instance"
+    assert "workflow" not in json.dumps(row["json_addl"]).lower()
 
 
 def test_packaged_registry_fixtures_match_core_prefix_ownership():
