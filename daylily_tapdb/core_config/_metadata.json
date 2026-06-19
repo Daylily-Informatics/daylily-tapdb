@@ -14,6 +14,7 @@
   "euid_prefixes": {
     "system_user": "SYS",
     "system_message": "MSG",
-    "external_reference": "XRF"
+    "external_reference": "XRF",
+    "generic_set_instance": "SET"
   }
 }
