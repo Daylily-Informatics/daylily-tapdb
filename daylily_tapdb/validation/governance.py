@@ -173,30 +173,36 @@ def ensure_core_governance_objects(
     inserted = 0
     for spec in specs:
         category, type_name, subtype, version = _template_key(spec["template_code"])
-        template = (
-            session.query(generic_template)
-            .filter(
-                generic_template.domain_code == domain_code,
-                generic_template.category == category,
-                generic_template.type == type_name,
-                generic_template.subtype == subtype,
-                generic_template.version == version,
-                generic_template.is_deleted.is_(False),
+        with session.no_autoflush:
+            template = (
+                session.query(generic_template)
+                .filter(
+                    generic_template.domain_code == domain_code,
+                    generic_template.category == category,
+                    generic_template.type == type_name,
+                    generic_template.subtype == subtype,
+                    generic_template.version == version,
+                    generic_template.issuer_app_code == "daylily-tapdb",
+                    generic_template.is_deleted.is_(False),
+                )
+                .first()
             )
-            .first()
-        )
         if template is None:
             continue
+        if not str(getattr(template, "instance_prefix", "") or "").strip():
+            template.instance_prefix = "GVR"
+            session.flush()
 
-        existing = (
-            session.query(generic_instance)
-            .filter(
-                generic_instance.domain_code == domain_code,
-                generic_instance.template_uid == template.uid,
-                generic_instance.is_deleted.is_(False),
+        with session.no_autoflush:
+            existing = (
+                session.query(generic_instance)
+                .filter(
+                    generic_instance.domain_code == domain_code,
+                    generic_instance.template_uid == template.uid,
+                    generic_instance.is_deleted.is_(False),
+                )
+                .all()
             )
-            .all()
-        )
         ref = spec["ref"]
         if any(
             isinstance(instance.json_addl, dict)

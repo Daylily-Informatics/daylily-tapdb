@@ -92,6 +92,7 @@ def resolve_host_shell(
     if bridge is None:
         return {
             "active": False,
+            "service_name": "tapdb",
             "app_name": "TAPDB",
             "shell_title": "",
             "shell_subtitle": "",
@@ -105,6 +106,7 @@ def resolve_host_shell(
 
     return {
         "active": True,
+        "service_name": str(bridge.service_name or "tapdb").strip() or "tapdb",
         "app_name": str(bridge.app_name or "TAPDB").strip() or "TAPDB",
         "shell_title": str(bridge.shell_title or "").strip(),
         "shell_subtitle": str(bridge.shell_subtitle or "").strip(),

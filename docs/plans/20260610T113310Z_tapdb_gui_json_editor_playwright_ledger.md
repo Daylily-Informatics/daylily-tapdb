@@ -24,3 +24,17 @@ Fix the focus-losing JSON editor on the embeddable TapDB GUI, use a public clean
 | GUI-PW-001 | Tests | Add pytest Playwright fixture for mounted TapDB GUI using in-process app/server | SUCCESS | `tests/test_gui_playwright.py`; starts mounted `/tapdb` FastAPI host on random port and launches Chromium |
 | GUI-PW-002 | Tests | Cover search, templates/new, validate/save, create-from-template, object detail edit/status/lineage, external link, graph, Meridian, metrics, admin gates | SUCCESS | `tests/test_gui_playwright.py` covers JSON editor focus, validate/save, search, templates, create, detail edits, JSON save, status, lineage, external link, graph, readiness, Meridian, metrics, admin 403 gates |
 | GUI-PW-003 | Verification | Run GUI unit tests and Playwright tests | SUCCESS | `python -m pytest tests/test_gui_embedded.py tests/test_gui_playwright.py tests/test_template_loader.py -q` -> `45 passed`; `python -m pytest tests/ -q` -> `705 passed, 14 skipped` |
+
+## 2026-06-23 Administrative Terminalization Amendment
+
+Approved by the user after the last-two-week completion audit. This amendment is docs-only: it does not change source code, runtime behavior, deployment config, service data, or release tags. The historical rows above are preserved for traceability, but the stale nonterminal states listed below are terminalized for current planning purposes.
+
+- Audit report: `dayhoff/docs/plans/20260623T120000Z_last_two_week_plan_completion_triage.md`
+- Default terminal disposition: `SUPERSEDED`
+- Basis: Later source, release, deployment, and live evidence supersede the stale row states preserved above.
+
+| ID | Prior Status | Prior Ledger % | Terminal Status | Terminal Basis |
+|---|---|---:|---|---|
+| `PLAN` | `UNPARSED` | 0 | `SUPERSEDED` | SUPERSEDED BY tapdb 9 0 9 and atlas tapdb gui evidence. Requirement: Plan-level note / no parseable task table |
+
+Terminal state after this amendment: 100% for the stale rows listed above; no implementation work remains in this historical ledger.

@@ -19,9 +19,9 @@ def _template(**overrides):
     payload = {
         "name": "Sample",
         "polymorphic_discriminator": "generic_template",
-        "category": "SMP",
-        "type": "sample",
-        "subtype": "tube",
+        "category": "sample",
+        "type": "tube",
+        "subtype": "generic",
         "version": "1.0",
         "instance_prefix": "SMP",
         "instance_polymorphic_identity": "generic_instance",
@@ -115,7 +115,7 @@ def test_template_ref_extraction_and_duplicate_keys():
 
     assert "ACT/action/do/1.0" in refs
     assert "WEL/container/well2/1.0" in refs
-    assert duplicates[("SMP", "sample", "tube", "1.0")] == ["a.json", "b.json"]
+    assert duplicates[("sample", "tube", "generic", "1.0")] == ["a.json", "b.json"]
 
 
 def test_loader_helpers_cover_project_root_and_ignored_reference_shapes(
@@ -341,6 +341,46 @@ def test_prepare_seed_templates_rejects_bad_prefixes(tmp_path: Path):
         )
 
 
+def test_prepare_seed_templates_rejects_prefix_as_category(tmp_path: Path):
+    with pytest.raises(ValueError, match="semantic category"):
+        loader._prepare_seed_templates(
+            [
+                _template(
+                    category="SMP",
+                    type="tube",
+                    subtype="generic",
+                    instance_prefix="SMP",
+                )
+            ],
+            core_config_dir=tmp_path,
+        )
+
+
+def test_validate_template_configs_reports_prefix_as_category(
+    tmp_path: Path, monkeypatch
+):
+    core = tmp_path / "core"
+    client = tmp_path / "client"
+    monkeypatch.setattr(loader, "find_tapdb_core_config_dir", lambda: core)
+    _write_pack(
+        client / "sample" / "templates.json",
+        {
+            "templates": [
+                _template(
+                    category="SMP",
+                    type="tube",
+                    subtype="generic",
+                    instance_prefix="SMP",
+                )
+            ]
+        },
+    )
+
+    _templates, issues = loader.validate_template_configs([client], strict=True)
+
+    assert any("category must be semantic" in issue.message for issue in issues)
+
+
 def test_validate_seed_ownership_rejects_missing_prefix(tmp_path: Path):
     domain_registry = tmp_path / "domain.json"
     prefix_registry = tmp_path / "prefix.json"
@@ -443,16 +483,32 @@ def test_upsert_template_inserts_updates_and_skips(monkeypatch):
         loader._template_model_for_discriminator("unknown") is loader.generic_template
     )
     inserted, created = loader._upsert_template(
-        session, base, domain_code="Z", overwrite=True
+        session,
+        base,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        overwrite=True,
     )
     updated, updated_obj = loader._upsert_template(
-        session, base, domain_code="Z", overwrite=True
+        session,
+        base,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        overwrite=True,
     )
     skipped, skipped_obj = loader._upsert_template(
-        session, base, domain_code="Z", overwrite=True
+        session,
+        base,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        overwrite=True,
     )
     skipped_no_overwrite, _ = loader._upsert_template(
-        session, base, domain_code="Z", overwrite=False
+        session,
+        base,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        overwrite=False,
     )
 
     assert inserted == "inserted"
@@ -483,7 +539,7 @@ def test_seed_templates_counts_outcomes_and_governance_hook(
     monkeypatch.setattr(
         loader,
         "_upsert_template",
-        lambda session, template, *, domain_code, overwrite: (
+        lambda session, template, *, domain_code, owner_repo_name, overwrite: (
             next(outcomes),
             SimpleNamespace(),
         ),

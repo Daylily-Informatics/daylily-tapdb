@@ -918,8 +918,10 @@ def _add_object_lineage(
         metadata = {
             **metadata,
             "edge_type": metadata.get("edge_type") or relationship_type,
-            "source_euid": metadata.get("source_euid") or parent.euid,
-            "target_euid": metadata.get("target_euid") or child.euid,
+            "semantic_source": metadata.get("semantic_source")
+            or {"euid": parent.euid, "role": "source"},
+            "semantic_target": metadata.get("semantic_target")
+            or {"euid": child.euid, "role": "target"},
         }
     try:
         lineage = _new_lineage(

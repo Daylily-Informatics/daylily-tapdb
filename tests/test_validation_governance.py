@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -68,6 +69,10 @@ class _Session:
                 obj.uid = index
             if getattr(obj, "euid", None) is None:
                 obj.euid = f"Z-GVR-{index}Q"
+
+    @property
+    def no_autoflush(self):
+        return nullcontext()
 
 
 def _template(

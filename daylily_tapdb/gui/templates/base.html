@@ -1,7 +1,8 @@
 <!doctype html>
-<html lang="en" data-lsmc-service="tapdb" data-theme="original">
+{% set shell = tapdb_gui_host_shell(request) %}
+{% set default_theme = 'dark' if shell.service_name in ['kahlo', 'bloom', 'dewey', 'qeo'] else 'original' %}
+<html lang="en" data-lsmc-service="{{ shell.service_name | default('tapdb') }}" data-theme="{{ default_theme }}">
 <head>
-  {% set shell = tapdb_gui_host_shell(request) %}
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}TapDB{% endblock %}</title>

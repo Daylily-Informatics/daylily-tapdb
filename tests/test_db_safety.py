@@ -36,7 +36,7 @@ def _template_payload():
     return {
         "name": "x",
         "polymorphic_discriminator": "generic_template",
-        "category": "AGX",
+        "category": "container",
         "type": "tube",
         "subtype": "micro",
         "version": "1.0",
@@ -65,18 +65,57 @@ def test_upsert_template_inserts_when_missing(monkeypatch):
             "instance_prefix": "agx",
         },
         domain_code="Z",
+        owner_repo_name="lsmc-atlas",
         overwrite=True,
     )
 
     assert outcome == "inserted"
     assert created in session.added
     assert created.instance_prefix == "AGX"
-    assert created.category == "AGX"
+    assert created.category == "container"
     assert created.domain_code == "Z"
     assert created.type == "tube"
     assert created.subtype == "micro"
     assert created.version == "1.0"
     assert session.flush_count == 1
+
+
+def test_upsert_template_lookup_is_owner_scoped(monkeypatch):
+    import daylily_tapdb.templates.loader as m
+
+    class _FakeTemplate:
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    monkeypatch.setattr(
+        m, "_template_model_for_discriminator", lambda _disc: _FakeTemplate
+    )
+    session = _FakeUpsertSession(existing=None)
+
+    m._upsert_template(
+        session,
+        template=_template_payload(),
+        domain_code="Z",
+        owner_repo_name="lsmc-atlas",
+        overwrite=True,
+    )
+
+    lookup_sql = str(session.statements[0])
+    assert "generic_template.issuer_app_code = :issuer_app_code_1" in lookup_sql
+
+
+def test_upsert_template_rejects_missing_owner():
+    import daylily_tapdb.templates.loader as m
+
+    with pytest.raises(ValueError, match="owner_repo_name is required"):
+        m._upsert_template(
+            _FakeUpsertSession(existing=None),
+            template=_template_payload(),
+            domain_code="Z",
+            owner_repo_name="",
+            overwrite=True,
+        )
 
 
 def test_upsert_template_overwrite_false_skips_existing():
@@ -86,7 +125,7 @@ def test_upsert_template_overwrite_false_skips_existing():
         name="existing",
         polymorphic_discriminator="generic_template",
         domain_code="Z",
-        category="AGX",
+        category="container",
         type="tube",
         subtype="micro",
         version="1.0",
@@ -101,7 +140,11 @@ def test_upsert_template_overwrite_false_skips_existing():
     session = _FakeUpsertSession(existing=existing)
 
     outcome, returned = m._upsert_template(
-        session, template=_template_payload(), domain_code="Z", overwrite=False
+        session,
+        template=_template_payload(),
+        domain_code="Z",
+        owner_repo_name="lsmc-atlas",
+        overwrite=False,
     )
 
     assert outcome == "skipped"
@@ -117,7 +160,7 @@ def test_upsert_template_overwrite_true_updates_existing():
         name="existing",
         polymorphic_discriminator="generic_template",
         domain_code="Z",
-        category="AGX",
+        category="container",
         type="tube",
         subtype="micro",
         version="1.0",
@@ -140,6 +183,7 @@ def test_upsert_template_overwrite_true_updates_existing():
             "bstatus": "active",
         },
         domain_code="Z",
+        owner_repo_name="lsmc-atlas",
         overwrite=True,
     )
 

@@ -1147,7 +1147,7 @@ def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
     assert lineage_response.json()["parent_euid"] == "Z-PAR-22Q"
     assert lineage_response.json()["child_euid"] == "Z-SMP-1Q"
     assert lineage_response.json()["relationship_type"] == "contains"
-    assert lineage_response.json()["v0_edge"]["compliance_status"] == "legacy_alias"
+    assert lineage_response.json()["v0_edge"]["compliance_status"] == "generic"
     assert lineage_response.json()["assessment"]["state"] == "valid_current"
     assert lineage_response.json()["assessment"]["subject_mutated"] is False
     assert session.added[0].json_addl["properties"]["subject_mutated"] is False
@@ -1304,8 +1304,8 @@ def test_gui_lineage_api_creates_v0_edge_with_evidence(monkeypatch):
     payload = response.json()
     assert payload["v0_edge"]["compliance_status"] == "canonical"
     assert payload["v0_edge"]["edge_type"] == "HOLDS_MATERIAL"
-    assert payload["v0_edge"]["source_euid"] == "Z-PAR-22Q"
-    assert payload["v0_edge"]["target_euid"] == "Z-SMP-1Q"
+    assert payload["v0_edge"]["semantic_source"]["euid"] == "Z-PAR-22Q"
+    assert payload["v0_edge"]["semantic_target"]["euid"] == "Z-SMP-1Q"
     assert session.added[0].json_addl["properties"]["v0_edge"]["evidence_refs"] == [
         {"euid": "Z-EVD-1Q"}
     ]

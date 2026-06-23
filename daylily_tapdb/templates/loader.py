@@ -61,7 +61,7 @@ TEMPLATE_MODEL_BY_DISCRIMINATOR = {
     "generic_template": generic_template,
 }
 
-_CORE_TEMPLATE_PREFIXES = {"SYS", "MSG", "XRF", "GVR"}
+_CORE_TEMPLATE_PREFIXES = {"SYS", "MSG", "XRF", "GVR", "GSE"}
 
 
 def _normalize_domain_scope(domain_code: str | None) -> str:
@@ -666,6 +666,19 @@ def validate_template_configs(
                 )
                 normalized_instance_prefix = ""
             if normalized_instance_prefix:
+                category = str(template.get("category") or "").strip()
+                if category.upper() == normalized_instance_prefix:
+                    issues.append(
+                        ConfigIssue(
+                            level="error",
+                            source_file=source_file,
+                            template_code=code,
+                            message=(
+                                "Template category must be semantic; it cannot "
+                                "equal instance_prefix."
+                            ),
+                        )
+                    )
                 is_core_template = _is_source_under_dir(source_file, core_config_dir)
                 if (
                     is_core_template
@@ -747,13 +760,18 @@ def _upsert_template(
     template: dict[str, Any],
     *,
     domain_code: str,
+    owner_repo_name: str,
     overwrite: bool,
 ) -> tuple[str, generic_template]:
+    owner = str(owner_repo_name or "").strip()
+    if not owner:
+        raise ValueError("owner_repo_name is required for template upsert")
     category, type_name, subtype, version = _template_key(template)
     stmt = (
         select(generic_template)
         .where(
             generic_template.domain_code == domain_code,
+            generic_template.issuer_app_code == owner,
             generic_template.category == category,
             generic_template.type == type_name,
             generic_template.subtype == subtype,
@@ -846,6 +864,12 @@ def _prepare_seed_templates(
             )
 
         normalized_instance_prefix = _normalize_instance_prefix(instance_prefix)
+        category = str(item.get("category") or "").strip()
+        if category.upper() == normalized_instance_prefix:
+            raise ValueError(
+                f"Template {_template_code(item)!r} must use a semantic category; "
+                "category cannot equal instance_prefix."
+            )
         if (
             is_core_template
             and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES
@@ -955,6 +979,7 @@ def seed_templates(
                 session,
                 template,
                 domain_code=resolved_domain,
+                owner_repo_name=resolved_owner,
                 overwrite=overwrite,
             )
             if outcome == "inserted":

@@ -24,8 +24,8 @@ def test_build_v0_edge_metadata_requires_evidence() -> None:
     with pytest.raises(ValueError, match="evidence_refs"):
         build_v0_edge_metadata(
             edge_type="HOLDS_MATERIAL",
-            source_euid="Z-BCT-1",
-            target_euid="Z-BNG-1",
+            semantic_source={"euid": "Z-BCT-1", "role": "source"},
+            semantic_target={"euid": "Z-BNG-1", "role": "target"},
             asserted_by_system="bloom",
             evidence_refs=[],
             correlation_id="corr-1",
@@ -36,8 +36,8 @@ def test_build_v0_edge_metadata_requires_evidence() -> None:
 def test_build_v0_edge_metadata_normalizes_legacy_evidence_refs() -> None:
     metadata = build_v0_edge_metadata(
         edge_type="HOLDS_MATERIAL",
-        source_euid="Z-BCT-1",
-        target_euid="Z-BNG-1",
+        semantic_source={"euid": "Z-BCT-1", "role": "source"},
+        semantic_target={"euid": "Z-BNG-1", "role": "target"},
         asserted_by_system="bloom",
         evidence_refs=["Z-EVD-1"],
         correlation_id="corr-1",
@@ -46,18 +46,22 @@ def test_build_v0_edge_metadata_normalizes_legacy_evidence_refs() -> None:
 
     assert metadata["contract"] == "LSMC_V0"
     assert metadata["edge_type"] == "HOLDS_MATERIAL"
+    assert metadata["semantic_source"] == {"euid": "Z-BCT-1", "role": "source"}
+    assert metadata["semantic_target"] == {"euid": "Z-BNG-1", "role": "target"}
+    assert "source_euid" not in metadata
+    assert "target_euid" not in metadata
     assert metadata["evidence_refs"] == [{"euid": "Z-EVD-1"}]
     assert metadata_location_label() == "json_addl.properties.v0_edge"
     assert is_strict_canonical_edge_type("HOLDS_MATERIAL")
     assert not is_strict_canonical_edge_type("holds_material")
 
 
-def test_describe_lineage_contract_marks_legacy_aliases() -> None:
+def test_describe_lineage_contract_does_not_alias_legacy_names() -> None:
     payload = describe_lineage_contract(_Lineage(relationship_type="order_patient"))
 
-    assert payload["compliance_status"] == "legacy_alias"
-    assert payload["edge_type"] == "TEST_HAS_SUBJECT"
-    assert canonical_edge_type("fulfillment_item") == "HAS_SLOT"
+    assert payload["compliance_status"] == "generic"
+    assert canonical_edge_type("fulfillment_item") is None
+    assert canonical_edge_type("HOLDS_MATERIAL") == "HOLDS_MATERIAL"
 
 
 def test_describe_lineage_contract_marks_canonical_metadata() -> None:
@@ -67,8 +71,8 @@ def test_describe_lineage_contract_marks_canonical_metadata() -> None:
             "properties": {
                 "v0_edge": {
                     "edge_type": "HOLDS_MATERIAL",
-                    "source_euid": "Z-BCT-1",
-                    "target_euid": "Z-BNG-1",
+                    "semantic_source": {"euid": "Z-BCT-1", "role": "container"},
+                    "semantic_target": {"euid": "Z-BNG-1", "role": "material"},
                     "asserted_by_system": "bloom",
                     "evidence_refs": [{"euid": "Z-EVD-1"}],
                     "correlation_id": "corr-1",
@@ -82,15 +86,15 @@ def test_describe_lineage_contract_marks_canonical_metadata() -> None:
     payload = describe_lineage_contract(lineage)
 
     assert payload["compliance_status"] == "canonical"
-    assert payload["source_euid"] == "Z-BCT-1"
-    assert payload["target_euid"] == "Z-BNG-1"
+    assert payload["semantic_source"]["euid"] == "Z-BCT-1"
+    assert payload["semantic_target"]["euid"] == "Z-BNG-1"
 
 
 def test_build_v0_edge_metadata_rejects_invalid_required_fields() -> None:
     base = {
         "edge_type": "HOLDS_MATERIAL",
-        "source_euid": "Z-BCT-1",
-        "target_euid": "Z-BNG-1",
+        "semantic_source": {"euid": "Z-BCT-1", "role": "source"},
+        "semantic_target": {"euid": "Z-BNG-1", "role": "target"},
         "asserted_by_system": "bloom",
         "evidence_refs": [{"euid": "Z-EVD-1"}],
         "correlation_id": "corr-1",
@@ -99,8 +103,10 @@ def test_build_v0_edge_metadata_rejects_invalid_required_fields() -> None:
 
     with pytest.raises(ValueError, match="Unsupported LSMC v0 edge type"):
         build_v0_edge_metadata(**{**base, "edge_type": "not-a-contract-edge"})
-    with pytest.raises(ValueError, match="source_euid is required"):
-        build_v0_edge_metadata(**{**base, "source_euid": " "})
+    with pytest.raises(ValueError, match=r"semantic_source\.euid is required"):
+        build_v0_edge_metadata(
+            **{**base, "semantic_source": {"euid": " ", "role": "source"}}
+        )
     with pytest.raises(ValueError, match=r"evidence_refs\[0\] is empty"):
         build_v0_edge_metadata(**{**base, "evidence_refs": [" "]})
     with pytest.raises(ValueError, match=r"evidence_refs\[0\]\.euid is required"):
@@ -114,9 +120,9 @@ def test_attach_and_describe_v0_metadata_edge_cases() -> None:
     metadata = attach_v0_edge_metadata(
         lineage,
         {
-            "edge_type": "contains",
-            "source_euid": "Z-BCT-1",
-            "target_euid": "Z-BNG-1",
+            "edge_type": "CONTAINS",
+            "semantic_source": {"euid": "Z-BCT-1", "role": "container"},
+            "semantic_target": {"euid": "Z-BNG-1", "role": "material"},
             "asserted_by_system": "bloom",
             "evidence_refs": [{"root_euid": "Z-EVD-1", "kind": "source"}],
             "correlation_id": "corr-1",
@@ -140,8 +146,8 @@ def test_attach_and_describe_v0_metadata_edge_cases() -> None:
             "properties": {
                 "v0_edge": {
                     "edge_type": "BAD",
-                    "source_euid": "Z-BCT-1",
-                    "target_euid": "Z-BNG-1",
+                    "semantic_source": {"euid": "Z-BCT-1", "role": "container"},
+                    "semantic_target": {"euid": "Z-BNG-1", "role": "material"},
                     "asserted_by_system": "bloom",
                     "evidence_refs": [{"euid": "Z-EVD-1"}],
                     "correlation_id": "corr-1",
@@ -158,3 +164,4 @@ def test_attach_and_describe_v0_metadata_edge_cases() -> None:
         == "generic"
     )
     assert canonical_edge_type(None) is None
+    assert canonical_edge_type("contains") is None
