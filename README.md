@@ -44,6 +44,14 @@ tapdb --config /abs/path/to/tapdb-config.yaml db data seed
 
 Always pass an explicit `--config`. Do not rely on ambient `TAPDB_*`, `PG*`, default database names, or implicit localhost/public-schema behavior.
 
+Runnable examples:
+
+- [`examples/readme/00_smoke.sh`](examples/readme/00_smoke.sh): activation and CLI smoke check.
+- [`examples/readme/10_bootstrap_local.sh`](examples/readme/10_bootstrap_local.sh): explicit local config and `bootstrap local --no-gui`.
+- [`examples/readme/20_python_api.py`](examples/readme/20_python_api.py): minimal `TAPDBConnection`, `TemplateManager`, and `InstanceFactory` usage.
+
+The canonical command shape is `tapdb --config <path> ...`; machine-readable inspection surfaces should expose `--json info` where supported. Meridian governance should remain aligned with `lsmc-bio/meridian-registry`, for example `meridian-euid domain-check Q`.
+
 ## CLI Interface
 
 The primary CLI is `tapdb`. It covers schema apply/migrate, template seed/load/validate, generic object operations, admin server helpers, and runtime diagnostics.

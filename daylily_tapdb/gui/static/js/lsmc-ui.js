@@ -1,7 +1,23 @@
 (function () {
-  const themes = ["original", "light", "dark", "cbf"];
-  const themeLabels = { cbf: "CBF" };
-  const storageKey = "lsmc.ui.theme";
+  const themes = [
+    "original",
+    "light",
+    "dark",
+    "cbf",
+    "ssf",
+    "viridis",
+    "viridis-dark",
+  ];
+  const themeLabels = {
+    cbf: "CBF",
+    ssf: "S.SF",
+    viridis: "Viridis",
+    "viridis-dark": "Viridis Dark",
+  };
+  const globalStorageKey = "lsmc.ui.theme";
+  const modeStoragePrefix = "lsmc.ui.theme.mode.";
+  const serviceStoragePrefix = "lsmc.ui.theme.service.";
+  const service = document.documentElement.dataset.lsmcService || "tapdb";
   const serviceDefaults = {
     "kahlo": "dark",
     "bloom": "dark",
@@ -14,19 +30,38 @@
   };
 
   function defaultTheme() {
-    const service = document.documentElement.dataset.lsmcService || "tapdb";
     return serviceDefaults[service] || "original";
   }
 
+  function serviceModeKey() {
+    return `${modeStoragePrefix}${service}`;
+  }
+
+  function serviceThemeKey() {
+    return `${serviceStoragePrefix}${service}`;
+  }
+
+  function isGlobalThemeMode() {
+    return window.localStorage.getItem(serviceModeKey()) !== "service";
+  }
+
   function currentTheme() {
-    const stored = window.localStorage.getItem(storageKey);
+    if (!isGlobalThemeMode()) {
+      const serviceTheme = window.localStorage.getItem(serviceThemeKey());
+      if (themes.includes(serviceTheme)) return serviceTheme;
+    }
+    const stored = window.localStorage.getItem(globalStorageKey);
     return themes.includes(stored) ? stored : defaultTheme();
   }
 
   function applyTheme(theme) {
     const value = themes.includes(theme) ? theme : defaultTheme();
     document.documentElement.dataset.theme = value;
-    window.localStorage.setItem(storageKey, value);
+    window.localStorage.setItem(isGlobalThemeMode() ? globalStorageKey : serviceThemeKey(), value);
+  }
+
+  function setThemeMode(globalMode) {
+    window.localStorage.setItem(serviceModeKey(), globalMode ? "global" : "service");
   }
 
   function commandForPage() {
@@ -40,11 +75,25 @@
   function initThemeControl() {
     const wrap = document.createElement("div");
     wrap.className = "lsmc-theme-control";
-    wrap.innerHTML = '<label>Theme <select></select></label>';
-    const select = wrap.querySelector("select");
+    const label = document.createElement("label");
+    label.textContent = "Theme";
+    const select = document.createElement("select");
     for (const theme of themes) select.appendChild(new Option(themeLabels[theme] || theme, theme));
     select.value = currentTheme();
+    label.appendChild(select);
+    const modeLabel = document.createElement("label");
+    modeLabel.className = "lsmc-theme-global";
+    const globalCheckbox = document.createElement("input");
+    globalCheckbox.type = "checkbox";
+    globalCheckbox.checked = isGlobalThemeMode();
+    modeLabel.append(globalCheckbox, document.createTextNode("Global"));
     select.addEventListener("change", () => applyTheme(select.value));
+    globalCheckbox.addEventListener("change", () => {
+      setThemeMode(globalCheckbox.checked);
+      select.value = currentTheme();
+      applyTheme(select.value);
+    });
+    wrap.append(label, modeLabel);
     document.body.appendChild(wrap);
   }
 
