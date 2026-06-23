@@ -399,7 +399,9 @@ def test_create_or_get_inserts_new_user(monkeypatch: pytest.MonkeyPatch):
 def test_create_or_get_switches_to_tapdb_owner_for_system_user_insert(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    session = _QueuedPostgresSession(rows=[("bloom",), ("daylily-tapdb",), (77,), ("bloom",)])
+    session = _QueuedPostgresSession(
+        rows=[("bloom",), ("daylily-tapdb",), (77,), ("bloom",)]
+    )
     created_user = SimpleNamespace(uid=77, username="new@example.com")
 
     monkeypatch.setattr(
@@ -426,10 +428,14 @@ def test_create_or_get_switches_to_tapdb_owner_for_system_user_insert(
     assert user is created_user
     statements = [stmt for stmt, _params in session.calls]
     assert "current_setting('session.current_owner_repo_name', true)" in statements[0]
-    assert "set_config('session.current_owner_repo_name', :owner, true)" in statements[1]
+    assert (
+        "set_config('session.current_owner_repo_name', :owner, true)" in statements[1]
+    )
     assert session.calls[1][1] == {"owner": "daylily-tapdb"}
     assert "INSERT INTO generic_instance" in statements[2]
-    assert "set_config('session.current_owner_repo_name', :owner, true)" in statements[3]
+    assert (
+        "set_config('session.current_owner_repo_name', :owner, true)" in statements[3]
+    )
     assert session.calls[3][1] == {"owner": "bloom"}
 
 

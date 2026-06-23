@@ -81,7 +81,9 @@ def _prepare_system_user_insert_owner(session: Session) -> str | None:
     return previous_owner
 
 
-def _restore_system_user_insert_owner(session: Session, previous_owner: str | None) -> None:
+def _restore_system_user_insert_owner(
+    session: Session, previous_owner: str | None
+) -> None:
     if previous_owner is None:
         return
     _set_local_owner_repo_name(session, previous_owner)

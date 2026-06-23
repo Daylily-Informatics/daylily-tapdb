@@ -23,7 +23,10 @@ def test_lsmc_theme_script_uses_explicit_global_and_service_storage() -> None:
     assert 'const globalStorageKey = "lsmc.ui.theme";' in script
     assert 'const modeStoragePrefix = "lsmc.ui.theme.mode.";' in script
     assert 'const serviceStoragePrefix = "lsmc.ui.theme.service.";' in script
-    assert 'window.localStorage.setItem(isGlobalThemeMode() ? globalStorageKey : serviceThemeKey(), value);' in script
+    assert (
+        "window.localStorage.setItem(isGlobalThemeMode() ? globalStorageKey : serviceThemeKey(), value);"
+        in script
+    )
 
 
 def test_lsmc_theme_css_defines_new_skin_selectors() -> None:

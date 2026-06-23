@@ -123,11 +123,15 @@ def _lineage_edge_payload(lineage: Any, *, service_name: str) -> dict[str, Any] 
             "source": getattr(child, "euid", None),
             "target": getattr(parent, "euid", None),
             "semantic_source_euid": (
-                semantic_source.get("euid") if isinstance(semantic_source, dict) else None
+                semantic_source.get("euid")
+                if isinstance(semantic_source, dict)
+                else None
             )
             or getattr(parent, "euid", None),
             "semantic_target_euid": (
-                semantic_target.get("euid") if isinstance(semantic_target, dict) else None
+                semantic_target.get("euid")
+                if isinstance(semantic_target, dict)
+                else None
             )
             or getattr(child, "euid", None),
             "relationship_type": getattr(lineage, "relationship_type", None)
