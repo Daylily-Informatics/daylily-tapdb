@@ -65,6 +65,14 @@
   }
 
   function commandForPage() {
+    // Most specific first: every backup path also contains "/admin/backups".
+    if (location.pathname.includes("/admin/backups/receipts/")) {
+      return "tapdb --json backup list   # .status.recent_receipts";
+    }
+    if (location.pathname.includes("/admin/backups/") && location.pathname.includes("/restore")) {
+      return "tapdb backup restore-plan --backup-id <id> [--mode in-place]";
+    }
+    if (location.pathname.includes("/admin/backups")) return "tapdb backup list";
     if (location.pathname.includes("/search")) return "tapdb search --help";
     if (location.pathname.includes("/templates")) return "tapdb db templates --help";
     if (location.pathname.includes("/metrics")) return "tapdb ui metrics --help";

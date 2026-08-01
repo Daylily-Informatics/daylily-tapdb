@@ -1,0 +1,201 @@
+;
+; Archive created at 2026-07-27 21:31:30 EDT
+;     dbname: tapdb_fixture
+;     TOC Entries: 190
+;     Compression: gzip
+;     Dump Version: 1.15-0
+;     Format: CUSTOM
+;     Integer: 4 bytes
+;     Offset: 8 bytes
+;     Dumped from database version: 16.14 (Homebrew)
+;     Dumped by pg_dump version: 16.14 (Homebrew)
+;
+;
+; Selected TOC Entries:
+;
+6; 2615 16385 SCHEMA - tapdb_prod postgres
+242; 1255 16637 FUNCTION tapdb_prod crockford_base32_decode(text) postgres
+241; 1255 16636 FUNCTION tapdb_prod crockford_base32_encode(bigint) postgres
+244; 1255 16639 FUNCTION tapdb_prod meridian_euid_domain_code(text) postgres
+245; 1255 16640 FUNCTION tapdb_prod meridian_euid_prefix(text) postgres
+246; 1255 16641 FUNCTION tapdb_prod meridian_euid_seq_from_euid(text) postgres
+260; 1255 16644 FUNCTION tapdb_prod meridian_generate_euid(text, bigint) postgres
+259; 1255 16643 FUNCTION tapdb_prod meridian_generate_euid(text, bigint, text) postgres
+251; 1255 16642 FUNCTION tapdb_prod meridian_luhn_mod32_check(text) postgres
+268; 1255 16652 FUNCTION tapdb_prod record_insert() postgres
+267; 1255 16651 FUNCTION tapdb_prod record_update() postgres
+265; 1255 16649 FUNCTION tapdb_prod set_audit_log_euid() postgres
+263; 1255 16647 FUNCTION tapdb_prod set_generic_instance_euid() postgres
+264; 1255 16648 FUNCTION tapdb_prod set_generic_instance_lineage_euid() postgres
+262; 1255 16646 FUNCTION tapdb_prod set_generic_template_euid() postgres
+266; 1255 16650 FUNCTION tapdb_prod soft_delete_row() postgres
+239; 1255 16393 FUNCTION tapdb_prod tapdb_current_domain_code() postgres
+240; 1255 16394 FUNCTION tapdb_prod tapdb_current_owner_repo_name() postgres
+261; 1255 16645 FUNCTION tapdb_prod tapdb_get_identity_prefix(text) postgres
+237; 1255 16391 FUNCTION tapdb_prod tapdb_validate_domain_code(text) postgres
+243; 1255 16638 FUNCTION tapdb_prod tapdb_validate_meridian_prefix(text) postgres
+238; 1255 16392 FUNCTION tapdb_prod tapdb_validate_owner_repo_name(text) postgres
+269; 1255 16653 FUNCTION tapdb_prod update_modified_dt() postgres
+236; 1259 16564 TABLE tapdb_prod _tapdb_migrations postgres
+229; 1259 16487 TABLE tapdb_prod audit_log postgres
+228; 1259 16486 SEQUENCE tapdb_prod audit_log_uid_seq postgres
+219; 1259 16389 SEQUENCE tapdb_prod ay_instance_seq postgres
+225; 1259 16426 TABLE tapdb_prod generic_instance postgres
+227; 1259 16452 TABLE tapdb_prod generic_instance_lineage postgres
+226; 1259 16451 SEQUENCE tapdb_prod generic_instance_lineage_uid_seq postgres
+224; 1259 16425 SEQUENCE tapdb_prod generic_instance_uid_seq postgres
+223; 1259 16404 TABLE tapdb_prod generic_template postgres
+222; 1259 16403 SEQUENCE tapdb_prod generic_template_uid_seq postgres
+235; 1259 16545 TABLE tapdb_prod inbox_message postgres
+234; 1259 16544 SEQUENCE tapdb_prod inbox_message_uid_seq postgres
+220; 1259 16390 SEQUENCE tapdb_prod msg_instance_seq postgres
+231; 1259 16505 TABLE tapdb_prod outbox_event postgres
+233; 1259 16527 TABLE tapdb_prod outbox_event_attempt postgres
+232; 1259 16526 SEQUENCE tapdb_prod outbox_event_attempt_uid_seq postgres
+230; 1259 16504 SEQUENCE tapdb_prod outbox_event_id_seq postgres
+221; 1259 16395 TABLE tapdb_prod tapdb_identity_prefix_config postgres
+217; 1259 16387 SEQUENCE tapdb_prod wsx_instance_seq postgres
+216; 1259 16386 SEQUENCE tapdb_prod wx_instance_seq postgres
+218; 1259 16388 SEQUENCE tapdb_prod xx_instance_seq postgres
+4101; 0 16564 TABLE DATA tapdb_prod _tapdb_migrations postgres
+4094; 0 16487 TABLE DATA tapdb_prod audit_log postgres
+4090; 0 16426 TABLE DATA tapdb_prod generic_instance postgres
+4092; 0 16452 TABLE DATA tapdb_prod generic_instance_lineage postgres
+4088; 0 16404 TABLE DATA tapdb_prod generic_template postgres
+4100; 0 16545 TABLE DATA tapdb_prod inbox_message postgres
+4096; 0 16505 TABLE DATA tapdb_prod outbox_event postgres
+4098; 0 16527 TABLE DATA tapdb_prod outbox_event_attempt postgres
+4086; 0 16395 TABLE DATA tapdb_prod tapdb_identity_prefix_config postgres
+4108; 0 0 SEQUENCE SET tapdb_prod audit_log_uid_seq postgres
+4109; 0 0 SEQUENCE SET tapdb_prod ay_instance_seq postgres
+4110; 0 0 SEQUENCE SET tapdb_prod generic_instance_lineage_uid_seq postgres
+4111; 0 0 SEQUENCE SET tapdb_prod generic_instance_uid_seq postgres
+4112; 0 0 SEQUENCE SET tapdb_prod generic_template_uid_seq postgres
+4113; 0 0 SEQUENCE SET tapdb_prod inbox_message_uid_seq postgres
+4114; 0 0 SEQUENCE SET tapdb_prod msg_instance_seq postgres
+4115; 0 0 SEQUENCE SET tapdb_prod outbox_event_attempt_uid_seq postgres
+4116; 0 0 SEQUENCE SET tapdb_prod outbox_event_id_seq postgres
+4117; 0 0 SEQUENCE SET tapdb_prod wsx_instance_seq postgres
+4118; 0 0 SEQUENCE SET tapdb_prod wx_instance_seq postgres
+4119; 0 0 SEQUENCE SET tapdb_prod xx_instance_seq postgres
+3900; 2606 16571 CONSTRAINT tapdb_prod _tapdb_migrations _tapdb_migrations_pkey postgres
+3852; 2606 16501 CONSTRAINT tapdb_prod audit_log audit_log_euid_key postgres
+3854; 2606 16499 CONSTRAINT tapdb_prod audit_log audit_log_pkey postgres
+3811; 2606 16441 CONSTRAINT tapdb_prod generic_instance generic_instance_euid_key postgres
+3839; 2606 16473 CONSTRAINT tapdb_prod generic_instance_lineage generic_instance_lineage_euid_key postgres
+3841; 2606 16471 CONSTRAINT tapdb_prod generic_instance_lineage generic_instance_lineage_pkey postgres
+3813; 2606 16443 CONSTRAINT tapdb_prod generic_instance generic_instance_machine_uuid_key postgres
+3815; 2606 16439 CONSTRAINT tapdb_prod generic_instance generic_instance_pkey postgres
+3798; 2606 16420 CONSTRAINT tapdb_prod generic_template generic_template_euid_key postgres
+3800; 2606 16418 CONSTRAINT tapdb_prod generic_template generic_template_pkey postgres
+3894; 2606 16561 CONSTRAINT tapdb_prod inbox_message inbox_message_message_machine_uuid_key postgres
+3896; 2606 16559 CONSTRAINT tapdb_prod inbox_message inbox_message_pkey postgres
+3898; 2606 16563 CONSTRAINT tapdb_prod inbox_message inbox_message_receipt_machine_uuid_key postgres
+3887; 2606 16538 CONSTRAINT tapdb_prod outbox_event_attempt outbox_event_attempt_pkey postgres
+3881; 2606 16518 CONSTRAINT tapdb_prod outbox_event outbox_event_pkey postgres
+3796; 2606 16402 CONSTRAINT tapdb_prod tapdb_identity_prefix_config tapdb_identity_prefix_config_pkey postgres
+3867; 2606 16503 CONSTRAINT tapdb_prod audit_log unique_audit_log_prefix_seq postgres
+3850; 2606 16475 CONSTRAINT tapdb_prod generic_instance_lineage unique_generic_instance_lineage_prefix_seq postgres
+3837; 2606 16445 CONSTRAINT tapdb_prod generic_instance unique_generic_instance_prefix_seq postgres
+3807; 2606 16424 CONSTRAINT tapdb_prod generic_template unique_generic_template_prefix_seq postgres
+3883; 2606 16520 CONSTRAINT tapdb_prod outbox_event unique_outbox_event_destination_dedupe_key postgres
+3809; 2606 16422 CONSTRAINT tapdb_prod generic_template unique_template_code postgres
+3855; 1259 16610 INDEX tapdb_prod idx_audit_log_changed_at postgres
+3856; 1259 16611 INDEX tapdb_prod idx_audit_log_changed_by postgres
+3857; 1259 16604 INDEX tapdb_prod idx_audit_log_domain postgres
+3858; 1259 16613 INDEX tapdb_prod idx_audit_log_domain_entity postgres
+3859; 1259 16614 INDEX tapdb_prod idx_audit_log_domain_timeline postgres
+3860; 1259 16608 INDEX tapdb_prod idx_audit_log_is_deleted postgres
+3861; 1259 16612 INDEX tapdb_prod idx_audit_log_json_addl_gin postgres
+3862; 1259 16609 INDEX tapdb_prod idx_audit_log_operation_type postgres
+3863; 1259 16607 INDEX tapdb_prod idx_audit_log_rel_table_euid_fk postgres
+3864; 1259 16605 INDEX tapdb_prod idx_audit_log_rel_table_name postgres
+3865; 1259 16606 INDEX tapdb_prod idx_audit_log_rel_table_uid_fk postgres
+3816; 1259 16589 INDEX tapdb_prod idx_generic_instance_category postgres
+3817; 1259 16580 INDEX tapdb_prod idx_generic_instance_domain postgres
+3818; 1259 16616 INDEX tapdb_prod idx_generic_instance_domain_machine_uuid postgres
+3819; 1259 16581 INDEX tapdb_prod idx_generic_instance_domain_template postgres
+3820; 1259 16583 INDEX tapdb_prod idx_generic_instance_domain_tenant postgres
+3821; 1259 16582 INDEX tapdb_prod idx_generic_instance_domain_type postgres
+3822; 1259 16586 INDEX tapdb_prod idx_generic_instance_euid postgres
+3823; 1259 16587 INDEX tapdb_prod idx_generic_instance_is_deleted postgres
+3824; 1259 16594 INDEX tapdb_prod idx_generic_instance_json_addl_gin postgres
+3842; 1259 16600 INDEX tapdb_prod idx_generic_instance_lineage_child postgres
+3843; 1259 16598 INDEX tapdb_prod idx_generic_instance_lineage_domain postgres
+3844; 1259 16602 INDEX tapdb_prod idx_generic_instance_lineage_domain_child postgres
+3845; 1259 16601 INDEX tapdb_prod idx_generic_instance_lineage_domain_parent postgres
+3846; 1259 16603 INDEX tapdb_prod idx_generic_instance_lineage_is_deleted postgres
+3847; 1259 16599 INDEX tapdb_prod idx_generic_instance_lineage_parent postgres
+3825; 1259 16615 INDEX tapdb_prod idx_generic_instance_machine_uuid postgres
+3826; 1259 16592 INDEX tapdb_prod idx_generic_instance_mod_dt postgres
+3827; 1259 16584 INDEX tapdb_prod idx_generic_instance_polymorphic_discriminator postgres
+3828; 1259 16593 INDEX tapdb_prod idx_generic_instance_singleton postgres
+3829; 1259 16590 INDEX tapdb_prod idx_generic_instance_subtype postgres
+3830; 1259 16596 INDEX tapdb_prod idx_generic_instance_system_user_login_identifier postgres
+3831; 1259 16588 INDEX tapdb_prod idx_generic_instance_template_uid postgres
+3832; 1259 16595 INDEX tapdb_prod idx_generic_instance_tenant_template_created_dt postgres
+3833; 1259 16585 INDEX tapdb_prod idx_generic_instance_type postgres
+3834; 1259 16579 INDEX tapdb_prod idx_generic_instance_unique_singleton_key postgres
+3835; 1259 16591 INDEX tapdb_prod idx_generic_instance_version postgres
+3801; 1259 16574 INDEX tapdb_prod idx_generic_template_domain postgres
+3802; 1259 16575 INDEX tapdb_prod idx_generic_template_domain_code_lookup postgres
+3803; 1259 16578 INDEX tapdb_prod idx_generic_template_is_deleted postgres
+3804; 1259 16576 INDEX tapdb_prod idx_generic_template_polymorphic_discriminator postgres
+3805; 1259 16577 INDEX tapdb_prod idx_generic_template_type postgres
+3888; 1259 16631 INDEX tapdb_prod idx_inbox_message_domain postgres
+3889; 1259 16635 INDEX tapdb_prod idx_inbox_message_domain_machine_uuid postgres
+3890; 1259 16633 INDEX tapdb_prod idx_inbox_message_domain_status postgres
+3891; 1259 16634 INDEX tapdb_prod idx_inbox_message_machine_uuid postgres
+3892; 1259 16632 INDEX tapdb_prod idx_inbox_message_status postgres
+3848; 1259 16597 INDEX tapdb_prod idx_lineage_unique_edge postgres
+3884; 1259 16622 INDEX tapdb_prod idx_outbox_attempt_event_id postgres
+3885; 1259 16630 INDEX tapdb_prod idx_outbox_attempt_event_time postgres
+3868; 1259 16626 INDEX tapdb_prod idx_outbox_event_claim_token postgres
+3869; 1259 16624 INDEX tapdb_prod idx_outbox_event_destination_status postgres
+3870; 1259 16619 INDEX tapdb_prod idx_outbox_event_domain postgres
+3871; 1259 16625 INDEX tapdb_prod idx_outbox_event_domain_destination_status_created postgres
+3872; 1259 16627 INDEX tapdb_prod idx_outbox_event_domain_status_created postgres
+3873; 1259 16623 INDEX tapdb_prod idx_outbox_event_domain_status_next postgres
+3874; 1259 16621 INDEX tapdb_prod idx_outbox_event_lease postgres
+3875; 1259 16618 INDEX tapdb_prod idx_outbox_event_message_uid postgres
+3876; 1259 16628 INDEX tapdb_prod idx_outbox_event_receipt_machine_uuid postgres
+3877; 1259 16620 INDEX tapdb_prod idx_outbox_event_status_next postgres
+3878; 1259 16617 INDEX tapdb_prod idx_outbox_event_status_next_attempt_at postgres
+3879; 1259 16629 INDEX tapdb_prod idx_outbox_event_tenant_created_dt postgres
+3911; 2620 16662 TRIGGER tapdb_prod generic_instance audit_insert_generic_instance postgres
+3916; 2620 16663 TRIGGER tapdb_prod generic_instance_lineage audit_insert_generic_instance_lineage postgres
+3906; 2620 16661 TRIGGER tapdb_prod generic_template audit_insert_generic_template postgres
+3912; 2620 16665 TRIGGER tapdb_prod generic_instance audit_update_generic_instance postgres
+3917; 2620 16666 TRIGGER tapdb_prod generic_instance_lineage audit_update_generic_instance_lineage postgres
+3907; 2620 16664 TRIGGER tapdb_prod generic_template audit_update_generic_template postgres
+3913; 2620 16659 TRIGGER tapdb_prod generic_instance soft_delete_generic_instance postgres
+3918; 2620 16660 TRIGGER tapdb_prod generic_instance_lineage soft_delete_generic_instance_lineage postgres
+3908; 2620 16658 TRIGGER tapdb_prod generic_template soft_delete_generic_template postgres
+3921; 2620 16657 TRIGGER tapdb_prod audit_log trigger_set_audit_log_euid postgres
+3914; 2620 16655 TRIGGER tapdb_prod generic_instance trigger_set_generic_instance_euid postgres
+3919; 2620 16656 TRIGGER tapdb_prod generic_instance_lineage trigger_set_generic_instance_lineage_euid postgres
+3909; 2620 16654 TRIGGER tapdb_prod generic_template trigger_set_generic_template_euid postgres
+3915; 2620 16668 TRIGGER tapdb_prod generic_instance update_modified_dt_generic_instance postgres
+3920; 2620 16669 TRIGGER tapdb_prod generic_instance_lineage update_modified_dt_generic_instance_lineage postgres
+3910; 2620 16667 TRIGGER tapdb_prod generic_template update_modified_dt_generic_template postgres
+3902; 2606 16481 FK CONSTRAINT tapdb_prod generic_instance_lineage generic_instance_lineage_child_instance_uid_fkey postgres
+3903; 2606 16476 FK CONSTRAINT tapdb_prod generic_instance_lineage generic_instance_lineage_parent_instance_uid_fkey postgres
+3901; 2606 16446 FK CONSTRAINT tapdb_prod generic_instance generic_instance_template_uid_fkey postgres
+3905; 2606 16539 FK CONSTRAINT tapdb_prod outbox_event_attempt outbox_event_attempt_outbox_event_id_fkey postgres
+3904; 2606 16521 FK CONSTRAINT tapdb_prod outbox_event outbox_event_message_uid_fkey postgres
+4069; 0 16487 ROW SECURITY tapdb_prod audit_log postgres
+4076; 3256 16674 POLICY tapdb_prod audit_log audit_log_domain_isolation postgres
+4067; 0 16426 ROW SECURITY tapdb_prod generic_instance postgres
+4074; 3256 16672 POLICY tapdb_prod generic_instance generic_instance_domain_isolation postgres
+4068; 0 16452 ROW SECURITY tapdb_prod generic_instance_lineage postgres
+4075; 3256 16673 POLICY tapdb_prod generic_instance_lineage generic_instance_lineage_domain_isolation postgres
+4066; 0 16404 ROW SECURITY tapdb_prod generic_template postgres
+4073; 3256 16671 POLICY tapdb_prod generic_template generic_template_domain_isolation postgres
+4072; 0 16545 ROW SECURITY tapdb_prod inbox_message postgres
+4079; 3256 16677 POLICY tapdb_prod inbox_message inbox_message_domain_isolation postgres
+4070; 0 16505 ROW SECURITY tapdb_prod outbox_event postgres
+4071; 0 16527 ROW SECURITY tapdb_prod outbox_event_attempt postgres
+4078; 3256 16676 POLICY tapdb_prod outbox_event_attempt outbox_event_attempt_domain_isolation postgres
+4077; 3256 16675 POLICY tapdb_prod outbox_event outbox_event_domain_isolation postgres
+4065; 0 16395 ROW SECURITY tapdb_prod tapdb_identity_prefix_config postgres
+4080; 3256 16678 POLICY tapdb_prod tapdb_identity_prefix_config tapdb_identity_prefix_config_domain_isolation postgres

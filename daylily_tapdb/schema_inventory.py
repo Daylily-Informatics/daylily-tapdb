@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sysconfig
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -423,6 +424,52 @@ def diff_schema_inventory(
         live=live,
         missing=missing,
         unexpected=unexpected,
+    )
+
+
+def schema_root_candidates() -> list[Path]:
+    """Return ordered candidate roots for TAPDB schema assets.
+
+    Covers a repo checkout, an installed package's data directory, and the
+    current working directory, in that order.
+    """
+    current = Path(__file__).resolve()
+    candidates: list[Path] = [current.parents[1] / "schema"]
+
+    data_dir = sysconfig.get_paths().get("data")
+    if data_dir:
+        candidates.append(Path(data_dir) / "schema")
+
+    candidates.append(Path.cwd() / "schema")
+
+    seen: set[Path] = set()
+    unique_candidates: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_candidates.append(candidate)
+
+    return unique_candidates
+
+
+def find_schema_root(required_subpath: Optional[Path] = None) -> Path:
+    """Resolve the schema root from known candidate locations.
+
+    Lives here rather than in the CLI so the backup service -- which must not
+    import typer -- can reach the same resolution the drift check uses.
+    """
+    for schema_root in schema_root_candidates():
+        if not schema_root.exists() or not schema_root.is_dir():
+            continue
+        if required_subpath is None or (schema_root / required_subpath).exists():
+            return schema_root
+
+    if required_subpath is None:
+        raise FileNotFoundError("Cannot find TAPDB schema root.")
+    raise FileNotFoundError(
+        f"Cannot find TAPDB schema root containing {required_subpath.as_posix()}."
     )
 
 

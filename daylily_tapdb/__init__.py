@@ -17,17 +17,32 @@ Example:
         db_user=cfg["user"],
         db_pass=cfg["password"],
         db_name=cfg["database"],
+        engine_type=cfg["engine_type"],
+        schema_name=cfg["schema_name"],
+        domain_code=cfg["domain_code"],
+        owner_repo_name=cfg["owner_repo_name"],
+        app_username="my_app",
     )
 
     templates = TemplateManager()
-    factory = InstanceFactory(templates)
+    factory = InstanceFactory(templates, domain_code=cfg["domain_code"])
 
     with db.session_scope(commit=True) as session:
-        plate = factory.create_instance(
+        user = factory.create_instance(
             session=session,
-            template_code='container/plate/fixed-plate-96/1.0/',
-            name='PLATE-001'
+            template_code="actor/user/system/1.0/",
+            name="alice",
         )
+
+Note:
+    ``engine_type``, ``app_username``, ``domain_code``, and ``owner_repo_name``
+    are all required by ``TAPDBConnection``; every key above except
+    ``app_username`` comes straight from ``get_db_config()``.
+
+    Only ``actor/user/system/1.0/``, ``message/webhook/event/1.0/``, and
+    ``reference/external_identifier/tapdb_object/1.0/`` are bundled with this
+    package — other template packs are supplied externally and seeded via
+    ``tapdb db data seed``.
 """
 
 try:

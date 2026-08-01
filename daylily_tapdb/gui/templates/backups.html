@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Backups{% endblock %}
+{% block content %}
+
+{# Item-10 scheduled-status page: is there a recent backup, did the last
+   attempt succeed, and is the receipt chain intact. #}
+<section class="band">
+  <h1>Backups</h1>
+  <p><strong>Target:</strong> {{ backups.status.target_label }}</p>
+
+  {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+
+  {% set state = backups.status.status %}
+  <div class="notice {% if state == 'ok' %}ok{% elif state == 'never_run' %}{% else %}error{% endif %}">
+    <strong>Status: {{ state }}</strong>
+    {% if state == 'ok' %}
+      Last successful backup {{ backups.status.last_success_at }}
+      ({{ backups.status.age_hours }}h ago).
+    {% elif state == 'stale' %}
+      Last successful backup was {{ backups.status.age_hours }}h ago, older than
+      the configured {{ backups.status.cadence.expected_interval_hours }}h cadence.
+    {% elif state == 'failing' %}
+      The most recent backup attempt failed
+      ({{ backups.status.last_attempt_at }}).
+    {% else %}
+      No successful backup has ever been recorded for this target.
+    {% endif %}
+  </div>
+
+  {% if not backups.status.cadence.configured %}
+    <p class="detail">
+      No cadence is configured, so this target is never reported as stale.
+      Set <code>backup.expected_interval_hours</code> to enable staleness
+      reporting.
+    </p>
+  {% else %}
+    <p class="detail">Next backup due: {{ backups.status.cadence.next_due_at }}</p>
+  {% endif %}
+
+  {% if not backups.status.receipt_chain.ok %}
+    <div class="notice error">
+      <strong>Receipt chain is broken.</strong>
+      The audit trail for this target has been altered or truncated:
+      <ul>
+        {% for finding in backups.status.receipt_chain.findings %}
+          <li>{{ finding }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  {% if backups.damaged %}
+    <div class="notice error">
+      {{ backups.damaged|length }} backup(s) have an unreadable manifest and are
+      not listed below: {{ backups.damaged|join(", ") }}
+    </div>
+  {% endif %}
+</section>
+
+<section class="band">
+  <h2>Create a backup</h2>
+  <p class="detail">Reads the database only; nothing is modified.</p>
+  <form method="post" action="{{ create_url }}">
+    <label>Class
+      <select name="backup_class">
+        <option value="full">full (logical dump)</option>
+        <option value="template-pack">template-pack (definitions only)</option>
+      </select>
+    </label>
+    <label>Note <input type="text" name="note" placeholder="optional"></label>
+    {# Without this the GUI has no way through a drift refusal: the button
+       fails permanently and the runbook's remedy ("re-run with --allow-drift")
+       is CLI-only, while the docs list Create on all three surfaces. #}
+    <label>
+      <input type="checkbox" name="allow_drift" value="1">
+      Capture even though the schema has drifted
+    </label>
+    <button type="submit">Create backup</button>
+  </form>
+</section>
+
+<section class="band">
+  <h2>Backups ({{ backups.count }})</h2>
+  <p class="detail">Storage: {{ backups.storage.uri }}</p>
+  {% if not backups.backups %}
+    <p>No backups have been taken for this target.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Backup</th><th>Class</th><th>Created</th><th>Rows</th>
+        <th>Size</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in backups.backups %}
+      <tr>
+        <td><code>{{ entry.backup_id }}</code></td>
+        <td>{{ entry.backup_class }}</td>
+        <td>{{ entry.created_at or "-" }}</td>
+        <td>{{ entry.row_totals if entry.row_totals is not none else "-" }}</td>
+        <td>{{ entry.bytes }}</td>
+        <td>
+          <form method="post" action="{{ verify_url_for(entry.backup_id) }}"
+                style="display:inline">
+            <button type="submit">Verify</button>
+          </form>
+          <form method="post" action="{{ rehearse_url_for(entry.backup_id) }}"
+                style="display:inline">
+            <button type="submit">Rehearse</button>
+          </form>
+          <a href="{{ restore_url_for(entry.backup_id) }}">Stage restore</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<section class="band">
+  <h2>Recent activity</h2>
+  {% if not backups.status.recent_receipts %}
+    <p>No lifecycle operations have been recorded.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>When</th><th>Operation</th><th>Status</th><th>Backup</th><th>By</th>
+        <th>Evidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for receipt in backups.status.recent_receipts %}
+      <tr>
+        <td>{{ receipt.created_at }}</td>
+        <td>{{ receipt.operation }}</td>
+        <td>{{ receipt.status }}</td>
+        <td><code>{{ receipt.backup_id or "-" }}</code></td>
+        <td>{{ receipt.actor.username or receipt.actor.surface }}</td>
+        {# An explicit column, not a link hidden on the operation name. The
+           first person shown this page could not find the evidence at all,
+           because nothing indicated the name was clickable. Naming the check
+           count also says *why* the link is worth following. #}
+        <td>
+          {% set checks = receipt.detail.get("checks") or [] %}
+          <a href="{{ receipt_url_for(receipt.receipt_id) }}">
+            {% if checks %}View {{ checks|length }} checks{% else %}View{% endif %}
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+{% endblock %}

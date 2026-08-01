@@ -126,6 +126,7 @@ def gui_nav_links(request: Request, shell: dict[str, Any]) -> list[dict[str, str
         {"label": "Readiness", "href": gui_url(request, "/admin/readiness")},
         {"label": "Meridian", "href": gui_url(request, "/admin/meridian")},
         {"label": "Metrics", "href": gui_url(request, "/admin/metrics")},
+        {"label": "Backups", "href": gui_url(request, "/admin/backups")},
     ]
     candidates = list(shell.get("nav_links") or []) + built_in
     seen_labels: set[str] = set()
@@ -2183,6 +2184,353 @@ def create_tapdb_gui_router(
             build_metrics_page_context(
                 "target", limit=limit, config_path=resolved_config_path
             )
+        )
+
+    # ------------------------------------------------------------------
+    # Backup and recovery lifecycle
+    #
+    # Every page is paired with a JSON route so the GUI is self-sufficient
+    # when a host app embeds it without mounting the admin service. All of it
+    # is admin-gated, and the restore form posts into
+    # ``views.apply_restore_from_review`` -- the same function the admin API
+    # calls, so the two surfaces cannot enforce different rules.
+    # ------------------------------------------------------------------
+
+    def _backup_env():
+        from daylily_tapdb.cli.db_config import get_backup_settings
+
+        return (
+            get_db_config(config_path=resolved_config_path),
+            get_backup_settings(config_path=resolved_config_path),
+        )
+
+    def _validated_backup_ref(ref: str) -> str:
+        """Validate a backup reference from the URL, or 400.
+
+        Delegates to the shared validator so the GUI and the admin API cannot
+        disagree about what a valid reference is.
+        """
+        from daylily_tapdb.backup.views import validate_backup_ref
+
+        try:
+            return validate_backup_ref(ref)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid_backup_ref") from exc
+
+    def _receipt_url(
+        request: Request,
+        receipt_id: str | None,
+        *,
+        fallback_notice: str = "",
+        fallback_error: str = "",
+    ) -> str:
+        """Link to the evidence page, or fall back if no receipt was written.
+
+        ``record_receipt=False`` paths and dry runs legitimately produce no
+        receipt; those still need somewhere to land.
+        """
+        if receipt_id:
+            return gui_url(request, f"/admin/backups/receipts/{receipt_id}")
+        return gui_url_with_query(
+            request, "/admin/backups", notice=fallback_notice, error=fallback_error
+        )
+
+    def _backups_context() -> dict[str, Any]:
+        from daylily_tapdb.backup import views as backup_views
+
+        cfg, settings = _backup_env()
+        return backup_views.inventory_context(cfg, settings)
+
+    @router.get("/admin/backups", response_class=HTMLResponse)
+    async def backups_page(
+        request: Request,
+        notice: str = "",
+        error: str = "",
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        return _render(
+            templates,
+            request,
+            "backups.html",
+            user=user,
+            backups=_backups_context(),
+            notice=notice,
+            error=error,
+            create_url=gui_url(request, "/admin/backups/create"),
+            verify_url_for=lambda ref: gui_url(request, f"/admin/backups/{ref}/verify"),
+            rehearse_url_for=lambda ref: gui_url(
+                request, f"/admin/backups/{ref}/rehearse"
+            ),
+            restore_url_for=lambda ref: gui_url(
+                request, f"/admin/backups/{ref}/restore"
+            ),
+            receipt_url_for=lambda rid: gui_url(
+                request, f"/admin/backups/receipts/{rid}"
+            ),
+        )
+
+    @router.get("/admin/backups/receipts/{receipt_id}", response_class=HTMLResponse)
+    async def backups_receipt(
+        request: Request,
+        receipt_id: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        """Render one receipt, including the checks that were actually run.
+
+        This is the evidence page. Operations used to redirect here-less, with
+        a one-word notice, discarding the verification results entirely.
+        """
+        from daylily_tapdb.backup import service as backup_service
+        from daylily_tapdb.backup.receipts import read_receipts
+
+        _cfg, settings = _backup_env()
+        wanted = _validated_backup_ref(receipt_id)
+        match = next(
+            (
+                r
+                for r in read_receipts(backup_service.receipts_directory(settings))
+                if r.receipt_id == wanted
+            ),
+            None,
+        )
+        if match is None:
+            raise HTTPException(status_code=404, detail="no such receipt")
+
+        checks = list(match.detail.get("checks") or [])
+        return _render(
+            templates,
+            request,
+            "backup_receipt.html",
+            user=user,
+            receipt=match,
+            checks=checks,
+            failed_checks=[c for c in checks if c.get("status") == "fail"],
+            backups_url=gui_url(request, "/admin/backups"),
+        )
+
+    @router.get("/api/admin/backups")
+    async def backups_api(
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        del user
+        from daylily_tapdb.backup import views as backup_views
+
+        cfg, settings = _backup_env()
+        return jsonable_encoder(backup_views.inventory_context(cfg, settings))
+
+    @router.get("/api/admin/backups/status")
+    async def backups_status_api(
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        del user
+        from daylily_tapdb.backup import views as backup_views
+
+        cfg, settings = _backup_env()
+        return jsonable_encoder(backup_views.status_context(cfg, settings))
+
+    @router.post("/admin/backups/create")
+    async def backups_create(
+        request: Request,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        from daylily_tapdb.backup import service as backup_service
+        from daylily_tapdb.backup.receipts import SURFACE_GUI, Actor
+
+        form = await request.form()
+        cfg, settings = _backup_env()
+        actor = Actor(surface=SURFACE_GUI, username=user.get("email"))
+        try:
+            created = backup_service.create_backup(
+                cfg,
+                settings,
+                backup_class=str(form.get("backup_class") or "full"),
+                allow_drift=bool(form.get("allow_drift")),
+                note=str(form.get("note") or "") or None,
+                actor=actor,
+            )
+        except Exception as exc:
+            return RedirectResponse(
+                gui_url_with_query(request, "/admin/backups", error=str(exc)[:200]),
+                status_code=303,
+            )
+        # Same evidence page as verify/rehearse/restore -- a create runs its
+        # own quick verification, and those verdicts are worth showing.
+        return RedirectResponse(
+            _receipt_url(request, created.receipt_id, fallback_notice="backup_created"),
+            status_code=303,
+        )
+
+    @router.post("/admin/backups/{ref}/verify")
+    async def backups_verify(
+        request: Request,
+        ref: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        from daylily_tapdb.backup import service as backup_service
+        from daylily_tapdb.backup.receipts import SURFACE_GUI, Actor
+
+        cfg, settings = _backup_env()
+        try:
+            report = backup_service.verify_backup(
+                cfg,
+                settings,
+                backup_id=_validated_backup_ref(ref),
+                actor=Actor(surface=SURFACE_GUI, username=user.get("email")),
+            )
+        except Exception as exc:
+            return RedirectResponse(
+                gui_url_with_query(request, "/admin/backups", error=str(exc)[:200]),
+                status_code=303,
+            )
+        return RedirectResponse(
+            _receipt_url(
+                request,
+                report.receipt_id,
+                fallback_error="" if report.ok else "verify_failed",
+            ),
+            status_code=303,
+        )
+
+    @router.post("/admin/backups/{ref}/rehearse")
+    async def backups_rehearse(
+        request: Request,
+        ref: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        from daylily_tapdb.backup import verify as backup_verify
+        from daylily_tapdb.backup.receipts import SURFACE_GUI, Actor
+
+        cfg, settings = _backup_env()
+        try:
+            evidence = backup_verify.rehearse_restore(
+                cfg,
+                settings,
+                backup_id=_validated_backup_ref(ref),
+                actor=Actor(surface=SURFACE_GUI, username=user.get("email")),
+            )
+        except Exception as exc:
+            return RedirectResponse(
+                gui_url_with_query(request, "/admin/backups", error=str(exc)[:200]),
+                status_code=303,
+            )
+        return RedirectResponse(
+            _receipt_url(
+                request,
+                evidence.receipt_id,
+                fallback_error="" if evidence.ok else "rehearsal_failed",
+            ),
+            status_code=303,
+        )
+
+    def _review(request: Request, ref: str, mode: str) -> dict[str, Any]:
+        from daylily_tapdb.backup import verify as backup_verify
+        from daylily_tapdb.backup import views as backup_views
+
+        cfg, settings = _backup_env()
+        options = backup_verify.RestoreOptions(mode=mode or "isolated")
+        return backup_views.restore_review_context(
+            cfg, settings, backup_id=_validated_backup_ref(ref), options=options
+        )
+
+    @router.get("/admin/backups/{ref}/restore", response_class=HTMLResponse)
+    async def backups_restore_review(
+        request: Request,
+        ref: str,
+        mode: str = "isolated",
+        error: str = "",
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        return _render(
+            templates,
+            request,
+            "restore_review.html",
+            user=user,
+            review=_review(request, ref, mode),
+            error=error,
+            apply_url=gui_url(request, f"/admin/backups/{ref}/restore"),
+            review_url=gui_url(request, f"/admin/backups/{ref}/restore"),
+            backups_url=gui_url(request, "/admin/backups"),
+        )
+
+    @router.get("/api/admin/backups/{ref}/restore")
+    async def backups_restore_review_api(
+        ref: str,
+        mode: str = "isolated",
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        del user
+        from daylily_tapdb.backup import verify as backup_verify
+        from daylily_tapdb.backup import views as backup_views
+
+        cfg, settings = _backup_env()
+        return jsonable_encoder(
+            backup_views.restore_review_context(
+                cfg,
+                settings,
+                backup_id=_validated_backup_ref(ref),
+                options=backup_verify.RestoreOptions(mode=mode or "isolated"),
+            )
+        )
+
+    @router.post("/admin/backups/{ref}/restore", response_class=HTMLResponse)
+    async def backups_restore_apply(
+        request: Request,
+        ref: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        from daylily_tapdb.backup import verify as backup_verify
+        from daylily_tapdb.backup import views as backup_views
+        from daylily_tapdb.backup.receipts import SURFACE_GUI, Actor
+
+        form = await request.form()
+        mode = str(form.get("mode") or "isolated")
+        cfg, settings = _backup_env()
+        options = backup_verify.RestoreOptions(
+            mode=mode,
+            target_database=str(form.get("target_database") or "") or None,
+            target_schema=str(form.get("target_schema") or "") or None,
+            keep_superseded=bool(form.get("keep_superseded")),
+        )
+        # The CLI and the admin API both validate these before use. quote_ident
+        # holds the line either way, but a surface that skips the shared
+        # validator is a surface that can drift -- and the operator gets a SQL
+        # error instead of a clear rejection.
+        try:
+            options.validated_target_database()
+            options.validated_target_schema()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400, detail=f"invalid restore options: {exc}"
+            ) from exc
+
+        try:
+            result = backup_views.apply_restore_from_review(
+                cfg,
+                settings,
+                backup_id=_validated_backup_ref(ref),
+                plan_fingerprint=str(form.get("plan_fingerprint") or "") or None,
+                confirm_target=str(form.get("confirm_target") or "") or None,
+                options=options,
+                actor=Actor(surface=SURFACE_GUI, username=user.get("email")),
+            )
+        except Exception as exc:
+            # Re-render the review with a *fresh* fingerprint. Handing back the
+            # stale one would let the operator retry into the same refusal.
+            return _render(
+                templates,
+                request,
+                "restore_review.html",
+                user=user,
+                review=_review(request, ref, mode),
+                error=str(exc)[:300],
+                apply_url=gui_url(request, f"/admin/backups/{ref}/restore"),
+                review_url=gui_url(request, f"/admin/backups/{ref}/restore"),
+                backups_url=gui_url(request, "/admin/backups"),
+            )
+
+        return RedirectResponse(
+            _receipt_url(request, result.receipt_id, fallback_notice="restore_applied"),
+            status_code=303,
         )
 
     return router

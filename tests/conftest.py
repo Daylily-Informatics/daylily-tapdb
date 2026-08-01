@@ -187,6 +187,10 @@ def pg_instance(tmp_path_factory):
                         "SYS": {"issuer_app_code": "daylily-tapdb"},
                         "MSG": {"issuer_app_code": "daylily-tapdb"},
                         "XRF": {"issuer_app_code": "daylily-tapdb"},
+                        # Required by the bundled core templates, so that
+                        # `db data seed` can actually run against this fixture.
+                        "GSE": {"issuer_app_code": "daylily-tapdb"},
+                        "GVR": {"issuer_app_code": "daylily-tapdb"},
                     }
                 },
             },

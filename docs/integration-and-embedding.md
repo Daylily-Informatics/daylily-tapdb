@@ -14,6 +14,8 @@ TAPDB owns the substrate layer:
 - transactional outbox and inbox handling
 - admin UI mounting and auth plumbing
 - CLI-driven database lifecycle
+- backup and recovery for its own schema (see
+  [`docs/backup-and-recovery.md`](backup-and-recovery.md))
 
 The current object model and relationships are implemented in [`daylily_tapdb/models`](../daylily_tapdb/models) and the outbox/inbox helpers in [`daylily_tapdb/outbox`](../daylily_tapdb/outbox).
 
@@ -103,6 +105,21 @@ When mounted at `/tapdb`, the V1 GUI exposes both HTML pages and JSON APIs:
 - `GET /tapdb/admin/meridian` and
   `GET /tapdb/api/admin/meridian/validate`
 - `GET /tapdb/admin/metrics` and `GET /tapdb/api/admin/metrics`
+- `GET /tapdb/admin/backups` and `GET /tapdb/api/admin/backups`
+- `GET /tapdb/api/admin/backups/status`
+- `GET /tapdb/admin/backups/{ref}/restore` and
+  `GET /tapdb/api/admin/backups/{ref}/restore`
+- `POST /tapdb/admin/backups/create`
+- `POST /tapdb/admin/backups/{ref}/verify`
+- `POST /tapdb/admin/backups/{ref}/rehearse`
+- `POST /tapdb/admin/backups/{ref}/restore`
+
+Every backup route is admin-only and refuses others with `403`. Each HTML page
+is paired with a JSON route so a host that mounts the GUI without the admin
+API still has a complete backup surface. The apply route goes through the same
+`daylily_tapdb.backup.views.apply_restore_from_review` the admin API uses, so
+the two cannot enforce different rules — see
+[`docs/backup-and-recovery.md`](backup-and-recovery.md).
 
 The external-link API creates the same first-class typed TapDB external
 reference object as the HTML form, then links it to the source object by

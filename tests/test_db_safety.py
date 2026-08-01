@@ -203,13 +203,16 @@ def test_db_migrate_idempotent_when_all_migrations_already_applied(
     db_migrate should not attempt to apply them again.
     """
     import daylily_tapdb.cli.db as m
+    import daylily_tapdb.schema_inventory as si
 
-    # Point db_migrate's computed migrations_dir at a temp tree.
-    fake_cli_dir = tmp_path / "daylily_tapdb" / "cli"
-    fake_cli_dir.mkdir(parents=True)
-    fake_db_py = fake_cli_dir / "db.py"
-    fake_db_py.write_text("# test stub\n")
-    monkeypatch.setattr(m, "__file__", str(fake_db_py))
+    # Point db_migrate's computed migrations_dir at a temp tree. Schema-root
+    # resolution lives in schema_inventory (shared with the backup service), so
+    # that is the module whose __file__ anchors the repo-checkout candidate.
+    fake_pkg_dir = tmp_path / "daylily_tapdb"
+    fake_pkg_dir.mkdir(parents=True)
+    fake_module = fake_pkg_dir / "schema_inventory.py"
+    fake_module.write_text("# test stub\n")
+    monkeypatch.setattr(si, "__file__", str(fake_module))
 
     migrations_dir = tmp_path / "schema" / "migrations"
     migrations_dir.mkdir(parents=True)
@@ -242,12 +245,14 @@ def test_db_migrate_idempotent_when_all_migrations_already_applied(
 def test_db_migrate_uses_installed_data_migrations(tmp_path, monkeypatch):
     """When repo schema is absent, migrations should resolve from data-dir schema."""
     import daylily_tapdb.cli.db as m
+    import daylily_tapdb.schema_inventory as si
 
-    fake_cli_dir = tmp_path / "site-packages" / "daylily_tapdb" / "cli"
-    fake_cli_dir.mkdir(parents=True)
-    fake_db_py = fake_cli_dir / "db.py"
-    fake_db_py.write_text("# test stub\n")
-    monkeypatch.setattr(m, "__file__", str(fake_db_py))
+    # Simulate an installed package with no repo checkout alongside it.
+    fake_pkg_dir = tmp_path / "site-packages" / "daylily_tapdb"
+    fake_pkg_dir.mkdir(parents=True)
+    fake_module = fake_pkg_dir / "schema_inventory.py"
+    fake_module.write_text("# test stub\n")
+    monkeypatch.setattr(si, "__file__", str(fake_module))
 
     data_root = tmp_path / "py-data"
     migrations_dir = data_root / "schema" / "migrations"
@@ -255,7 +260,7 @@ def test_db_migrate_uses_installed_data_migrations(tmp_path, monkeypatch):
     migration_file = migrations_dir / "001_test.sql"
     migration_file.write_text("SELECT 1;\n")
 
-    monkeypatch.setattr(m.sysconfig, "get_paths", lambda: {"data": str(data_root)})
+    monkeypatch.setattr(si.sysconfig, "get_paths", lambda: {"data": str(data_root)})
     monkeypatch.setattr(
         m,
         "_get_db_config",

@@ -2810,3 +2810,162 @@ async def api_delete_object(request: Request, euid: str, hard_delete: bool = Fal
             session.flush()
 
             return {"success": True, "message": f"Object {euid} soft-deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Backup and recovery lifecycle
+#
+# Every route is admin-gated and every one is a thin call into
+# ``admin/backups.py``, which in turn calls the shared service. The apply route
+# goes through ``backup.views.apply_restore_from_review`` -- the same function
+# the GUI form posts to -- so the two surfaces cannot enforce different rules.
+# ---------------------------------------------------------------------------
+
+
+def _backup_context() -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve the target config and backup settings for a request."""
+    from daylily_tapdb.cli.db_config import get_backup_settings
+
+    try:
+        return get_db_config(), get_backup_settings()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "backup_unavailable",
+                "message": f"Cannot resolve TapDB backup configuration: {exc}",
+            },
+        ) from exc
+
+
+async def _json_body(request: Request) -> dict[str, Any]:
+    """Read a JSON object body, tolerating an empty one."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+@app.get("/api/backups")
+@require_admin
+async def api_backups_list(
+    request: Request,
+    backup_class: Optional[str] = Query(None, alias="class"),
+    limit: Optional[int] = Query(None, ge=0, le=1000),
+):
+    """List backups for this target, with receipts and the status block."""
+    from admin import backups as backups_api
+
+    cfg, settings = _backup_context()
+    return backups_api.list_payload(
+        cfg, settings, backup_class=backup_class, limit=limit
+    )
+
+
+@app.get("/api/backups/status")
+@require_admin
+async def api_backups_status(request: Request):
+    """Report backup health: ok, stale, failing, or never_run."""
+    from admin import backups as backups_api
+
+    cfg, settings = _backup_context()
+    return backups_api.status_payload(cfg, settings)
+
+
+@app.get("/api/backups/health")
+@require_admin
+async def api_backups_health(request: Request):
+    """Report whether this target is recoverable.
+
+    The HTTP form of ``tapdb backup health``, sharing one implementation.
+    A *failing* target is still a 200 -- see ``backups_api.health_payload``
+    for why a broken backup must not be reported as a broken service.
+    """
+    from admin import backups as backups_api
+
+    cfg, settings = _backup_context()
+    return backups_api.health_payload(cfg, settings)
+
+
+@app.get("/api/backups/plan")
+@require_admin
+async def api_backups_plan(
+    request: Request,
+    backup_class: Optional[str] = Query(None, alias="class"),
+    strict: bool = Query(False),
+):
+    """Report what a backup would capture. Never writes anything."""
+    from admin import backups as backups_api
+
+    cfg, settings = _backup_context()
+    return backups_api.plan_payload(
+        cfg, settings, backup_class=backup_class, strict=strict
+    )
+
+
+@app.post("/api/backups", status_code=201)
+@require_admin
+async def api_backups_create(request: Request):
+    """Create a backup and return its manifest."""
+    from admin import backups as backups_api
+
+    cfg, settings = _backup_context()
+    body = await _json_body(request)
+    return backups_api.create_payload(
+        cfg, settings, body=body, actor=backups_api.api_actor(request)
+    )
+
+
+@app.post("/api/backups/{ref}/verify")
+@require_admin
+async def api_backups_verify(request: Request, ref: str):
+    """Verify a stored backup; 422 when the artifact is corrupt."""
+    from admin import backups as backups_api
+
+    cfg, settings = _backup_context()
+    body = await _json_body(request)
+    return backups_api.verify_payload(
+        cfg,
+        settings,
+        ref=ref,
+        level=str(body.get("level") or "deep"),
+        actor=backups_api.api_actor(request),
+    )
+
+
+@app.post("/api/backups/{ref}/restore/stage")
+@require_admin
+async def api_backups_restore_stage(request: Request, ref: str):
+    """Stage a restore. Read-only; returns the fingerprint and typed label."""
+    from admin import backups as backups_api
+
+    cfg, settings = _backup_context()
+    body = await _json_body(request)
+    return backups_api.stage_payload(cfg, settings, ref=ref, body=body)
+
+
+@app.post("/api/backups/{ref}/restore/apply")
+@require_admin
+async def api_backups_restore_apply(request: Request, ref: str):
+    """Apply a staged restore, after re-staging and re-checking everything."""
+    from admin import backups as backups_api
+
+    cfg, settings = _backup_context()
+    body = await _json_body(request)
+    return backups_api.apply_payload(
+        cfg, settings, ref=ref, body=body, actor=backups_api.api_actor(request)
+    )
+
+
+@app.post("/api/backups/{ref}/rehearse")
+@require_admin
+async def api_backups_rehearse(request: Request, ref: str):
+    """Rehearse a restore into a throwaway database; returns evidence."""
+    from admin import backups as backups_api
+
+    cfg, settings = _backup_context()
+    body = await _json_body(request)
+    return backups_api.rehearse_payload(
+        cfg, settings, ref=ref, body=body, actor=backups_api.api_actor(request)
+    )

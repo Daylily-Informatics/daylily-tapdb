@@ -13,6 +13,20 @@ JSON_COMMANDS: set[tuple[str | None, str]] = {
     ("validation", "revalidate"),
     ("validation", "editor-data"),
     ("repair", "create"),
+    ("backup", "plan"),
+    ("backup", "create"),
+    ("backup", "verify"),
+    ("backup", "list"),
+    ("backup", "restore-plan"),
+    ("backup", "restore"),
+    ("backup", "rehearse"),
+    # `backup health` emits JSON on stdout unconditionally, so the global
+    # --json flag changes nothing about its output. It is registered here
+    # anyway: without it `tapdb --json backup health` -- the correct flag
+    # position -- is rejected as a contract violation, which would hand a
+    # monitoring caller an unparseable error for spelling the command right.
+    ("backup", "health"),
+    ("backup", "prune"),
 }
 
 MUTATING_COMMANDS = {
@@ -58,6 +72,10 @@ MUTATING_COMMANDS = {
     ("cognito/config", "update"),
     ("aurora", "create"),
     ("aurora", "delete"),
+    ("backup", "create"),
+    ("backup", "restore"),
+    ("backup", "rehearse"),
+    ("backup", "prune"),
 }
 
 INTERACTIVE_COMMANDS = {
@@ -66,6 +84,29 @@ INTERACTIVE_COMMANDS = {
     ("db/data", "restore"),
     ("users", "delete"),
     ("aurora", "delete"),
+    # The replacement for `db data restore` must not be less guarded than the
+    # command it supersedes.
+    ("backup", "restore"),
+    # `backup prune` is deliberately absent. Retention is a scheduled job, and
+    # a confirmation prompt in a cron path gets defeated with `yes |` -- which
+    # trains the reflex that defeats every other prompt too. Its guards are the
+    # typed target label, the dry-run default, and the delete ceiling, none of
+    # which a pipe can satisfy.
+}
+
+#: Commands that honour the framework-level ``--dry-run``.
+#:
+#: **Must stay a subset of MUTATING_COMMANDS.** ``CommandPolicy.__post_init__``
+#: raises when ``supports_dry_run`` is set without ``mutates_state``, and
+#: policies are built during registration -- so a violation breaks the whole
+#: CLI at import time, not when the offending command is invoked. Read-only
+#: commands (plan, restore-plan, verify, list) have nothing to simulate and
+#: must never appear here.
+DRY_RUN_COMMANDS = {
+    ("backup", "create"),
+    ("backup", "restore"),
+    ("backup", "rehearse"),
+    ("backup", "prune"),
 }
 
 LONG_RUNNING_COMMANDS = {
@@ -83,6 +124,10 @@ LONG_RUNNING_COMMANDS = {
     ("aurora", "create"),
     ("aurora", "delete"),
     ("aurora", "connect"),
+    ("backup", "create"),
+    ("backup", "restore"),
+    ("backup", "rehearse"),
+    ("backup", "prune"),
 }
 
 
@@ -99,4 +144,5 @@ def policy_for_command(group_path: str | None, name: str) -> CommandPolicy:
         mutates_state=key in MUTATING_COMMANDS or key in INTERACTIVE_COMMANDS,
         interactive=key in INTERACTIVE_COMMANDS,
         long_running=key in LONG_RUNNING_COMMANDS,
+        supports_dry_run=key in DRY_RUN_COMMANDS,
     )

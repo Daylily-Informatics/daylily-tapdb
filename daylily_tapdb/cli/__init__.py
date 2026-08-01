@@ -213,6 +213,8 @@ def build_app():
     import typer
     from rich.table import Table
 
+    from daylily_tapdb.cli.backup import backup_app
+
     # Import subcommand modules (require Typer/Rich)
     from daylily_tapdb.cli.cognito import cognito_app
     from daylily_tapdb.cli.db import (
@@ -295,6 +297,7 @@ def build_app():
     app.add_typer(pg_app, name="pg")
     app.add_typer(validation_app, name="validation")
     app.add_typer(repair_app, name="repair")
+    app.add_typer(backup_app, name="backup")
     app.add_typer(user_app, name="users")
     app.add_typer(cognito_app, name="cognito")
 
@@ -954,6 +957,35 @@ def build_app():
             "db_pool_recycle": 1800,
         }
 
+    def _validated_storage_uri(value: str, *, field_name: str) -> str:
+        """Reject a credential-bearing URI before it is written to the config."""
+        from daylily_tapdb.backup.manifest import assert_credential_free_uri
+
+        try:
+            return assert_credential_free_uri(str(value), field_name=field_name)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    def _default_backup_config() -> dict:
+        """Defaults for the backup lifecycle section.
+
+        An empty storage URI means "under this config directory", so a freshly
+        initialized target can take a backup without any further setup.
+        ``expected_interval_hours: 0`` means no cadence is configured, which the
+        status page reports as such rather than implying a schedule that does
+        not exist.
+        """
+        return {
+            "storage": {"uri": ""},
+            "retention": {"keep_last": 30},
+            "encryption": {"mode": "none"},
+            "signing": {"mode": "none", "kms_key_arn": ""},
+            "provider_snapshots": {"enabled": False, "cluster_identifier": ""},
+            "rehearsal": {"database_prefix": "tapdb_rehearsal"},
+            "expected_interval_hours": 0,
+            "receipt_mirror": {},
+        }
+
     def _initialize_namespaced_config(
         *,
         client_id: str,
@@ -1076,6 +1108,29 @@ def build_app():
             "safety_tier": normalized_safety_tier,
             "destructive_operations": normalized_destructive_operations,
         }
+
+        # Merge rather than overwrite: re-running `config init` must not silently
+        # discard a storage destination or cadence an operator already set.
+        backup_root = root.get("backup")
+        if not isinstance(backup_root, dict):
+            root["backup"] = _default_backup_config()
+        else:
+            merged_backup = _default_backup_config()
+            for key, value in backup_root.items():
+                if key in {
+                    "storage",
+                    "retention",
+                    "encryption",
+                    "signing",
+                    "provider_snapshots",
+                    "rehearsal",
+                    "receipt_mirror",
+                } and isinstance(value, dict):
+                    merged_backup[key].update(value)
+                else:
+                    merged_backup[key] = value
+            root["backup"] = merged_backup
+
         root.pop("environments", None)
 
         _write_yaml_or_json_file(config_path, root)
@@ -1335,6 +1390,38 @@ def build_app():
             "--destructive-operations",
             help="Destructive operation policy: blocked, confirm_required, or allowed",
         ),
+        backup_storage_uri: Optional[str] = typer.Option(
+            None,
+            "--backup-storage-uri",
+            help="Backup storage destination (file:// or s3://; empty = config dir)",
+        ),
+        backup_keep_last: Optional[int] = typer.Option(
+            None,
+            "--backup-keep-last",
+            help="Backups to retain (recorded in manifests; enforcement is external)",
+        ),
+        backup_expected_interval_hours: Optional[float] = typer.Option(
+            None,
+            "--backup-expected-interval-hours",
+            help="Expected backup cadence in hours (0 = no cadence configured)",
+        ),
+        backup_expected_rehearsal_interval_days: Optional[float] = typer.Option(
+            None,
+            "--backup-expected-rehearsal-interval-days",
+            help=(
+                "Expected restore-rehearsal cadence in days (0 = no cadence configured)"
+            ),
+        ),
+        backup_rehearsal_database_prefix: Optional[str] = typer.Option(
+            None,
+            "--backup-rehearsal-database-prefix",
+            help="Database name prefix used for restore rehearsals",
+        ),
+        backup_receipt_mirror_uri: Optional[str] = typer.Option(
+            None,
+            "--backup-receipt-mirror-uri",
+            help="Receipt mirror destination (recorded in receipts, not written here)",
+        ),
     ) -> None:
         """Update fields inside a single-target TAPDB v4 config."""
         from daylily_tapdb.cli.db_config import get_config_path
@@ -1505,6 +1592,71 @@ def build_app():
         if admin_metrics_flush_seconds is not None:
             metrics["flush_seconds"] = float(admin_metrics_flush_seconds)
             admin_changed = True
+        backup_changed = False
+        backup_root = root.get("backup")
+        if not isinstance(backup_root, dict):
+            backup_root = _default_backup_config()
+            root["backup"] = backup_root
+        if backup_storage_uri is not None:
+            storage_section = _required_mapping(backup_root, "storage", "backup")
+            # Reject credential-bearing URIs at write time, not just at read
+            # time -- otherwise a bad value sits in the file until a backup
+            # runs, and manifests carry storage URIs to shared destinations.
+            storage_section["uri"] = _validated_storage_uri(
+                backup_storage_uri, field_name="backup.storage.uri"
+            )
+            backup_changed = True
+        if backup_keep_last is not None:
+            retention_section = _required_mapping(backup_root, "retention", "backup")
+            if int(backup_keep_last) < 1:
+                raise RuntimeError("--backup-keep-last must be at least 1")
+            retention_section["keep_last"] = int(backup_keep_last)
+            backup_changed = True
+        if backup_expected_interval_hours is not None:
+            if float(backup_expected_interval_hours) < 0:
+                raise RuntimeError(
+                    "--backup-expected-interval-hours must be zero or greater "
+                    "(zero means no cadence is configured)"
+                )
+            backup_root["expected_interval_hours"] = float(
+                backup_expected_interval_hours
+            )
+            backup_changed = True
+        if backup_expected_rehearsal_interval_days is not None:
+            if float(backup_expected_rehearsal_interval_days) < 0:
+                raise RuntimeError(
+                    "--backup-expected-rehearsal-interval-days must be zero or "
+                    "greater (zero means no cadence is configured)"
+                )
+            # Top-level under `backup:`, matching expected_interval_hours --
+            # not nested under `backup.rehearsal`, whose block `config init`
+            # merges wholesale and whose exact contents are asserted by tests.
+            backup_root["expected_rehearsal_interval_days"] = float(
+                backup_expected_rehearsal_interval_days
+            )
+            backup_changed = True
+        if backup_rehearsal_database_prefix is not None:
+            rehearsal_section = _required_mapping(backup_root, "rehearsal", "backup")
+            rehearsal_section["database_prefix"] = (
+                validate_postgres_identifier_component(
+                    backup_rehearsal_database_prefix,
+                    field_name="backup.rehearsal.database_prefix",
+                )
+            )
+            backup_changed = True
+        if backup_receipt_mirror_uri is not None:
+            mirror = str(backup_receipt_mirror_uri).strip()
+            backup_root["receipt_mirror"] = (
+                {
+                    "uri": _validated_storage_uri(
+                        mirror, field_name="backup.receipt_mirror.uri"
+                    )
+                }
+                if mirror
+                else {}
+            )
+            backup_changed = True
+
         safety_changed = False
         safety_root = _required_mapping(root, "safety", "root")
         if safety_tier is not None:
@@ -1527,6 +1679,7 @@ def build_app():
             and not clear_fields
             and not admin_changed
             and not safety_changed
+            and not backup_changed
         ):
             raise RuntimeError("No config changes requested.")
 

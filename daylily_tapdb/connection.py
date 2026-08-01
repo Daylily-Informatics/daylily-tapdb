@@ -58,7 +58,7 @@ class TAPDBConnection:
         db_user: Optional[str] = None,
         db_name: str = "tapdb",
         app_username: Optional[str] = None,
-        echo_sql: Optional[bool] = None,
+        echo_sql: bool = False,
         pool_size: int = 5,
         max_overflow: int = 10,
         pool_timeout: int = 30,
@@ -83,7 +83,8 @@ class TAPDBConnection:
             db_user: Database user. Required when db_url is not supplied.
             db_name: Database name. Required when db_url is not supplied.
             app_username: Username for audit logging. Required.
-            echo_sql: Log SQL statements.
+            echo_sql: Log every SQL statement the engine emits. Defaults to
+                False; callers generally want this off outside debugging.
             pool_size: Connection pool size
             max_overflow: Max connections above pool_size
             pool_timeout: Seconds to wait for connection
@@ -113,8 +114,6 @@ class TAPDBConnection:
         if not self.owner_repo_name:
             raise ValueError("owner_repo_name is required")
 
-        if echo_sql is None:
-            raise ValueError("echo_sql is required")
         if engine_type not in {"local", "compose", "aurora"}:
             raise ValueError("engine_type must be 'local', 'compose', or 'aurora'")
 

@@ -73,7 +73,16 @@ Use these functional groups only:
 
 3. `tapdb db`
 - Logical database operations only.
-- DB create/delete, schema apply/status/reset/migrate, data seed/backup/restore.
+- DB create/delete, schema apply/status/reset/migrate, data seed.
+- `data backup` / `data restore` are **deprecated**; use `tapdb backup`.
+
+3a. `tapdb backup`
+- Backup and recovery lifecycle only.
+- `plan`, `create`, `verify`, `list`, `restore-plan`, `restore`, `rehearse`.
+- Schema-scoped logical backups, staged restores, rehearsals, hash-chained
+  receipts. See `docs/backup-and-recovery.md`.
+- Exit codes are contractual: `0` ok, `1` ran and found a problem, `2` could
+  not run.
 
 4. `tapdb aurora`
 - Cloud infrastructure lifecycle only.
@@ -258,6 +267,24 @@ JSON endpoints:
 - public: `GET /api/graph/data`, `GET /api/templates`, `GET /api/instances`, `GET /api/object/{euid}`
 - admin-only: `POST /api/lineage`, `DELETE /api/object/{euid}`
 
+Backup routes in `admin/main.py` (all admin-only):
+- `GET /api/backups`, `GET /api/backups/status`, `GET /api/backups/plan`
+- `POST /api/backups` (201), `POST /api/backups/{ref}/verify`
+- `POST /api/backups/{ref}/restore/stage`, `POST /api/backups/{ref}/restore/apply`
+- `POST /api/backups/{ref}/rehearse`
+
+Embedded GUI backup routes in `daylily_tapdb/gui/router.py` (all admin-only,
+403 otherwise):
+- pages: `GET /admin/backups`, `GET /admin/backups/{ref}/restore`
+- JSON: `GET /api/admin/backups`, `GET /api/admin/backups/status`,
+  `GET /api/admin/backups/{ref}/restore`
+- actions: `POST /admin/backups/create`, `POST /admin/backups/{ref}/verify`,
+  `POST /admin/backups/{ref}/rehearse`, `POST /admin/backups/{ref}/restore`
+
+All three surfaces call the same `daylily_tapdb.backup` service functions. That
+is enforced at runtime by `tests/test_backup_surfaces_contract.py` — do not add
+a check, a `pg_dump`, or a receipt write to a surface.
+
 `/info` includes DB + Cognito runtime details for authenticated users and admin-only DB inventory enumeration.
 
 ## HTTPS Policy
@@ -290,9 +317,17 @@ Before running commands in shared OS accounts:
 Only execute with explicit user intent:
 - `tapdb db delete`
 - `tapdb db schema reset`
+- `tapdb backup restore --mode in-place` (replaces the live schema)
 - `tapdb aurora delete`
 - Cognito delete operations
 - Manual removal of runtime data directories
+
+`tapdb backup restore` defaults to `--mode isolated`, which restores into a
+separate database and never touches live data. Only `--mode in-place` is
+destructive, and it requires the typed target label
+`<client_id>/<database_name>/<schema_name>@<database>` unless
+`safety.destructive_operations` is `allowed`. Setting that to `blocked` refuses
+in-place restores outright.
 
 ## Agent Delivery Expectations
 When making TAPDB changes:
