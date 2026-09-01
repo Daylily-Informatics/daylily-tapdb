@@ -47,6 +47,20 @@ DEFAULT_DB_POOL_SIZE = 5
 DEFAULT_DB_MAX_OVERFLOW = 10
 DEFAULT_DB_POOL_TIMEOUT = 30
 DEFAULT_DB_POOL_RECYCLE = 1800
+DEFAULT_BACKUP_KEEP_LAST = 30
+DEFAULT_BACKUP_REHEARSAL_PREFIX = "tapdb_rehearsal"
+DEFAULT_BACKUP_EXPECTED_INTERVAL_HOURS = 0.0
+#: Days between restore rehearsals. Defaults to 0 (disabled), mirroring
+#: ``expected_interval_hours``: the runbook recommends quarterly, but shipping
+#: 90 as a default would make every existing deployment start failing health on
+#: upgrade for a cadence nobody opted into. Opt-in, documented in the runbook.
+DEFAULT_BACKUP_EXPECTED_REHEARSAL_INTERVAL_DAYS = 0.0
+#: Artifact size above which `backup health` reports `skip` instead of reading
+#: and checksumming the newest recovery point. Health is polled; `backup
+#: verify` is the audit. **0 means no limit** -- always checksum, whatever the
+#: size -- which is the right choice for a small store and the wrong one for a
+#: 50 GB dump polled every five minutes.
+DEFAULT_BACKUP_HEALTH_VERIFY_MAX_BYTES = 1024 * 1024 * 1024
 _POSTGRES_IDENTIFIER_RE = re.compile(r"[^a-z0-9_]+")
 _SAFE_POSTGRES_IDENTIFIER_COMPONENT_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 _SUPPORTED_ENGINE_TYPES = {"aurora", "compose", "local"}
@@ -589,6 +603,61 @@ def _float(value: Any, *, default: float) -> float:
         return default
 
 
+def _unparseable_number(value: Any, *, integral: bool = False) -> bool:
+    """Return True when a value is present but is not a number.
+
+    ``_int``/``_float`` fall back to their default on a parse failure, which is
+    the right behaviour for a getter -- a typo must not crash the CLI. But it
+    makes "absent" and "``24h``" indistinguishable downstream, and for
+    ``expected_interval_hours`` the default is ``0`` meaning *no cadence*: a
+    typo in the one field that arms the staleness alarm silently disarms it.
+
+    Callers that need to tell the two apart use this to report the typo instead
+    of inheriting a default that looks deliberate.
+
+    ``integral`` validates with the same parser that resolves the value.
+    ``keep_last`` is resolved by ``_int``, so ``3.7`` and ``1e3`` are floats
+    that ``int()`` rejects -- they would silently fall back to the default
+    while passing a float-based check. For a setting that governs deletion,
+    silently substituting a default is precisely the case this must catch.
+    """
+    raw = _string(value)
+    if not raw:
+        return False
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return True
+    # `inf` and `nan` parse cleanly and are catastrophic here. YAML spells them
+    # `.inf` / `.nan`, so they arrive already coerced to floats. An infinite
+    # cadence makes `age_hours > interval` unsatisfiable and `nan` makes every
+    # comparison False -- either one disarms the staleness alarm while
+    # reporting it as configured, which is exactly the silent failure this
+    # function exists to catch.
+    if parsed != parsed or parsed in (float("inf"), float("-inf")):
+        return True
+    if integral:
+        try:
+            int(raw)
+        except ValueError:
+            return True
+    return False
+
+
+def _credential_free_uri(value: str, *, field_name: str) -> str:
+    """Reject a URI that embeds credentials.
+
+    Delegates to the backup manifest's check so config validation and manifest
+    rendering can never disagree about what counts as credential-bearing.
+    """
+    from daylily_tapdb.backup.manifest import assert_credential_free_uri
+
+    try:
+        return assert_credential_free_uri(value, field_name=field_name)
+    except ValueError as exc:
+        raise RuntimeError(f"TapDB config {exc}") from exc
+
+
 def _string_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -598,6 +667,139 @@ def _string_list(value: Any) -> list[str]:
     if not text:
         return []
     return [item.strip() for item in text.split(",") if item.strip()]
+
+
+def get_backup_settings(
+    *,
+    config_path: Optional[str | Path] = None,
+    client_id: Optional[str] = None,
+    database_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """Resolve normalized backup settings from the active TapDB config.
+
+    Every field has a working default, so a config written before this section
+    existed keeps working -- the backup subsystem is additive against consumers
+    pinned to older releases.
+
+    Storage and mirror URIs are rejected here if they embed credentials. Doing
+    it at load means a bad config fails immediately rather than part-way
+    through a backup, and it keeps credentials out of manifests, which travel
+    to shared storage.
+    """
+    cfg = get_db_config(
+        config_path=config_path,
+        client_id=client_id,
+        database_name=database_name,
+    )
+    root, resolved_config_path, config_exists = _load_config_with_path(
+        config_path=config_path,
+        client_id=cfg.get("client_id"),
+        database_name=cfg.get("database_name"),
+    )
+    if not config_exists:
+        raise RuntimeError(f"No TAPDB config found at {resolved_config_path}.")
+
+    backup = _as_mapping(root.get("backup"), field_name="backup")
+    storage = _as_mapping(backup.get("storage"), field_name="backup.storage")
+    retention = _as_mapping(backup.get("retention"), field_name="backup.retention")
+    encryption = _as_mapping(backup.get("encryption"), field_name="backup.encryption")
+    signing = _as_mapping(backup.get("signing"), field_name="backup.signing")
+    provider_snapshots = _as_mapping(
+        backup.get("provider_snapshots"),
+        field_name="backup.provider_snapshots",
+    )
+    rehearsal = _as_mapping(backup.get("rehearsal"), field_name="backup.rehearsal")
+    receipt_mirror = _as_mapping(
+        backup.get("receipt_mirror"),
+        field_name="backup.receipt_mirror",
+    )
+
+    encryption_mode = _string(encryption.get("mode"), default="none").lower()
+    if encryption_mode not in {"none"}:
+        raise RuntimeError(
+            "TapDB config backup.encryption.mode must be 'none' in this release."
+        )
+
+    signing_mode = _string(signing.get("mode"), default="none").lower()
+    if signing_mode not in {"none", "kms"}:
+        raise RuntimeError(
+            "TapDB config backup.signing.mode must be one of: none, kms."
+        )
+
+    return {
+        "config_path": str(resolved_config_path),
+        "config_dir": str(Path(resolved_config_path).parent),
+        "storage_uri": _credential_free_uri(
+            _string(storage.get("uri")),
+            field_name="backup.storage.uri",
+        ),
+        "keep_last": _int(
+            retention.get("keep_last"),
+            default=DEFAULT_BACKUP_KEEP_LAST,
+        ),
+        "encryption_mode": encryption_mode,
+        "signing_mode": signing_mode,
+        "signing_kms_key_arn": _string(signing.get("kms_key_arn")),
+        "provider_snapshots_enabled": _bool(
+            provider_snapshots.get("enabled"),
+            default=False,
+        ),
+        "provider_snapshots_cluster_identifier": _string(
+            provider_snapshots.get("cluster_identifier")
+        ),
+        "rehearsal_database_prefix": _string(
+            rehearsal.get("database_prefix"),
+            default=DEFAULT_BACKUP_REHEARSAL_PREFIX,
+        ),
+        "expected_interval_hours": _float(
+            backup.get("expected_interval_hours"),
+            default=DEFAULT_BACKUP_EXPECTED_INTERVAL_HOURS,
+        ),
+        # Top-level under `backup:`, like expected_interval_hours -- not nested
+        # under `backup.rehearsal`, whose block is asserted by exact equality in
+        # tests/test_backup_config.py and which `config init` merges as a whole.
+        "health_verify_max_bytes": _int(
+            backup.get("health_verify_max_bytes"),
+            default=DEFAULT_BACKUP_HEALTH_VERIFY_MAX_BYTES,
+        ),
+        "expected_rehearsal_interval_days": _float(
+            backup.get("expected_rehearsal_interval_days"),
+            default=DEFAULT_BACKUP_EXPECTED_REHEARSAL_INTERVAL_DAYS,
+        ),
+        # Names of numeric settings that were present but unparseable. The
+        # resolved values above still carry their defaults so nothing crashes;
+        # this is how a reader tells "not configured" from "configured wrong",
+        # which for a cadence is the difference between "no alarm wanted" and
+        # "the alarm you asked for is not armed".
+        "invalid_fields": sorted(
+            name
+            for name, raw in (
+                ("expected_interval_hours", backup.get("expected_interval_hours")),
+                (
+                    "expected_rehearsal_interval_days",
+                    backup.get("expected_rehearsal_interval_days"),
+                ),
+                ("keep_last", retention.get("keep_last")),
+                (
+                    "health_verify_max_bytes",
+                    backup.get("health_verify_max_bytes"),
+                ),
+            )
+            if _unparseable_number(
+                raw, integral=name in ("keep_last", "health_verify_max_bytes")
+            )
+        ),
+        "receipt_mirror": (
+            {
+                "uri": _credential_free_uri(
+                    _string(receipt_mirror.get("uri")),
+                    field_name="backup.receipt_mirror.uri",
+                )
+            }
+            if _string(receipt_mirror.get("uri"))
+            else {}
+        ),
+    }
 
 
 def get_admin_settings(

@@ -26,24 +26,33 @@ class AuroraSchemaDeployer:
     """
 
     @staticmethod
-    def _build_psql_env(
+    def client_env(
         *,
         host: str,
         port: int,
         user: str,
-        database: str,
         region: str,
         iam_auth: bool = True,
         secret_arn: Optional[str] = None,
         password: Optional[str] = None,
         hostaddr: Optional[str] = None,
-    ) -> tuple[list[str], dict[str, str]]:
-        """Build psql command and environment variables for Aurora.
+    ) -> dict[str, str]:
+        """Build the environment any libpq client needs to reach Aurora.
 
-        Returns:
-            Tuple of (psql_cmd_args, env_vars).
+        Returns credential and TLS material only -- ``PGPASSWORD``,
+        ``PGSSLMODE``, ``PGSSLROOTCERT``, and optionally ``PGHOSTADDR``.
+
+        It deliberately does **not** carry the connection target. Host, port,
+        user, and database are passed as command-line flags, which ``psql``,
+        ``pg_dump``, and ``pg_restore`` all accept identically -- so every
+        client gets Aurora's IAM/Secrets-Manager auth and ``verify-full`` TLS
+        from this one function while building its own argv.
+
+        ``PGHOSTADDR`` pins the resolved address. That matters for
+        snapshot-consistent dumps: ``pg_dump --snapshot`` is only valid if it
+        reaches the same backend as the session that exported the snapshot, and
+        an Aurora cluster's reader and writer endpoints are different hosts.
         """
-        # Resolve credential
         if iam_auth:
             credential = AuroraConnectionBuilder.get_iam_auth_token(
                 region=region,
@@ -64,7 +73,6 @@ class AuroraSchemaDeployer:
                 "or an explicit password."
             )
 
-        # Ensure CA bundle
         ca_path = AuroraConnectionBuilder.ensure_ca_bundle()
 
         env_vars = os.environ.copy()
@@ -73,6 +81,41 @@ class AuroraSchemaDeployer:
         env_vars["PGSSLROOTCERT"] = str(ca_path)
         if hostaddr:
             env_vars["PGHOSTADDR"] = str(hostaddr).strip()
+
+        return env_vars
+
+    @classmethod
+    def _build_psql_env(
+        cls,
+        *,
+        host: str,
+        port: int,
+        user: str,
+        database: str,
+        region: str,
+        iam_auth: bool = True,
+        secret_arn: Optional[str] = None,
+        password: Optional[str] = None,
+        hostaddr: Optional[str] = None,
+    ) -> tuple[list[str], dict[str, str]]:
+        """Build psql command and environment variables for Aurora.
+
+        Thin wrapper over :meth:`client_env` that adds the psql argv, kept so
+        ``run_psql`` behaviour is unchanged by the extraction.
+
+        Returns:
+            Tuple of (psql_cmd_args, env_vars).
+        """
+        env_vars = cls.client_env(
+            host=host,
+            port=port,
+            user=user,
+            region=region,
+            iam_auth=iam_auth,
+            secret_arn=secret_arn,
+            password=password,
+            hostaddr=hostaddr,
+        )
 
         cmd = [
             "psql",

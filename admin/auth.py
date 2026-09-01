@@ -392,6 +392,8 @@ PERMISSIONS = {
         "can_create_lineage": False,
         "can_delete_object": False,
         "can_manage_users": False,
+        # Backups can be restored over live data; never a non-admin capability.
+        "can_manage_backups": False,
     },
     "admin": {
         "can_view_templates": True,
@@ -402,6 +404,7 @@ PERMISSIONS = {
         "can_create_lineage": True,
         "can_delete_object": True,
         "can_manage_users": True,
+        "can_manage_backups": True,
     },
 }
 

@@ -104,6 +104,7 @@ Client integration tests should prove mounted `/tapdb` routes through the host s
 - [`docs/template-authoring.md`](docs/template-authoring.md): template authoring.
 - [`docs/dag_spec.md`](docs/dag_spec.md): DAG/lineage model.
 - [`docs/identity-and-scoping.md`](docs/identity-and-scoping.md): identity, EUID, tenant, and scope model.
+- [`docs/backup-and-recovery.md`](docs/backup-and-recovery.md): backup/recovery operator runbook — what a backup captures, choosing a recovery method, and the staged restore procedure.
 - [`docs/plans/`](docs/plans/): TapDB ledgers.
 
 TapDB remains substrate-first. Service-specific workflow rules belong in the owning service.

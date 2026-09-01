@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Review restore{% endblock %}
+{% block content %}
+
+<section class="band">
+  <h1>Review restore</h1>
+  <p><strong>Backup:</strong> <code>{{ review.backup_id }}</code></p>
+
+  {# A GET form, deliberately -- switching mode must *re-stage*, not edit a
+     field in the apply form. The plan fingerprint covers the mode, so a mode
+     changed after staging would be refused as stale; worse, a hidden field an
+     operator could flip would mean applying an operation whose warnings and
+     step list they were never shown. Reloading re-runs preflight and re-renders
+     the whole page for the mode actually chosen.
+
+     Without this the destructive mode was reachable only by hand-editing the
+     query string -- see plan section 4.3, which specified a mode select. #}
+  <form method="get" action="{{ review_url }}" class="inline">
+    <label>Mode
+      <select name="mode" onchange="this.form.submit()">
+        <option value="isolated" {% if review.mode != "in_place" %}selected{% endif %}>
+          isolated - restore into a separate database
+        </option>
+        <option value="in-place" {% if review.mode == "in_place" %}selected{% endif %}>
+          in-place - REPLACE the live schema
+        </option>
+      </select>
+    </label>
+    <noscript><button type="submit">Change mode</button></noscript>
+  </form>
+
+  {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+
+  {% if review.mode == "in_place" %}
+  <div class="notice error">
+    <strong>This replaces live data in {{ review.target_schema }}.</strong>
+    A safety backup is taken first and the current schema is renamed aside
+    rather than dropped, so a failure at any point before verification passes
+    restores the original. It is still a destructive operation.
+  </div>
+  {% else %}
+  <div class="notice">
+    This restores into <code>{{ review.target_database }}</code>, a separate
+    database. Live data is not touched.
+  </div>
+  {% endif %}
+</section>
+
+<section class="band">
+  <h2>What will happen</h2>
+  <ol>
+    {% for step in review.steps %}<li>{{ step }}</li>{% endfor %}
+  </ol>
+</section>
+
+<section class="band">
+  <h2>Preflight</h2>
+  {% if review.blocking %}
+  <div class="notice error">
+    This restore cannot proceed until the following are resolved.
+  </div>
+  {% endif %}
+  <table>
+    <thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead>
+    <tbody>
+      {% for check in review.checks %}
+      <tr>
+        <td>{{ check.id }}</td>
+        <td>{{ check.status }}</td>
+        <td>{{ check.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="band">
+  <h2>Confirm</h2>
+  {% if review.blocking %}
+    <p>Apply is unavailable while preflight is failing.</p>
+  {% else %}
+  {# Only ask for the typed label when apply will actually check it. Asking
+     otherwise would assert a control the service does not enforce -- the
+     operator would reasonably infer their typing is what authorises this. #}
+  {% if review.confirmation_required %}
+  <p>
+    To proceed, type the target label exactly:
+    <br><code id="required-label">{{ review.required_confirm_target }}</code>
+  </p>
+  {% else %}
+  <p>
+    This restore does not touch live data, so no typed confirmation is
+    required.
+  </p>
+  {% endif %}
+  <form method="post" action="{{ apply_url }}" id="apply-form">
+    {# The fingerprint pins this exact plan. Apply re-stages and compares, so a
+       change between rendering and submitting is refused rather than silently
+       applying something the operator never saw. #}
+    <input type="hidden" name="plan_fingerprint" value="{{ review.plan_fingerprint }}">
+    <input type="hidden" name="mode" value="{{ review.mode }}">
+    {% if review.options.target_database %}
+      <input type="hidden" name="target_database"
+             value="{{ review.options.target_database }}">
+    {% endif %}
+    {% if review.confirmation_required %}
+    <label>Target label
+      <input type="text" name="confirm_target" id="confirm-target"
+             autocomplete="off" required>
+    </label>
+    {% endif %}
+    {% if review.mode == "in_place" %}
+    <label>
+      <input type="checkbox" name="keep_superseded" value="1">
+      Keep the replaced schema for inspection
+    </label>
+    {% endif %}
+    <button type="submit" id="apply-button"
+            {% if review.confirmation_required %}disabled{% endif %}>
+      Apply restore
+    </button>
+  </form>
+
+  {% if review.confirmation_required %}
+  {# Progressive enhancement only. The server re-checks the typed label and the
+     fingerprint regardless, so disabling the button is a courtesy, not the
+     control. #}
+  <script>
+    (function () {
+      var input = document.getElementById("confirm-target");
+      var button = document.getElementById("apply-button");
+      var required = document.getElementById("required-label").textContent.trim();
+      function sync() { button.disabled = input.value.trim() !== required; }
+      input.addEventListener("input", sync);
+      sync();
+    })();
+  </script>
+  {% endif %}
+  {% endif %}
+</section>
+
+<section class="band">
+  <p><a href="{{ backups_url }}">Back to backups</a></p>
+  <p class="detail">Plan fingerprint: <code>{{ review.plan_fingerprint }}</code></p>
+</section>
+
+{% endblock %}

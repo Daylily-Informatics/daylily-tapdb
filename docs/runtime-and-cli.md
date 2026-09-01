@@ -58,6 +58,7 @@ The root command is `tapdb`. The current help surface shows these top-level grou
 - `bootstrap`
 - `ui`
 - `db`
+- `backup`
 - `pg`
 - `users`
 - `cognito`
@@ -67,7 +68,12 @@ That split is deliberate:
 
 - `config` initializes or updates the explicit-target TAPDB config.
 - `pg` manages local or system PostgreSQL processes.
-- `db` manages database lifecycle, schema, migrations, backup, and data seeding.
+- `db` manages database lifecycle, schema, migrations, and data seeding.
+- `backup` is the backup and recovery lifecycle: `plan`, `create`, `verify`,
+  `list`, `restore-plan`, `restore`, `rehearse`. See
+  [`docs/backup-and-recovery.md`](backup-and-recovery.md). The older
+  `tapdb db data backup`/`restore` commands are deprecated in favour of this
+  group.
 - `ui` manages the admin server process.
 - `bootstrap` is the one-command orchestration path.
 - `users` manages actor-backed TAPDB auth users.

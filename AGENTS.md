@@ -135,3 +135,7 @@ pip install -e ".[dev,admin,cli]"    # Full install with admin UI
 - Add client-domain template packs to this repo
 - Push directly to `main`
 - Run `tapdb db delete` or `tapdb db schema reset` without explicit user intent
+- Run `tapdb backup restore --mode in-place` without explicit user intent (the
+  default `--mode isolated` is non-destructive)
+- Add a check, a `pg_dump`, or a receipt write to the CLI, admin API, or GUI —
+  those belong in `daylily_tapdb.backup`, and a contract test enforces it
