@@ -27,11 +27,14 @@ from daylily_tapdb.cli._registry_v2 import (
 )
 from daylily_tapdb.cli.backup import EXIT_ERROR, EXIT_FINDINGS, EXIT_OK
 
-runner = CliRunner()
+# CliRunner replaces process environment variables while it invokes the app.
+# Set the width on the runner itself so Typer/Rich help and validation output is
+# deterministic in both an interactive shell and GitHub's non-interactive CI.
+runner = CliRunner(env={"COLUMNS": "120"})
 
 
 @pytest.fixture(autouse=True)
-def _no_context_leak(monkeypatch: pytest.MonkeyPatch):
+def _no_context_leak():
     """Reset CLI context around every test in this file.
 
     Several tests here invoke the CLI with a deliberately missing config to
@@ -39,12 +42,9 @@ def _no_context_leak(monkeypatch: pytest.MonkeyPatch):
     leaks into the next module -- whose module-scoped fixtures are set up
     before any function-scoped context fixture can correct it.
 
-    The assertions below intentionally inspect option and validation text.
-    Rich/Typer truncates those strings at the narrow terminal width used by
-    non-interactive CI, so make the test rendering width explicit rather than
-    making its outcome depend on the runner's environment.
+    The assertions below intentionally inspect option and validation text; the
+    module's runner supplies a deterministic rendering width for that purpose.
     """
-    monkeypatch.setenv("COLUMNS", "120")
     from daylily_tapdb.cli.context import clear_cli_context
 
     clear_cli_context()
