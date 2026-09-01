@@ -27,10 +27,7 @@ from daylily_tapdb.cli._registry_v2 import (
 )
 from daylily_tapdb.cli.backup import EXIT_ERROR, EXIT_FINDINGS, EXIT_OK
 
-# CliRunner replaces process environment variables while it invokes the app.
-# Set the width on the runner itself so Typer/Rich help and validation output is
-# deterministic in both an interactive shell and GitHub's non-interactive CI.
-runner = CliRunner(env={"COLUMNS": "120"})
+runner = CliRunner()
 
 
 @pytest.fixture(autouse=True)
@@ -42,8 +39,6 @@ def _no_context_leak():
     leaks into the next module -- whose module-scoped fixtures are set up
     before any function-scoped context fixture can correct it.
 
-    The assertions below intentionally inspect option and validation text; the
-    module's runner supplies a deterministic rendering width for that purpose.
     """
     from daylily_tapdb.cli.context import clear_cli_context
 
