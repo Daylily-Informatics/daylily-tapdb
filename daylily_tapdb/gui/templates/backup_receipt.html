@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Backup operation result{% endblock %}
+{% block content %}
+
+{# The evidence page. Before this existed, applying a restore in the GUI
+   redirected with a one-word notice: the ten post-restore checks the CLI
+   prints were computed, used to decide whether to keep the restore, and then
+   thrown away. An operator had no way to see what had actually been verified.
+
+   It renders a *receipt* rather than a transient result, so the same page can
+   be reopened later and shows what an auditor would see. #}
+
+<section class="band">
+  <h1>{{ receipt.operation|replace("backup_", "")|capitalize }} result</h1>
+
+  {% if receipt.status == "succeeded" %}
+  <div class="notice ok">
+    <strong>Succeeded.</strong>
+    {% if checks %}
+      Verified by {{ checks|length }} check(s), listed below.
+    {% else %}
+      This operation records no verification checks.
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="notice error">
+    <strong>Failed.</strong>
+    {% if receipt.detail.error %}{{ receipt.detail.error }}{% endif %}
+  </div>
+  {% endif %}
+
+  {% if failed_checks %}
+  <div class="notice error">
+    <strong>{{ failed_checks|length }} check(s) failed.</strong>
+    A restore whose verification fails is not left in place silently -- see the
+    detail on each row.
+  </div>
+  {% endif %}
+
+  <table>
+    <tbody>
+      <tr><th>Receipt</th><td><code>{{ receipt.receipt_id }}</code></td></tr>
+      <tr><th>When</th><td>{{ receipt.created_at }}</td></tr>
+      <tr><th>Operation</th><td>{{ receipt.operation }}</td></tr>
+      <tr><th>Backup</th><td><code>{{ receipt.backup_id or "-" }}</code></td></tr>
+      <tr><th>Target</th><td><code>{{ receipt.target_label or "-" }}</code></td></tr>
+      <tr>
+        <th>By</th>
+        <td>{{ receipt.actor.username or "-" }} ({{ receipt.actor.surface }})</td>
+      </tr>
+      {% if receipt.detail.mode %}
+      <tr><th>Mode</th><td>{{ receipt.detail.mode }}</td></tr>
+      {% endif %}
+      {% if receipt.detail.target_database %}
+      <tr>
+        <th>Restored into</th>
+        <td><code>{{ receipt.detail.target_database }}</code></td>
+      </tr>
+      {% endif %}
+      {% if receipt.detail.safety_backup_id %}
+      <tr>
+        <th>Safety backup</th>
+        <td><code>{{ receipt.detail.safety_backup_id }}</code></td>
+      </tr>
+      {% endif %}
+      {% if receipt.detail.evidence_key %}
+      <tr>
+        <th>Rehearsal evidence</th>
+        <td><code>{{ receipt.detail.evidence_key }}</code></td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  {% if receipt.detail.quarantined %}
+  <div class="notice error">
+    <strong>Quarantined.</strong> The restore completed but failed
+    verification, so the database was kept for inspection rather than dropped.
+    Do not treat it as a good copy.
+  </div>
+  {% endif %}
+</section>
+
+{% if receipt.detail.sequences_advanced %}
+<section class="band">
+  <h2>Sequences advanced</h2>
+  <p class="detail">
+    An in-place restore rewinds sequences along with rows. These were pushed
+    back past everything the target had already issued, so no identifier can be
+    handed out twice.
+  </p>
+  <table>
+    <thead><tr><th>Sequence</th><th>Next was</th><th>Next now</th></tr></thead>
+    <tbody>
+      {% for name, moved in receipt.detail.sequences_advanced.items() %}
+      <tr>
+        <td><code>{{ name }}</code></td>
+        <td>{{ moved.from_next }}</td>
+        <td>{{ moved.to_next }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if checks %}
+<section class="band">
+  <h2>Verification</h2>
+  <table>
+    <thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead>
+    <tbody>
+      {% for check in checks %}
+      <tr>
+        <td><code>{{ check.id }}</code></td>
+        <td>{{ check.status }}</td>
+        <td>{{ check.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="band">
+  <p><a href="{{ backups_url }}">Back to backups</a></p>
+</section>
+
+{% endblock %}

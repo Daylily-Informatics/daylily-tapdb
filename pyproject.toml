@@ -159,6 +159,11 @@ ignore = ["E501"]
 [tool.ruff.lint.per-file-ignores]
 "daylily_tapdb/models/*.py" = ["N801"]
 "admin/db_pool.py" = ["N806"]
+# These fakes mirror boto3's PascalCase keyword arguments (Bucket=, Key=,
+# DBClusterIdentifier=). Renaming them would make each double diverge from the
+# API it stands in for, which is the whole point of the tests.
+"tests/test_backup_storage_s3.py" = ["N803"]
+"tests/test_backup_snapshots.py" = ["N803"]
 
 [tool.mypy]
 python_version = "3.10"
