@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 import pytest
+from typer import rich_utils
 from typer.testing import CliRunner
 
 from daylily_tapdb.cli import app, framework_app
@@ -31,15 +32,20 @@ runner = CliRunner()
 
 
 @pytest.fixture(autouse=True)
-def _no_context_leak():
-    """Reset CLI context around every test in this file.
+def _no_context_leak(monkeypatch: pytest.MonkeyPatch):
+    """Reset CLI context and keep text-contract assertions capture-safe.
 
     Several tests here invoke the CLI with a deliberately missing config to
     check exit codes. That selection is global state, and without this it
     leaks into the next module -- whose module-scoped fixtures are set up
     before any function-scoped context fixture can correct it.
 
+    GitHub Actions sets ``GITHUB_ACTIONS``, which makes Typer force Rich
+    terminal styling even inside ``CliRunner``'s captured non-TTY streams.
+    That injects ANSI sequences into the option text asserted below. The
+    commands remain Rich-capable for users; only this test capture is plain.
     """
+    monkeypatch.setattr(rich_utils, "FORCE_TERMINAL", False)
     from daylily_tapdb.cli.context import clear_cli_context
 
     clear_cli_context()
