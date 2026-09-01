@@ -89,7 +89,7 @@ and no compatibility path for missing governance metadata.
 
 The public Meridian domain-code authority is
 [`lsmc-bio/meridian-registry`](https://github.com/lsmc-bio/meridian-registry).
-TapDB consumes it through `meridian-euid==0.4.7`, which pins public registry
+TapDB consumes it through `meridian-euid==0.4.8`, which pins public registry
 version `0.1.1` and exposes `meridian-euid domain-check ... --registry-index`.
 The configured `meta.domain_registry_path` is still a local runtime fixture used
 to assert that the selected deployment domain is registered for that runtime.

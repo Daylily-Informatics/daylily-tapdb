@@ -125,7 +125,7 @@ examples, tests, and isolated TapDB-only bootstrap flows.
 
 Public Meridian domain-code allocation now lives in
 [`lsmc-bio/meridian-registry`](https://github.com/lsmc-bio/meridian-registry).
-TapDB depends on `meridian-euid==0.4.7`, which pins `meridian-registry` at
+TapDB depends on `meridian-euid==0.4.8`, which pins `meridian-registry` at
 `0.1.1` and provides the explicit checker:
 
 ```bash
