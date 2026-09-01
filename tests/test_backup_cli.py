@@ -31,14 +31,20 @@ runner = CliRunner()
 
 
 @pytest.fixture(autouse=True)
-def _no_context_leak():
+def _no_context_leak(monkeypatch: pytest.MonkeyPatch):
     """Reset CLI context around every test in this file.
 
     Several tests here invoke the CLI with a deliberately missing config to
     check exit codes. That selection is global state, and without this it
     leaks into the next module -- whose module-scoped fixtures are set up
     before any function-scoped context fixture can correct it.
+
+    The assertions below intentionally inspect option and validation text.
+    Rich/Typer truncates those strings at the narrow terminal width used by
+    non-interactive CI, so make the test rendering width explicit rather than
+    making its outcome depend on the runner's environment.
     """
+    monkeypatch.setenv("COLUMNS", "120")
     from daylily_tapdb.cli.context import clear_cli_context
 
     clear_cli_context()
