@@ -37,12 +37,12 @@ dependency pin, resolved lock, and version-specific documentation notes.
 | LOCK-001 | dependencies | Resolve `uv.lock` to the published `0.4.8` artifacts | SUCCESS | contract_test | Gate 1 | Codex | `uv lock --upgrade-package meridian-euid`; `uv.lock` records `0.4.8` sdist and wheel hashes |  | Lock resolution uses the PyPI artifacts published for this release. |
 | DOC-001 | config documentation | Update all version-specific registry notes | SUCCESS | historical_docs_only | Gate 1 | Codex | `config/tapdb-config-example.yaml`; `docs/identity-and-scoping.md`; `docs/runtime-and-cli.md` | Current-source inventory found three references, not one. | All three notes now cite `0.4.8` and retain the registry `0.1.1` relationship. |
 | VERIFY-001 | packaging | Confirm exact `0.4.8` resolution and clean scoped diff | SUCCESS | contract_test | Gate 5 | Codex | `uv sync --locked`; `importlib.metadata.version` -> `0.4.8`; `meridian_euid.__version__` -> `0.4.8`; `uv lock --check`; `git diff --check` |  | Exact dependency resolution and scoped diff verified without a duplicate full local suite. |
-| PR-001 | integration | Commit, push, open a PR, and use its CI as the regression run | OPEN | contract_test | Gate 5 | Codex | Pending |  |  |
-| FINAL-001 | handoff | Terminalize every ledger row and report the downstream pin | OPEN | plan_amendment | Gate 5 | Codex | Pending |  |  |
+| PR-001 | integration | Commit, push, open a PR, and use its CI as the regression run | SUCCESS | contract_test | Gate 5 | Codex | [PR #99](https://github.com/Daylily-Informatics/daylily-tapdb/pull/99), `6e63567`, merge `6da8994d97fe15423fd9916eb21f82b839d17caf` |  | Ruff, Bandit, and the full test job passed before a normal merge. |
+| FINAL-001 | handoff | Terminalize every ledger row and report the downstream pin | SUCCESS | plan_amendment | Gate 5 | Codex | This ledger closeout commit is merged through its required docs-only PR |  | The merge of this closeout PR makes every row terminal without rerunning the unchanged regression matrix. |
 
 ## Terminal-State Report
 
-- `SUCCESS`: 5
-- Working rows: 2
-- All rows terminal: no.
-- Objective complete: no.
+- `SUCCESS`: 7
+- Working rows: 0
+- All rows terminal: yes.
+- Objective complete: yes. TapDB `main` now pins `meridian-euid==0.4.8`.
