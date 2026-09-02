@@ -98,14 +98,28 @@ def backup(env):
 # ---------------------------------------------------------------------------
 
 
-def _exec(cfg, sql: str, *, commit: bool = True, database: str | None = None):
+def _exec(
+    cfg,
+    sql: str,
+    *,
+    commit: bool = True,
+    database: str | None = None,
+    schema_name: str | None = None,
+    connection_role: str = "runtime",
+):
     """Run a statement, returning rows when there are any.
 
     DDL returns no result set, and asking one for rows raises rather than
     yielding an empty list -- so branch on ``returns_rows`` instead.
     """
-    probe = dict(cfg, database=database) if database else cfg
-    with service.open_session(probe, app_username="pytest") as conn:
+    probe = dict(cfg)
+    if database:
+        probe["database"] = database
+    if schema_name:
+        probe["schema_name"] = schema_name
+    with service.open_session(
+        probe, app_username="pytest", connection_role=connection_role
+    ) as conn:
         with conn.session_scope(commit=commit) as session:
             result = session.execute(text(sql))
             return result.fetchall() if result.returns_rows else []
@@ -130,7 +144,10 @@ def _schemas(cfg):
     return {
         r[0]
         for r in _exec(
-            cfg, "SELECT schema_name FROM information_schema.schemata", commit=False
+            cfg,
+            "SELECT schema_name FROM information_schema.schemata",
+            commit=False,
+            connection_role="operator",
         )
     }
 
@@ -231,8 +248,16 @@ def test_a_table_in_another_schema_is_not_captured(env):
     manage, and a restore would then recreate someone else's table.
     """
     cfg, settings = env
-    _exec(cfg, "CREATE TABLE IF NOT EXISTS public.stranger (id int)")
-    _exec(cfg, "INSERT INTO public.stranger VALUES (1)")
+    _exec(
+        cfg,
+        "CREATE TABLE IF NOT EXISTS public.stranger (id int)",
+        connection_role="operator",
+    )
+    _exec(
+        cfg,
+        "INSERT INTO public.stranger VALUES (1)",
+        connection_role="operator",
+    )
 
     try:
         manifest = service.create_backup(cfg, settings).manifest
@@ -240,7 +265,11 @@ def test_a_table_in_another_schema_is_not_captured(env):
         assert "stranger" not in manifest.row_counts
         assert manifest.content_inventory["schema_names_seen"] == [cfg["schema_name"]]
     finally:
-        _exec(cfg, "DROP TABLE IF EXISTS public.stranger")
+        _exec(
+            cfg,
+            "DROP TABLE IF EXISTS public.stranger",
+            connection_role="operator",
+        )
 
 
 def test_every_managed_table_is_captured(env):
@@ -254,6 +283,7 @@ def test_every_managed_table_is_captured(env):
             "SELECT table_name FROM information_schema.tables "
             f"WHERE table_schema = '{schema}' AND table_type = 'BASE TABLE'",
             commit=False,
+            connection_role="operator",
         )
     }
 
@@ -272,17 +302,26 @@ def test_every_managed_table_is_captured(env):
 
 
 def test_an_in_place_restore_leaves_a_neighbouring_schema_untouched(env, backup):
-    """TapDB usually shares a database. An in-place restore replaces *its*
-    schema and must not disturb whatever else lives alongside it.
-    """
+    """An in-place restore replaces only its configured schema."""
     cfg, settings = env
-    _exec(cfg, "CREATE SCHEMA IF NOT EXISTS neighbour")
-    _exec(cfg, "CREATE TABLE IF NOT EXISTS neighbour.ledger (id int, note text)")
-    _exec(cfg, "INSERT INTO neighbour.ledger VALUES (1, 'not yours')")
+    _exec(cfg, "CREATE SCHEMA IF NOT EXISTS neighbour", connection_role="operator")
+    _exec(
+        cfg,
+        "CREATE TABLE IF NOT EXISTS neighbour.ledger (id int, note text)",
+        connection_role="operator",
+    )
+    _exec(
+        cfg,
+        "INSERT INTO neighbour.ledger VALUES (1, 'not yours')",
+        connection_role="operator",
+    )
 
     try:
         before = _exec(
-            cfg, "SELECT id, note FROM neighbour.ledger ORDER BY id", commit=False
+            cfg,
+            "SELECT id, note FROM neighbour.ledger ORDER BY id",
+            commit=False,
+            connection_role="operator",
         )
 
         verify.restore_backup(
@@ -294,12 +333,19 @@ def test_an_in_place_restore_leaves_a_neighbouring_schema_untouched(env, backup)
         )
 
         after = _exec(
-            cfg, "SELECT id, note FROM neighbour.ledger ORDER BY id", commit=False
+            cfg,
+            "SELECT id, note FROM neighbour.ledger ORDER BY id",
+            commit=False,
+            connection_role="operator",
         )
         assert after == before
         assert "neighbour" in _schemas(cfg)
     finally:
-        _exec(cfg, "DROP SCHEMA IF EXISTS neighbour CASCADE")
+        _exec(
+            cfg,
+            "DROP SCHEMA IF EXISTS neighbour CASCADE",
+            connection_role="operator",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -515,11 +561,7 @@ def test_a_restored_database_still_enforces_euid_uniqueness(
 
 
 def test_a_completed_swap_leaves_exactly_one_schema_and_no_residue(env, backup):
-    """A successful in-place restore must not leave working schemas around.
-
-    The staged flow creates and renames schemas; if one survives, the next
-    backup would capture it and a reader would not know which is authoritative.
-    """
+    """A successful in-place restore leaves no working schemas behind."""
     cfg, settings = env
     schema = str(cfg["schema_name"])
 
@@ -543,8 +585,6 @@ def test_a_completed_swap_leaves_exactly_one_schema_and_no_residue(env, backup):
 
 
 def test_keeping_the_superseded_schema_is_opt_in_and_visible(env, backup):
-    """When asked to keep it, it is kept -- and named so it cannot be mistaken
-    for the live schema."""
     cfg, settings = env
     schema = str(cfg["schema_name"])
 
@@ -566,7 +606,11 @@ def test_keeping_the_superseded_schema_is_opt_in_and_visible(env, backup):
         assert schema in _schemas(cfg)
     finally:
         for name in kept:
-            _exec(cfg, f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
+            _exec(
+                cfg,
+                f'DROP SCHEMA IF EXISTS "{name}" CASCADE',
+                connection_role="operator",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -636,16 +680,6 @@ def test_a_rehearsal_is_not_recorded_as_a_restore(env, backup):
 def test_an_in_place_restore_never_reissues_an_euid_minted_after_the_backup(
     env, backup
 ):
-    """The corruption an in-place restore could otherwise cause, reproduced.
-
-    Observed before the fix: a row minted ``Z-GVR-5R``, an in-place restore
-    rolled it back, and the very next insert was issued ``Z-GVR-5R`` again --
-    so a consumer holding that EUID silently resolved to a different object.
-
-    The archive cannot prevent this on its own: it predates the identifier. The
-    pre-restore safety backup does know about it, and
-    ``reconcile_sequences_to_floor`` uses it as the floor.
-    """
     cfg, settings = env
 
     doomed_euid, doomed_seq = _new_instance(cfg, name="minted-after-the-backup")
@@ -658,10 +692,7 @@ def test_an_in_place_restore_never_reissues_an_euid_minted_after_the_backup(
         confirm_target=service.target_label(cfg),
     )
 
-    # The restore rolled it back -- that part is expected.
-    assert not _canary_present(cfg, doomed_euid), (
-        "the rewind did not happen; this test would prove nothing"
-    )
+    assert not _canary_present(cfg, doomed_euid)
 
     reissued_euid, reissued_seq = _new_instance(cfg, name="minted-after-the-restore")
 
@@ -675,7 +706,6 @@ def test_an_in_place_restore_never_reissues_an_euid_minted_after_the_backup(
 
 
 def test_the_in_place_restore_reports_which_sequences_it_advanced(env, backup):
-    """The reconciliation is auditable, not silent."""
     cfg, settings = env
     _new_instance(cfg, name="minted-after-the-backup")
 
@@ -785,9 +815,17 @@ def drifted(env):
     """A TAPDB-namespaced object created outside the migration path."""
     cfg, _settings = env
     schema = str(cfg["schema_name"])
-    _exec(cfg, f'CREATE TABLE "{schema}".tapdb_hand_made (uid bigint primary key)')
+    _exec(
+        cfg,
+        f'CREATE TABLE "{schema}".tapdb_hand_made (uid bigint primary key)',
+        connection_role="operator",
+    )
     yield
-    _exec(cfg, f'DROP TABLE IF EXISTS "{schema}".tapdb_hand_made')
+    _exec(
+        cfg,
+        f'DROP TABLE IF EXISTS "{schema}".tapdb_hand_made',
+        connection_role="operator",
+    )
 
 
 def test_a_drifted_schema_refuses_to_be_backed_up(env, drifted):
@@ -883,6 +921,7 @@ def test_restoring_under_a_different_schema_name_actually_renames(
             "SELECT schema_name FROM information_schema.schemata",
             commit=False,
             database=result.target_database,
+            schema_name=renamed,
         )
     }
     assert renamed in schemas, f"requested schema absent; got {sorted(schemas)}"
@@ -897,6 +936,7 @@ def test_restoring_under_a_different_schema_name_actually_renames(
         f'SELECT count(*) FROM "{renamed}".generic_instance',
         commit=False,
         database=result.target_database,
+        schema_name=renamed,
     )
     assert int(rows[0][0]) > 0, "renamed schema has no data"
 
@@ -933,15 +973,6 @@ def test_no_rename_step_when_the_schema_name_is_unchanged(env, backup):
 def test_failing_post_restore_checks_roll_the_original_schema_back(
     env, backup, monkeypatch
 ):
-    """The rollback branch that fires on failing *verdicts*, not exceptions.
-
-    ``test_backup_restore_pg.py`` patches the check runner to *raise*, which
-    lands in the same ``except`` without ever evaluating
-    ``if any(check.failed ...)``. Mutating that condition to ``if False``
-    survived all 653 backup tests -- so the branch the plan calls the single
-    most important guarantee in the subsystem had no coverage at all. This
-    returns a failing CheckResult instead, which is what the real suite does.
-    """
     cfg, settings = env
     before_counts, before_seqs = _state(cfg)
     before_schemas = _schemas(cfg)
@@ -971,12 +1002,6 @@ def test_failing_post_restore_checks_roll_the_original_schema_back(
 def test_a_rollback_that_cannot_restore_the_original_says_so_loudly(
     env, backup, monkeypatch
 ):
-    """If the rename-back fails, the operator must be told the target is unsafe.
-
-    Previously the drop and the rename were two bare statements: a failing drop
-    skipped the rename entirely and swapped in its own error, leaving the live
-    schema name holding rewound data with nothing saying so.
-    """
     cfg, settings = env
     real_admin_sql = verify._admin_sql
 
@@ -1009,14 +1034,6 @@ def test_a_rollback_that_cannot_restore_the_original_says_so_loudly(
     detail = getattr(excinfo.value, "detail", {}) or {}
     assert detail.get("superseded_schema"), detail
 
-    # The failure receipt must name the safety backup.
-    #
-    # This is the worst state the system can reach -- the rollback failed, so
-    # the safety backup may be the only intact copy of production. It was
-    # published before the first rename, but it lives on the `RestoreResult`
-    # that never returns on this path, so the receipt previously recorded only
-    # {"mode", "error"} and the sole link back was an English sentence in the
-    # manifest note.
     failures = [
         entry
         for entry in read_receipts(service.receipts_directory(settings))
@@ -1024,10 +1041,7 @@ def test_a_rollback_that_cannot_restore_the_original_says_so_loudly(
     ]
     assert failures, "a failed restore must still write a receipt"
     safety_id = failures[-1].detail.get("safety_backup_id")
-    assert safety_id, f"failure receipt did not name the safety backup: {failures[-1]}"
-
-    # And the id must resolve to a real backup carrying structured provenance,
-    # not just be a plausible-looking string.
+    assert safety_id
     safety_manifest = service._load_manifest(
         service.storage_for(settings),
         service.find_backup_prefix(cfg, service.storage_for(settings), safety_id),
@@ -1037,15 +1051,19 @@ def test_a_rollback_that_cannot_restore_the_original_says_so_loudly(
         "restored_backup_id": backup.backup_id,
     }
 
-    # This test deliberately leaves the target in the broken state it asserts
-    # -- data parked under `_superseded_`, live name missing. `pg_instance` is
-    # session-scoped, so without this every later test on the shared database
-    # inherits the wreckage. Perform the manual recovery the error describes.
     monkeypatch.undo()
     superseded = detail["superseded_schema"]
     schema = str(cfg["schema_name"])
-    _exec(cfg, f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
-    _exec(cfg, f'ALTER SCHEMA "{superseded}" RENAME TO "{schema}"')
+    _exec(
+        cfg,
+        f'DROP SCHEMA IF EXISTS "{schema}" CASCADE',
+        connection_role="operator",
+    )
+    _exec(
+        cfg,
+        f'ALTER SCHEMA "{superseded}" RENAME TO "{schema}"',
+        connection_role="operator",
+    )
     assert schema in _schemas(cfg)
     assert not any("_superseded_" in name for name in _schemas(cfg))
 

@@ -13,6 +13,7 @@ import logging
 import secrets
 import subprocess
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -23,7 +24,12 @@ from urllib.request import urlopen
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import (
+    HTMLResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import text
@@ -70,16 +76,30 @@ from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.services.external_refs import (
-    external_ref_payloads as _shared_external_ref_payloads,
-)
-from daylily_tapdb.services.external_refs import (
+    V1ProxyPolicy,
     fetch_remote_graph,
     fetch_remote_object_detail,
     get_external_ref_by_index,
     namespace_external_graph,
 )
+from daylily_tapdb.services.external_refs import (
+    external_ref_payloads as _shared_external_ref_payloads,
+)
 from daylily_tapdb.services.object_lookup import (
     find_object_by_euid as _shared_find_object_by_euid,
+)
+from daylily_tapdb.services.object_operations import (
+    ObjectSelector,
+    repair_object,
+    soft_delete_object,
+    update_object,
+)
+from daylily_tapdb.services.object_search import search_objects
+from daylily_tapdb.templates.repository import (
+    export_repository_pack,
+    import_repository_pack,
+    repository_inventory,
+    repository_pack_bytes,
 )
 from daylily_tapdb.web.bridge import resolve_host_context, resolve_host_shell
 
@@ -105,7 +125,7 @@ def _active_tapdb_target() -> str:
 
 APP_ENV = _active_tapdb_target()
 DEFAULT_SUPPORT_EMAIL = "support@daylilyinformatics.com"
-DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/tapdb-core"
+DEFAULT_GITHUB_REPO_URL = "https://github.com/Daylily-Informatics/daylily-tapdb"
 _RESERVED_TEMPLATE_COORDS = {("actor", "user", "system")}
 
 
@@ -134,10 +154,17 @@ def _default_admin_settings() -> dict[str, Any]:
     }
 
 
+_ADMIN_SETTINGS_LOAD_ERROR: Exception | None = None
+
+
 def _load_admin_settings() -> dict[str, Any]:
+    global _ADMIN_SETTINGS_LOAD_ERROR
     try:
-        return get_admin_settings()
+        settings = get_admin_settings()
+        _ADMIN_SETTINGS_LOAD_ERROR = None
+        return settings
     except Exception as exc:
+        _ADMIN_SETTINGS_LOAD_ERROR = exc
         logger.warning("Could not resolve TAPDB admin settings from config: %s", exc)
         return _default_admin_settings()
 
@@ -238,6 +265,10 @@ SESSION_SECRET = str(
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    if _ADMIN_SETTINGS_LOAD_ERROR is not None:
+        raise RuntimeError(
+            "TapDB admin startup requires a valid explicit target config"
+        ) from _ADMIN_SETTINGS_LOAD_ERROR
     try:
         yield
     finally:
@@ -622,14 +653,6 @@ def load_db_inventory_context() -> dict:
         return _empty_db_inventory_context(error=str(exc))
 
     return ctx
-
-
-def _mask_sensitive_value(key: str, value: str) -> str:
-    """Redact sensitive values for safe UI display."""
-    key_u = key.upper()
-    if any(token in key_u for token in ("PASSWORD", "SECRET", "TOKEN")):
-        return "(redacted)"
-    return value or "(empty)"
 
 
 def _normalize_cognito_domain(raw_domain: str) -> str:
@@ -1421,73 +1444,28 @@ async def help_page(request: Request):
 @app.get("/info", response_class=HTMLResponse)
 @require_auth
 async def info_page(request: Request):
-    """Runtime info page with DB and Cognito connection details."""
+    """Render the shared sanitized runtime payload and admin-only inventory."""
     user = request.state.user
     permissions = get_user_permissions(user)
-    env = _active_tapdb_target()
     cfg = get_db_config()
     is_admin = str(user.get("role") or "").strip().lower() == "admin"
+    from daylily_tapdb.runtime_info import build_runtime_info
+
+    runtime_info = build_runtime_info(
+        config_path=get_config_path(), resolved_config=cfg
+    )
 
     inventory_ctx = _empty_db_inventory_context()
     if is_admin:
         inventory_ctx = load_db_inventory_context()
     inventory_ctx["db_inventory_visible"] = is_admin
 
-    runtime_db_name = (
-        str(inventory_ctx.get("db_inventory_db_name") or "").strip()
-        or str(cfg.get("database") or "").strip()
-    )
-
-    db_rows: List[tuple[str, str]] = [
-        ("target", env),
-        ("config_path", str(get_config_path())),
-        ("runtime_database_name", runtime_db_name),
-    ]
-    for key in sorted(cfg.keys()):
-        if key == "password":
-            continue
-        db_rows.append((key, _mask_sensitive_value(key, str(cfg.get(key, "")))))
-    db_rows.append(
-        ("password_configured", "yes" if bool(cfg.get("password")) else "no")
-    )
-
-    cognito_summary_rows: List[tuple[str, str]] = []
-    cognito_env_rows: List[tuple[str, str]] = []
-    cognito_error: Optional[str] = None
-    try:
-        pool_cfg = resolve_tapdb_pool_config(env)
-        cognito_summary_rows = [
-            ("pool_id", pool_cfg.pool_id),
-            ("app_client_id", pool_cfg.app_client_id),
-            ("region", pool_cfg.region),
-            ("aws_profile", pool_cfg.aws_profile or "(not set)"),
-            ("config_path", str(pool_cfg.source_file)),
-            ("client_name", pool_cfg.client_name),
-            ("domain", pool_cfg.domain or "(not set)"),
-            ("callback_url", pool_cfg.callback_url or "(not set)"),
-            ("logout_url", pool_cfg.logout_url or "(not set)"),
-        ]
-        cognito_env_rows = [
-            ("COGNITO_USER_POOL_ID", pool_cfg.pool_id),
-            ("COGNITO_APP_CLIENT_ID", pool_cfg.app_client_id),
-            ("COGNITO_REGION", pool_cfg.region),
-            ("COGNITO_DOMAIN", pool_cfg.domain or "(not set)"),
-            ("COGNITO_CALLBACK_URL", pool_cfg.callback_url or "(not set)"),
-            ("COGNITO_LOGOUT_URL", pool_cfg.logout_url or "(not set)"),
-            ("AWS_PROFILE", pool_cfg.aws_profile or "(not set)"),
-        ]
-    except Exception as exc:
-        cognito_error = str(exc)
-
     content = templates.get_template("info.html").render(
         request=request,
         style=get_style(request),
         user=user,
         permissions=permissions,
-        db_rows=db_rows,
-        cognito_summary_rows=cognito_summary_rows,
-        cognito_env_rows=cognito_env_rows,
-        cognito_error=cognito_error,
+        runtime_info=runtime_info,
         **inventory_ctx,
     )
     return HTMLResponse(content=content)
@@ -2392,7 +2370,9 @@ async def create_instance_submit(request: Request, template_euid: str):
 
 
 @app.get("/api/graph/data")
+@require_auth
 async def get_graph_data(
+    request: Request,
     start_euid: Optional[str] = None,
     depth: int = Query(4, ge=1, le=10),
 ):
@@ -2418,6 +2398,7 @@ async def get_graph_data(
     }
 
     with get_db() as conn:
+        conn.app_username = request.state.user.get("username")
         with conn.session_scope() as session:
             if start_euid:
                 # Start from specific node and traverse
@@ -2537,13 +2518,16 @@ async def get_graph_data(
 
 
 @app.get("/api/templates")
+@require_auth
 async def api_list_templates(
+    request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     category: Optional[str] = None,
 ):
     """API: List templates."""
     with get_db() as conn:
+        conn.app_username = request.state.user.get("username")
         with conn.session_scope() as session:
             query = session.query(generic_template).filter_by(is_deleted=False)
             if category:
@@ -2572,13 +2556,16 @@ async def api_list_templates(
 
 
 @app.get("/api/instances")
+@require_auth
 async def api_list_instances(
+    request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     category: Optional[str] = None,
 ):
     """API: List instances."""
     with get_db() as conn:
+        conn.app_username = request.state.user.get("username")
         with conn.session_scope() as session:
             query = session.query(generic_instance).filter_by(is_deleted=False)
             if category:
@@ -2607,9 +2594,11 @@ async def api_list_instances(
 
 
 @app.get("/api/object/{euid}")
-async def api_get_object(euid: str):
+@require_auth
+async def api_get_object(request: Request, euid: str):
     """API: Get object by EUID."""
     with get_db() as conn:
+        conn.app_username = request.state.user.get("username")
         with conn.session_scope() as session:
             obj, obj_type = _find_object_by_euid(session, euid)
 
@@ -2632,6 +2621,222 @@ async def api_get_object(euid: str):
             }
 
 
+def _operator_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, PermissionError):
+        return HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, FileExistsError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, RuntimeError) and "ambiguous" in str(exc).lower():
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/runtime-info")
+@require_admin
+async def api_runtime_info(request: Request):
+    """Return the same sanitized payload rendered by CLI and GUI surfaces."""
+    del request
+    from daylily_tapdb.runtime_info import build_runtime_info
+
+    return build_runtime_info(
+        config_path=get_config_path(), resolved_config=get_db_config()
+    )
+
+
+@app.get("/api/objects/search")
+@require_auth
+async def api_objects_search(
+    request: Request,
+    q: str = "",
+    euid: str = "",
+    record_type: str = "all",
+    category: str = "",
+    type: str = "",
+    subtype: str = "",
+    tenant_id: str = "",
+    relationship_type: str = "",
+    limit: int = Query(25, ge=1, le=100),
+    cursor: str = "",
+):
+    cfg = get_db_config()
+    with get_db() as conn:
+        conn.app_username = request.state.user.get("username")
+        with conn.session_scope() as session:
+            try:
+                return search_objects(
+                    session,
+                    service_name=str(cfg["client_id"]),
+                    q=q,
+                    euid=euid,
+                    record_type=record_type,
+                    category=category,
+                    type_name=type,
+                    subtype=subtype,
+                    tenant_id=tenant_id,
+                    relationship_type=relationship_type,
+                    limit=limit,
+                    cursor=cursor,
+                )
+            except ValueError as exc:
+                raise _operator_http_error(exc) from exc
+
+
+@app.patch("/api/objects/{euid}")
+@require_admin
+async def api_objects_update(request: Request, euid: str):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+    changes = body.get("changes")
+    if not isinstance(changes, dict):
+        raise HTTPException(status_code=400, detail="changes must be an object")
+    apply = body.get("apply") is True
+    actor = str(request.state.user.get("username") or "")
+    with get_db() as conn:
+        conn.app_username = actor
+        with conn.session_scope(commit=apply) as session:
+            try:
+                return update_object(
+                    session,
+                    ObjectSelector(euid=euid),
+                    changes,
+                    actor=actor,
+                    dry_run=not apply,
+                )
+            except Exception as exc:
+                raise _operator_http_error(exc) from exc
+
+
+@app.post("/api/objects/{euid}/repair")
+@require_admin
+async def api_objects_repair(request: Request, euid: str):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+    payload = body.get("repair_payload")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="repair_payload must be an object")
+    apply = body.get("apply") is True
+    actor = str(request.state.user.get("username") or "")
+    cfg = get_db_config()
+    with get_db() as conn:
+        conn.app_username = actor
+        with conn.session_scope(commit=apply) as session:
+            try:
+                return repair_object(
+                    session,
+                    ObjectSelector(euid=euid),
+                    domain_code=str(cfg["domain_code"]),
+                    actor=actor,
+                    reason=str(body.get("reason") or ""),
+                    repair_payload=payload,
+                    dry_run=not apply,
+                )
+            except Exception as exc:
+                raise _operator_http_error(exc) from exc
+
+
+@app.get("/api/templates/repository/status")
+@require_admin
+async def api_templates_repository_status(request: Request, repository_pack: str):
+    cfg = get_db_config()
+    with get_db() as conn:
+        conn.app_username = request.state.user.get("username")
+        with conn.session_scope() as session:
+            try:
+                return repository_inventory(
+                    session,
+                    repository_pack,
+                    domain_code=str(cfg["domain_code"]),
+                    issuer_app_code=str(cfg["owner_repo_name"]),
+                )
+            except Exception as exc:
+                raise _operator_http_error(exc) from exc
+
+
+@app.get("/api/templates/repository/download")
+@require_admin
+async def api_templates_repository_download(request: Request, euid: str = ""):
+    """Download canonical pack bytes without creating a server-side artifact."""
+    cfg = get_db_config()
+    with get_db() as conn:
+        conn.app_username = request.state.user.get("username")
+        with conn.session_scope() as session:
+            try:
+                content = repository_pack_bytes(
+                    session,
+                    domain_code=str(cfg["domain_code"]),
+                    issuer_app_code=str(cfg["owner_repo_name"]),
+                    template_euid=euid.strip() or None,
+                )
+            except Exception as exc:
+                raise _operator_http_error(exc) from exc
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": (
+                'attachment; filename="tapdb-repository-template-pack.json"'
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.post("/api/templates/repository/export")
+@require_admin
+async def api_templates_repository_export(request: Request):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+    cfg = get_db_config()
+    actor = str(request.state.user.get("username") or "")
+    with get_db() as conn:
+        conn.app_username = actor
+        with conn.session_scope() as session:
+            try:
+                return export_repository_pack(
+                    session,
+                    str(body.get("repository_pack") or ""),
+                    domain_code=str(cfg["domain_code"]),
+                    issuer_app_code=str(cfg["owner_repo_name"]),
+                    prefix_registry_path=str(cfg["prefix_ownership_registry_path"]),
+                    actor=actor,
+                    template_euid=str(body.get("euid") or "") or None,
+                )
+            except Exception as exc:
+                raise _operator_http_error(exc) from exc
+
+
+@app.post("/api/templates/repository/import")
+@require_admin
+async def api_templates_repository_import(request: Request):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+    cfg = get_db_config()
+    apply = body.get("apply") is True
+    actor = str(request.state.user.get("username") or "")
+    with get_db() as conn:
+        conn.app_username = actor
+        with conn.session_scope(commit=apply) as session:
+            try:
+                result = import_repository_pack(
+                    session,
+                    str(body.get("repository_pack") or ""),
+                    domain_code=str(cfg["domain_code"]),
+                    owner_repo_name=str(cfg["owner_repo_name"]),
+                    domain_registry_path=str(cfg["domain_registry_path"]),
+                    prefix_registry_path=str(cfg["prefix_ownership_registry_path"]),
+                    dry_run=not apply,
+                )
+                return asdict(result)
+            except Exception as exc:
+                raise _operator_http_error(exc) from exc
+
+
 @app.get("/api/graph/external")
 @require_auth
 async def api_get_external_graph(
@@ -2641,6 +2846,9 @@ async def api_get_external_graph(
     depth: int = Query(4, ge=1, le=10),
 ):
     """Proxy a configured external graph and namespace it for merge-safe rendering."""
+    policy = getattr(request.app.state, "tapdb_v1_proxy_policy", None)
+    if not isinstance(policy, V1ProxyPolicy):
+        raise HTTPException(status_code=404, detail="dag_v1_proxy_disabled")
     user = request.state.user
     with get_db() as conn:
         conn.app_username = user.get("username")
@@ -2655,7 +2863,7 @@ async def api_get_external_graph(
             except IndexError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             try:
-                payload = fetch_remote_graph(request, ref, depth=depth)
+                payload = fetch_remote_graph(request, ref, depth=depth, policy=policy)
                 return namespace_external_graph(
                     payload,
                     ref=ref,
@@ -2675,6 +2883,9 @@ async def api_get_external_graph_object(
     euid: str = Query(...),
 ):
     """Proxy a configured external object detail payload."""
+    policy = getattr(request.app.state, "tapdb_v1_proxy_policy", None)
+    if not isinstance(policy, V1ProxyPolicy):
+        raise HTTPException(status_code=404, detail="dag_v1_proxy_disabled")
     user = request.state.user
     with get_db() as conn:
         conn.app_username = user.get("username")
@@ -2689,7 +2900,9 @@ async def api_get_external_graph_object(
             except IndexError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             try:
-                return fetch_remote_object_detail(request, ref, euid=euid)
+                return fetch_remote_object_detail(
+                    request, ref, euid=euid, policy=policy
+                )
             except Exception as exc:
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -2777,39 +2990,31 @@ async def api_create_lineage(request: Request):
             return {"success": True, "euid": lineage.euid, "uid": lineage.uid}
 
 
+@app.delete("/api/objects/{euid}")
 @app.delete("/api/object/{euid}")
 @require_admin
-async def api_delete_object(request: Request, euid: str, hard_delete: bool = False):
-    """API: Soft-delete an object by EUID. (Admin only)"""
-    user = getattr(request.state, "user", None)
+async def api_delete_object(
+    request: Request,
+    euid: str,
+    apply: bool = False,
+    hard_delete: bool = False,
+):
+    """Dry-run by default; apply only the supported soft-delete mutation."""
+    if hard_delete:
+        raise HTTPException(status_code=400, detail="hard delete is not supported")
+    actor = str((getattr(request.state, "user", None) or {}).get("username") or "")
     with get_db() as conn:
-        conn.app_username = (user or {}).get("username")
-        with conn.session_scope(commit=True) as session:
-            obj = (
-                session.query(generic_template)
-                .filter_by(euid=euid, is_deleted=False)
-                .first()
-            )
-            if not obj:
-                obj = (
-                    session.query(generic_instance)
-                    .filter_by(euid=euid, is_deleted=False)
-                    .first()
+        conn.app_username = actor
+        with conn.session_scope(commit=apply) as session:
+            try:
+                return soft_delete_object(
+                    session,
+                    ObjectSelector(euid=euid),
+                    actor=actor,
+                    dry_run=not apply,
                 )
-            if not obj:
-                obj = (
-                    session.query(generic_instance_lineage)
-                    .filter_by(euid=euid, is_deleted=False)
-                    .first()
-                )
-
-            if not obj:
-                raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
-
-            obj.is_deleted = True
-            session.flush()
-
-            return {"success": True, "message": f"Object {euid} soft-deleted"}
+            except Exception as exc:
+                raise _operator_http_error(exc) from exc
 
 
 # ---------------------------------------------------------------------------

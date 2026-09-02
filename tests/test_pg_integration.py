@@ -151,7 +151,12 @@ class TestConnectionModule:
 
         info = pg_instance
         conn_obj = TAPDBConnection(
-            **_conn_kwargs(db_url=info["dsn"], schema_name=info["schema_name"])
+            **_conn_kwargs(
+                db_url=info["dsn"],
+                schema_name=info["schema_name"],
+                config_identity=str(info["config_path"]),
+                allow_global_rows=True,
+            )
         )
         with conn_obj as c:
             with c.session_scope(commit=False) as session:
@@ -166,6 +171,8 @@ class TestConnectionModule:
             **_conn_kwargs(
                 db_url=pg_instance["dsn"],
                 schema_name=pg_instance["schema_name"],
+                config_identity=str(pg_instance["config_path"]),
+                allow_global_rows=True,
             )
         )
         with conn_obj as c:
@@ -179,8 +186,19 @@ class TestConnectionModule:
 
 
 class TestSchemaMigrate:
-    def test_db_schema_migrate(self, pg_instance):
-        result = runner.invoke(app, ["db", "schema", "migrate"])
+    def test_db_schema_migrate(self, pg_instance, tmp_path):
+        receipt = (tmp_path / "migration-preflight.json").resolve()
+        result = runner.invoke(
+            app,
+            [
+                "db",
+                "schema",
+                "migrate",
+                "--dry-run",
+                "--receipt",
+                str(receipt),
+            ],
+        )
         assert result.exit_code in (0, 1)
 
 
@@ -209,7 +227,7 @@ class TestDbCommands:
         import json
 
         payload = json.loads(result.output)
-        assert "version" in payload
+        assert "version" in payload["package"]
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -226,10 +244,27 @@ class TestORMOperations:
             },
         )
 
+    @staticmethod
+    def _install_context(conn, pg_instance) -> None:
+        for name, value in (
+            ("session.current_config_identity", str(pg_instance["config_path"])),
+            ("session.current_schema_name", pg_instance["schema_name"]),
+            ("session.current_domain_code", "Z"),
+            ("session.current_owner_repo_name", "daylily-tapdb"),
+            ("session.current_tenant_id", ""),
+            ("session.current_username", "pytest-pg-integration"),
+            ("session.allow_global_rows", "false"),
+        ):
+            conn.execute(
+                text("SELECT set_config(:name, :value, true)"),
+                {"name": name, "value": value},
+            )
+
     def test_query_templates(self, pg_instance):
         """Verify seeded templates are queryable."""
         engine = self._engine(pg_instance)
         with engine.connect() as conn:
+            self._install_context(conn, pg_instance)
             rows = conn.execute(
                 text("SELECT uid, category, type FROM generic_template LIMIT 5")
             ).fetchall()
@@ -241,6 +276,7 @@ class TestORMOperations:
         """Verify generic_instance table is accessible."""
         engine = self._engine(pg_instance)
         with engine.connect() as conn:
+            self._install_context(conn, pg_instance)
             rows = conn.execute(
                 text("SELECT uid, euid FROM generic_instance LIMIT 5")
             ).fetchall()
@@ -250,6 +286,7 @@ class TestORMOperations:
         """Verify lineage table exists and is queryable."""
         engine = self._engine(pg_instance)
         with engine.connect() as conn:
+            self._install_context(conn, pg_instance)
             rows = conn.execute(
                 text("SELECT uid FROM generic_instance_lineage LIMIT 5")
             ).fetchall()
@@ -259,6 +296,7 @@ class TestORMOperations:
         """Verify audit_log table exists and is queryable."""
         engine = self._engine(pg_instance)
         with engine.connect() as conn:
+            self._install_context(conn, pg_instance)
             rows = conn.execute(text("SELECT uid FROM audit_log LIMIT 5")).fetchall()
             assert isinstance(rows, list)
 
@@ -266,6 +304,7 @@ class TestORMOperations:
         """Verify outbox_event table exists and is queryable."""
         engine = self._engine(pg_instance)
         with engine.connect() as conn:
+            self._install_context(conn, pg_instance)
             rows = conn.execute(text("SELECT id FROM outbox_event LIMIT 5")).fetchall()
             assert isinstance(rows, list)
 

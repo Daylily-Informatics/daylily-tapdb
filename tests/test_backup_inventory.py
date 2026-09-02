@@ -122,6 +122,8 @@ def test_schema_asset_checksums_cover_schema_plus_every_migration():
     assert len(entries) == len(asset_paths)
     assert entries[0]["name"] == "tapdb_schema.sql"
     assert entries[0]["sha256"] == sha256_file(SCHEMA_ROOT / "tapdb_schema.sql")
+    assert entries[1]["name"] == "rls.sql"
+    assert entries[1]["sha256"] == sha256_file(SCHEMA_ROOT / "rls.sql")
     assert all(entry["sha256"] for entry in entries)
     # Every migration on disk is represented; nothing is hardcoded.
     migration_names = {p.name for p in (SCHEMA_ROOT / "migrations").glob("*.sql")}

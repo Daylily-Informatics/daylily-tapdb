@@ -8,13 +8,14 @@ client FastAPI apps can adopt without rewriting their existing TapDB usage.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from jinja2 import ChoiceLoader, Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
@@ -36,16 +37,27 @@ from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.services.external_refs import external_ref_payloads
 from daylily_tapdb.services.graph_payloads import build_graph_payload
 from daylily_tapdb.services.object_lookup import find_object_by_euid
+from daylily_tapdb.services.object_operations import (
+    ObjectSelector,
+    repair_object,
+    soft_delete_object,
+    update_object,
+)
 from daylily_tapdb.services.object_search import search_objects
 from daylily_tapdb.templates.loader import (
     ConfigIssue,
     find_tapdb_core_config_dir,
     seed_templates,
 )
+from daylily_tapdb.templates.repository import (
+    export_repository_pack,
+    import_repository_pack,
+    repository_inventory,
+    repository_pack_bytes,
+)
 from daylily_tapdb.validation.governance import (
     assess_evidence,
     assess_object,
-    create_repair_record,
     editor_data_for_object,
     normalize_validator_ref,
 )
@@ -126,6 +138,7 @@ def gui_nav_links(request: Request, shell: dict[str, Any]) -> list[dict[str, str
         {"label": "Readiness", "href": gui_url(request, "/admin/readiness")},
         {"label": "Meridian", "href": gui_url(request, "/admin/meridian")},
         {"label": "Metrics", "href": gui_url(request, "/admin/metrics")},
+        {"label": "Runtime", "href": gui_url(request, "/admin/runtime")},
         {"label": "Backups", "href": gui_url(request, "/admin/backups")},
     ]
     candidates = list(shell.get("nav_links") or []) + built_in
@@ -409,6 +422,25 @@ def _reject_immutable_object_fields(payload: dict[str, Any]) -> None:
                 "Immutable object field(s) cannot be edited through TapDB GUI/API: "
                 + ", ".join(immutable)
             ),
+        )
+
+
+def _reject_unknown_payload_fields(
+    payload: dict[str, Any], *, allowed: set[str]
+) -> None:
+    unknown = sorted(set(payload).difference(allowed))
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail="Unexpected payload field(s): " + ", ".join(unknown),
+        )
+
+
+def _require_form_apply(form: dict[str, str]) -> None:
+    if form.get("apply") != "true":
+        raise HTTPException(
+            status_code=400,
+            detail="This mutation requires the clicked Apply button (apply=true)",
         )
 
 
@@ -845,26 +877,36 @@ def _create_object_repair(
     actor: str,
     reason: str,
     repair_payload: dict[str, Any],
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     try:
-        return create_repair_record(
+        return repair_object(
             session,
+            ObjectSelector(euid=euid),
             domain_code=str(cfg.get("domain_code") or ""),
-            subject_euid=euid,
             actor=actor,
             reason=reason,
             repair_payload=repair_payload,
-            governance_context={"surface": "tapdb_gui"},
+            dry_run=dry_run,
         )
     except LookupError as exc:
         message = str(exc)
-        status = 404 if message.startswith("Object not found:") else 422
+        status = 404 if message.lower().startswith("object not found") else 422
         raise HTTPException(status_code=status, detail=message) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _update_object_name(session: Any, *, euid: str, name: str) -> dict[str, Any]:
+def _update_object_name(
+    session: Any,
+    *,
+    euid: str,
+    name: str,
+    actor: str = "",
+    dry_run: bool = False,
+) -> dict[str, Any]:
     value = str(name or "").strip()
     if not value:
         raise HTTPException(status_code=400, detail="name is required")
@@ -873,11 +915,30 @@ def _update_object_name(session: Any, *, euid: str, name: str) -> dict[str, Any]
         raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
     if record_type == "template":
         raise HTTPException(status_code=403, detail="Templates are read-only")
-    obj.name = value
-    return {"euid": euid, "name": value}
+    try:
+        return update_object(
+            session,
+            ObjectSelector(euid=euid),
+            {"name": value},
+            actor=actor,
+            dry_run=dry_run,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _update_object_status(session: Any, *, euid: str, bstatus: str) -> dict[str, Any]:
+def _update_object_status(
+    session: Any,
+    *,
+    euid: str,
+    bstatus: str,
+    actor: str = "",
+    dry_run: bool = False,
+) -> dict[str, Any]:
     status = str(bstatus or "").strip()
     if not status:
         raise HTTPException(status_code=400, detail="bstatus is required")
@@ -886,8 +947,20 @@ def _update_object_status(session: Any, *, euid: str, bstatus: str) -> dict[str,
         raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
     if record_type == "template":
         raise HTTPException(status_code=403, detail="Templates are read-only")
-    obj.bstatus = status
-    return {"euid": euid, "bstatus": status}
+    try:
+        return update_object(
+            session,
+            ObjectSelector(euid=euid),
+            {"bstatus": status},
+            actor=actor,
+            dry_run=dry_run,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _add_object_lineage(
@@ -1127,6 +1200,7 @@ def create_tapdb_gui_router(
         type: str = "",
         subtype: str = "",
         limit: int = Query(25, ge=1, le=100),
+        cursor: str = "",
         user: dict[str, Any] = Depends(require_tapdb_gui_user),
     ):
         if record_type not in SEARCH_RECORD_TYPES:
@@ -1146,6 +1220,7 @@ def create_tapdb_gui_router(
                     type_name=type,
                     subtype=subtype,
                     limit=limit,
+                    cursor=cursor,
                 )
         return _render(
             templates,
@@ -1160,6 +1235,7 @@ def create_tapdb_gui_router(
                 "type": type,
                 "subtype": subtype,
                 "limit": limit,
+                "cursor": cursor,
             },
         )
 
@@ -1171,6 +1247,7 @@ def create_tapdb_gui_router(
         type: str = "",
         subtype: str = "",
         limit: int = Query(25, ge=1, le=100),
+        cursor: str = "",
         user: dict[str, Any] = Depends(require_tapdb_gui_user),
     ):
         if record_type not in SEARCH_RECORD_TYPES:
@@ -1190,12 +1267,15 @@ def create_tapdb_gui_router(
                     type_name=type,
                     subtype=subtype,
                     limit=limit,
+                    cursor=cursor,
                 )
 
     @router.get("/templates", response_class=HTMLResponse)
     async def templates_page(
         request: Request,
         category: str = "",
+        repository_pack: str = "",
+        repository_error: str = "",
         user: dict[str, Any] = Depends(require_tapdb_gui_user),
     ):
         with get_db(resolved_config_path) as conn:
@@ -1215,6 +1295,27 @@ def create_tapdb_gui_router(
                     .all()
                 )
                 rows = [_template_row(item) for item in items]
+                inventory = None
+                if repository_pack and str(user.get("role") or "").lower() == "admin":
+                    cfg = get_db_config(config_path=resolved_config_path)
+                    try:
+                        inventory = repository_inventory(
+                            session,
+                            repository_pack,
+                            domain_code=str(cfg["domain_code"]),
+                            issuer_app_code=str(cfg["owner_repo_name"]),
+                        )
+                    except Exception as exc:
+                        inventory = {"status": "failed", "error": str(exc), "items": []}
+                inventory_by_euid = {
+                    str(item.get("stored_euid")): str(item.get("status") or "failed")
+                    for item in (inventory or {}).get("items", [])
+                    if isinstance(item, dict) and item.get("stored_euid")
+                }
+                for row in rows:
+                    row["repository_status"] = inventory_by_euid.get(
+                        str(row.get("euid")), "pending"
+                    )
         return _render(
             templates,
             request,
@@ -1222,7 +1323,150 @@ def create_tapdb_gui_router(
             user=user,
             items=rows,
             category=category,
+            repository_pack=repository_pack,
+            repository_inventory=inventory,
+            repository_error=repository_error,
         )
+
+    @router.post("/templates/repository/export")
+    async def templates_repository_export_page(
+        request: Request,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        form = await _read_urlencoded_form(request)
+        repository_pack = str(form.get("repository_pack") or "")
+        cfg = get_db_config(config_path=resolved_config_path)
+        try:
+            with get_db(resolved_config_path) as conn:
+                conn.app_username = user.get("username")
+                with conn.session_scope() as session:
+                    export_repository_pack(
+                        session,
+                        repository_pack,
+                        domain_code=str(cfg["domain_code"]),
+                        issuer_app_code=str(cfg["owner_repo_name"]),
+                        prefix_registry_path=str(cfg["prefix_ownership_registry_path"]),
+                        actor=str(user.get("username") or ""),
+                    )
+        except Exception as exc:
+            return RedirectResponse(
+                gui_url_with_query(
+                    request,
+                    "/templates",
+                    repository_pack=repository_pack,
+                    repository_error=str(exc)[:200],
+                ),
+                status_code=303,
+            )
+        return RedirectResponse(
+            gui_url_with_query(request, "/templates", repository_pack=repository_pack),
+            status_code=303,
+        )
+
+    @router.get("/api/templates/repository/status")
+    async def templates_repository_status_api(
+        repository_pack: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        cfg = get_db_config(config_path=resolved_config_path)
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope() as session:
+                try:
+                    return repository_inventory(
+                        session,
+                        repository_pack,
+                        domain_code=str(cfg["domain_code"]),
+                        issuer_app_code=str(cfg["owner_repo_name"]),
+                    )
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/api/templates/repository/download")
+    async def templates_repository_download_api(
+        euid: str = "",
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        """Download canonical pack bytes without creating a server-side artifact."""
+
+        cfg = get_db_config(config_path=resolved_config_path)
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope() as session:
+                try:
+                    content = repository_pack_bytes(
+                        session,
+                        domain_code=str(cfg["domain_code"]),
+                        issuer_app_code=str(cfg["owner_repo_name"]),
+                        template_euid=euid.strip() or None,
+                    )
+                except LookupError as exc:
+                    raise HTTPException(status_code=404, detail=str(exc)) from exc
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="tapdb-repository-template-pack.json"'
+                ),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @router.post("/api/templates/repository/export")
+    async def templates_repository_export_api(
+        request: Request,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        payload = await _read_optional_json_object(request)
+        cfg = get_db_config(config_path=resolved_config_path)
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope() as session:
+                try:
+                    return export_repository_pack(
+                        session,
+                        str(payload.get("repository_pack") or ""),
+                        domain_code=str(cfg["domain_code"]),
+                        issuer_app_code=str(cfg["owner_repo_name"]),
+                        prefix_registry_path=str(cfg["prefix_ownership_registry_path"]),
+                        actor=str(user.get("username") or ""),
+                        template_euid=str(payload.get("euid") or "") or None,
+                    )
+                except FileExistsError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/api/templates/repository/import")
+    async def templates_repository_import_api(
+        request: Request,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        payload = await _read_optional_json_object(request)
+        cfg = get_db_config(config_path=resolved_config_path)
+        apply = payload.get("apply") is True
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope(commit=apply) as session:
+                try:
+                    return asdict(
+                        import_repository_pack(
+                            session,
+                            str(payload.get("repository_pack") or ""),
+                            domain_code=str(cfg["domain_code"]),
+                            owner_repo_name=str(cfg["owner_repo_name"]),
+                            domain_registry_path=str(cfg["domain_registry_path"]),
+                            prefix_registry_path=str(
+                                cfg["prefix_ownership_registry_path"]
+                            ),
+                            dry_run=not apply,
+                        )
+                    )
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/templates/new", response_class=HTMLResponse)
     async def template_new_page(
@@ -1640,6 +1884,58 @@ def create_tapdb_gui_router(
             with conn.session_scope() as session:
                 return jsonable_encoder(_object_detail_context(session, euid))
 
+    @router.patch("/api/objects/{euid}")
+    async def governed_object_update_api(
+        request: Request,
+        euid: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        payload = await _read_optional_json_object(request)
+        changes = payload.get("changes")
+        if not isinstance(changes, dict):
+            raise HTTPException(status_code=400, detail="changes must be an object")
+        apply = payload.get("apply") is True
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope(commit=apply) as session:
+                try:
+                    return update_object(
+                        session,
+                        ObjectSelector(euid=euid),
+                        changes,
+                        actor=str(user.get("username") or ""),
+                        dry_run=not apply,
+                    )
+                except LookupError as exc:
+                    raise HTTPException(status_code=404, detail=str(exc)) from exc
+                except PermissionError as exc:
+                    raise HTTPException(status_code=403, detail=str(exc)) from exc
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.delete("/api/objects/{euid}")
+    async def governed_object_delete_api(
+        euid: str,
+        apply: bool = False,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope(commit=apply) as session:
+                try:
+                    return soft_delete_object(
+                        session,
+                        ObjectSelector(euid=euid),
+                        actor=str(user.get("username") or ""),
+                        dry_run=not apply,
+                    )
+                except LookupError as exc:
+                    raise HTTPException(status_code=404, detail=str(exc)) from exc
+                except PermissionError as exc:
+                    raise HTTPException(status_code=403, detail=str(exc)) from exc
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @router.get("/api/object/{euid}/editor-data")
     async def object_editor_data_api(
         euid: str,
@@ -1734,6 +2030,7 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         form = await _read_urlencoded_form(request)
+        _require_form_apply(form)
         payload = _parse_json_object(
             str(form.get("repair_payload") or "{}"), label="repair_payload"
         )
@@ -1761,17 +2058,20 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         payload = await _read_optional_json_object(request)
+        _reject_immutable_object_fields(payload)
+        _reject_unknown_payload_fields(
+            payload, allowed={"apply", "reason", "repair_payload"}
+        )
         repair_payload = payload.get("repair_payload")
-        if repair_payload is None:
-            repair_payload = payload.get("json_addl")
         if not isinstance(repair_payload, dict):
             raise HTTPException(
                 status_code=400, detail="repair_payload must be a JSON object"
             )
         cfg = get_db_config(config_path=resolved_config_path)
+        apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
+            with conn.session_scope(commit=apply) as session:
                 return jsonable_encoder(
                     _create_object_repair(
                         session,
@@ -1780,6 +2080,7 @@ def create_tapdb_gui_router(
                         actor=str(user.get("username") or ""),
                         reason=str(payload.get("reason") or ""),
                         repair_payload=repair_payload,
+                        dry_run=not apply,
                     )
                 )
 
@@ -1790,6 +2091,7 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         form = await _read_urlencoded_form(request)
+        _require_form_apply(form)
         json_addl = str(form.get("json_addl") or "")
         payload = _parse_json_object(json_addl, label="json_addl")
         cfg = get_db_config(config_path=resolved_config_path)
@@ -1816,11 +2118,17 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         form = await _read_urlencoded_form(request)
+        _require_form_apply(form)
         name = str(form.get("name") or "")
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
             with conn.session_scope(commit=True) as session:
-                _update_object_name(session, euid=euid, name=name)
+                _update_object_name(
+                    session,
+                    euid=euid,
+                    name=name,
+                    actor=str(user.get("username") or ""),
+                )
         return RedirectResponse(
             gui_url_with_query(request, f"/object/{euid}", notice="name_updated"),
             status_code=303,
@@ -1832,20 +2140,20 @@ def create_tapdb_gui_router(
         euid: str,
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=400, detail="name payload must be a JSON object"
-            )
+        payload = await _read_optional_json_object(request)
         _reject_immutable_object_fields(payload)
+        _reject_unknown_payload_fields(payload, allowed={"apply", "name"})
+        apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
+            with conn.session_scope(commit=apply) as session:
                 return jsonable_encoder(
                     _update_object_name(
                         session,
                         euid=euid,
                         name=str(payload.get("name") or ""),
+                        actor=str(user.get("username") or ""),
+                        dry_run=not apply,
                     )
                 )
 
@@ -1855,25 +2163,31 @@ def create_tapdb_gui_router(
         euid: str,
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
-        payload = await request.json()
-        if not isinstance(payload, dict):
+        payload = await _read_optional_json_object(request)
+        _reject_immutable_object_fields(payload)
+        _reject_unknown_payload_fields(
+            payload, allowed={"apply", "json_addl", "reason"}
+        )
+        json_addl = payload.get("json_addl")
+        if not isinstance(json_addl, dict):
             raise HTTPException(
                 status_code=400, detail="json_addl must be a JSON object"
             )
+        apply = payload.get("apply") is True
         cfg = get_db_config(config_path=resolved_config_path)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
+            with conn.session_scope(commit=apply) as session:
                 return jsonable_encoder(
                     _create_object_repair(
                         session,
                         cfg=cfg,
                         euid=euid,
                         actor=str(user.get("username") or ""),
-                        reason=(
-                            "JSON repair submitted through compatibility edit-json API"
-                        ),
-                        repair_payload=payload,
+                        reason=str(payload.get("reason") or "").strip()
+                        or "JSON repair submitted through compatibility edit-json API",
+                        repair_payload=json_addl,
+                        dry_run=not apply,
                     )
                 )
 
@@ -1884,11 +2198,17 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         form = await _read_urlencoded_form(request)
+        _require_form_apply(form)
         bstatus = str(form.get("bstatus") or "")
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
             with conn.session_scope(commit=True) as session:
-                _update_object_status(session, euid=euid, bstatus=bstatus)
+                _update_object_status(
+                    session,
+                    euid=euid,
+                    bstatus=bstatus,
+                    actor=str(user.get("username") or ""),
+                )
         return RedirectResponse(
             gui_url_with_query(request, f"/object/{euid}", notice="status_updated"),
             status_code=303,
@@ -1900,20 +2220,20 @@ def create_tapdb_gui_router(
         euid: str,
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=400, detail="status payload must be a JSON object"
-            )
+        payload = await _read_optional_json_object(request)
         _reject_immutable_object_fields(payload)
+        _reject_unknown_payload_fields(payload, allowed={"apply", "bstatus"})
+        apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
+            with conn.session_scope(commit=apply) as session:
                 return jsonable_encoder(
                     _update_object_status(
                         session,
                         euid=euid,
                         bstatus=str(payload.get("bstatus") or ""),
+                        actor=str(user.get("username") or ""),
+                        dry_run=not apply,
                     )
                 )
 
@@ -2184,6 +2504,36 @@ def create_tapdb_gui_router(
             build_metrics_page_context(
                 "target", limit=limit, config_path=resolved_config_path
             )
+        )
+
+    @router.get("/admin/runtime", response_class=HTMLResponse)
+    async def runtime_info_page(
+        request: Request,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        from daylily_tapdb.runtime_info import build_runtime_info
+
+        return _render(
+            templates,
+            request,
+            "runtime.html",
+            user=user,
+            runtime_info=build_runtime_info(
+                config_path=resolved_config_path,
+                resolved_config=get_db_config(config_path=resolved_config_path),
+            ),
+        )
+
+    @router.get("/api/admin/runtime")
+    async def runtime_info_api(
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        del user
+        from daylily_tapdb.runtime_info import build_runtime_info
+
+        return build_runtime_info(
+            config_path=resolved_config_path,
+            resolved_config=get_db_config(config_path=resolved_config_path),
         )
 
     # ------------------------------------------------------------------

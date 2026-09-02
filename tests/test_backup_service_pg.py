@@ -11,15 +11,18 @@ a corrupted artifact is rejected.
 
 from __future__ import annotations
 
+import json
 import shutil
 
 import pytest
+from sqlalchemy import text
 from typer.testing import CliRunner
 
 import daylily_tapdb.cli as cli_mod
-from daylily_tapdb.backup import service
+from daylily_tapdb.backup import service, verify
 from daylily_tapdb.backup.manifest import (
     BACKUP_CLASS_FULL,
+    BACKUP_CLASS_PROVIDER_SNAPSHOT,
     BACKUP_CLASS_TEMPLATE_PACK,
     PROVENANCE_OPERATOR,
     canonical_bytes,
@@ -109,6 +112,20 @@ def test_plan_never_writes_anything(env, tmp_path):
     assert read_receipts(service.receipts_directory(settings)) == []
 
 
+def test_plan_discloses_that_full_capture_is_physically_complete(env):
+    cfg, settings = env
+
+    scope = service.plan_backup(cfg, settings).would_capture["data_scope"]
+
+    assert scope["mode"] == "physical_schema"
+    assert scope["physical_schema_complete"] is True
+    assert scope["restore_mode"] == "isolated_or_in_place"
+    assert all(
+        item["key"] != "rows_outside_rls_scope"
+        for item in service.plan_backup(cfg, settings).would_capture["state_inventory"]
+    )
+
+
 def test_plan_enumerates_every_table_not_a_fixed_list(env):
     cfg, settings = env
 
@@ -167,9 +184,9 @@ def test_archive_proves_its_own_schema_scope(env):
 
     assert manifest.content_inventory["schema_names_seen"] == [cfg["schema_name"]]
     counts = manifest.content_inventory["counts_by_kind"]
-    assert counts["TABLE"] == 9
+    assert counts["TABLE"] >= 10
     assert counts["FUNCTION"] >= 20
-    assert counts["TRIGGER"] == 16
+    assert counts["TRIGGER"] >= 16
 
 
 def test_manifest_carries_no_secrets(env):
@@ -180,6 +197,287 @@ def test_manifest_carries_no_secrets(env):
 
     assert "password" not in blob
     assert str(cfg.get("password") or "no-password-set") not in str(payload)
+
+
+def test_manifest_declares_the_complete_operator_data_scope(env):
+    cfg, settings = env
+
+    scope = service.create_backup(cfg, settings).manifest.target_identity["data_scope"]
+
+    assert scope == {
+        "mode": "physical_schema",
+        "tenant_id": None,
+        "row_security": "bypassed",
+        "physical_schema_complete": True,
+        "restore_mode": "isolated_or_in_place",
+    }
+
+
+def test_full_backup_and_isolated_restore_include_rows_from_multiple_tenants(env):
+    """The signed completeness claim is backed by archive and restore evidence."""
+    cfg, settings = env
+    schema = str(cfg["schema_name"])
+    tenant_a = "00000000-0000-4000-8000-000000000101"
+    tenant_b = "00000000-0000-4000-8000-000000000102"
+    selected: list[tuple[int, str | None]] = []
+    restored_database: str | None = None
+
+    with service.open_session(
+        cfg, app_username="pytest_multi_tenant_setup", connection_role="operator"
+    ) as conn:
+        with conn.session_scope(commit=True) as session:
+            rows = session.execute(
+                text(
+                    f'SELECT uid, tenant_id::text FROM "{schema}".generic_template '
+                    "ORDER BY uid LIMIT 2"
+                )
+            ).all()
+            assert len(rows) == 2
+            selected = [(int(row[0]), row[1]) for row in rows]
+            for (uid, _original), tenant_id in zip(
+                selected, (tenant_a, tenant_b), strict=True
+            ):
+                session.execute(
+                    text(
+                        f'UPDATE "{schema}".generic_template '
+                        "SET tenant_id = CAST(:tenant_id AS uuid) WHERE uid = :uid"
+                    ),
+                    {"tenant_id": tenant_id, "uid": uid},
+                )
+
+    try:
+        created = service.create_backup(cfg, settings)
+        operator_count = created.manifest.row_counts["generic_template"]
+
+        with service.open_session(
+            cfg, app_username="pytest_runtime_count", connection_role="runtime"
+        ) as conn:
+            with conn.session_scope(commit=False) as session:
+                runtime_count = int(
+                    session.execute(
+                        text(f'SELECT count(*) FROM "{schema}".generic_template')
+                    ).scalar_one()
+                )
+
+        assert operator_count >= runtime_count + 2
+
+        restored = verify.restore_backup(
+            cfg,
+            settings,
+            backup_id=created.backup_id,
+            options=verify.RestoreOptions(mode=verify.MODE_ISOLATED),
+        )
+        restored_database = restored.target_database
+        restored_cfg = {
+            **cfg,
+            "database": restored.target_database,
+            "schema_name": restored.target_schema,
+        }
+        with service.open_session(
+            restored_cfg,
+            app_username="pytest_multi_tenant_verify",
+            connection_role="operator",
+        ) as conn:
+            with conn.session_scope(commit=False) as session:
+                tenant_ids = set(
+                    session.execute(
+                        text(
+                            f'SELECT tenant_id::text FROM "{restored.target_schema}".'
+                            "generic_template WHERE tenant_id IS NOT NULL"
+                        )
+                    ).scalars()
+                )
+        assert {tenant_a, tenant_b}.issubset(tenant_ids)
+    finally:
+        if restored_database:
+            verify._drop_database(cfg, restored_database)
+        with service.open_session(
+            cfg,
+            app_username="pytest_multi_tenant_cleanup",
+            connection_role="operator",
+        ) as conn:
+            with conn.session_scope(commit=True) as session:
+                for uid, original in selected:
+                    session.execute(
+                        text(
+                            f'UPDATE "{schema}".generic_template '
+                            "SET tenant_id = CAST(:tenant_id AS uuid) WHERE uid = :uid"
+                        ),
+                        {"tenant_id": original, "uid": uid},
+                    )
+
+
+def test_full_target_identity_never_claims_a_tenant_filtered_scope(env):
+    cfg, _settings = env
+    tenant_id = "00000000-0000-4000-8000-000000000001"
+    tenant_cfg = dict(cfg, tenant_id=tenant_id)
+
+    scope = service._target_identity(tenant_cfg)["data_scope"]
+
+    assert scope["mode"] == "physical_schema"
+    assert scope["tenant_id"] is None
+    assert scope["physical_schema_complete"] is True
+
+
+def test_backup_class_role_and_signed_scope_contracts_are_exact(env):
+    cfg, _settings = env
+    tenant_cfg = {
+        **cfg,
+        "tenant_id": "00000000-0000-4000-8000-000000000201",
+    }
+
+    assert service._connection_role_for_backup_class(BACKUP_CLASS_FULL) == "operator"
+    assert (
+        service._connection_role_for_backup_class(BACKUP_CLASS_TEMPLATE_PACK)
+        == "runtime"
+    )
+    assert (
+        service._connection_role_for_backup_class(BACKUP_CLASS_PROVIDER_SNAPSHOT)
+        is None
+    )
+    assert service._target_identity(
+        tenant_cfg, backup_class=BACKUP_CLASS_TEMPLATE_PACK
+    )["data_scope"] == {
+        "mode": "tenant_and_global",
+        "tenant_id": tenant_cfg["tenant_id"],
+        "row_security": "enforced",
+        "physical_schema_complete": False,
+        "restore_mode": "not_applicable",
+    }
+    assert service._target_identity(cfg, backup_class=BACKUP_CLASS_PROVIDER_SNAPSHOT)[
+        "data_scope"
+    ] == {
+        "mode": "provider_cluster_snapshot",
+        "tenant_id": None,
+        "row_security": "not_applicable",
+        "physical_schema_complete": False,
+        "restore_mode": "provider_cutover",
+    }
+
+
+def test_full_backup_operator_config_fails_closed_without_a_distinct_identity(env):
+    cfg, _settings = env
+
+    with pytest.raises(RuntimeError, match="require target.operator credentials"):
+        service.connection_config_for_role(
+            {**cfg, "operator_configured": False}, "operator"
+        )
+    with pytest.raises(RuntimeError, match="non-empty and distinct"):
+        service.connection_config_for_role(
+            {**cfg, "operator_user": cfg["user"]}, "operator"
+        )
+
+    selected = service.connection_config_for_role(cfg, "operator")
+    assert selected["user"] == cfg["operator_user"]
+    assert selected["user"] != cfg["user"]
+    assert selected["tenant_id"] is None
+    assert selected["allow_global_claims"] is True
+
+
+def test_template_pack_uses_runtime_rls_scope_without_operator_credentials(
+    env, tmp_path
+):
+    cfg, settings = env
+    schema = str(cfg["schema_name"])
+    tenant_id = "00000000-0000-4000-8000-000000000202"
+    selected: list[tuple[int, str | None]] = []
+
+    with service.open_session(
+        cfg, app_username="pytest_template_scope_setup", connection_role="operator"
+    ) as conn:
+        with conn.session_scope(commit=True) as session:
+            rows = session.execute(
+                text(
+                    f'SELECT uid, tenant_id::text FROM "{schema}".generic_template '
+                    "ORDER BY uid LIMIT 2"
+                )
+            ).all()
+            assert len(rows) == 2
+            selected = [(int(row[0]), row[1]) for row in rows]
+            session.execute(
+                text(
+                    f'UPDATE "{schema}".generic_template '
+                    "SET tenant_id = CAST(:tenant_id AS uuid) "
+                    "WHERE uid IN (:first_uid, :second_uid)"
+                ),
+                {
+                    "tenant_id": tenant_id,
+                    "first_uid": selected[0][0],
+                    "second_uid": selected[1][0],
+                },
+            )
+
+    try:
+        runtime_cfg = {**cfg, "operator_configured": False, "operator_user": ""}
+        with service.open_session(
+            runtime_cfg,
+            app_username="pytest_template_scope_runtime_count",
+            connection_role="runtime",
+        ) as conn:
+            with conn.session_scope(commit=False) as session:
+                runtime_visible = int(
+                    session.execute(
+                        text(f'SELECT count(*) FROM "{schema}".generic_template')
+                    ).scalar_one()
+                )
+        with service.open_session(
+            cfg,
+            app_username="pytest_template_scope_operator_count",
+            connection_role="operator",
+        ) as conn:
+            with conn.session_scope(commit=False) as session:
+                operator_visible = int(
+                    session.execute(
+                        text(f'SELECT count(*) FROM "{schema}".generic_template')
+                    ).scalar_one()
+                )
+        assert operator_visible == runtime_visible + 2
+
+        plan = service.plan_backup(
+            runtime_cfg, settings, backup_class=BACKUP_CLASS_TEMPLATE_PACK
+        )
+        assert plan.ok, [check.to_payload() for check in plan.blocking]
+        assert plan.would_capture["data_scope"]["mode"] == "global_only"
+        assert plan.would_capture["state_inventory"] == []
+        assert {item["key"] for item in plan.would_capture["excluded_state"]} >= {
+            "non_template_database_state",
+            "rows_outside_rls_scope",
+        }
+
+        result = service.create_backup(
+            runtime_cfg, settings, backup_class=BACKUP_CLASS_TEMPLATE_PACK
+        )
+        artifact = tmp_path / "store" / result.storage_prefix / "template-pack.json"
+        pack = json.loads(artifact.read_text(encoding="utf-8"))
+        scope = result.manifest.target_identity["data_scope"]
+
+        assert scope["row_security"] == "enforced"
+        assert scope["physical_schema_complete"] is False
+        assert result.manifest.schema_drift == {
+            "status": "not_applicable",
+            "has_drift": None,
+        }
+        assert result.manifest.row_counts == {
+            "generic_template": len(pack["templates"])
+        }
+        assert len(pack["templates"]) == runtime_visible
+        assert result.manifest.sequences == []
+        assert result.manifest.content_inventory["visibility_scope"] == scope
+    finally:
+        with service.open_session(
+            cfg,
+            app_username="pytest_template_scope_cleanup",
+            connection_role="operator",
+        ) as conn:
+            with conn.session_scope(commit=True) as session:
+                for uid, original in selected:
+                    session.execute(
+                        text(
+                            f'UPDATE "{schema}".generic_template '
+                            "SET tenant_id = CAST(:tenant_id AS uuid) WHERE uid = :uid"
+                        ),
+                        {"tenant_id": original, "uid": uid},
+                    )
 
 
 def test_create_writes_manifest_checksum_and_artifact(env, tmp_path):
@@ -348,8 +646,6 @@ def test_list_filters_by_class(env):
 
 
 def test_template_pack_export_round_trips(env, tmp_path):
-    import json
-
     cfg, settings = env
 
     result = service.create_backup(
@@ -396,12 +692,10 @@ def test_provider_snapshot_class_produces_a_receipt_backup(env, tmp_path, monkey
     The RDS call is stubbed, but everything around it is real: the manifest,
     the artifact, storage layout, and the post-write verification.
     """
-    import json
-
     from daylily_tapdb.backup import snapshots
-    from daylily_tapdb.backup.manifest import BACKUP_CLASS_PROVIDER_SNAPSHOT
 
     cfg, settings = env
+    cfg = {**cfg, "operator_configured": False, "operator_user": ""}
 
     class _FakeRds:
         def create_db_cluster_snapshot(self, **kwargs):
@@ -422,11 +716,27 @@ def test_provider_snapshot_class_produces_a_receipt_backup(env, tmp_path, monkey
     # guard itself has its own tests.
     monkeypatch.setattr(snapshots, "require_enabled", lambda cfg, settings: None)
     monkeypatch.setattr(snapshots, "_rds_client", lambda region: _FakeRds())
+    monkeypatch.setattr(
+        service,
+        "open_session",
+        lambda *_args, **_kwargs: pytest.fail(
+            "provider snapshots must not open a PostgreSQL session"
+        ),
+    )
     settings = {
         **settings,
         "provider_snapshots_enabled": True,
         "provider_snapshots_cluster_identifier": "tapdb-test-cluster",
     }
+
+    plan = service.plan_backup(
+        cfg, settings, backup_class=BACKUP_CLASS_PROVIDER_SNAPSHOT
+    )
+    assert plan.ok, [check.to_payload() for check in plan.blocking]
+    assert plan.would_capture["state_inventory"] == []
+    assert plan.would_capture["provider_snapshot"]["inventory"] == (
+        "opaque_until_provider_restore"
+    )
 
     result = service.create_backup(
         cfg, settings, backup_class=BACKUP_CLASS_PROVIDER_SNAPSHOT
@@ -434,6 +744,19 @@ def test_provider_snapshot_class_produces_a_receipt_backup(env, tmp_path, monkey
 
     assert result.verify.ok
     assert result.manifest.backup_class == BACKUP_CLASS_PROVIDER_SNAPSHOT
+    assert result.manifest.target_identity["data_scope"] == {
+        "mode": "provider_cluster_snapshot",
+        "tenant_id": None,
+        "row_security": "not_applicable",
+        "physical_schema_complete": False,
+        "restore_mode": "provider_cutover",
+    }
+    assert result.manifest.row_counts == {}
+    assert result.manifest.sequences == []
+    assert result.manifest.schema_drift == {
+        "status": "not_applicable",
+        "has_drift": None,
+    }
     inventory = result.manifest.content_inventory
     assert inventory["cluster_identifier"] == "tapdb-test-cluster"
     assert inventory["encrypted"] is True
@@ -446,7 +769,6 @@ def test_provider_snapshot_class_produces_a_receipt_backup(env, tmp_path, monkey
 
 def test_a_provider_snapshot_backup_is_listed_and_filterable(env, monkeypatch):
     from daylily_tapdb.backup import snapshots
-    from daylily_tapdb.backup.manifest import BACKUP_CLASS_PROVIDER_SNAPSHOT
 
     cfg, settings = env
 

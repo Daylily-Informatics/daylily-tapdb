@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ['*']
+    branches: ['**']
   pull_request:
     branches: [main]
 
@@ -10,126 +10,188 @@ env:
   PYTHON_VERSION: '3.12'
 
 jobs:
-  lint:
-    name: Code Quality (Ruff)
+  quality:
+    name: Ruff and mypy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
-      - name: Install ruff
-        run: pip install ruff
+      - name: Install quality tooling
+        run: python -m pip install -e ".[dev,cli,aurora,admin,gui]"
 
-      - name: Run ruff check
-        run: ruff check daylily_tapdb/ admin/ tests/
+      - name: Ruff check
+        run: >-
+          ruff check daylily_tapdb admin tests
+          scripts/ci_prepare_postgres_config.py
+          scripts/verify_changed_coverage.py
+          scripts/verify_wheel_assets.py
 
-      - name: Run ruff format check
-        run: ruff format --check daylily_tapdb/ admin/ tests/
+      - name: Ruff format
+        run: >-
+          ruff format --check daylily_tapdb admin tests
+          scripts/ci_prepare_postgres_config.py
+          scripts/verify_changed_coverage.py
+          scripts/verify_wheel_assets.py
+
+      - name: Mypy release surfaces
+        # pyproject.toml lists every new 9.2 module explicitly. The older dynamic
+        # ORM/Typer surfaces remain outside this strict gate until modernized.
+        run: mypy
 
   security:
-    name: Security Scanning (Bandit)
+    name: Bandit and detect-secrets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install bandit
-        run: pip install "bandit[toml]"
+      - name: Install security tooling
+        run: python -m pip install "bandit[toml]" detect-secrets
 
-      - name: Run bandit security scan
-        run: bandit -c pyproject.toml -r daylily_tapdb/ admin/
+      - name: Bandit
+        run: bandit -c pyproject.toml -r daylily_tapdb admin
+
+      - name: Detect verified secrets
+        run: |
+          detect-secrets scan --all-files --only-verified \
+            --exclude-files '(^|/)(\.git|\.venv|\.mypy_cache|\.pytest_cache|\.ruff_cache|dist|build)/' \
+            > detect-secrets.json
+          python -c 'import json, pathlib; report = json.loads(pathlib.Path("detect-secrets.json").read_text()); raise SystemExit("verified secrets detected") if report.get("results") else None'
 
   test:
-    name: Tests
+    name: PostgreSQL 17 full suite
     runs-on: ubuntu-latest
-    needs: [lint]
+    needs: [quality, security]
 
     services:
       postgres:
         image: postgres:17
         env:
-          POSTGRES_USER: tapdb
-          POSTGRES_PASSWORD: tapdb
+          POSTGRES_USER: tapdb_operator
+          POSTGRES_PASSWORD: operator-password
           POSTGRES_DB: tapdb
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U tapdb -d tapdb"
+          --health-cmd "pg_isready -U tapdb_operator -d tapdb"
           --health-interval 10s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
 
     env:
-      TAPDB_TEST_DSN: postgresql://tapdb:tapdb@localhost:5432/tapdb
+      PGPASSWORD: operator-password
+      TAPDB_RUN_DOCS_LOCAL: '1'
+      TAPDB_TEST_CONFIG: ${{ runner.temp }}/tapdb-ci/tapdb-config.yaml
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      - name: Install dependencies
+      - name: Install PostgreSQL 17 client and server tools
+        run: |
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          sudo curl --fail --silent --show-error \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-17 postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install build
-          pip install -e ".[dev,cli,aurora,admin]"
+          python -m pip install -e ".[dev,cli,aurora,admin,gui]"
 
-      - name: Show SCM version context
+      - name: Install Chromium for GUI acceptance
+        run: python -m playwright install --with-deps chromium
+
+      - name: Create explicit PostgreSQL 17 runtime role and config
         run: |
-          git describe --tags --dirty --always
-          python -m setuptools_scm
+          psql -h localhost -p 5432 -U tapdb_operator -d postgres \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE tapdb_runtime LOGIN PASSWORD 'runtime-password' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION"
+          psql -h localhost -p 5432 -U tapdb_operator -d tapdb \
+            -v ON_ERROR_STOP=1 \
+            -c "REVOKE CREATE ON DATABASE tapdb FROM PUBLIC; GRANT CONNECT ON DATABASE tapdb TO tapdb_runtime; REVOKE CREATE ON SCHEMA public FROM PUBLIC"
+          python scripts/ci_prepare_postgres_config.py
 
-      - name: Build wheel artifact
-        run: python -m build --wheel
-
-      - name: Verify wheel includes schema assets
+      - name: Apply and seed explicit target
+        env:
+          PGPASSWORD: runtime-password
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import zipfile
+          tapdb --config "$TAPDB_TEST_CONFIG" db schema apply
+          tapdb --config "$TAPDB_TEST_CONFIG" db data seed
 
-          wheels = sorted(Path("dist").glob("*.whl"))
-          if not wheels:
-              raise SystemExit("No wheel artifact was produced in dist/")
+      - name: Run complete tests with branch coverage and docs-local examples
+        env:
+          PGPASSWORD: runtime-password
+        run: >-
+          python -m pytest tests -q
+          --tapdb-config "$TAPDB_TEST_CONFIG"
+          --cov=daylily_tapdb
+          --cov=admin
+          --cov-branch
+          --cov-report=term-missing
+          --cov-report=json:coverage.json
+          --cov-fail-under=90
 
-          wheel_path = wheels[-1]
-          with zipfile.ZipFile(wheel_path) as wheel:
-              names = set(wheel.namelist())
+      - name: Require 90 percent in every changed production module
+        run: >-
+          python scripts/verify_changed_coverage.py
+          --base origin/main
+          --report coverage.json
+          --minimum 90
 
-          def has_suffix(suffix: str) -> bool:
-              return any(name.endswith(suffix) for name in names)
+  build:
+    name: Build and installed-wheel smoke
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-          missing = []
-          for required in ("schema/tapdb_schema.sql", "schema/rls.sql"):
-              if not has_suffix(required):
-                  missing.append(required)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
-          migration_files = [
-              name
-              for name in names
-              if "schema/migrations/" in name and name.endswith(".sql")
-          ]
+      - name: Build distributions
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.0'
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
 
-          if not migration_files:
-              missing.append("schema/migrations/*.sql")
+      - name: Verify wheel schema and migration assets
+        run: python scripts/verify_wheel_assets.py --expected-version 9.2.0
 
-          if missing:
-              joined = ", ".join(missing)
-              raise SystemExit(f"Wheel missing required schema assets: {joined}")
-
-          print(f"Validated schema assets in {wheel_path.name}")
-          PY
-
-      - name: Run tests
-        run: python -m pytest tests/ -q --deselect tests/test_admin_routes_smoke.py
+      - name: Smoke-test the installed wheel
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-smoke"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install dist/*.whl fastapi
+          export TAPDB_TEST_CONFIG="$RUNNER_TEMP/wheel-smoke-config/tapdb-config.yaml"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" scripts/ci_prepare_postgres_config.py
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -c "import daylily_tapdb"
+          "$RUNNER_TEMP/wheel-smoke/bin/tapdb" --help
+          "$RUNNER_TEMP/wheel-smoke/bin/tapdb" --config "$TAPDB_TEST_CONFIG" info --json
+          "$RUNNER_TEMP/wheel-smoke/bin/tapdb" --config "$TAPDB_TEST_CONFIG" templates --help
+          "$RUNNER_TEMP/wheel-smoke/bin/tapdb" --config "$TAPDB_TEST_CONFIG" objects --help

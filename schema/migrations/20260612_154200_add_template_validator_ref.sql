@@ -1,5 +1,8 @@
 -- Add physical template validator reference.
--- This is DDL-only schema evolution; it is not evidence migration.
+-- Historical NULL/empty values are explicitly attributed below; all other
+-- template values and their provenance timestamps remain unchanged.
+-- tapdb-allow-column: generic_template.validator_ref
+-- tapdb-transformation: generic_template.validator_ref:null_or_empty_to_universal_pass_v1
 
 BEGIN;
 
@@ -34,10 +37,18 @@ BEGIN
         PERFORM set_config('session.current_domain_code', scope_domain, true);
         PERFORM set_config('session.current_owner_repo_name', scope_owner, true);
 
+        ALTER TABLE generic_template
+            DISABLE TRIGGER audit_update_generic_template;
+        ALTER TABLE generic_template
+            DISABLE TRIGGER update_modified_dt_generic_template;
         UPDATE generic_template
            SET validator_ref = 'UNIVERSAL_PASS@1'
          WHERE validator_ref IS NULL
             OR btrim(validator_ref) = '';
+        ALTER TABLE generic_template
+            ENABLE TRIGGER update_modified_dt_generic_template;
+        ALTER TABLE generic_template
+            ENABLE TRIGGER audit_update_generic_template;
     END IF;
 END $$;
 

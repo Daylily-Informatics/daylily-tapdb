@@ -163,3 +163,21 @@ class inbox_message(Base):
             f"<inbox_message(uid={self.uid!r}, "
             f"msg_uuid={self.message_machine_uuid!r}, status={self.status!r})>"
         )
+
+
+class tapdb_legacy_outbox_mapping(Base):
+    """Immutable identity mapping emitted by legacy outbox conversion."""
+
+    __tablename__ = "tapdb_legacy_outbox_mapping"
+
+    old_outbox_id = Column(BIGINT, primary_key=True, nullable=False)
+    old_event_id = Column(UUID(as_uuid=True), unique=True, nullable=False)
+    message_uid = Column(
+        BIGINT, ForeignKey("generic_instance.uid"), unique=True, nullable=False
+    )
+    message_euid = Column(Text, unique=True, nullable=False)
+    message_euid_seq = Column(BIGINT, nullable=False)
+    source_sha256 = Column(Text, nullable=False)
+    mapped_dt = Column(
+        DateTime(timezone=True), nullable=False, server_default=FetchedValue()
+    )

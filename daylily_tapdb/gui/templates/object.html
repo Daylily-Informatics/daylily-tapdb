@@ -53,11 +53,11 @@
 	  <h2>Edit</h2>
 	  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/name') }}" class="toolbar">
 	    <input name="name" value="{{ obj.name or '' }}" placeholder="name">
-	    <button type="submit">Set Name</button>
+	    <button type="submit" name="apply" value="true">Set Name (Apply)</button>
 	  </form>
 	  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/status') }}" class="toolbar">
 	    <input name="bstatus" value="{{ obj.bstatus or '' }}" placeholder="status">
-	    <button type="submit">Set Status</button>
+	    <button type="submit" name="apply" value="true">Set Status (Apply)</button>
   </form>
   <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/lineage') }}" class="toolbar">
     <input name="related_euid" placeholder="related EUID">
@@ -72,7 +72,7 @@
 	  <form method="post" action="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/repairs') }}" class="editor">
 	    <input name="reason" placeholder="repair reason">
 	    <textarea name="repair_payload" spellcheck="false" data-tapdb-json-editor data-json-editor-label="Repair JSON payload">{{ json_text }}</textarea>
-	    <button type="submit">Create repair</button>
+	    <button type="submit" name="apply" value="true">Create repair (Apply)</button>
 	  </form>
 </section>
 {% endif %}

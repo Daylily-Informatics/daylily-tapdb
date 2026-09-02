@@ -175,6 +175,9 @@ CREATE TABLE IF NOT EXISTS generic_instance (
     -- Machine/protocol identity (UUIDv7 for external APIs, webhook idempotency, etc.)
     machine_uuid UUID UNIQUE,
 
+    -- Exact natural identity. Existing rows are never inferred/backfilled.
+    identity_key VARCHAR(512),
+
     -- Type hierarchy (copied from template: category/type/subtype/version)
     polymorphic_discriminator TEXT NOT NULL,
     category TEXT NOT NULL,
@@ -197,7 +200,9 @@ CREATE TABLE IF NOT EXISTS generic_instance (
     created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT unique_generic_instance_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq)
+    CONSTRAINT unique_generic_instance_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq),
+    CONSTRAINT ck_generic_instance_identity_key_global CHECK (identity_key IS NULL OR tenant_id IS NULL),
+    CONSTRAINT ck_generic_instance_identity_key_format CHECK (identity_key IS NULL OR (identity_key ~ '^[a-z][a-z0-9._/-]*:[^[:cntrl:]]+$' AND char_length(identity_key) <= 512))
 );
 
 -- generic_instance_lineage: Directed edges between instances
@@ -326,6 +331,17 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     )
 );
 
+-- Immutable provenance for legacy outbox-to-message identity allocations.
+CREATE TABLE IF NOT EXISTS tapdb_legacy_outbox_mapping (
+    old_outbox_id BIGINT PRIMARY KEY,
+    old_event_id UUID NOT NULL UNIQUE,
+    message_uid BIGINT NOT NULL UNIQUE REFERENCES generic_instance(uid),
+    message_euid TEXT NOT NULL UNIQUE,
+    message_euid_seq BIGINT NOT NULL,
+    source_sha256 TEXT NOT NULL,
+    mapped_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- outbox_event_attempt: Append-only delivery attempt history.
 -- One row per delivery attempt; immutable operational history.
 CREATE TABLE IF NOT EXISTS outbox_event_attempt (
@@ -397,7 +413,9 @@ BEGIN
           AND conrelid = 'generic_template'::regclass
     ) THEN
         ALTER TABLE generic_template ADD CONSTRAINT unique_template_code
-            UNIQUE (domain_code, category, type, subtype, version);
+            UNIQUE (
+                domain_code, issuer_app_code, category, type, subtype, version
+            );
     END IF;
 END $$;
 
@@ -409,6 +427,7 @@ ALTER TABLE generic_instance ALTER COLUMN json_addl SET DEFAULT '{}'::jsonb;
 ALTER TABLE generic_template ADD COLUMN IF NOT EXISTS tenant_id UUID;
 ALTER TABLE generic_instance ADD COLUMN IF NOT EXISTS tenant_id UUID;
 ALTER TABLE generic_instance ADD COLUMN IF NOT EXISTS machine_uuid UUID UNIQUE;
+ALTER TABLE generic_instance ADD COLUMN IF NOT EXISTS identity_key VARCHAR(512);
 ALTER TABLE generic_instance_lineage ADD COLUMN IF NOT EXISTS tenant_id UUID;
 ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS tenant_id UUID;
 
@@ -490,6 +509,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_machine_uuid
 CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_machine_uuid
     ON generic_instance(domain_code, issuer_app_code, machine_uuid)
     WHERE machine_uuid IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_natural_identity
+    ON generic_instance (
+        domain_code, issuer_app_code, template_uid, identity_key
+    )
+    WHERE identity_key IS NOT NULL;
 
 -- outbox_event indexes
 CREATE INDEX IF NOT EXISTS idx_outbox_event_status_next_attempt_at

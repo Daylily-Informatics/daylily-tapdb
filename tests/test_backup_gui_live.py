@@ -259,19 +259,23 @@ def test_isolated_review_does_not_ask_for_a_label_it_will_not_check(live):
     assert applied.status_code == 303, applied.text[:2000]
 
 
-def test_in_place_review_still_demands_the_typed_label(live):
-    """The control the service *does* enforce is still rendered and enforced."""
+def test_in_place_review_accepts_a_complete_operator_archive(live):
+    """A full operator archive retains the staged in-place recovery path."""
     client, created, _cfg, _settings = live
 
     review = client.get(
         f"/api/admin/backups/{created.backup_id}/restore", params={"mode": "in-place"}
     ).json()
     assert review["confirmation_required"] is True
+    scope = next(c for c in review["checks"] if c["id"] == "identity.data_scope")
+    assert scope["status"] == "pass"
+    assert scope["data"]["physical_schema_complete"] is True
 
     page = client.get(
         f"/admin/backups/{created.backup_id}/restore", params={"mode": "in-place"}
     )
     assert 'name="confirm_target"' in page.text
+    assert review["required_confirm_target"] in page.text
 
     response = client.post(
         f"/admin/backups/{created.backup_id}/restore",
@@ -282,10 +286,11 @@ def test_in_place_review_still_demands_the_typed_label(live):
         },
         follow_redirects=False,
     )
-    # Re-rendered rather than redirected: the operator stays on the form.
+    # The server, not only the browser, rejects an incorrect typed target.
     assert response.status_code == 200, response.status_code
     assert 'name="plan_fingerprint"' in response.text
     assert 'name="confirm_target"' in response.text
+    assert "confirmation does not match" in response.text
 
 
 def test_in_place_is_reachable_without_hand_editing_the_url(live):
@@ -511,7 +516,9 @@ def test_the_gui_can_capture_a_drifted_schema(live):
     client, _created, cfg, _settings = live
     schema = str(cfg["schema_name"])
 
-    with service.open_session(cfg, app_username="pytest") as conn:
+    with service.open_session(
+        cfg, app_username="pytest", connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             session.execute(
                 text(
@@ -539,7 +546,9 @@ def test_the_gui_can_capture_a_drifted_schema(live):
             allowed.headers["location"]
         )
     finally:
-        with service.open_session(cfg, app_username="pytest") as conn:
+        with service.open_session(
+            cfg, app_username="pytest", connection_role="operator"
+        ) as conn:
             with conn.session_scope(commit=True) as session:
                 session.execute(
                     text(f'DROP TABLE IF EXISTS "{schema}".tapdb_gui_drift')

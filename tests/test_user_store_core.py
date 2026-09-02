@@ -28,6 +28,21 @@ class _RowResult:
         return [self._row]
 
 
+class _Nested:
+    def __init__(self):
+        self.is_active = True
+        self.committed = False
+        self.rolled_back = False
+
+    def commit(self):
+        self.is_active = False
+        self.committed = True
+
+    def rollback(self):
+        self.is_active = False
+        self.rolled_back = True
+
+
 class _FakeSession:
     def __init__(self, row=(1,)):
         self.row = row
@@ -37,6 +52,10 @@ class _FakeSession:
         captured_params = dict(params or {})
         self.calls.append((str(stmt), captured_params))
         return _RowResult(self.row)
+
+    def begin_nested(self):
+        self.nested = _Nested()
+        return self.nested
 
 
 class _QueuedPostgresSession:
@@ -52,6 +71,10 @@ class _QueuedPostgresSession:
         if self.rows:
             return _RowResult(self.rows.pop(0))
         return _RowResult(None)
+
+    def begin_nested(self):
+        self.nested = _Nested()
+        return self.nested
 
 
 def test_normalize_login_identifier_normalizes_case_and_whitespace():
@@ -396,12 +419,10 @@ def test_create_or_get_inserts_new_user(monkeypatch: pytest.MonkeyPatch):
     assert lookup_calls == [("new@example.com", True)]
 
 
-def test_create_or_get_switches_to_tapdb_owner_for_system_user_insert(
+def test_create_or_get_never_switches_the_principal_bound_owner_scope(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    session = _QueuedPostgresSession(
-        rows=[("bloom",), ("daylily-tapdb",), (77,), ("bloom",)]
-    )
+    session = _QueuedPostgresSession(rows=[(77,)])
     created_user = SimpleNamespace(uid=77, username="new@example.com")
 
     monkeypatch.setattr(
@@ -427,16 +448,9 @@ def test_create_or_get_switches_to_tapdb_owner_for_system_user_insert(
     assert created is True
     assert user is created_user
     statements = [stmt for stmt, _params in session.calls]
-    assert "current_setting('session.current_owner_repo_name', true)" in statements[0]
-    assert (
-        "set_config('session.current_owner_repo_name', :owner, true)" in statements[1]
-    )
-    assert session.calls[1][1] == {"owner": "daylily-tapdb"}
-    assert "INSERT INTO generic_instance" in statements[2]
-    assert (
-        "set_config('session.current_owner_repo_name', :owner, true)" in statements[3]
-    )
-    assert session.calls[3][1] == {"owner": "bloom"}
+    assert len(statements) == 1
+    assert "INSERT INTO generic_instance" in statements[0]
+    assert "set_config" not in statements[0]
 
 
 def test_create_or_get_retries_lookup_after_integrity_error(
@@ -446,6 +460,10 @@ def test_create_or_get_retries_lookup_after_integrity_error(
     calls = {"count": 0}
 
     class _IntegritySession:
+        def begin_nested(self):
+            self.nested = _Nested()
+            return self.nested
+
         def execute(self, stmt, params=None):
             calls["count"] += 1
             raise m.IntegrityError("insert failed", params, Exception("boom"))

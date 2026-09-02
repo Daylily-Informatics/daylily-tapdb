@@ -11,7 +11,7 @@ from daylily_tapdb import InstanceFactory, TAPDBConnection, TemplateManager
 from daylily_tapdb.cli.context import set_cli_context
 from daylily_tapdb.cli.db_config import get_db_config
 
-TEMPLATE_CODE = "MSG/message/webhook_event/1.0/"
+TEMPLATE_CODE = "message/webhook/event/1.0/"
 
 
 def _default_config_path() -> Path:
@@ -23,12 +23,7 @@ def _default_config_path() -> Path:
     client_id = os.environ.get("TAPDB_DOCS_CLIENT_ID", "docs")
     database_name = os.environ.get("TAPDB_DOCS_DATABASE_NAME", "demo")
     return (
-        workdir
-        / ".config"
-        / "tapdb"
-        / client_id
-        / database_name
-        / "tapdb-config.yaml"
+        workdir / ".config" / "tapdb" / client_id / database_name / "tapdb-config.yaml"
     ).resolve()
 
 
@@ -58,9 +53,11 @@ def main() -> None:
         db_pass=cfg["password"],
         db_name=cfg["database"],
         schema_name=cfg["schema_name"],
+        engine_type=cfg["engine_type"],
         app_username="tapdb_readme_example",
         domain_code=domain_code,
         owner_repo_name=owner_repo_name,
+        config_identity=str(config_path),
     )
 
     template_manager = TemplateManager()

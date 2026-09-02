@@ -186,6 +186,21 @@ STATE_INVENTORY: tuple[StateCategory, ...] = (
         ),
     ),
     StateCategory(
+        key="rows_outside_rls_scope",
+        title="Rows outside the runtime forced-RLS scope",
+        disposition=DISPOSITION_EXCLUDED,
+        detail=(
+            "A database template-pack contains global templates plus the configured "
+            "tenant's templates, or global templates only when tenant_id is empty."
+        ),
+        rationale=(
+            "The runtime role is intentionally NOBYPASSRLS. Hidden tenant templates "
+            "cannot be claimed as captured, so the signed manifest records the exact "
+            "scope. Full backups use the distinct operator role and do not include "
+            "this exclusion."
+        ),
+    ),
+    StateCategory(
         key="cluster_settings",
         title="Cluster settings and parameter groups",
         disposition=DISPOSITION_EXCLUDED,

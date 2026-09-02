@@ -7,6 +7,7 @@ import json
 import os
 import re
 import stat
+import uuid
 import warnings
 from pathlib import Path
 from typing import Any, Optional
@@ -298,7 +299,7 @@ def _build_db_config_from_section(
     file_cfg: dict[str, Any],
     section_name: str,
     target_name: str,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     meta = root.get("meta") if isinstance(root, dict) else None
     if not isinstance(meta, dict):
         raise RuntimeError(f"Config metadata is required in {resolved_config_path}.")
@@ -405,6 +406,70 @@ def _build_db_config_from_section(
         "target_name": target_name,
     }
 
+    tenant_id = (_file_str("tenant_id") or "").strip()
+    if tenant_id:
+        try:
+            tenant_id = str(uuid.UUID(tenant_id))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Config {resolved_config_path}: {section_name}.tenant_id must be a UUID"
+            ) from exc
+    cfg["tenant_id"] = tenant_id
+    allow_global_claims = file_cfg.get("allow_global_claims", False)
+    if not isinstance(allow_global_claims, bool):
+        raise RuntimeError(
+            f"Config {resolved_config_path}: "
+            f"{section_name}.allow_global_claims must be boolean"
+        )
+    cfg["allow_global_claims"] = allow_global_claims
+
+    operator_value = file_cfg.get("operator")
+    if operator_value is None:
+        operator: dict[str, Any] = {}
+    elif isinstance(operator_value, dict):
+        operator = operator_value
+    else:
+        raise RuntimeError(
+            f"Config {resolved_config_path}: {section_name}.operator must be a mapping"
+        )
+    operator_user = str(operator.get("user") or "").strip()
+    if operator and not operator_user:
+        raise RuntimeError(
+            f"Config {resolved_config_path} is missing {section_name}.operator.user"
+        )
+    if operator_user and operator_user == cfg["user"]:
+        raise RuntimeError(
+            f"Config {resolved_config_path}: {section_name}.operator.user must differ "
+            f"from {section_name}.user"
+        )
+    cfg["operator_user"] = operator_user
+    cfg["operator_password"] = str(operator.get("password") or "")
+    cfg["operator_secret_arn"] = str(operator.get("secret_arn") or "").strip()
+    operator_iam_auth = operator.get("iam_auth", False)
+    if not isinstance(operator_iam_auth, bool):
+        raise RuntimeError(
+            f"Config {resolved_config_path}: "
+            f"{section_name}.operator.iam_auth must be boolean"
+        )
+    cfg["operator_iam_auth"] = operator_iam_auth
+    cfg["operator_configured"] = bool(operator)
+    if operator and engine_type == "aurora":
+        if "iam_auth" not in operator:
+            raise RuntimeError(
+                f"Config {resolved_config_path} is missing "
+                f"{section_name}.operator.iam_auth"
+            )
+        operator_iam = cfg["operator_iam_auth"]
+        if (
+            not operator_iam
+            and not cfg["operator_secret_arn"]
+            and not cfg["operator_password"]
+        ):
+            raise RuntimeError(
+                f"Config {resolved_config_path}: Aurora {section_name}.operator "
+                "requires iam_auth, secret_arn, or password"
+            )
+
     cfg["client_id"] = ctx.client_id
     cfg["database_name"] = ctx.database_name
     cfg["owner_repo_name"] = owner_repo_name
@@ -493,7 +558,7 @@ def get_db_config(
     config_path: Optional[str | Path] = None,
     client_id: Optional[str] = None,
     database_name: Optional[str] = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Resolve the single explicit TapDB target from the active config."""
     ctx, root, resolved_config_path = _resolve_common_config(
         config_path=config_path,

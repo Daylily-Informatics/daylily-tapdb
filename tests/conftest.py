@@ -111,10 +111,12 @@ def pg_instance(tmp_path_factory):
     pg_ctl = shutil.which("pg_ctl")
     initdb_bin = shutil.which("initdb")
     createdb_bin = shutil.which("createdb")
-    if not all([pg_ctl, initdb_bin, createdb_bin]):
-        pytest.skip("PostgreSQL binaries (pg_ctl, initdb, createdb) not on PATH")
+    psql_bin = shutil.which("psql")
+    if not all([pg_ctl, initdb_bin, createdb_bin, psql_bin]):
+        pytest.skip("PostgreSQL binaries (pg_ctl, initdb, createdb, psql) not on PATH")
 
     port = TAPDB_TEST_PG_PORT
+    operator_user = "tapdb_operator"
     base = tmp_path_factory.mktemp("tapdb_pg")
     data_dir = base / "data"
     # macOS limits Unix socket paths to 104 chars — use /tmp for short path
@@ -124,7 +126,18 @@ def pg_instance(tmp_path_factory):
 
     # --- initdb ---
     subprocess.run(
-        [initdb_bin, "-D", str(data_dir), "--no-locale", "-E", "UTF8", "-A", "trust"],
+        [
+            initdb_bin,
+            "-D",
+            str(data_dir),
+            "--no-locale",
+            "-E",
+            "UTF8",
+            "-A",
+            "trust",
+            "-U",
+            operator_user,
+        ],
         check=True,
         capture_output=True,
     )
@@ -148,12 +161,45 @@ def pg_instance(tmp_path_factory):
         print(log_file.read_text())
         raise RuntimeError(f"PostgreSQL did not start on port {port}")
 
-    user = os.environ.get("USER", "postgres")
+    user = "tapdb_runtime"
     database = "tapdb_test_integ"
 
     # --- create database ---
     subprocess.run(
-        [createdb_bin, "-h", "localhost", "-p", str(port), "-U", user, database],
+        [
+            createdb_bin,
+            "-h",
+            "localhost",
+            "-p",
+            str(port),
+            "-U",
+            operator_user,
+            database,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            psql_bin,
+            "-h",
+            "localhost",
+            "-p",
+            str(port),
+            "-U",
+            operator_user,
+            "-d",
+            "postgres",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-c",
+            (
+                f'CREATE ROLE "{user}" LOGIN NOSUPERUSER NOBYPASSRLS '
+                "NOCREATEDB NOCREATEROLE NOREPLICATION; "
+                f'REVOKE CONNECT ON DATABASE "{database}" FROM PUBLIC; '
+                f'GRANT CONNECT ON DATABASE "{database}" TO "{user}";'
+            ),
+        ],
         check=True,
         capture_output=True,
     )
@@ -217,6 +263,14 @@ def pg_instance(tmp_path_factory):
             "domain_code": "Z",
             "user": user,
             "password": "",
+            "tenant_id": "",
+            "allow_global_claims": True,
+            "operator": {
+                "user": operator_user,
+                "password": "",
+                "secret_arn": "",
+                "iam_auth": False,
+            },
             "database": database,
             "schema_name": "tapdb_testdb",
             "unix_socket_dir": str(socket_dir),
@@ -238,6 +292,7 @@ def pg_instance(tmp_path_factory):
     run_link.symlink_to(socket_dir)
 
     dsn = f"postgresql://{user}:@localhost:{port}/{database}"
+    operator_dsn = f"postgresql://{operator_user}:@localhost:{port}/{database}"
 
     yield {
         "port": port,
@@ -249,6 +304,8 @@ def pg_instance(tmp_path_factory):
         "database": database,
         "schema_name": "tapdb_testdb",
         "dsn": dsn,
+        "operator_user": operator_user,
+        "operator_dsn": operator_dsn,
         "base": base,
     }
 

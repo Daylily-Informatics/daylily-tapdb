@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}TapDB Runtime Information{% endblock %}
+{% block content %}
+<section class="band">
+  <h1>Sanitized Runtime Information</h1>
+  <p>This is the same payload exposed by the CLI and authenticated API.</p>
+</section>
+{% for section in ["package", "python", "meridian", "git", "config", "database", "scope", "storage", "ui", "dag"] %}
+<section class="band">
+  <h2>{{ section }}</h2>
+  <pre>{{ runtime_info[section] | tojson(indent=2) }}</pre>
+</section>
+{% endfor %}
+{% endblock %}

@@ -90,7 +90,9 @@ def _live_state(cfg, schema=None):
     from daylily_tapdb.backup import introspect
 
     target = schema or str(cfg["schema_name"])
-    with service.open_session(cfg, app_username="pytest") as conn:
+    with service.open_session(
+        cfg, app_username="pytest", connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=False) as session:
             return (
                 introspect.capture_row_counts(session, target),
@@ -102,7 +104,9 @@ def _live_state(cfg, schema=None):
 
 
 def _schemas(cfg):
-    with service.open_session(cfg, app_username="pytest") as conn:
+    with service.open_session(
+        cfg, app_username="pytest", connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=False) as session:
             rows = session.execute(
                 text("SELECT schema_name FROM information_schema.schemata")
@@ -174,7 +178,6 @@ def test_in_place_plan_describes_the_rename_aside_flow(env, backup):
     assert "safety backup" in steps
     assert "rename" in steps
     assert "drop schema" in steps
-    # The original must not be dropped before a verified replacement exists.
     assert steps.index("rename") < steps.index("drop schema")
 
 
@@ -295,6 +298,7 @@ def test_every_preflight_check_from_the_plan_is_present(env, backup):
         "client.pg_restore",  # 2 client >= dump
         "migrations.known",  # 3
         "identity.match",  # 4
+        "identity.data_scope",
         "governance.registries",  # 5 registry checksums
         "governance.prefixes",  # 5 prefix claimability
         "target.empty",  # 6
@@ -305,16 +309,46 @@ def test_every_preflight_check_from_the_plan_is_present(env, backup):
         assert required in ids, f"preflight is missing {required}"
 
 
-def test_rls_check_skips_honestly_when_the_archive_has_no_policies(env, backup):
+def test_full_archive_is_physically_complete_for_both_restore_modes(env, backup):
     cfg, settings = env
-    # `db schema apply` does not apply rls.sql, so archives taken here carry no
-    # POLICY entries. The check must say so rather than reporting a pass it did
-    # not earn.
+
+    isolated = verify.plan_restore(cfg, settings, backup_id=backup.backup_id)
+    isolated_scope = next(c for c in isolated.checks if c.id == "identity.data_scope")
+    assert isolated_scope.status == "pass"
+    assert isolated_scope.data["physical_schema_complete"] is True
+
+    in_place = verify.plan_restore(
+        cfg,
+        settings,
+        backup_id=backup.backup_id,
+        options=RestoreOptions(mode=MODE_IN_PLACE),
+    )
+    in_place_scope = next(c for c in in_place.checks if c.id == "identity.data_scope")
+    assert in_place_scope.status == "pass"
+    assert in_place_scope.data["physical_schema_complete"] is True
+
+
+def test_full_archive_is_not_reinterpreted_as_tenant_filtered(env, backup):
+    cfg, settings = env
+    tenant_cfg = dict(cfg)
+    tenant_cfg["tenant_id"] = "00000000-0000-4000-8000-000000000001"
+
+    plan = verify.plan_restore(tenant_cfg, settings, backup_id=backup.backup_id)
+    check = next(c for c in plan.checks if c.id == "identity.data_scope")
+
+    assert check.status == "pass"
+    assert check.data["mode"] == "physical_schema"
+
+
+def test_rls_check_passes_for_the_canonical_forced_policies(env, backup):
+    cfg, settings = env
+    # Fresh schema apply consumes canonical rls.sql, so a real archive must
+    # carry and validate the forced-RLS policies.
     plan = verify.plan_restore(cfg, settings, backup_id=backup.backup_id)
     check = next(c for c in plan.checks if c.id == "rls.roles")
 
-    assert check.status == "skip"
-    assert "no policies" in check.detail
+    assert check.status == "pass"
+    assert "policies" in check.detail
 
 
 def test_rls_check_reads_the_archive_when_policies_are_present(env, backup):
@@ -713,7 +747,6 @@ def test_in_place_restore_replaces_the_schema_and_takes_a_safety_backup(env, bac
     assert result.safety_backup_id, "in-place must take a safety backup first"
     after_counts, _ = _live_state(cfg)
     assert after_counts == before_counts
-    # The superseded schema is gone by default.
     assert not any("_superseded_" in name for name in _schemas(cfg))
 
 
@@ -730,9 +763,9 @@ def test_in_place_keeps_the_superseded_schema_when_asked(env, backup):
 
     assert result.superseded_schema
     assert result.superseded_schema in _schemas(cfg)
-
-    # Clean up so later tests see a normal database.
-    with service.open_session(cfg, app_username="pytest") as conn:
+    with service.open_session(
+        cfg, app_username="pytest", connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             session.execute(
                 text(f'DROP SCHEMA IF EXISTS "{result.superseded_schema}" CASCADE')
@@ -749,12 +782,6 @@ def test_in_place_keeps_the_superseded_schema_when_asked(env, backup):
 def test_a_failed_in_place_restore_leaves_the_original_intact(
     env, backup, monkeypatch, failing_attr, message
 ):
-    """The single most important guarantee in the subsystem.
-
-    Whether pg_restore dies partway or verification rejects the result, the
-    original schema must come back byte-for-byte -- same rows, same sequence
-    high-water marks, same schema name, no leftovers.
-    """
     cfg, settings = env
     before_counts, before_seqs = _live_state(cfg)
     before_schemas = _schemas(cfg)
@@ -776,7 +803,6 @@ def test_a_failed_in_place_restore_leaves_the_original_intact(
     after_counts, after_seqs = _live_state(cfg)
     assert after_counts == before_counts
     assert after_seqs == before_seqs
-    # The rollback renames the original back; no stray schema is left behind.
     assert _schemas(cfg) == before_schemas
 
 
@@ -800,7 +826,6 @@ def test_a_failed_in_place_restore_still_leaves_a_safety_backup(
             confirm_target=service.target_label(cfg),
         )
 
-    # The safety backup is taken before anything is touched, so it survives.
     assert len(service.list_backups(cfg, settings).entries) > before
 
 

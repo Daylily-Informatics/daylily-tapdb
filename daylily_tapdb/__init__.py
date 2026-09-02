@@ -5,13 +5,14 @@ A reusable library for building template-driven database applications
 with PostgreSQL and SQLAlchemy.
 
 Example:
+    from pathlib import Path
+
     from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory
     from daylily_tapdb.cli.db_config import get_db_config
 
     # Connect using an explicit TapDB target config.
-    cfg = get_db_config(
-        config_path="~/.config/tapdb/tapdb/tapdb/tapdb-config.yaml",
-    )
+    config_path = Path("/abs/path/to/tapdb-config.yaml")
+    cfg = get_db_config(config_path=config_path)
     db = TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_user=cfg["user"],
@@ -22,6 +23,7 @@ Example:
         domain_code=cfg["domain_code"],
         owner_repo_name=cfg["owner_repo_name"],
         app_username="my_app",
+        config_identity=str(config_path),
     )
 
     templates = TemplateManager()
@@ -35,9 +37,9 @@ Example:
         )
 
 Note:
-    ``engine_type``, ``app_username``, ``domain_code``, and ``owner_repo_name``
-    are all required by ``TAPDBConnection``; every key above except
-    ``app_username`` comes straight from ``get_db_config()``.
+    ``engine_type``, ``app_username``, ``domain_code``, ``owner_repo_name``, and
+    ``config_identity`` are all required by PostgreSQL ``TAPDBConnection``
+    sessions; every target value comes from one explicit absolute config.
 
     Only ``actor/user/system/1.0/``, ``message/webhook/event/1.0/``, and
     ``reference/external_identifier/tapdb_object/1.0/`` are bundled with this

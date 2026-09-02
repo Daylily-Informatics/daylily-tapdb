@@ -24,6 +24,7 @@ The refactor review and the deeper doc set live in this directory as separate su
 - [template-authoring.md](template-authoring.md)
 - [runtime-and-cli.md](runtime-and-cli.md)
 - [integration-and-embedding.md](integration-and-embedding.md)
+- [consumer-discoverability-guide.md](consumer-discoverability-guide.md)
 - [repository-review.md](repository-review.md)
 
 Those files are the right place for detailed references, policy notes, and implementation guidance that would clutter the root README.

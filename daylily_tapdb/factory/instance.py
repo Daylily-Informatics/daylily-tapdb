@@ -2,10 +2,16 @@
 
 import copy
 import logging
+import re
+import unicodedata
 import uuid
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Dict, Optional
 
 from pydantic import ValidationError
+from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from daylily_tapdb.models.instance import generic_instance
@@ -20,6 +26,49 @@ from daylily_tapdb.validation.instantiation_layouts import (
 logger = logging.getLogger(__name__)
 
 _SYSTEM_USER_COORDS = ("actor", "user", "system")
+_IDENTITY_NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9._/-]*$")
+
+
+class IdentityClaimOutcome(str, Enum):
+    """Outcome of an exact natural-identity claim."""
+
+    CREATED = "created"
+    EXISTING = "existing"
+
+
+@dataclass(frozen=True)
+class InstanceIdentityClaim:
+    """Result of claiming one globally-scoped typed instance identity."""
+
+    instance: generic_instance
+    outcome: IdentityClaimOutcome
+
+
+def validate_identity_key(identity_key: str) -> str:
+    """Validate an identity key without trimming, case-folding, or inference."""
+    if not isinstance(identity_key, str):
+        raise ValueError("identity_key must be a string")
+    if len(identity_key) > 512:
+        raise ValueError("identity_key must contain at most 512 characters")
+    namespace, separator, suffix = identity_key.partition(":")
+    if separator != ":" or not _IDENTITY_NAMESPACE_RE.fullmatch(namespace):
+        raise ValueError(
+            "identity_key must start with a lowercase ASCII namespace followed by ':'"
+        )
+    if not suffix:
+        raise ValueError("identity_key suffix must be non-empty")
+    if any(unicodedata.category(character) == "Cc" for character in suffix):
+        raise ValueError("identity_key suffix must not contain control characters")
+    return identity_key
+
+
+def _require_active_postgresql_transaction(session: Session) -> None:
+    bind = session.get_bind()
+    dialect = str(getattr(getattr(bind, "dialect", None), "name", "") or "")
+    if dialect != "postgresql":
+        raise RuntimeError("natural identity claims require PostgreSQL")
+    if not session.in_transaction():
+        raise RuntimeError("natural identity claims require an active transaction")
 
 
 def _normalize_domain_code(domain_code: Any) -> Optional[str]:
@@ -243,6 +292,109 @@ class InstanceFactory:
             self._create_children(session, instance, template, _depth, _visited.copy())
 
         return instance
+
+    def claim_instance_by_identity(
+        self,
+        session: Session,
+        *,
+        template_code: str,
+        identity_key: str,
+        name: str,
+        properties: Optional[Dict[str, Any]] = None,
+        claimant_tenant_id: Optional[uuid.UUID] = None,
+        command_evidence: Optional[Dict[str, Any]] = None,
+        create_children: bool = False,
+    ) -> InstanceIdentityClaim:
+        """Atomically create or replay a globally-scoped natural identity claim.
+
+        The attempted insert is isolated in a nested savepoint. This method
+        never commits or rolls back the caller's outer transaction.
+        """
+        _require_active_postgresql_transaction(session)
+        validated_key = validate_identity_key(identity_key)
+        if self.domain_code is None:
+            raise ValueError("domain_code is required for natural identity claims")
+
+        normalized_template_code = normalize_template_code_str(template_code)
+        template = self.template_manager.get_template(
+            session, normalized_template_code, **self._scope_kwargs
+        )
+        if template is None:
+            raise ValueError(f"Template not found: {normalized_template_code}")
+
+        domain_code, issuer_app_code = session.execute(
+            text("SELECT tapdb_current_domain_code(), tapdb_current_owner_repo_name()")
+        ).one()
+        domain_code = str(domain_code)
+        issuer_app_code = str(issuer_app_code)
+
+        json_addl = self._build_json_addl(session, template, properties)
+        self._normalize_system_user_json_addl(template, json_addl)
+        json_addl["identity_claim"] = {
+            "claimant_tenant_id": (
+                str(claimant_tenant_id) if claimant_tenant_id is not None else None
+            ),
+            "command_evidence": copy.deepcopy(command_evidence or {}),
+            "create_children": bool(create_children),
+        }
+        discriminator = (
+            template.instance_polymorphic_identity
+            or template.polymorphic_discriminator.replace("_template", "_instance")
+        )
+        expected = {
+            "name": name,
+            "tenant_id": None,
+            "polymorphic_discriminator": discriminator,
+            "category": template.category,
+            "type": template.type,
+            "subtype": template.subtype,
+            "version": template.version,
+            "template_uid": template.uid,
+            "identity_key": validated_key,
+            "json_addl": json_addl,
+            "bstatus": template.json_addl.get("default_status", "created"),
+            "is_singleton": bool(template.is_singleton),
+        }
+
+        statement = (
+            pg_insert(generic_instance.__table__)
+            .values(**expected)
+            .on_conflict_do_nothing(
+                index_elements=[
+                    "domain_code",
+                    "issuer_app_code",
+                    "template_uid",
+                    "identity_key",
+                ],
+                index_where=generic_instance.identity_key.is_not(None),
+            )
+            .returning(generic_instance.uid)
+        )
+        with session.begin_nested():
+            inserted_uid = session.execute(statement).scalar_one_or_none()
+
+        if inserted_uid is not None:
+            instance = session.execute(
+                select(generic_instance).where(generic_instance.uid == inserted_uid)
+            ).scalar_one()
+            if create_children:
+                self._create_children(session, instance, template, 0, set())
+            return InstanceIdentityClaim(instance, IdentityClaimOutcome.CREATED)
+
+        instance = session.execute(
+            select(generic_instance).where(
+                generic_instance.domain_code == domain_code,
+                generic_instance.issuer_app_code == issuer_app_code,
+                generic_instance.template_uid == template.uid,
+                generic_instance.identity_key == validated_key,
+            )
+        ).scalar_one_or_none()
+        if instance is None:
+            raise RuntimeError(
+                "natural identity conflict winner disappeared before replay lookup"
+            )
+
+        return InstanceIdentityClaim(instance, IdentityClaimOutcome.EXISTING)
 
     def _normalize_system_user_json_addl(
         self, template: generic_template, json_addl: Dict[str, Any]

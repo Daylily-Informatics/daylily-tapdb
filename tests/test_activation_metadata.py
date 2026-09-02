@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import builtins
 import tomllib
 from pathlib import Path
+
+import pytest
 
 
 def test_pyproject_pins_published_cli_core_yo() -> None:
@@ -34,3 +37,29 @@ def test_activate_uses_published_cli_core_yo_metadata_check() -> None:
     assert '_tapdb_cli_core_yo_version="2.1.1"' in text
     assert "cli-core-yo==${_tapdb_cli_core_yo_version}" in text
     assert "cli-core-yo is not installed as published" in text
+
+
+def test_package_init_has_source_checkout_version_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_init = Path(__file__).resolve().parents[1] / "daylily_tapdb" / "__init__.py"
+    real_import = builtins.__import__
+
+    def _import_without_generated_version(
+        name, globals=None, locals=None, fromlist=(), level=0
+    ):
+        if name == "daylily_tapdb._version":
+            raise ImportError("setuptools-scm version module is absent")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _import_without_generated_version)
+    namespace = {
+        "__name__": "daylily_tapdb_init_fallback_probe",
+        "__package__": "daylily_tapdb",
+    }
+    exec(
+        compile(package_init.read_text(encoding="utf-8"), package_init, "exec"),
+        namespace,
+    )
+
+    assert namespace["__version__"] == "0.0.0.dev0"

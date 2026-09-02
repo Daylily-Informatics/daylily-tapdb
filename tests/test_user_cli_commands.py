@@ -11,6 +11,10 @@ import daylily_tapdb.cli.user as user_mod
 runner = CliRunner()
 
 
+def _raise(error: Exception):
+    raise error
+
+
 class _FakeConn:
     def __init__(self) -> None:
         self.sessions: list[SimpleNamespace] = []
@@ -199,3 +203,61 @@ def test_user_delete_success(monkeypatch: pytest.MonkeyPatch):
 
     assert result.exit_code == 0
     assert "Deleted user" in result.output
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        (["list"], "Failed to list users"),
+        (["add", "--username", "alice"], "Failed to create user"),
+        (["set-role", "alice", "admin"], "Failed to set role"),
+        (["deactivate", "alice"], "Failed to deactivate user"),
+        (["activate", "alice"], "Failed to activate user"),
+        (
+            ["set-password", "alice", "--password", "example-password"],
+            "Failed to set password",
+        ),
+        (["delete", "alice", "--force"], "Failed to delete user"),
+    ],
+)
+def test_user_commands_report_connection_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+    expected: str,
+) -> None:
+    monkeypatch.setattr(
+        user_mod,
+        "_open_connection",
+        lambda *_args, **_kwargs: _raise(RuntimeError("database unavailable")),
+    )
+    monkeypatch.setattr(user_mod, "_hash_password", lambda _value: "hashed")
+
+    result = runner.invoke(user_mod.user_app, args)
+
+    assert result.exit_code == 1
+    assert expected in result.output
+    assert "database unavailable" in result.output
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["add", "--username", "alice", "--password", "example-password"],
+        ["set-password", "alice", "--password", "example-password"],
+    ],
+)
+def test_user_password_commands_report_hashing_dependency_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+) -> None:
+    monkeypatch.setattr(
+        user_mod,
+        "_hash_password",
+        lambda _value: _raise(RuntimeError("password hashing unavailable")),
+    )
+
+    result = runner.invoke(user_mod.user_app, args)
+
+    assert result.exit_code == 1
+    assert "password hashing unavailable" in result.output
+    assert "passlib" in result.output

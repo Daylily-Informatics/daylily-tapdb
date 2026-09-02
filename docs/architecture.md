@@ -1,6 +1,6 @@
 # TAPDB Architecture
 
-This document describes the `tapdb-core` repository. The Python import package remains `daylily_tapdb`.
+This document describes the `daylily-tapdb` repository. The Python import package is `daylily_tapdb`.
 
 TAPDB is a small substrate with a large surface area. The point of the design is not to be clever; it is to keep the durable pieces generic so that application repos can stay domain-specific without re-implementing the persistence layer.
 

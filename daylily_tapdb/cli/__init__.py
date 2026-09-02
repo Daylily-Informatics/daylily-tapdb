@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -228,7 +229,9 @@ def build_app():
         run_migrations,
         seed_templates,
     )
+    from daylily_tapdb.cli.objects import objects_app
     from daylily_tapdb.cli.pg import pg_app, pg_init, pg_start_local
+    from daylily_tapdb.cli.templates import templates_app
     from daylily_tapdb.cli.user import user_app
     from daylily_tapdb.cli.validation import repair_app, validation_app
 
@@ -300,6 +303,8 @@ def build_app():
     app.add_typer(backup_app, name="backup")
     app.add_typer(user_app, name="users")
     app.add_typer(cognito_app, name="cognito")
+    app.add_typer(templates_app, name="templates")
+    app.add_typer(objects_app, name="objects")
 
     # Aurora subcommand — always visible, but requires boto3
     _has_boto3 = False
@@ -1001,6 +1006,12 @@ def build_app():
         ui_port: int,
         user: str,
         password: str,
+        tenant_id: str,
+        allow_global_claims: bool,
+        operator_user: str,
+        operator_password: str,
+        operator_secret_arn: str,
+        operator_iam_auth: bool,
         database: str,
         schema_name: str,
         safety_tier: str,
@@ -1055,6 +1066,15 @@ def build_app():
         normalized_domain_code = str(domain_code or "").strip().upper()
         if not normalized_domain_code:
             raise RuntimeError("--domain-code is required")
+        normalized_tenant_id = str(tenant_id or "").strip()
+        if normalized_tenant_id:
+            try:
+                normalized_tenant_id = str(uuid.UUID(normalized_tenant_id))
+            except ValueError as exc:
+                raise RuntimeError("--tenant-id must be a UUID") from exc
+        normalized_operator_user = str(operator_user or "").strip()
+        if normalized_operator_user and normalized_operator_user == str(user).strip():
+            raise RuntimeError("--operator-user must differ from --user")
 
         root = existing if isinstance(existing, dict) else {}
         root["meta"] = {
@@ -1099,6 +1119,20 @@ def build_app():
             "domain_code": normalized_domain_code,
             "user": str(user).strip(),
             "password": str(password),
+            "tenant_id": normalized_tenant_id,
+            "allow_global_claims": bool(allow_global_claims),
+            **(
+                {
+                    "operator": {
+                        "user": normalized_operator_user,
+                        "password": str(operator_password),
+                        "secret_arn": str(operator_secret_arn).strip(),
+                        "iam_auth": bool(operator_iam_auth),
+                    }
+                }
+                if normalized_operator_user
+                else {}
+            ),
             "database": normalized_database,
             "schema_name": normalized_schema_name,
             "cognito_user_pool_id": str(prior_target.get("cognito_user_pool_id") or ""),
@@ -1195,6 +1229,34 @@ def build_app():
             "--password",
             help="Database password. Use an empty string for passwordless local auth.",
         ),
+        tenant_id: str = typer.Option(
+            "",
+            "--tenant-id",
+            help="Fixed tenant UUID for runtime access; empty is global-only",
+        ),
+        allow_global_claims: bool = typer.Option(
+            False,
+            "--allow-global-claims/--no-allow-global-claims",
+            help="Allow this fixed runtime principal to claim global identities",
+        ),
+        operator_user: str = typer.Option(
+            "",
+            "--operator-user",
+            help="Distinct PostgreSQL migration/operator user",
+        ),
+        operator_password: str = typer.Option(
+            "",
+            "--operator-password",
+            help="Operator password; empty permits explicit passwordless local auth",
+        ),
+        operator_secret_arn: str = typer.Option(
+            "", "--operator-secret-arn", help="Aurora operator Secrets Manager ARN"
+        ),
+        operator_iam_auth: bool = typer.Option(
+            False,
+            "--operator-iam-auth/--no-operator-iam-auth",
+            help="Use IAM authentication for the Aurora operator",
+        ),
         database: str = typer.Option(
             ...,
             "--database",
@@ -1234,6 +1296,12 @@ def build_app():
             ui_port=ui_port,
             user=user,
             password=password,
+            tenant_id=tenant_id,
+            allow_global_claims=allow_global_claims,
+            operator_user=operator_user,
+            operator_password=operator_password,
+            operator_secret_arn=operator_secret_arn,
+            operator_iam_auth=operator_iam_auth,
             database=database,
             schema_name=schema_name,
             safety_tier=safety_tier,
@@ -1265,6 +1333,30 @@ def build_app():
         user: Optional[str] = typer.Option(None, "--user", help="Database user"),
         password: Optional[str] = typer.Option(
             None, "--password", help="Database password"
+        ),
+        tenant_id: Optional[str] = typer.Option(
+            None,
+            "--tenant-id",
+            help="Fixed runtime tenant UUID; empty clears to global-only",
+        ),
+        allow_global_claims: Optional[bool] = typer.Option(
+            None,
+            "--allow-global-claims/--no-allow-global-claims",
+            help="Permit global identity claims for this fixed runtime principal",
+        ),
+        operator_user: Optional[str] = typer.Option(
+            None, "--operator-user", help="Distinct migration/operator database user"
+        ),
+        operator_password: Optional[str] = typer.Option(
+            None, "--operator-password", help="Migration/operator database password"
+        ),
+        operator_secret_arn: Optional[str] = typer.Option(
+            None, "--operator-secret-arn", help="Aurora operator secret ARN"
+        ),
+        operator_iam_auth: Optional[bool] = typer.Option(
+            None,
+            "--operator-iam-auth/--no-operator-iam-auth",
+            help="Use IAM authentication for the Aurora operator",
         ),
         database: Optional[str] = typer.Option(
             None, "--database", help="Database name"
@@ -1435,6 +1527,8 @@ def build_app():
             "ui_port",
             "user",
             "password",
+            "tenant_id",
+            "allow_global_claims",
             "database",
             "schema_name",
             "cognito_user_pool_id",
@@ -1507,6 +1601,16 @@ def build_app():
             updates["user"] = str(user).strip()
         if password is not None:
             updates["password"] = str(password)
+        if tenant_id is not None:
+            normalized_tenant_id = str(tenant_id).strip()
+            if normalized_tenant_id:
+                try:
+                    normalized_tenant_id = str(uuid.UUID(normalized_tenant_id))
+                except ValueError as exc:
+                    raise RuntimeError("--tenant-id must be a UUID") from exc
+            updates["tenant_id"] = normalized_tenant_id
+        if allow_global_claims is not None:
+            target_cfg["allow_global_claims"] = bool(allow_global_claims)
         if database is not None:
             updates["database"] = str(database).strip()
         if schema_name is not None:
@@ -1542,6 +1646,35 @@ def build_app():
             meta["prefix_ownership_registry_path"] = str(
                 Path(prefix_ownership_registry_path).expanduser()
             )
+
+        operator_changed = any(
+            value is not None
+            for value in (
+                operator_user,
+                operator_password,
+                operator_secret_arn,
+                operator_iam_auth,
+            )
+        )
+        operator_cfg = target_cfg.get("operator")
+        if operator_changed and not isinstance(operator_cfg, dict):
+            operator_cfg = {}
+            target_cfg["operator"] = operator_cfg
+        if isinstance(operator_cfg, dict):
+            if operator_user is not None:
+                normalized_operator_user = str(operator_user).strip()
+                if (
+                    normalized_operator_user
+                    == str(updates.get("user", target_cfg.get("user") or "")).strip()
+                ):
+                    raise RuntimeError("--operator-user must differ from --user")
+                operator_cfg["user"] = normalized_operator_user
+            if operator_password is not None:
+                operator_cfg["password"] = str(operator_password)
+            if operator_secret_arn is not None:
+                operator_cfg["secret_arn"] = str(operator_secret_arn).strip()
+            if operator_iam_auth is not None:
+                operator_cfg["iam_auth"] = bool(operator_iam_auth)
 
         admin_changed = False
         if admin_repo_url is not None:
@@ -1680,6 +1813,7 @@ def build_app():
             and not admin_changed
             and not safety_changed
             and not backup_changed
+            and not operator_changed
         ):
             raise RuntimeError("No config changes requested.")
 
@@ -1710,238 +1844,41 @@ def build_app():
             False, "--json", help="Emit machine-readable JSON (no tables)."
         ),
     ):
-        """Show TAPDB explicit-target configuration and status."""
-        import json
-        import shutil
-        from datetime import UTC, datetime
+        """Show the shared sanitized runtime-information payload."""
+        from daylily_tapdb.runtime_info import build_runtime_info
 
-        from daylily_tapdb import __version__
-        from daylily_tapdb.cli.db_config import get_config_path, get_db_config
-
-        def _psql_query(cfg: dict[str, str], sql: str) -> tuple[bool, str]:
-            psql = shutil.which("psql")
-            if not psql:
-                return False, "psql not found"
-            env_vars = os.environ.copy()
-            env_vars["PGCONNECT_TIMEOUT"] = "3"
-            if cfg.get("password"):
-                env_vars["PGPASSWORD"] = cfg["password"]
-            cmd = [
-                psql,
-                "-X",
-                "-q",
-                "-t",
-                "-A",
-                "-w",
-                "-v",
-                "ON_ERROR_STOP=1",
-                "-h",
-                cfg["host"],
-                "-p",
-                cfg["port"],
-                "-U",
-                cfg["user"],
-                "-d",
-                cfg["database"],
-                "-c",
-                sql,
-            ]
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    env=env_vars,
-                    timeout=5,
-                )
-            except Exception as e:
-                return False, str(e)
-            if result.returncode != 0:
-                return False, (
-                    result.stderr or ""
-                ).strip() or f"psql exit={result.returncode}"
-            return True, (result.stdout or "").strip()
-
-        def _human_duration(seconds: int | None) -> str:
-            if seconds is None:
-                return "-"
-            if seconds < 0:
-                return "0s"
-            days, rem = divmod(seconds, 86400)
-            hours, rem = divmod(rem, 3600)
-            minutes, secs = divmod(rem, 60)
-            parts: list[str] = []
-            if days:
-                parts.append(f"{days}d")
-            if hours:
-                parts.append(f"{hours}h")
-            if minutes:
-                parts.append(f"{minutes}m")
-            parts.append(f"{secs}s")
-            return " ".join(parts)
-
-        def _ui_process_times(pid: int) -> dict[str, object]:
-            result: dict[str, object] = {
-                "pid": pid,
-                "running": True,
-                "start_time": None,
-                "uptime_seconds": None,
-                "uptime_human": None,
-                "error": None,
-            }
-            try:
-                ps = shutil.which("ps") or "ps"
-                r = subprocess.run(
-                    [ps, "-p", str(pid), "-o", "lstart="],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                )
-                if r.returncode != 0:
-                    result["error"] = (
-                        r.stderr or ""
-                    ).strip() or f"ps exit={r.returncode}"
-                    return result
-                raw = (r.stdout or "").strip()
-                if not raw:
-                    result["error"] = "ps returned empty start time"
-                    return result
-                start_dt = datetime.strptime(raw, "%a %b %d %H:%M:%S %Y").replace(
-                    tzinfo=UTC
-                )
-                result["start_time"] = start_dt.isoformat(sep=" ")
-                up_s = int((datetime.now(UTC) - start_dt).total_seconds())
-                result["uptime_seconds"] = up_s
-                result["uptime_human"] = _human_duration(up_s)
-                return result
-            except Exception as e:
-                result["error"] = str(e)
-                return result
-
-        ctx = _require_context()
-        cfg = get_db_config()
-        effective_config_path = get_config_path()
-        ui_pid_file, ui_log_file, _ = _ui_runtime_paths()
-        runtime_root = ctx.runtime_dir()
-
-        template_config_dir: str | None = None
-        template_config_error: str | None = None
+        payload = build_runtime_info()
+        framework_json = False
         try:
-            from daylily_tapdb.cli.db import _find_config_dir  # type: ignore
+            from cli_core_yo.runtime import get_context
 
-            template_config_dir = str(_find_config_dir())
-        except Exception as e:
-            template_config_error = str(e)
-
-        ui_pid = _get_pid(ui_pid_file)
-        ui_times: dict[str, object] | None = (
-            _ui_process_times(ui_pid) if ui_pid else None
-        )
-        url = (
-            f"postgresql://{cfg['user']}@{cfg['host']}:{cfg['port']}/{cfg['database']}"
-        )
-        ok, msg = _psql_query(cfg, "select 1;")
-        uptime = None
-        if ok:
-            ok_u, msg_u = _psql_query(cfg, "select now() - pg_postmaster_start_time();")
-            uptime = msg_u if ok_u else f"error: {msg_u}"
-        postgres = {
-            "target": "explicit",
-            "url": url,
-            "schema_name": cfg.get("schema_name"),
-            "password_set": bool(cfg.get("password")),
-            "status": "ok" if ok else "error",
-            "error": None if ok else msg,
-            "uptime": uptime,
-        }
-
-        if as_json:
-            payload: dict[str, object] = {
-                "version": __version__,
-                "python": sys.version.split()[0],
-                "target": "explicit",
-                "client_id": ctx.client_id,
-                "database_name": ctx.database_name,
-                "schema_name": cfg.get("schema_name"),
-                "paths": {
-                    "ui_pid_file": str(ui_pid_file),
-                    "ui_log_file": str(ui_log_file),
-                    "effective_config": {
-                        "path": str(effective_config_path),
-                        "exists": effective_config_path.exists(),
-                    },
-                    "config_dir": str(effective_config_path.parent),
-                    "runtime_root": str(runtime_root),
-                    "db_log_dir": str(runtime_root / "logs"),
-                    "template_config_dir": template_config_dir,
-                    "template_config_error": template_config_error,
-                },
-                "ui": {
-                    "running": bool(ui_pid),
-                    "pid": ui_pid,
-                    "process": ui_times,
-                },
-                "postgres": postgres,
-            }
+            framework_json = bool(get_context().json_mode)
+        except Exception:
+            # The legacy Typer app remains an intentional direct embedding
+            # surface and has no cli-core runtime context.
+            pass
+        if as_json or framework_json:
             sys.stdout.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
             return
-
-        general = Table(title="TAPDB Info", show_header=True)
-        general.add_column("Property", style="cyan")
-        general.add_column("Value")
-        general.add_row("Version", __version__)
-        general.add_row("Python", sys.version.split()[0])
-        general.add_row("Target", "explicit")
-        general.add_row("Client ID", ctx.client_id)
-        general.add_row("Database Name", ctx.database_name)
-        general.add_row("Schema Name", str(cfg.get("schema_name") or ""))
-        general.add_row("Namespace", ctx.namespace_slug())
-        general.add_row("UI Server", f"Running (PID {ui_pid})" if ui_pid else "Stopped")
-        if ui_times and ui_times.get("start_time"):
-            general.add_row("UI Start Time", str(ui_times.get("start_time")))
-            general.add_row("UI Uptime", str(ui_times.get("uptime_human") or "-"))
-        general.add_row("UI PID File", str(ui_pid_file))
-        general.add_row("UI Log File", str(ui_log_file))
-        print_renderable(general)
-
-        config_table = Table(title="Config", show_header=True)
-        config_table.add_column("Property", style="cyan")
-        config_table.add_column("Value")
-        exists_label = "exists" if effective_config_path.exists() else "missing"
-        config_table.add_row(
-            "Effective config",
-            f"{effective_config_path} ({exists_label})",
-        )
-        config_table.add_row("Config dir", str(effective_config_path.parent))
-        config_table.add_row("Runtime root", str(runtime_root))
-        config_table.add_row("DB log dir", str(runtime_root / "logs"))
-        if template_config_dir:
-            config_table.add_row("Template config dir", template_config_dir)
-        else:
-            config_table.add_row(
-                "Template config dir", f"(not found) {template_config_error}"
-            )
-        print_renderable(config_table)
-
-        pg_table = Table(title="PostgreSQL", show_header=True)
-        pg_table.add_column("Target", style="cyan")
-        pg_table.add_column("URL")
-        pg_table.add_column("Schema")
-        pg_table.add_column("Password")
-        pg_table.add_column("Status")
-        pg_table.add_column("Uptime")
-        status = str(postgres.get("status") or "-")
-        if status == "error" and postgres.get("error"):
-            status = f"error: {postgres.get('error')}"
-        pg_table.add_row(
-            "explicit",
-            f"[dim]{url}[/dim]",
-            str(cfg.get("schema_name") or ""),
-            "set" if postgres.get("password_set") else "(not set)",
-            status,
-            str(postgres.get("uptime") or "-"),
-        )
-        print_renderable(pg_table)
+        table = Table(title="TAPDB Runtime Info", show_header=True)
+        table.add_column("Section", style="cyan")
+        table.add_column("Details")
+        table.add_row("Target", str(payload["config"]["target"]))
+        table.add_row("Schema Name", str(payload["database"]["schema_name"]))
+        for section in (
+            "package",
+            "python",
+            "meridian",
+            "git",
+            "config",
+            "database",
+            "scope",
+            "storage",
+            "ui",
+            "dag",
+        ):
+            table.add_row(section, json.dumps(payload[section], sort_keys=True))
+        print_renderable(table)
 
     return app
 
@@ -2004,11 +1941,51 @@ def _register_typer_group(registry, group, *, parent_path: str | None = None) ->
         _register_typer_group(registry, nested_group, parent_path=group_path)
 
 
+def _replace_framework_info(registry, *, callback, help_text: str) -> None:
+    """Replace cli-core's built-in info command with TapDB runtime info.
+
+    cli-core-yo 2.1.1 reserves ``info`` before loading plugins and exposes no
+    public replacement method.  The dependency is exactly pinned, so validate
+    its registry shape and fail loudly if that contract changes.
+    """
+    existing = registry.get_command(("info",))
+    roots = getattr(registry, "_roots", None)
+    commands = getattr(registry, "_commands", None)
+    if (
+        existing is None
+        or not isinstance(roots, dict)
+        or not isinstance(commands, dict)
+        or "info" not in roots
+        or ("info",) not in commands
+    ):
+        raise RuntimeError(
+            "cli-core-yo registry does not expose the pinned root info command"
+        )
+
+    del roots["info"]
+    del commands[("info",)]
+    registry.add_command(
+        group_path=None,
+        name="info",
+        callback=callback,
+        help_text=help_text,
+        policy=existing.policy,
+        order=existing.order,
+    )
+
+
 def register(registry, spec) -> None:
     cli_app = app or build_app()
     for cmd in getattr(cli_app, "registered_commands", []):
         cmd_name = cmd.name or cmd.callback.__name__.replace("_", "-")
-        if cmd_name in ("version", "info", "config"):
+        if cmd_name in ("version", "config"):
+            continue
+        if cmd_name == "info":
+            _replace_framework_info(
+                registry,
+                callback=cmd.callback,
+                help_text=help_text(cmd.callback),
+            )
             continue
         _registry_add_command(
             registry=registry,

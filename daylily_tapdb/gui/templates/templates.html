@@ -12,19 +12,40 @@
     <input name="category" value="{{ category }}" placeholder="category">
     <button type="submit">Filter</button>
   </form>
+  {% if user.role == "admin" %}
+  <form method="get" action="{{ tapdb_gui_url(request, '/api/templates/repository/download') }}" class="toolbar">
+    <input name="euid" placeholder="Optional exact stored template EUID">
+    <button type="submit">Download Canonical Pack</button>
+  </form>
+  <p>The download returns an identity-free canonical JSON pack as an attachment and creates no server-side files.</p>
+  <form method="get" action="{{ tapdb_gui_url(request, '/templates') }}" class="toolbar">
+    <input name="repository_pack" value="{{ repository_pack }}" placeholder="/absolute/path/to/template-pack.json" required>
+    <button type="submit">Inventory Repository Pack</button>
+  </form>
+  <form method="post" action="{{ tapdb_gui_url(request, '/templates/repository/export') }}" class="toolbar">
+    <input name="repository_pack" value="{{ repository_pack }}" placeholder="/absolute/path/to/template-pack.json" required>
+    <button type="submit">Export New Repository Pack</button>
+  </form>
+  <p>Server-side repository export requires an explicit absolute path and writes both the pack and its immutable provenance receipt. Existing files are never overwritten.</p>
+  {% if repository_error %}<p class="error">{{ repository_error }}</p>{% endif %}
+  {% if repository_inventory %}
+  <pre>{{ repository_inventory | tojson(indent=2) }}</pre>
+  {% endif %}
+  {% endif %}
 </section>
 <section class="band">
   <table>
-	    <thead><tr><th>EUID</th><th>Name</th><th>Code</th><th>Instance Prefix</th><th>Validator</th><th></th><th></th></tr></thead>
+    <thead><tr><th>EUID</th><th>Name</th><th>Code</th><th>Instance Prefix</th><th>Validator</th><th>Repository</th><th></th><th></th></tr></thead>
     <tbody>
       {% for item in items %}
       <tr>
         <td><a href="{{ tapdb_gui_url(request, '/object/' ~ item.euid) }}">{{ item.euid }}</a></td>
         <td>{{ item.name }}</td>
-	        <td>{{ item.category }}/{{ item.type }}/{{ item.subtype }}/{{ item.version }}</td>
-	        <td>{{ item.instance_prefix }}</td>
-	        <td><code>{{ item.validator_ref }}</code></td>
-	        <td>{% if user.role == "admin" %}<a href="{{ tapdb_gui_url(request, '/create/' ~ item.euid) }}">Create</a>{% endif %}</td>
+        <td>{{ item.category }}/{{ item.type }}/{{ item.subtype }}/{{ item.version }}</td>
+        <td>{{ item.instance_prefix }}</td>
+        <td><code>{{ item.validator_ref }}</code></td>
+        <td>{{ item.repository_status }}</td>
+        <td>{% if user.role == "admin" %}<a href="{{ tapdb_gui_url(request, '/create/' ~ item.euid) }}">Create</a>{% endif %}</td>
         <td>{% if user.role == "admin" %}<a href="{{ tapdb_gui_url(request, '/templates/new') }}?seed_euid={{ item.euid }}">Build New Template</a>{% endif %}</td>
       </tr>
       {% endfor %}

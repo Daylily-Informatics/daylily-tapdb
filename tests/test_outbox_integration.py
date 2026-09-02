@@ -3,9 +3,8 @@ import time
 import uuid
 from pathlib import Path
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
-from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.outbox import outbox_event
 from daylily_tapdb.outbox import list_events_by_destination, lookup_by_machine_uuid
@@ -15,27 +14,14 @@ from daylily_tapdb.outbox.repository import (
     enqueue_fanout,
     mark_received,
 )
-from tests.conftest import resolve_tapdb_test_dsn
 from tests.test_integration import (
     _drop_schema,
-    _install_schema,
+    _install_bound_schema,
+    _provision_runtime_principal,
+    _runtime_connection,
     _seed_identity_prefixes,
     _seed_templates,
 )
-
-
-def _conn_kwargs(**overrides):
-    values = {
-        "db_user": "tapdb",
-        "app_username": "pytest",
-        "domain_code": "T",
-        "owner_repo_name": "daylily-tapdb",
-        "echo_sql": False,
-        "engine_type": "local",
-    }
-    values.update(overrides)
-    return values
-
 
 # Minimal message template definition for tests
 _MSG_TEMPLATE = {
@@ -54,36 +40,70 @@ _MSG_TEMPLATE = {
 }
 
 
-def _setup_schema(pytestconfig, suffix="outbox"):
+def _setup_schema(
+    pytestconfig,
+    *,
+    tenant_id: uuid.UUID,
+    suffix: str = "outbox",
+    domain_code: str = "T",
+    owner_repo_name: str = "daylily-tapdb",
+):
     """Create a fresh test schema with the message template seeded."""
-    dsn = resolve_tapdb_test_dsn(pytestconfig)
     repo_root = Path(__file__).resolve().parents[1]
     schema_sql_path = repo_root / "schema" / "tapdb_schema.sql"
     schema_name = (
         f"tapdb_test_{suffix}_{int(time.time())}_{random.randint(1, 1_000_000_000)}"
     )
-    _install_schema(dsn, schema_name, schema_sql_path)
+    operator_dsn, dsn, config_identity = _install_bound_schema(
+        pytestconfig,
+        schema_name,
+        schema_sql_path,
+        domain_code=domain_code,
+        owner_repo_name=owner_repo_name,
+        tenant_id=tenant_id,
+    )
 
     # Seed identity prefixes and message template
-    conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
+    conn = _runtime_connection(
+        dsn=operator_dsn,
+        schema_name=schema_name,
+        config_identity=config_identity,
+        app_username="pytest-outbox-template-seed",
+        domain_code=domain_code,
+        owner_repo_name=owner_repo_name,
+        tenant_id=tenant_id,
+        allow_global_rows=True,
+        connection_role="operator",
+    )
     with conn.session_scope(commit=True) as session:
-        session.execute(text(f"SET search_path TO {schema_name}"))
-        _seed_identity_prefixes(session, prefix="TST")
+        _seed_identity_prefixes(
+            session,
+            prefix="TST",
+            domain_code=domain_code,
+            owner_repo_name=owner_repo_name,
+        )
         _seed_templates(session, [_MSG_TEMPLATE])
 
-    return dsn, schema_name
+    return operator_dsn, dsn, schema_name, config_identity
 
 
 def test_postgres_outbox_enqueue_creates_message_instance(pytestconfig):
     """enqueue_event creates a generic_instance message + thin outbox_event row."""
-    dsn, schema_name = _setup_schema(pytestconfig)
+    tenant_id = uuid.uuid4()
+    operator_dsn, dsn, schema_name, config_identity = _setup_schema(
+        pytestconfig, tenant_id=tenant_id
+    )
 
     try:
-        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
+        conn = _runtime_connection(
+            dsn=dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-outbox-enqueue",
+            tenant_id=tenant_id,
+            allow_global_rows=True,
+        )
         with conn.session_scope(commit=False) as session:
-            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
-
-            tenant_id = uuid.uuid4()
             machine_uuid = enqueue_event(
                 session=session,
                 tenant_id=tenant_id,
@@ -105,10 +125,10 @@ def test_postgres_outbox_enqueue_creates_message_instance(pytestconfig):
                 )
             ).scalar_one()
             assert msg.domain_code == "T"
-            assert msg.issuer_app_code == "TAPD"
-            assert msg.category == "system"
-            assert msg.type == "message"
-            assert msg.subtype == "webhook_event"
+            assert msg.issuer_app_code == "daylily-tapdb"
+            assert msg.category == "message"
+            assert msg.type == "webhook"
+            assert msg.subtype == "event"
             assert msg.json_addl["event_type"] == "order.created"
             assert msg.json_addl["aggregate_euid"] == "TGX-ABC"
             assert msg.json_addl["payload"] == {"order_number": "ORD-1"}
@@ -119,7 +139,7 @@ def test_postgres_outbox_enqueue_creates_message_instance(pytestconfig):
                 select(outbox_event).where(outbox_event.message_uid == msg.uid)
             ).scalar_one()
             assert oe.domain_code == "T"
-            assert oe.issuer_app_code == "TAPD"
+            assert oe.issuer_app_code == "daylily-tapdb"
             assert oe.status == "pending"
             assert oe.destination == "atlas"
             assert oe.dedupe_key == "atlas|order.created|TGX-ABC"
@@ -129,34 +149,73 @@ def test_postgres_outbox_enqueue_creates_message_instance(pytestconfig):
                 getattr(type(oe), "payload", None), property
             )
     finally:
-        _drop_schema(dsn, schema_name)
+        _drop_schema(operator_dsn, schema_name, runtime_dsns=(dsn,))
 
 
 def test_postgres_outbox_domain_scoping_isolates_dedupe_and_queries(pytestconfig):
     """Same destination+dedupe can exist in separate domain/app scopes."""
-    dsn, schema_name = _setup_schema(pytestconfig, suffix="scope")
+    tenant_id = uuid.uuid4()
+    operator_dsn, dsn_a, schema_name, config_identity = _setup_schema(
+        pytestconfig,
+        tenant_id=tenant_id,
+        suffix="scope",
+        domain_code="A",
+        owner_repo_name="appa",
+    )
+    dsn_b = _provision_runtime_principal(
+        operator_dsn,
+        schema_name,
+        config_identity=config_identity,
+        domain_code="B",
+        owner_repo_name="appb",
+        tenant_id=tenant_id,
+        allow_global_rows=True,
+    )
 
     try:
-        tenant_id = uuid.uuid4()
-        conn_a = TAPDBConnection(
-            **_conn_kwargs(
-                db_url=dsn,
-                app_username="pytest-a",
-                domain_code="A",
-                owner_repo_name="appa",
+        for domain_code, owner_repo_name in (("B", "appb"),):
+            seed_conn = _runtime_connection(
+                dsn=operator_dsn,
+                schema_name=schema_name,
+                config_identity=config_identity,
+                app_username=f"pytest-{domain_code.lower()}-template-seed",
+                domain_code=domain_code,
+                owner_repo_name=owner_repo_name,
+                tenant_id=tenant_id,
+                allow_global_rows=True,
+                connection_role="operator",
             )
+            with seed_conn.session_scope(commit=True) as session:
+                _seed_identity_prefixes(
+                    session,
+                    prefix="TST",
+                    domain_code=domain_code,
+                    owner_repo_name=owner_repo_name,
+                )
+                _seed_templates(session, [_MSG_TEMPLATE])
+
+        conn_a = _runtime_connection(
+            dsn=dsn_a,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-a",
+            domain_code="A",
+            owner_repo_name="appa",
+            tenant_id=tenant_id,
+            allow_global_rows=True,
         )
-        conn_b = TAPDBConnection(
-            **_conn_kwargs(
-                db_url=dsn,
-                app_username="pytest-b",
-                domain_code="B",
-                owner_repo_name="appb",
-            )
+        conn_b = _runtime_connection(
+            dsn=dsn_b,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-b",
+            domain_code="B",
+            owner_repo_name="appb",
+            tenant_id=tenant_id,
+            allow_global_rows=True,
         )
 
         with conn_a.session_scope(commit=True) as session:
-            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
             machine_a = enqueue_event(
                 session=session,
                 tenant_id=tenant_id,
@@ -168,7 +227,6 @@ def test_postgres_outbox_domain_scoping_isolates_dedupe_and_queries(pytestconfig
             )
 
         with conn_b.session_scope(commit=True) as session:
-            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
             machine_b = enqueue_event(
                 session=session,
                 tenant_id=tenant_id,
@@ -182,72 +240,77 @@ def test_postgres_outbox_domain_scoping_isolates_dedupe_and_queries(pytestconfig
         assert machine_a != machine_b
 
         with conn_a.session_scope(commit=False) as session:
-            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
             rows = list_events_by_destination(
                 session,
                 "https://tenant.example.com/webhook",
                 domain_code="A",
-                issuer_app_code="APPA",
+                issuer_app_code="appa",
             )
             assert len(rows) == 1
             assert rows[0].domain_code == "A"
-            assert rows[0].issuer_app_code == "APPA"
+            assert rows[0].issuer_app_code == "appa"
             assert lookup_by_machine_uuid(
                 session,
                 machine_a,
                 domain_code="A",
-                issuer_app_code="APPA",
+                issuer_app_code="appa",
             )
             assert (
                 lookup_by_machine_uuid(
                     session,
                     machine_b,
                     domain_code="A",
-                    issuer_app_code="APPA",
+                    issuer_app_code="appa",
                 )
                 is None
             )
 
         with conn_b.session_scope(commit=False) as session:
-            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
             rows = list_events_by_destination(
                 session,
                 "https://tenant.example.com/webhook",
                 domain_code="B",
-                issuer_app_code="APPB",
+                issuer_app_code="appb",
             )
             assert len(rows) == 1
             assert rows[0].domain_code == "B"
-            assert rows[0].issuer_app_code == "APPB"
+            assert rows[0].issuer_app_code == "appb"
             assert lookup_by_machine_uuid(
                 session,
                 machine_b,
                 domain_code="B",
-                issuer_app_code="APPB",
+                issuer_app_code="appb",
             )
             assert (
                 lookup_by_machine_uuid(
                     session,
                     machine_a,
                     domain_code="B",
-                    issuer_app_code="APPB",
+                    issuer_app_code="appb",
                 )
                 is None
             )
     finally:
-        _drop_schema(dsn, schema_name)
+        _drop_schema(operator_dsn, schema_name, runtime_dsns=(dsn_a, dsn_b))
 
 
 def test_postgres_outbox_claim_and_deliver(pytestconfig):
     """claim_events returns outbox rows with eagerly-loaded message."""
-    dsn, schema_name = _setup_schema(pytestconfig, suffix="claim")
+    tenant_id = uuid.uuid4()
+    operator_dsn, dsn, schema_name, config_identity = _setup_schema(
+        pytestconfig, tenant_id=tenant_id, suffix="claim"
+    )
 
     try:
-        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
+        conn = _runtime_connection(
+            dsn=dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-outbox-claim",
+            tenant_id=tenant_id,
+            allow_global_rows=True,
+        )
         with conn.session_scope(commit=False) as session:
-            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
-
-            tenant_id = uuid.uuid4()
             machine_uuid = enqueue_event(
                 session=session,
                 tenant_id=tenant_id,
@@ -276,19 +339,26 @@ def test_postgres_outbox_claim_and_deliver(pytestconfig):
             assert received.status == "received"
             assert received.receipt_received_dt is not None
     finally:
-        _drop_schema(dsn, schema_name)
+        _drop_schema(operator_dsn, schema_name, runtime_dsns=(dsn,))
 
 
 def test_postgres_outbox_fanout_multiple_destinations(pytestconfig):
     """One canonical message can fan out to multiple outbox_event rows."""
-    dsn, schema_name = _setup_schema(pytestconfig, suffix="fanout")
+    tenant_id = uuid.uuid4()
+    operator_dsn, dsn, schema_name, config_identity = _setup_schema(
+        pytestconfig, tenant_id=tenant_id, suffix="fanout"
+    )
 
     try:
-        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
+        conn = _runtime_connection(
+            dsn=dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-outbox-fanout",
+            tenant_id=tenant_id,
+            allow_global_rows=True,
+        )
         with conn.session_scope(commit=False) as session:
-            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
-
-            tenant_id = uuid.uuid4()
             # Create the canonical message via a single enqueue
             machine_uuid = enqueue_event(
                 session=session,
@@ -336,4 +406,4 @@ def test_postgres_outbox_fanout_multiple_destinations(pytestconfig):
                 "https://internal-audit.example.com/events",
             ]
     finally:
-        _drop_schema(dsn, schema_name)
+        _drop_schema(operator_dsn, schema_name, runtime_dsns=(dsn,))

@@ -7,7 +7,7 @@ Phase 2 spec: ORM must match schema.
 
 from __future__ import annotations
 
-from sqlalchemy import Column, Text, event, text
+from sqlalchemy import Column, Text, UniqueConstraint, event, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.orm import Session, relationship
@@ -35,6 +35,17 @@ class generic_template(tapdb_core):
     """
 
     __tablename__ = "generic_template"
+    __table_args__ = (
+        UniqueConstraint(
+            "domain_code",
+            "issuer_app_code",
+            "category",
+            "type",
+            "subtype",
+            "version",
+            name="unique_template_code",
+        ),
+    )
     __mapper_args__ = {
         "polymorphic_identity": "generic_template",
         "polymorphic_on": "polymorphic_discriminator",

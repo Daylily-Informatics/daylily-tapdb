@@ -91,9 +91,11 @@ def restored(env, backup):
     )
 
 
-def _session(cfg, database, schema):
+def _session(cfg, database, schema, *, connection_role="runtime"):
     probe = dict(cfg, database=database, schema_name=schema)
-    return service.open_session(probe, app_username="pytest")
+    return service.open_session(
+        probe, app_username="pytest", connection_role=connection_role
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +170,9 @@ def test_template_references_detects_an_orphan(env, restored):
     cfg, _ = env
     schema = cfg["schema_name"]
 
-    with _session(cfg, restored.target_database, schema) as conn:
+    with _session(
+        cfg, restored.target_database, schema, connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             session.execute(
                 text(
@@ -307,7 +311,9 @@ def test_schema_drift_detects_a_hand_made_tapdb_object(env, restored):
     cfg, _ = env
     schema = cfg["schema_name"]
 
-    with _session(cfg, restored.target_database, schema) as conn:
+    with _session(
+        cfg, restored.target_database, schema, connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             session.execute(
                 text(
@@ -315,7 +321,9 @@ def test_schema_drift_detects_a_hand_made_tapdb_object(env, restored):
                 )
             )
 
-    with _session(cfg, restored.target_database, schema) as conn:
+    with _session(
+        cfg, restored.target_database, schema, connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=False) as session:
             check = postrestore.check_schema_drift(session, cfg, schema)
 
@@ -327,7 +335,9 @@ def test_schema_drift_tolerates_a_foreign_table(env, restored):
     cfg, _ = env
     schema = cfg["schema_name"]
 
-    with _session(cfg, restored.target_database, schema) as conn:
+    with _session(
+        cfg, restored.target_database, schema, connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             session.execute(
                 text(
@@ -336,7 +346,9 @@ def test_schema_drift_tolerates_a_foreign_table(env, restored):
                 )
             )
 
-    with _session(cfg, restored.target_database, schema) as conn:
+    with _session(
+        cfg, restored.target_database, schema, connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=False) as session:
             check = postrestore.check_schema_drift(session, cfg, schema)
 

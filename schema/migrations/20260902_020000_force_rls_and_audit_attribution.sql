@@ -1,0 +1,7 @@
+-- Apply the canonical forced-RLS and audit-attribution asset on upgrades.
+-- Identity columns, EUID assignments, sequence state, relationships, and
+-- provenance timestamps are unchanged. The only data transformation is:
+-- audit_log.changed_by NULL/empty -> migration:pre-9.2-unattributed.
+-- tapdb-allow-column: audit_log.changed_by
+-- tapdb-transformation: audit_log.changed_by:null_or_empty_to_pre92_unattributed_v1
+-- tapdb-include: ../rls.sql

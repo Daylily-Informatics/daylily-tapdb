@@ -155,6 +155,26 @@ class _FakeSession:
             return _FakeQuery([(i.category,) for i in self._state["instances"]])
         raise AssertionError(f"Unexpected query model: {model!r}")
 
+    def execute(self, statement):
+        entity = statement.column_descriptions[0].get("entity")
+        rows = {
+            admin_main.generic_template: self._state["templates"],
+            admin_main.generic_instance: self._state["instances"],
+            admin_main.generic_instance_lineage: self._state["lineages"],
+        }.get(entity)
+        if rows is None:
+            raise AssertionError(f"Unexpected execute entity: {entity!r}")
+        rendered = str(statement.compile(compile_kwargs={"literal_binds": True}))
+        matching = [row for row in rows if str(row.euid) in rendered]
+
+        class _ScalarResult:
+            def scalar_one_or_none(self):
+                if len(matching) > 1:
+                    raise AssertionError("fixture returned more than one row")
+                return matching[0] if matching else None
+
+        return _ScalarResult()
+
     def add(self, obj):
         if getattr(obj, "euid", None) is None:
             obj.euid = f"LG{len(self._state['lineages']) + 200}"
@@ -494,6 +514,13 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         },
     )
     monkeypatch.setattr(admin_main, "get_config_path", lambda: "/tmp/tapdb-config.yaml")
+    from daylily_tapdb import runtime_info as runtime_info_module
+
+    monkeypatch.setattr(
+        runtime_info_module,
+        "build_runtime_info",
+        lambda **_kwargs: {"format": "tapdb.runtime-info/v1"},
+    )
     monkeypatch.setattr(admin_main, "_active_tapdb_target", lambda: "target")
     monkeypatch.setattr(
         admin_main,
@@ -569,8 +596,6 @@ def test_main_query_helpers_and_footer_metadata(route_client, monkeypatch):
     assert effective == "john@example.com"
     assert "own user audit trail" in warning
 
-    assert admin_main._mask_sensitive_value("db_password", "secret") == "(redacted)"
-    assert admin_main._mask_sensitive_value("host", "") == "(empty)"
     assert admin_main._parse_allowed_origins(
         " https://a.example, https://b.example "
     ) == [
@@ -1034,9 +1059,15 @@ def test_main_oauth_routes_and_api_routes(route_client, monkeypatch):
 
     monkeypatch.setattr(auth_mod, "get_current_user", _admin)
     monkeypatch.setattr(
+        admin_main.app.state,
+        "tapdb_v1_proxy_policy",
+        admin_main.V1ProxyPolicy(allowed_hosts=frozenset({"atlas.local"})),
+        raising=False,
+    )
+    monkeypatch.setattr(
         admin_main,
         "fetch_remote_graph",
-        lambda request, ref, *, depth: {
+        lambda request, ref, *, depth, policy: {
             "elements": {"nodes": [{"data": {"id": ref.root_euid}}], "edges": []}
         },
     )
@@ -1052,7 +1083,7 @@ def test_main_oauth_routes_and_api_routes(route_client, monkeypatch):
     monkeypatch.setattr(
         admin_main,
         "fetch_remote_object_detail",
-        lambda request, ref, *, euid: {"euid": euid, "system": ref.system},
+        lambda request, ref, *, euid, policy: {"euid": euid, "system": ref.system},
     )
     assert client.get("/api/graph/data").status_code == 200
     assert client.get("/api/graph/data?start_euid=GX11&depth=2").status_code == 200
@@ -1112,9 +1143,16 @@ def test_main_oauth_routes_and_api_routes(route_client, monkeypatch):
     assert created.status_code == 200
     assert state["lineages"][-1].relationship_type == "depends_on"
 
-    deleted = client.delete("/api/object/GT1")
+    deleted_template = client.delete("/api/object/GT1?apply=true")
+    assert deleted_template.status_code == 403
+    assert state["templates"][0].is_deleted is False
+    preview = client.delete("/api/object/GX11")
+    assert preview.status_code == 200
+    assert preview.json()["dry_run"] is True
+    assert state["instances"][0].is_deleted is False
+    deleted = client.delete("/api/object/GX11?apply=true")
     assert deleted.status_code == 200
-    assert state["templates"][0].is_deleted is True
+    assert state["instances"][0].is_deleted is True
 
 
 @pytest.mark.anyio

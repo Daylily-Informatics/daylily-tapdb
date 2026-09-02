@@ -17,7 +17,7 @@ from daylily_tapdb.schema_inventory import (
     schema_asset_files,
 )
 from tests.conftest import resolve_tapdb_test_dsn
-from tests.test_integration import _drop_schema, _install_schema
+from tests.test_integration import _config_identity, _drop_schema, _install_schema
 
 
 def _repo_schema_root() -> Path:
@@ -37,6 +37,7 @@ def test_build_expected_schema_inventory_parses_repo_assets():
     assert "agx_instance_seq" in inventory.sequences
     assert "record_insert()" in inventory.functions
     assert "set_audit_log_euid()" in inventory.functions
+    assert "tapdb_assert_runtime_role()" in inventory.functions
     assert "audit_update_generic_instance" in inventory.triggers["generic_instance"]
     assert "idx_outbox_event_tenant_created_dt" in inventory.indexes["outbox_event"]
     assert "generic_template_pkey" in inventory.indexes["generic_template"]
@@ -104,11 +105,17 @@ def test_diff_schema_inventory_strict_mode_flags_only_tapdb_owned_extras():
 
 def test_live_inventory_and_diff_against_real_postgres(pytestconfig):
     dsn = resolve_tapdb_test_dsn(pytestconfig)
+    config_identity = _config_identity(pytestconfig)
 
     schema_root = _repo_schema_root()
     schema_sql_path = schema_root / "tapdb_schema.sql"
     schema_name = f"tapdb_drift_{int(time.time())}_{random.randint(1, 1_000_000)}"
-    _install_schema(dsn, schema_name, schema_sql_path)
+    _install_schema(
+        dsn,
+        schema_name,
+        schema_sql_path,
+        config_identity=config_identity,
+    )
 
     engine = create_engine(dsn)
     try:
@@ -166,13 +173,24 @@ def test_explicit_live_inventory_schema_bypasses_multi_schema_discovery(
     pytestconfig,
 ):
     dsn = resolve_tapdb_test_dsn(pytestconfig)
+    config_identity = _config_identity(pytestconfig)
 
     schema_sql_path = _repo_schema_root() / "tapdb_schema.sql"
     suffix = f"{int(time.time())}_{random.randint(1, 1_000_000)}"
     first_schema = f"tapdb_drift_a_{suffix}"
     second_schema = f"tapdb_drift_b_{suffix}"
-    _install_schema(dsn, first_schema, schema_sql_path)
-    _install_schema(dsn, second_schema, schema_sql_path)
+    _install_schema(
+        dsn,
+        first_schema,
+        schema_sql_path,
+        config_identity=config_identity,
+    )
+    _install_schema(
+        dsn,
+        second_schema,
+        schema_sql_path,
+        config_identity=config_identity,
+    )
 
     engine = create_engine(dsn)
     try:

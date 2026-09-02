@@ -36,6 +36,17 @@ ENGINE_AURORA = "aurora"
 DUMP_FORMAT_CUSTOM = "custom"
 DEFAULT_ARTIFACT_NAME = "tapdb.dump"
 
+
+def sanitized_libpq_environment() -> dict[str, str]:
+    """Copy the process environment without ambient libpq/TapDB controls."""
+
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith(("PG", "TAPDB_"))
+    }
+
+
 #: Archive entry descriptions emitted by pg_dump.
 #:
 #: Several are prefixes of others -- "SEQUENCE SET" of "SEQUENCE", "TABLE
@@ -311,7 +322,7 @@ def client_env(cfg: Mapping[str, Any]) -> dict[str, str]:
                 "Aurora targets require an explicit 'region'; refusing to guess "
                 "which region to mint an auth token for."
             )
-        return AuroraSchemaDeployer.client_env(
+        resolved = AuroraSchemaDeployer.client_env(
             host=str(cfg["host"]),
             port=int(cfg["port"]),
             user=str(cfg["user"]),
@@ -321,8 +332,16 @@ def client_env(cfg: Mapping[str, Any]) -> dict[str, str]:
             password=cfg.get("password") or None,
             hostaddr=cfg.get("hostaddr") or None,
         )
+        env_vars = sanitized_libpq_environment()
+        for key in ("PGPASSWORD", "PGSSLMODE", "PGSSLROOTCERT"):
+            if resolved.get(key):
+                env_vars[key] = str(resolved[key])
+        hostaddr = str(cfg.get("hostaddr") or "").strip()
+        if hostaddr:
+            env_vars["PGHOSTADDR"] = hostaddr
+        return env_vars
 
-    env_vars = os.environ.copy()
+    env_vars = sanitized_libpq_environment()
     password = cfg.get("password")
     if password:
         env_vars["PGPASSWORD"] = str(password)

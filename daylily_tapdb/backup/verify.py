@@ -679,16 +679,17 @@ def _check_target_emptiness(
             detail=f"{target_database} will be created from template0",
         )
 
+    operator_cfg = service.connection_config_for_role(cfg, "operator")
     probe = engine.run_command(
         engine.build_psql_command(
-            cfg,
+            operator_cfg,
             sql=(
                 "SELECT count(*) FROM information_schema.schemata "
                 "WHERE schema_name = " + quote_literal(target_schema)
             ),
             database=target_database,
         ),
-        env=engine.client_env(cfg),
+        env=engine.client_env(operator_cfg),
     )
     if not probe.ok:
         return CheckResult(
@@ -840,6 +841,8 @@ def plan_restore(
     # exist, before refusing. The module's rule is that every check runs before
     # anything is mutated.
     checks.append(_check_restorable_class(manifest))
+    scope_check = _check_restore_scope(cfg, manifest, mode=mode)
+    checks.append(scope_check)
     checks.extend(_check_artifact_integrity(cfg, settings, backup_id))
     checks.append(
         _check_migration_inventory(
@@ -884,7 +887,11 @@ def plan_restore(
                 archive_path = None
 
         try:
-            with service.open_session(cfg, app_username="tapdb_restore_plan") as conn:
+            with service.open_session(
+                cfg,
+                app_username="tapdb_restore_plan",
+                connection_role="operator",
+            ) as conn:
                 with conn.session_scope(commit=False) as session:
                     versions = introspect.server_version(session)
                     checks.append(_check_version_compatibility(manifest, versions))
@@ -930,15 +937,62 @@ def plan_restore(
         required_confirm_target=service.target_label(cfg),
         confirmation_required=confirmation_required(cfg, mode),
         plan_fingerprint=fingerprint,
-        steps=_describe_steps(
-            mode=mode,
-            target_database=target_database,
-            target_schema=target_schema,
-            keep_superseded=resolved.keep_superseded,
-            source_schema=source_schema,
+        steps=(
+            ["refuse in-place restore: archive is not physically schema-complete"]
+            if mode == MODE_IN_PLACE and scope_check.failed
+            else _describe_steps(
+                mode=mode,
+                target_database=target_database,
+                target_schema=target_schema,
+                keep_superseded=resolved.keep_superseded,
+                source_schema=source_schema,
+            )
         ),
         checks=checks,
         options=resolved.to_payload(),
+    )
+
+
+def _check_restore_scope(
+    cfg: dict[str, Any], manifest: BackupManifest, *, mode: str
+) -> CheckResult:
+    """Require signed evidence that ``full`` is physically schema-complete."""
+    del cfg, mode
+    recorded = manifest.target_identity.get("data_scope")
+    if not isinstance(recorded, dict):
+        return CheckResult(
+            id="identity.data_scope",
+            status=STATUS_FAIL,
+            detail="full backup does not declare physical-schema capture scope",
+        )
+
+    expected = {
+        "mode": "physical_schema",
+        "tenant_id": None,
+        "row_security": "bypassed",
+        "physical_schema_complete": True,
+        "restore_mode": "isolated_or_in_place",
+    }
+    actual = {
+        "mode": str(recorded.get("mode") or "").strip(),
+        "tenant_id": str(recorded.get("tenant_id") or "").strip() or None,
+        "row_security": str(recorded.get("row_security") or "").strip(),
+        "physical_schema_complete": recorded.get("physical_schema_complete") is True,
+        "restore_mode": str(recorded.get("restore_mode") or "").strip(),
+    }
+    if actual != expected:
+        return CheckResult(
+            id="identity.data_scope",
+            status=STATUS_FAIL,
+            detail="full backup is not authenticated as physically schema-complete",
+            data={"recorded": actual, "required": expected},
+        )
+
+    return CheckResult(
+        id="identity.data_scope",
+        status=STATUS_PASS,
+        detail="operator-authenticated archive is physically schema-complete",
+        data=actual,
     )
 
 
@@ -1194,9 +1248,12 @@ def _admin_sql(
     cfg: dict[str, Any], sql: str, *, database: Optional[str] = None
 ) -> None:
     """Run one maintenance statement, raising on failure."""
+    operator_cfg = service.connection_config_for_role(cfg, "operator")
     result = engine.run_command(
-        engine.build_psql_command(cfg, sql=sql, database=database or "postgres"),
-        env=engine.client_env(cfg),
+        engine.build_psql_command(
+            operator_cfg, sql=sql, database=database or "postgres"
+        ),
+        env=engine.client_env(operator_cfg),
     )
     if not result.ok:
         raise BackupVerificationError(
@@ -1229,9 +1286,12 @@ def _restore_archive(
     try:
         asset = manifest.included_assets[0]
         local = storage.get_file(f"{prefix}/{asset.name}", staged / asset.name)
+        operator_cfg = service.connection_config_for_role(cfg, "operator")
         result = engine.run_command(
-            engine.build_pg_restore_command(cfg, archive_path=local, database=database),
-            env=engine.client_env(cfg),
+            engine.build_pg_restore_command(
+                operator_cfg, archive_path=local, database=database
+            ),
+            env=engine.client_env(operator_cfg),
         )
         if not result.ok:
             raise BackupVerificationError(
@@ -1249,15 +1309,16 @@ def _database_exists(cfg: dict[str, Any], database: str) -> bool:
     inside ``'...'``. Interpolating it raw would let an operator-supplied
     ``--target-database`` inject SQL that runs with restore privileges.
     """
+    operator_cfg = service.connection_config_for_role(cfg, "operator")
     result = engine.run_command(
         engine.build_psql_command(
-            cfg,
+            operator_cfg,
             sql=(
                 "SELECT 1 FROM pg_database WHERE datname = " + quote_literal(database)
             ),
             database="postgres",
         ),
-        env=engine.client_env(cfg),
+        env=engine.client_env(operator_cfg),
     )
     return bool(result.ok and result.stdout.strip())
 
@@ -1292,6 +1353,7 @@ def _restore_isolated(
             source_schema=plan.source_schema,
             target_schema=plan.target_schema,
         )
+        _restore_runtime_access(cfg, database=database, schema=plan.target_schema)
         checks = _post_restore_checks(
             cfg,
             settings,
@@ -1400,14 +1462,61 @@ def _rename_restored_schema(
 
 
 def _drop_database(cfg: dict[str, Any], database: str) -> None:
+    operator_cfg = service.connection_config_for_role(cfg, "operator")
     engine.run_command(
         engine.build_psql_command(
-            cfg,
+            operator_cfg,
             sql=f"DROP DATABASE IF EXISTS {quote_ident(database)}",
             database="postgres",
         ),
-        env=engine.client_env(cfg),
+        env=engine.client_env(operator_cfg),
     )
+
+
+def _restore_runtime_access(cfg: dict[str, Any], *, database: str, schema: str) -> None:
+    """Restore the explicit runtime role grants omitted by ``--no-acl``."""
+
+    runtime_user = str(cfg.get("user") or "").strip()
+    if not runtime_user:
+        raise BackupVerificationError("restore target has no configured runtime user")
+    operator_cfg = service.connection_config_for_role(cfg, "operator")
+    operator_user = str(operator_cfg["user"])
+    quoted_schema = quote_ident(schema)
+    quoted_runtime = quote_ident(runtime_user)
+    quoted_operator = quote_ident(operator_user)
+    sql = "\n".join(
+        (
+            "BEGIN;",
+            "DO $tapdb_rebind$ DECLARE fn record; BEGIN "
+            "FOR fn IN SELECT n.nspname, p.proname, "
+            "pg_get_function_identity_arguments(p.oid) AS args "
+            "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+            f"WHERE n.nspname = {quote_literal(schema)} "
+            "AND EXISTS (SELECT 1 FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) "
+            "setting WHERE split_part(setting, '=', 1) = 'search_path') LOOP "
+            "EXECUTE format('ALTER FUNCTION %I.%I(%s) SET search_path TO %I', "
+            "fn.nspname, fn.proname, fn.args, fn.nspname); END LOOP; "
+            "END $tapdb_rebind$;",
+            f"GRANT USAGE ON SCHEMA {quoted_schema} TO {quoted_runtime};",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "
+            f"{quoted_schema} TO {quoted_runtime};",
+            "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA "
+            f"{quoted_schema} TO {quoted_runtime};",
+            f"ALTER DEFAULT PRIVILEGES FOR ROLE {quoted_operator} IN SCHEMA "
+            f"{quoted_schema} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES "
+            f"TO {quoted_runtime};",
+            f"ALTER DEFAULT PRIVILEGES FOR ROLE {quoted_operator} IN SCHEMA "
+            f"{quoted_schema} GRANT USAGE, SELECT, UPDATE ON SEQUENCES "
+            f"TO {quoted_runtime};",
+            f"UPDATE {quoted_schema}.tapdb_runtime_principal_scope SET "
+            f"schema_name = {quote_literal(schema)} WHERE "
+            f"role_name = {quote_literal(runtime_user)};",
+            f"REVOKE ALL ON TABLE {quoted_schema}.tapdb_runtime_principal_scope "
+            f"FROM {quoted_runtime};",
+            "COMMIT;",
+        )
+    )
+    _admin_sql(cfg, sql, database=database)
 
 
 def _restore_in_place(
@@ -1472,6 +1581,7 @@ def _restore_in_place(
 
     try:
         _restore_archive(cfg, settings, backup_id=backup_id, database=database)
+        _restore_runtime_access(cfg, database=database, schema=schema)
         # Before anything verifies or uses the restored schema, push every
         # sequence past what the target had *actually* issued. The archive only
         # knows the positions as of the backup, so without this an identifier
@@ -1536,7 +1646,11 @@ def _reconcile_sequences_after_restore(
     probe_cfg["database"] = database
     probe_cfg["schema_name"] = schema
 
-    with service.open_session(probe_cfg, app_username="tapdb_restore_seq") as conn:
+    with service.open_session(
+        probe_cfg,
+        app_username="tapdb_restore_seq",
+        connection_role="operator",
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             return postrestore.reconcile_sequences_to_floor(
                 session, schema, floor=floor
@@ -1571,7 +1685,11 @@ def _post_restore_checks(
     probe_cfg["database"] = database
     probe_cfg["schema_name"] = schema
 
-    with service.open_session(probe_cfg, app_username="tapdb_restore_verify") as conn:
+    with service.open_session(
+        probe_cfg,
+        app_username="tapdb_restore_verify",
+        connection_role="operator",
+    ) as conn:
         with conn.session_scope(commit=False) as session:
             return postrestore.run_all(session, probe_cfg, manifest, schema=schema)
 

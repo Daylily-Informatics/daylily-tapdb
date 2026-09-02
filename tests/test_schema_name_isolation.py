@@ -12,6 +12,7 @@ from daylily_tapdb.models.template import generic_template
 from tests.test_integration import (
     _drop_schema,
     _install_schema,
+    _provision_runtime_principal,
     _seed_identity_prefixes,
     _seed_templates,
 )
@@ -68,9 +69,22 @@ def _write_tapdb_config(
 
 
 def _seed_marker_template(
-    *, dsn: str, schema_name: str, prefix: str, marker: str
+    *,
+    dsn: str,
+    schema_name: str,
+    config_identity: str,
+    prefix: str,
+    marker: str,
 ) -> None:
-    with TAPDBConnection(**_conn_kwargs(db_url=dsn, schema_name=schema_name)) as conn:
+    with TAPDBConnection(
+        **_conn_kwargs(
+            db_url=dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            allow_global_rows=True,
+            connection_role="operator",
+        )
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             _seed_identity_prefixes(session, prefix=prefix)
             _seed_templates(
@@ -92,8 +106,15 @@ def _seed_marker_template(
             )
 
 
-def _template_names(*, dsn: str, schema_name: str) -> set[str]:
-    with TAPDBConnection(**_conn_kwargs(db_url=dsn, schema_name=schema_name)) as conn:
+def _template_names(*, dsn: str, schema_name: str, config_identity: str) -> set[str]:
+    with TAPDBConnection(
+        **_conn_kwargs(
+            db_url=dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            allow_global_rows=True,
+        )
+    ) as conn:
         with conn.session_scope(commit=False) as session:
             return set(session.scalars(select(generic_template.name)).all())
 
@@ -130,18 +151,64 @@ def test_two_configured_schemas_share_one_physical_database_without_cross_reads(
     assert cfg_a["schema_name"] == schema_a
     assert cfg_b["schema_name"] == schema_b
 
+    runtime_a = ""
+    runtime_b = ""
     try:
-        _install_schema(pg_instance["dsn"], schema_a, schema_sql_path)
-        _install_schema(pg_instance["dsn"], schema_b, schema_sql_path)
-        _seed_marker_template(
-            dsn=pg_instance["dsn"], schema_name=schema_a, prefix="AX", marker="Alpha"
+        _install_schema(
+            pg_instance["operator_dsn"],
+            schema_a,
+            schema_sql_path,
+            config_identity=str(config_a.resolve()),
+        )
+        _install_schema(
+            pg_instance["operator_dsn"],
+            schema_b,
+            schema_sql_path,
+            config_identity=str(config_b.resolve()),
+        )
+        runtime_a = _provision_runtime_principal(
+            pg_instance["operator_dsn"],
+            schema_a,
+            config_identity=str(config_a.resolve()),
+            domain_code="T",
+            owner_repo_name="daylily-tapdb",
+            tenant_id=None,
+            allow_global_rows=True,
+        )
+        runtime_b = _provision_runtime_principal(
+            pg_instance["operator_dsn"],
+            schema_b,
+            config_identity=str(config_b.resolve()),
+            domain_code="T",
+            owner_repo_name="daylily-tapdb",
+            tenant_id=None,
+            allow_global_rows=True,
         )
         _seed_marker_template(
-            dsn=pg_instance["dsn"], schema_name=schema_b, prefix="BT", marker="Beta"
+            dsn=pg_instance["operator_dsn"],
+            schema_name=schema_a,
+            config_identity=str(config_a.resolve()),
+            prefix="AX",
+            marker="Alpha",
+        )
+        _seed_marker_template(
+            dsn=pg_instance["operator_dsn"],
+            schema_name=schema_b,
+            config_identity=str(config_b.resolve()),
+            prefix="BT",
+            marker="Beta",
         )
 
-        names_a = _template_names(dsn=pg_instance["dsn"], schema_name=schema_a)
-        names_b = _template_names(dsn=pg_instance["dsn"], schema_name=schema_b)
+        names_a = _template_names(
+            dsn=runtime_a,
+            schema_name=schema_a,
+            config_identity=str(config_a.resolve()),
+        )
+        names_b = _template_names(
+            dsn=runtime_b,
+            schema_name=schema_b,
+            config_identity=str(config_b.resolve()),
+        )
 
         assert "Alpha Schema Marker" in names_a
         assert "Beta Schema Marker" not in names_a
@@ -149,14 +216,24 @@ def test_two_configured_schemas_share_one_physical_database_without_cross_reads(
         assert "Alpha Schema Marker" not in names_b
 
         with TAPDBConnection(
-            **_conn_kwargs(db_url=pg_instance["dsn"], schema_name=schema_a)
+            **_conn_kwargs(
+                db_url=runtime_a,
+                schema_name=schema_a,
+                config_identity=str(config_a.resolve()),
+                allow_global_rows=True,
+            )
         ) as conn_a:
             with conn_a.session_scope(commit=False) as session_a:
                 count_a = session_a.scalar(
                     select(func.count()).select_from(generic_template)
                 )
         with TAPDBConnection(
-            **_conn_kwargs(db_url=pg_instance["dsn"], schema_name=schema_b)
+            **_conn_kwargs(
+                db_url=runtime_b,
+                schema_name=schema_b,
+                config_identity=str(config_b.resolve()),
+                allow_global_rows=True,
+            )
         ) as conn_b:
             with conn_b.session_scope(commit=False) as session_b:
                 count_b = session_b.scalar(
@@ -166,5 +243,13 @@ def test_two_configured_schemas_share_one_physical_database_without_cross_reads(
         assert count_a == len(names_a)
         assert count_b == len(names_b)
     finally:
-        _drop_schema(pg_instance["dsn"], schema_a)
-        _drop_schema(pg_instance["dsn"], schema_b)
+        _drop_schema(
+            pg_instance["operator_dsn"],
+            schema_a,
+            runtime_dsns=(runtime_a,) if runtime_a else (),
+        )
+        _drop_schema(
+            pg_instance["operator_dsn"],
+            schema_b,
+            runtime_dsns=(runtime_b,) if runtime_b else (),
+        )

@@ -49,13 +49,32 @@ most common way a recovery goes badly.
 
 | Situation | Use | What you get | What you lose |
 |---|---|---|---|
-| You need template definitions moved to another environment, or want to seed a new deployment | **Template pack** — `--class template-pack` | Templates and their configuration, portable across databases | Instance data. This is a configuration export, not a recovery tool. |
-| Data was lost, corrupted, or wrongly modified inside TapDB's schema | **Full logical restore** — `--class full`, then `backup restore` | Every row, sequence, and object as of the backup, into an isolated database or in-place | Anything written after the backup was taken |
+| You need a database-derived template snapshot for an operator backup workflow | **Database backup template pack** — `tapdb backup create --class template-pack` | Templates and their configuration, portable across databases | Instance data. This is a configuration export, not a recovery tool. |
+| Data was lost, corrupted, or wrongly modified inside TapDB's configured schema | **Logical restore** — `--class full`, then `backup restore` | Every row in the configured schema, independent of runtime tenant scope, into an isolated database or through the gated in-place workflow | Anything written after the backup was taken |
 | The whole cluster is gone, or you need a point far back in time and your provider holds it | **Provider snapshot cutover** — `--class provider-snapshot` records the snapshot; the cutover itself is an Aurora/RDS operation | Whole-cluster recovery including roles and other schemas | Granularity — you move the entire cluster, not one schema. TapDB records the receipt; it does not perform the cutover. |
 
-**When in doubt, start with `full` into an isolated target.** It is
-non-destructive, it tells you exactly what the backup contains, and you can
-compare before deciding to go in-place.
+**Start with `full` into an isolated target.** A full capture never uses the
+runtime `NOBYPASSRLS` credential. It requires the separately configured
+`target.operator` identity, verifies that identity is a distinct PostgreSQL
+`SUPERUSER` or `BYPASSRLS` role, and fails hard when it is absent or invalid.
+The signed manifest records `mode: physical_schema`, `row_security: bypassed`,
+and `physical_schema_complete: true`; that claim means every tenant's rows in
+the configured schema were visible to both the inventory transaction and
+`pg_dump`. The ordinary runtime role remains RLS-bound and is never promoted.
+
+A database `template-pack` uses that ordinary runtime role and therefore
+contains only active templates visible under its configured tenant/global RLS
+scope. Its manifest records that scope, omits sequences and non-template row
+counts, and never claims physical-schema completeness. A `provider-snapshot`
+is created through the RDS API without opening a PostgreSQL session; TapDB
+signs a provider receipt but treats its database contents as opaque until a
+provider restore is independently inspected.
+
+The database backup class above is distinct from the deterministic,
+source-controlled repository packs managed by `tapdb templates
+export|import|inventory`. Repository packs have an adjacent portable provenance
+receipt and intentionally exclude database identity, timestamps, secrets, and
+sequence state; see [Template Authoring](template-authoring.md#repository-owned-packs).
 
 ---
 
@@ -336,8 +355,15 @@ command exits `1`.
 
 ### 7.2 In-place (destructive, and gated)
 
-In-place replaces the live schema. It requires `--mode in-place` **and** the
-typed target label:
+In-place replaces the live schema and accepts only a signed `full` archive
+whose data-scope claim is exactly the operator-authenticated physical-schema
+contract described in §2. Legacy or runtime-scoped archives fail the
+`identity.data_scope` gate before mutation. The restore itself also requires
+the distinct `target.operator` credential; there is no fallback to the runtime
+credential and the runtime role is never granted an RLS bypass.
+
+For a physically complete archive, in-place additionally requires the typed
+target label:
 
 ```
 <client_id>/<database_name>/<schema_name>@<database>
@@ -550,6 +576,25 @@ only thing that clears the warning, because receipts are immutable.
 
 Under `backup:` in the TapDB config (`config_version: 4`). Every field has a
 working default, so a config written before this section existed keeps working.
+
+The authentication used by a `full` backup is not a `backup:` setting. Configure
+the distinct privileged identity under the selected `target`:
+
+```yaml
+target:
+  user: tapdb_runtime
+  operator:
+    user: tapdb_operator
+    password: ""       # explicit empty value is valid for local trust auth
+    secret_arn: ""
+    iam_auth: false
+```
+
+The operator user must differ from `target.user` and must authenticate as a
+PostgreSQL `SUPERUSER` or `BYPASSRLS` role. Aurora targets select an explicit
+operator authentication path through `password`, `secret_arn`, or `iam_auth`.
+Missing operator configuration makes full plan/create/restore fail; TapDB never
+substitutes the runtime credential or ambient libpq target variables.
 
 **Keys are nested.** Unrecognised keys are silently ignored — so a flat
 `storage_uri:` does not fail, it just never takes effect and your backups go to

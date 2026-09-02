@@ -475,7 +475,7 @@ def find_schema_root(required_subpath: Optional[Path] = None) -> Path:
 
 def schema_asset_files(schema_root: Path) -> list[Path]:
     """Return schema asset files from a resolved schema root."""
-    asset_paths = [schema_root / "tapdb_schema.sql"]
+    asset_paths = [schema_root / "tapdb_schema.sql", schema_root / "rls.sql"]
     migrations_dir = schema_root / "migrations"
     if migrations_dir.exists():
         asset_paths.extend(sorted(migrations_dir.glob("*.sql")))

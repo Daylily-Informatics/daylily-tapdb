@@ -218,7 +218,9 @@ def capture_migrations(session: Any, schema_name: str) -> list[dict[str, Any]]:
 
 
 @contextmanager
-def snapshot_transaction(engine: Any) -> Iterator[tuple[Any, Optional[str]]]:
+def snapshot_transaction(
+    connection_manager: Any,
+) -> Iterator[tuple[Any, Optional[str]]]:
     """Open a repeatable-read transaction and export its snapshot.
 
     Yields ``(connection, snapshot_name)``. The connection stays open for the
@@ -239,10 +241,13 @@ def snapshot_transaction(engine: Any) -> Iterator[tuple[Any, Optional[str]]]:
     Every read this yields is schema-qualified, so the absence of the scoped
     session's ``search_path`` does not matter.
     """
-    connection = engine.connect().execution_options(isolation_level="REPEATABLE READ")
+    connection = connection_manager.engine.connect().execution_options(
+        isolation_level="REPEATABLE READ"
+    )
     transaction = connection.begin()
     snapshot: Optional[str] = None
     try:
+        connection_manager.install_transaction_context(connection)
         try:
             value = connection.execute(text("SELECT pg_export_snapshot()")).scalar()
             snapshot = str(value) if value else None
@@ -250,6 +255,7 @@ def snapshot_transaction(engine: Any) -> Iterator[tuple[Any, Optional[str]]]:
             # Degrade to best effort without losing the connection.
             transaction.rollback()
             transaction = connection.begin()
+            connection_manager.install_transaction_context(connection)
             snapshot = None
         yield connection, snapshot
     finally:

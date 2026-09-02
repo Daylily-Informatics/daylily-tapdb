@@ -4,12 +4,13 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
+from daylily_tapdb.services.external_refs import V1ProxyPolicy
 from daylily_tapdb.web.dag import (
     CONTRACT_VERSION,
     build_dag_capability_advertisement,
@@ -65,6 +66,7 @@ class _FakeSession:
 class _FakeConn:
     def __init__(self, session) -> None:
         self._session = session
+        self.app_username = None
 
     def __enter__(self):
         return self
@@ -176,17 +178,20 @@ def _build_fake_runtime_connection():
     )
 
 
+async def _authenticated(_request: Request) -> dict[str, str]:
+    return {"sub": "dag-test-operator"}
+
+
+async def _anonymous(_request: Request) -> dict[str, str]:
+    return {}
+
+
 def test_build_dag_capability_advertisement_has_canonical_paths() -> None:
     payload = build_dag_capability_advertisement(auth="session_or_bearer")
 
     assert payload["contract_version"] == CONTRACT_VERSION
     assert payload["extensions"] == ["tapdb.dag_v1"]
-    assert payload["capabilities"] == [
-        "exact_lookup",
-        "native_graph",
-        "object_search",
-        "external_graph_expansion",
-    ]
+    assert payload["capabilities"] == ["exact_lookup", "native_graph", "object_search"]
     assert payload["endpoints"][0]["path"] == "/api/dag/object/{euid}"
     assert payload["endpoints"][1]["path"] == "/api/dag/data"
     assert payload["endpoints"][2]["path"] == "/api/dag/search"
@@ -195,18 +200,29 @@ def test_build_dag_capability_advertisement_has_canonical_paths() -> None:
         "external_payload.tapdb_graph",
         "typed_external_identifier",
     ]
+    assert all("external" not in item["kind"] for item in payload["endpoints"])
+
+    proxied = build_dag_capability_advertisement(v1_proxy_enabled=True)
+    assert "external_graph_expansion" in proxied["capabilities"]
 
 
 def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(
     monkeypatch,
 ) -> None:
+    connections = []
+
+    def _runtime_connection(_config_path):
+        conn = _build_fake_runtime_connection().conn
+        connections.append(conn)
+        return conn
+
     monkeypatch.setattr(
         "daylily_tapdb.web.runtime.get_db",
-        lambda _config_path: _build_fake_runtime_connection().conn,
+        _runtime_connection,
     )
     monkeypatch.setattr(
         "daylily_tapdb.web.dag.fetch_remote_graph",
-        lambda _request, _ref, *, depth: {
+        lambda _request, _ref, *, depth, policy: {
             "elements": {
                 "nodes": [{"data": {"id": "AT-1", "euid": "AT-1"}}],
                 "edges": [],
@@ -227,14 +243,32 @@ def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(
     )
     monkeypatch.setattr(
         "daylily_tapdb.web.dag.fetch_remote_object_detail",
-        lambda _request, ref, *, euid: {"euid": euid, "system": ref.system},
+        lambda _request, ref, *, euid, policy: {
+            "euid": euid,
+            "system": ref.system,
+        },
+    )
+    monkeypatch.setattr(
+        "daylily_tapdb.web.dag.search_objects",
+        lambda _session, **_kwargs: {
+            "items": [
+                {
+                    "euid": "GX1",
+                    "record_type": "instance",
+                }
+            ],
+            "page": {"limit": 25, "returned": 1, "next_cursor": None},
+            "filters": {},
+        },
     )
 
     app = FastAPI()
     app.include_router(
         create_tapdb_dag_router(
             config_path="/tmp/tapdb-config.yaml",
+            auth_dependency=_authenticated,
             service_name="dewey",
+            v1_proxy_policy=V1ProxyPolicy(allowed_hosts=frozenset({"atlas.example"})),
         )
     )
     client = TestClient(app)
@@ -309,6 +343,8 @@ def test_create_tapdb_dag_router_serves_exact_lookup_graph_and_external(
     )
     assert external_object_response.status_code == 200
     assert external_object_response.json()["euid"] == "AT-9"
+    assert connections
+    assert all(conn.app_username == "dag-test-operator" for conn in connections)
 
 
 def test_create_tapdb_dag_router_returns_404_for_non_owned_euid(monkeypatch) -> None:
@@ -320,6 +356,7 @@ def test_create_tapdb_dag_router_returns_404_for_non_owned_euid(monkeypatch) -> 
     app.include_router(
         create_tapdb_dag_router(
             config_path="/tmp/tapdb-config.yaml",
+            auth_dependency=_authenticated,
             service_name="dewey",
         )
     )
@@ -327,3 +364,36 @@ def test_create_tapdb_dag_router_returns_404_for_non_owned_euid(monkeypatch) -> 
 
     response = client.get("/api/dag/object/NOPE-1")
     assert response.status_code == 404
+
+
+def test_create_tapdb_dag_router_requires_authentication(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "daylily_tapdb.web.runtime.get_db",
+        lambda _config_path: _build_fake_runtime_connection().conn,
+    )
+    app = FastAPI()
+    app.include_router(
+        create_tapdb_dag_router(
+            config_path="/tmp/tapdb-config.yaml",
+            auth_dependency=_anonymous,
+            service_name="dewey",
+        )
+    )
+
+    response = TestClient(app).get("/api/dag/object/GX1")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "tapdb_dag_v1_auth_identity_required"
+
+
+def test_create_tapdb_dag_router_rejects_missing_auth_dependency() -> None:
+    try:
+        create_tapdb_dag_router(
+            config_path="/tmp/tapdb-config.yaml",
+            auth_dependency=None,  # type: ignore[arg-type]
+            service_name="dewey",
+        )
+    except ValueError as exc:
+        assert "explicit auth_dependency" in str(exc)
+    else:  # pragma: no cover - the assertion above must be reached
+        raise AssertionError("missing auth dependency was accepted")

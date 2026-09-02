@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -140,8 +141,10 @@ def test_config_update_and_info_share_single_target(tmp_path: Path):
 
     info = runner.invoke(app, ["--config", str(cfg_path), "info", "--json"])
     assert info.exit_code == 0, info.output
-    assert '"target": "explicit"' in info.output
-    assert '"schema_name": "tapdb_updated"' in info.output
+    payload = json.loads(info.output)
+    assert payload["config"]["target"] == "explicit"
+    assert payload["database"]["schema_name"] == "tapdb_updated"
+    assert "target" not in payload
 
 
 def test_ui_mkcert_generates_under_explicit_runtime(

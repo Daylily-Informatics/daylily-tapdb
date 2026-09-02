@@ -1,6 +1,6 @@
 # TAPDB GUI Inclusion Guide
 
-This guide lives in the `tapdb-core` repository. The Python import package remains `daylily_tapdb`.
+This guide lives in the `daylily-tapdb` repository. The Python import package is `daylily_tapdb`.
 
 This guide explains how to embed the TAPDB Admin GUI inside another app and
 choose an auth strategy. For the broader FastAPI + Jinja2 host-app pattern, see
@@ -44,8 +44,8 @@ app.mount(
 
 The same TapDB package also exposes `create_tapdb_gui_router(...)` for hosts
 that want to include the router directly, `create_tapdb_web_app(...)` for the
-legacy full admin surface, and `create_tapdb_dag_router(...)` for root-level
-`/api/dag/*` routes.
+legacy full admin surface, and `mount_tapdb_dag_surfaces(...)` for authenticated
+root-level DAG v2 discovery, exact lookup, traversal, and search routes.
 
 ## 2) Auth Modes
 
@@ -89,7 +89,7 @@ Use this when:
 
 - the host app already owns browser session auth
 - `/tapdb` should feel like part of the host UI
-- the host app wants canonical `/api/dag/*` routes at root while TapDB HTML
+- the host app wants `/api/dag/manifest` and `/api/dag/v2/*` at root while TapDB HTML
   stays namespaced under `/tapdb`
 
 ### Mode C: Auth Disabled
@@ -108,7 +108,8 @@ Use this only for local development or diagnostics.
 ## 3) Recommended Client Pattern
 
 1. Mount TapDB V1 GUI at `/tapdb` with `create_tapdb_gui_app(...)`.
-2. Publish canonical DAG routes at root `/api/dag/*` with `create_tapdb_dag_router(...)`.
+2. Atomically publish authenticated DAG v2 routes with
+   `mount_tapdb_dag_surfaces(...)`, an exact service ID, and positive limits.
 3. Use `TapdbHostBridge(auth_mode="host_session", ...)` when the host owns auth.
 4. Use TapDB-native auth only when TapDB should manage its own login flow.
 
@@ -134,8 +135,8 @@ APIs for reusable primitives, including `/tapdb/api/object/{euid}`,
   resolve a user.
 - `GET /tapdb/admin/readiness` should show config, governance, external-link
   template, and template-inventory readiness checks for operators.
-- `GET /api/dag/object/{euid}` should be guarded by the host app's chosen API
-  dependency, not by TapDB browser auth.
+- `GET /api/dag/v2/object/{euid}` and the manifest, graph, and search routes
+  must all be guarded by the host app's chosen API dependency.
 
 ## 5) Security Notes
 
