@@ -268,7 +268,17 @@ def test_branch_campaign_user_store_template_lookup_does_not_mutate_fixed_scope(
     session = _UserSession([(42, "SYS")])
     assert user_store._get_system_user_template_uid(session) == 42
     assert session.rows == []
-    assert "set_config" not in session.statements[0]
+    statement = session.statements[0]
+    assert "set_config" not in statement
+    assert "domain_code = tapdb_current_domain_code()" in statement
+    assert "issuer_app_code = tapdb_current_owner_repo_name()" in statement
+
+
+def test_branch_campaign_all_system_user_queries_use_exact_bound_scope():
+    where = user_store._SYSTEM_USER_WHERE
+    assert "domain_code = tapdb_current_domain_code()" in where
+    assert "issuer_app_code = tapdb_current_owner_repo_name()" in where
+    assert "daylily-tapdb" not in where
 
 
 def test_branch_campaign_user_store_maps_fallback_identity_and_role():

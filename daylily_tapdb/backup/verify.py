@@ -1494,7 +1494,8 @@ def _restore_runtime_access(cfg: dict[str, Any], *, database: str, schema: str) 
             f"WHERE n.nspname = {quote_literal(schema)} "
             "AND EXISTS (SELECT 1 FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) "
             "setting WHERE split_part(setting, '=', 1) = 'search_path') LOOP "
-            "EXECUTE format('ALTER FUNCTION %I.%I(%s) SET search_path TO %I', "
+            "EXECUTE format('ALTER FUNCTION %I.%I(%s) SET search_path TO "
+            "%I, pg_catalog, pg_temp', "
             "fn.nspname, fn.proname, fn.args, fn.nspname); END LOOP; "
             "END $tapdb_rebind$;",
             f"GRANT USAGE ON SCHEMA {quoted_schema} TO {quoted_runtime};",

@@ -480,6 +480,31 @@ def test_branch_campaign_rollback_attempts_rename_after_drop_failure(monkeypatch
         )
 
 
+def test_restore_runtime_access_retains_hardened_function_search_path(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        service,
+        "connection_config_for_role",
+        lambda _cfg, _role: {"user": "tapdb_operator"},
+    )
+    monkeypatch.setattr(
+        verify,
+        "_admin_sql",
+        lambda _cfg, sql, **kwargs: captured.update(sql=sql, kwargs=kwargs),
+    )
+
+    verify._restore_runtime_access(
+        {"user": "tapdb_runtime"},
+        database="restored_database",
+        schema="restored_schema",
+    )
+
+    sql = captured["sql"]
+    assert "SET search_path TO %I, pg_catalog, pg_temp', fn.nspname, fn.proname" in sql
+    assert "SET search_path TO %I', fn.nspname" not in sql
+    assert captured["kwargs"] == {"database": "restored_database"}
+
+
 def test_branch_campaign_restore_step_description_and_confirmation_bypass():
     steps = verify._describe_steps(
         mode=verify.MODE_IN_PLACE,

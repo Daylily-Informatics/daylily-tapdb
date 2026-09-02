@@ -23,11 +23,18 @@ from daylily_tapdb.services.external_refs import (
 )
 from daylily_tapdb.services.graph_payloads import _v2_edge
 from daylily_tapdb.templates.manager import TemplateManager
+from daylily_tapdb.user_store import (
+    create_or_get,
+    get_by_login_identifier,
+    get_by_uid,
+    list_users,
+    set_role,
+)
 
 runner = CliRunner()
 
 
-def test_client_runtime_creates_typed_xrf_from_operator_seeded_core(
+def test_client_runtime_uses_operator_seeded_core_for_xrf_and_user(
     pg_instance, tmp_path
 ):
     clear_cli_context()
@@ -160,6 +167,91 @@ def test_client_runtime_creates_typed_xrf_from_operator_seeded_core(
     )
     assert client_seeded.exit_code == 0, client_seeded.output
 
+    shared_login = f"shared-login-{uuid.uuid4().hex}@example.test"
+    daylily_operator = TAPDBConnection(
+        db_url=pg_instance["operator_dsn"],
+        db_user=pg_instance["operator_user"],
+        app_username="pytest:daylily-operator",
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        schema_name=schema_name,
+        tenant_id=None,
+        allow_global_rows=True,
+        config_identity=str(pg_instance["config_path"]),
+        engine_type="local",
+        connection_role="operator",
+    )
+    with daylily_operator as connection:
+        with connection.session_scope(commit=True) as session:
+            daylily_actor, daylily_created = create_or_get(
+                session,
+                login_identifier=shared_login,
+                email=shared_login,
+                display_name="Daylily Owner User",
+                role="user",
+            )
+            assert daylily_created is True
+
+    client_operator = TAPDBConnection(
+        db_url=pg_instance["operator_dsn"],
+        db_user=pg_instance["operator_user"],
+        app_username="pytest:client-operator",
+        domain_code="Z",
+        owner_repo_name=client_owner,
+        schema_name=schema_name,
+        tenant_id=None,
+        allow_global_rows=True,
+        config_identity=str(client_config.resolve()),
+        engine_type="local",
+        connection_role="operator",
+    )
+    with client_operator as connection:
+        with connection.session_scope(commit=True) as session:
+            client_actor, client_created = create_or_get(
+                session,
+                login_identifier=shared_login,
+                email=shared_login,
+                display_name="Client Owner User",
+                role="user",
+            )
+            replayed_actor, replay_created = create_or_get(
+                session,
+                login_identifier=shared_login,
+                email=shared_login,
+                display_name="Ignored Replay Name",
+                role="user",
+            )
+            assert client_created is True
+            assert replay_created is False
+            assert replayed_actor.uid == client_actor.uid
+            assert (
+                get_by_login_identifier(
+                    session, shared_login, include_inactive=True
+                ).uid
+                == client_actor.uid
+            )
+            assert get_by_uid(session, daylily_actor.uid, include_inactive=True) is None
+            matching_users = [
+                user
+                for user in list_users(session, include_inactive=True)
+                if user.username == shared_login
+            ]
+            assert [user.uid for user in matching_users] == [client_actor.uid]
+            assert set_role(session, shared_login, "admin") is True
+
+    with operator.connect() as connection:
+        owner_roles = dict(
+            connection.execute(
+                text(
+                    "SELECT issuer_app_code, json_addl->>'role' "
+                    "FROM generic_instance "
+                    "WHERE json_addl->>'login_identifier' = :login"
+                ),
+                {"login": shared_login},
+            ).all()
+        )
+    assert owner_roles == {"daylily-tapdb": "user", client_owner: "admin"}
+
     with operator.connect() as connection:
         client_templates = connection.execute(
             text(
@@ -194,6 +286,41 @@ def test_client_runtime_creates_typed_xrf_from_operator_seeded_core(
     factory = InstanceFactory(manager, domain_code="Z")
     with runtime_connection as connection:
         with connection.session_scope(commit=True) as session:
+            login_identifier = f"client-user-{uuid.uuid4().hex}@example.test"
+            actor, actor_created = create_or_get(
+                session,
+                login_identifier=login_identifier,
+                email=login_identifier,
+                display_name="Client User",
+            )
+            replayed_actor, replay_created = create_or_get(
+                session,
+                login_identifier=login_identifier,
+                email=login_identifier,
+                display_name="Ignored Replay Name",
+            )
+            actor_scope = (
+                session.execute(
+                    text(
+                        "SELECT gi.issuer_app_code AS instance_owner, "
+                        "gt.issuer_app_code AS template_owner, "
+                        "gt.instance_prefix AS template_prefix "
+                        "FROM generic_instance gi "
+                        "JOIN generic_template gt ON gt.uid = gi.template_uid "
+                        "WHERE gi.uid = :uid"
+                    ),
+                    {"uid": actor.uid},
+                )
+                .mappings()
+                .one()
+            )
+            assert actor_created is True
+            assert replay_created is False
+            assert replayed_actor.uid == actor.uid
+            assert actor_scope["instance_owner"] == client_owner
+            assert actor_scope["template_owner"] == client_owner
+            assert actor_scope["template_prefix"] == "SYS"
+
             source = factory.create_instance(
                 session,
                 template_code="content/specimen/sample/1.0/",

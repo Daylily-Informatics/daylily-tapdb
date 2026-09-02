@@ -675,6 +675,32 @@ def test_isolated_restore_recreates_the_schema_in_a_new_database(env, backup):
         probe = dict(cfg, database=result.target_database)
         counts, _ = _live_state(probe, schema=cfg["schema_name"])
         assert counts == backup.manifest.row_counts
+        with service.open_session(
+            probe, app_username="pytest", connection_role="operator"
+        ) as conn:
+            with conn.session_scope(commit=False) as session:
+                rows = session.execute(
+                    text(
+                        "SELECT p.proname, setting FROM pg_proc p "
+                        "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                        "CROSS JOIN LATERAL unnest(p.proconfig) AS setting "
+                        "WHERE n.nspname = :schema "
+                        "AND p.proname IN ('tapdb_assert_runtime_role', "
+                        "'record_insert', 'tapdb_validate_lineage_endpoint_scope', "
+                        "'soft_delete_row') "
+                        "AND split_part(setting, '=', 1) = 'search_path'"
+                    ),
+                    {"schema": cfg["schema_name"]},
+                ).all()
+        assert {name for name, _setting in rows} == {
+            "tapdb_assert_runtime_role",
+            "record_insert",
+            "tapdb_validate_lineage_endpoint_scope",
+            "soft_delete_row",
+        }
+        assert {setting for _name, setting in rows} == {
+            f"search_path={cfg['schema_name']}, pg_catalog, pg_temp"
+        }
     finally:
         if result is not None:
             _drop_db(cfg, result.target_database)

@@ -100,6 +100,8 @@ def test_select_user_columns_contains_expected_aliases_and_filters():
     assert "AS role" in sql
     assert "AS is_active" in sql
     assert "AS require_password_change" in sql
+    assert "gi.domain_code = tapdb_current_domain_code()" in sql
+    assert "gi.issuer_app_code = tapdb_current_owner_repo_name()" in sql
     assert "polymorphic_discriminator = 'actor_instance'" in sql
     assert "gi.category = 'actor'" in sql
     assert "gi.type = 'user'" in sql
@@ -116,7 +118,8 @@ def test_get_system_user_template_uid_returns_uid_and_uses_expected_params():
     assert "FROM generic_template" in stmt
     assert "NULLIF(instance_prefix, '')" in stmt
     assert "upper(NULLIF(instance_prefix, '')) = 'SYS'" in stmt
-    assert "AND issuer_app_code = 'daylily-tapdb'" in stmt
+    assert "AND domain_code = tapdb_current_domain_code()" in stmt
+    assert "AND issuer_app_code = tapdb_current_owner_repo_name()" in stmt
     assert "uid DESC" in stmt
     assert params == {
         "category": m.SYSTEM_USER_TEMPLATE_CATEGORY,
@@ -139,14 +142,16 @@ def test_get_system_user_template_uid_raises_when_template_prefix_missing():
         m._get_system_user_template_uid(session)
 
 
-def test_get_system_user_template_uid_filters_to_tapdb_owned_sys_template():
+def test_get_system_user_template_uid_filters_to_exact_bound_runtime_scope():
     session = _FakeSession(row=(42, "SYS"))
 
     assert m._get_system_user_template_uid(session) == 42
 
     stmt, _ = session.calls[0]
-    assert "AND issuer_app_code = 'daylily-tapdb'" in stmt
+    assert "AND domain_code = tapdb_current_domain_code()" in stmt
+    assert "AND issuer_app_code = tapdb_current_owner_repo_name()" in stmt
     assert "AND upper(NULLIF(instance_prefix, '')) = 'SYS'" in stmt
+    assert "daylily-tapdb" not in stmt
 
 
 def test_set_last_login_writes_timestamp_and_uid(monkeypatch: pytest.MonkeyPatch):
@@ -158,6 +163,8 @@ def test_set_last_login_writes_timestamp_and_uid(monkeypatch: pytest.MonkeyPatch
     stmt, params = session.calls[0]
     assert "SET json_addl = jsonb_set" in stmt
     assert "modified_dt = NOW()" in stmt
+    assert "gi.domain_code = tapdb_current_domain_code()" in stmt
+    assert "gi.issuer_app_code = tapdb_current_owner_repo_name()" in stmt
     assert params["uid"] == 7
     assert params["last_login_dt"] == "2026-03-29T12:30:00+00:00"
 

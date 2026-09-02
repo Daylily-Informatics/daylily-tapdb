@@ -28,10 +28,10 @@ SYSTEM_USER_TEMPLATE_CODE = (
     f"{SYSTEM_USER_TEMPLATE_CATEGORY}/{SYSTEM_USER_TEMPLATE_TYPE}/"
     f"{SYSTEM_USER_TEMPLATE_SUBTYPE}/{SYSTEM_USER_TEMPLATE_VERSION}"
 )
-SYSTEM_USER_OWNER_REPO = "daylily-tapdb"
-
 _SYSTEM_USER_WHERE = """
     gi.is_deleted = FALSE
+    AND gi.domain_code = tapdb_current_domain_code()
+    AND gi.issuer_app_code = tapdb_current_owner_repo_name()
     AND gi.polymorphic_discriminator = 'actor_instance'
     AND gi.category = 'actor'
     AND gi.type = 'user'
@@ -156,7 +156,8 @@ def _get_system_user_template_uid(session: Session) -> int:
               AND type = :type
               AND subtype = :subtype
               AND version = :version
-              AND issuer_app_code = 'daylily-tapdb'
+              AND domain_code = tapdb_current_domain_code()
+              AND issuer_app_code = tapdb_current_owner_repo_name()
               AND upper(NULLIF(instance_prefix, '')) = 'SYS'
             ORDER BY
               CASE WHEN bstatus = 'active' THEN 0 ELSE 1 END,
@@ -367,12 +368,8 @@ def set_last_login(session: Session, user_uid: int | str) -> None:
                     TRUE
                 ),
                 modified_dt = NOW()
-            WHERE gi.uid = :uid
-              AND gi.is_deleted = FALSE
-              AND gi.polymorphic_discriminator = 'actor_instance'
-              AND gi.category = '{SYSTEM_USER_TEMPLATE_CATEGORY}'
-              AND gi.type = '{SYSTEM_USER_TEMPLATE_TYPE}'
-              AND gi.subtype = '{SYSTEM_USER_TEMPLATE_SUBTYPE}'
+            WHERE {_SYSTEM_USER_WHERE}
+              AND gi.uid = :uid
             """
         ),
         {"uid": int(user_uid), "last_login_dt": last_login_dt},

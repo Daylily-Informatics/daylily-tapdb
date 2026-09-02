@@ -44,12 +44,12 @@ existing `twup` function.
 |---|---|---|---|---|---|---|---|---|---|
 | PLAN-001 | plan | Preserve exact DAG specification in clean branch | SUCCESS | plan_amendment | Gate 0 | orchestrator | `shasum -a 256` -> `d5e8593b6bc85256924db76630d3014882b4a65389a5154782ef7a2d087ca8eb` |  | Exact supplied specification preserved byte-for-byte. |
 | PLAN-002 | plan | Record clean baseline, scopes, checks, and release authority | SUCCESS | plan_amendment | Gate 0 | orchestrator | this ledger; baseline `1620 passed, 14 skipped` |  | Gate 0 inventory is frozen before runtime implementation. |
-| MIG-ID-001 | migration | Existing identity values remain byte-for-byte unchanged | SUCCESS | feature_implementation | Gate 2 | schema_identity | `migration_identity.py`; immutable tuple/hash receipts; populated PostgreSQL preservation tests in the 2,223-test gate |  | Every pre-existing UID/EUID/EUID component, UUID, scope, template, lineage, linkage, and creation timestamp is fingerprinted and compared before commit. |
+| MIG-ID-001 | migration | Existing identity values remain byte-for-byte unchanged | SUCCESS | feature_implementation | Gate 2 | schema_identity | `migration_identity.py`; immutable tuple/hash receipts; populated PostgreSQL preservation tests in the 2,225-test gate |  | Every pre-existing UID/EUID/EUID component, UUID, scope, template, lineage, linkage, and creation timestamp is fingerprinted and compared before commit. |
 | MIG-SEQ-001 | migration | Existing identity/EUID sequence assignments and state remain unchanged except declared new allocations | SUCCESS | feature_implementation | Gate 2 | schema_identity | pre/post sequence definitions and state in migration receipts; failure/no-op/sparse/high-watermark PostgreSQL tests |  | Undeclared changes, cached/behind/cycling generators, and gap reuse fail closed; only declared new-message allocation can advance exact generators. |
 | MIG-DIFF-001 | migration | Only explicitly declared non-identity columns may change | SUCCESS | contract_test | Gate 2 | schema_identity | per-row/per-column hashes plus exact transformation markers; failure injection in `test_postgres_identity_concurrency.py` |  | Unknown allowlists or transformations fail preflight and every undeclared postflight delta rolls back. |
 | MIG-CLI-001 | migration | Dry-run/apply preflight-receipt migration interface and exclusive guard | SUCCESS | feature_implementation | Gate 2 | schema_identity | `tapdb db schema migrate --dry-run/--apply`; immutable receipt tests; advisory plus ACCESS EXCLUSIVE guards |  | Apply is receipt-bound and transactional and refuses target, asset, schema, row, FK, or sequence drift. |
 | MIG-OUTBOX-001 | migration | Legacy outbox conversion preserves existing IDs/UUIDs and records deterministic mapping receipts | SUCCESS | feature_implementation | Gate 2 | schema_identity | `20260902_010100_legacy_outbox_message_conversion.sql`; mixed-owner success and fail-closed PostgreSQL tests |  | Existing outbox ID/event UUID/scope/payload/state/timestamps remain authoritative; only genuinely new canonical MSG identities are allocated and mapped. |
-| MIG-TEST-001 | migration | Historical, sparse, failure, no-op, and restore-then-migrate identity fixtures | SUCCESS | contract_test | Gate 5 | schema_identity | `2,223 passed`, including migration contract, real-PostgreSQL concurrency, post-restore, no-op, and injected-failure cases |  | No migration acceptance test skipped. |
+| MIG-TEST-001 | migration | Historical, sparse, failure, no-op, and restore-then-migrate identity fixtures | SUCCESS | contract_test | Gate 5 | schema_identity | `2,225 passed`, including migration contract, real-PostgreSQL concurrency, post-restore, no-op, and injected-failure cases |  | No migration acceptance test skipped. |
 | DEP-001 | dependency | Every install and artifact resolves exactly `meridian-euid==0.4.8` | IN_PROGRESS | contract_test | Gate 5 | orchestrator | exact `pyproject.toml`/`uv.lock` pin and approved PyPI hashes; isolated 9.2.0 wheel metadata/install resolved 0.4.8 |  | Final post-merge artifact and no-cache PyPI proofs remain. |
 | ISS-093 | issue #93 | Database-enforced typed-instance natural identity claim API | SUCCESS | feature_implementation | Gate 2 | schema_identity | partial unique index; `InstanceIdentityClaim`; `INSERT ... ON CONFLICT`; separate-session replay/divergence/rollback tests |  | Global exact keys retain ownership through soft delete; caller transaction boundaries remain untouched. |
 | ISS-092 | issue #92 | Transaction-scoped advisory locks with bounded waits and redacted diagnostics | SUCCESS | feature_implementation | Gate 2 | schema_identity | framed SHA-256 signed-int64 helper; same-key/different-key/commit/rollback/timeout real-PostgreSQL tests |  | No session-level lock is used and receipts expose only a fingerprint. |
@@ -73,22 +73,22 @@ existing `twup` function.
 | DOC-README-001 | docs | Rewrite root README using approved RGBW structure and current code truth | SUCCESS | historical_docs_only | Gate 5 | dag_security_docs | rewritten `README.md`; docs/release contract tests |  | Purpose, model, install, core types, embedding, DAG, security, testing, and release are current and public-safe. |
 | DOC-ACTIVE-001 | docs | Reconcile every active guide with schema, CLI, API, GUI, migration, security, and packaging | SUCCESS | historical_docs_only | Gate 5 | dag_security_docs | active-doc audit plus 31 focused docs/release contract tests and full suite |  | Historical ledgers retain their historical pins/paths; active guidance reflects 9.2. |
 | DOC-CONS-001 | docs | Consumer discoverability guide is complete, linked, and contract-tested | SUCCESS | historical_docs_only | Gate 5 | dag_security_docs | `docs/consumer-discoverability-guide.md`, README/docs index links, snippet/link/anti-pattern tests |  | Includes service mount, manifest, discovery, claims/locks, typed XRF, migration expectations, adopter checklist, and troubleshooting. |
-| TEST-PG-001 | tests | PostgreSQL 17 critical integration suite cannot skip | SUCCESS | contract_test | Gate 5 | orchestrator | GitHub run `33609517506`, PostgreSQL 17: `2,223 passed`, zero skipped, eight warnings in 286.52 seconds |  | Full PostgreSQL 17 acceptance passed before merge. |
+| TEST-PG-001 | tests | PostgreSQL 17 critical integration suite cannot skip | IN_PROGRESS | contract_test | Gate 5 | orchestrator | local PostgreSQL 16.14 post-review gate: `2,225 passed`, zero skipped, seven warnings in 116.24 seconds; prior PostgreSQL 17 run `33609517506` was green |  | Fresh PostgreSQL 17 acceptance is required for the review-hardening commit. |
 | TEST-CONC-001 | tests | Separate-session natural-identity and lock concurrency coverage | SUCCESS | contract_test | Gate 5 | schema_identity | real PostgreSQL separate-session same/different key, winner, timeout, commit, rollback, and connection-reuse tests |  | Transaction and lock lifecycle acceptance is complete locally. |
 | TEST-DAG-001 | tests | All ten DAG v2 acceptance scenarios pass | SUCCESS | contract_test | Gate 5 | dag_security_docs | DAG/XRF/RLS/mount acceptance included in `2,223 passed`; focused DAG/docs runs `99 passed` plus follow-up |  | No v2 acceptance skip. |
 | TEST-OPS-001 | tests | Template, object, runtime, GUI/API, and repository round-trip coverage | SUCCESS | contract_test | Gate 5 | ops_templates | focused CLI/unit repair `283 passed`; complete operations/browser/database suite in full gate |  | Browser acceptance ran with no skip. |
 | TEST-COV-001 | tests | Branch coverage enabled; overall and changed/new modules at least 90% | SUCCESS | contract_test | Gate 5 | orchestrator | overall 95.30%; 44 changed production modules verified at >=90%, lowest 90.21% |  | CLI exclusions removed and branch coverage enforced. |
-| CI-001 | CI | Ruff, mypy, Bandit, secret scan, full pytest, coverage, docs, build, schema, and installed-wheel smoke | SUCCESS | contract_test | Gate 5 | dag_security_docs | GitHub push/PR runs `33609511959` and `33609517506`: all eight jobs green |  | PostgreSQL 17, installed-wheel, static, security, coverage, docs, and build gates passed. |
-| REL-PR-001 | release | One green PR closes all eleven issues | IN_PROGRESS | contract_test | Gate 5 | orchestrator | PR `#101`, head `99b9cfef8bd4e6492730451351d1bce46778763e`, all checks green |  | Reviewed merge remains. |
+| CI-001 | CI | Ruff, mypy, Bandit, secret scan, full pytest, coverage, docs, build, schema, and installed-wheel smoke | IN_PROGRESS | contract_test | Gate 5 | dag_security_docs | prior push/PR runs `33609511959` and `33609517506` were green; local post-review static, security, full-suite, and coverage gates are green |  | Fresh GitHub gates are required for the review-hardening commit. |
+| REL-PR-001 | release | One green PR closes all eleven issues | IN_PROGRESS | contract_test | Gate 5 | orchestrator | PR `#101`; two automated-review findings plus adjacent owner-isolation hardening fixed and locally verified |  | Commit, fresh review/checks, and reviewed merge remain. |
 | REL-TAG-001 | release | Annotated immutable bare tag `9.2.0` points to exact merge commit | OPEN | contract_test | Gate 5 | orchestrator | pending |  |  |
 | REL-BUILD-001 | release | Clean artifacts validate version, dependency, assets, checksums, and fresh install | IN_PROGRESS | contract_test | Gate 5 | orchestrator | candidate and GitHub installed-wheel smoke passed |  | Final exact-merge artifact build and checksums remain. |
 | REL-PYPI-001 | release | Invoke `twup` once and verify no-cache PyPI install of 9.2.0 | OPEN | contract_test | Gate 5 | orchestrator | pending |  |  |
 
 ## Gate 5: Local Verification Receipt
 
-- Full release suite, using explicit config
+- Full post-review release suite, using explicit config
   `/tmp/tapdb-release-pg.8FLOUT/tapdb-ci-v2/tapdb-config.yaml` against local
-  PostgreSQL 16.14: `2,223 passed`, zero skipped, seven warnings, 117.90
+  PostgreSQL 16.14: `2,225 passed`, zero skipped, seven warnings, 116.24
   seconds.
 - Branch coverage: 95.30% overall. The changed-module verifier accepted all 44
   changed production modules at or above 90%; the lowest result was 90.21%.
@@ -109,12 +109,32 @@ existing `twup` function.
   verification, the single authorized `twup` invocation, and fresh no-cache
   PyPI verification.
 
+## Gate 5: Pull-Request Review Hardening Receipt
+
+- Automated review found that restored protected functions lost the explicit
+  `pg_catalog, pg_temp` tail of their hardened `search_path`. Restore now
+  reapplies the exact protected order, with unit and real-PostgreSQL
+  `pg_proc.proconfig` coverage.
+- Automated review also found that System User template lookup assumed the
+  default TapDB owner. Lookup now binds the active database domain and owner,
+  with non-default client-owner creation and replay coverage.
+- Cross-workstream review identified the adjacent operator-session risk that
+  System User reads and mutations could cross owner boundaries for duplicate
+  logins because operator connections bypass RLS. Every shared System User
+  predicate now binds the active domain and owner; real-PostgreSQL coverage
+  exercises create, replay, read, list, lookup by UID, and role update across
+  duplicate logins owned by different clients.
+- The combined focused post-review matrix passed 142 tests. The complete local
+  PostgreSQL gate then passed all 2,225 tests with zero skips and retained
+  95.30% branch coverage; all 44 changed production modules remain at or above
+  90%.
+
 ## Gate 5: Remote Verification Receipt
 
-- Pull-request run `33609517506` completed successfully at head
+- Pre-review pull-request run `33609517506` completed successfully at head
   `99b9cfef8bd4e6492730451351d1bce46778763e`; its PostgreSQL 17 job ran all
   2,223 tests with zero skips in 286.52 seconds.
-- Push run `33609511959` independently completed the same quality, security,
+- Pre-review push run `33609511959` independently completed the same quality, security,
   PostgreSQL 17, coverage, and installed-wheel sequence.
 - Each run passed Ruff and mypy, Bandit and verified-secret scanning,
   PostgreSQL 17 full-suite and changed-module coverage enforcement, and the
@@ -126,6 +146,8 @@ existing `twup` function.
   PostgreSQL log path. These were corrected without weakening production
   behavior; the combined affected local suite passed 114 tests before the
   final remote runs.
+- These receipts prove the pre-review head only. Fresh GitHub checks for the
+  review-hardening commit remain required before merge.
 
 ## Final Report
 
@@ -133,5 +155,5 @@ All rows terminal: no.
 
 Objective complete: no.
 
-Status counts: 36 `SUCCESS`, three `IN_PROGRESS`, two `OPEN` (41 control rows
+Status counts: 34 `SUCCESS`, five `IN_PROGRESS`, two `OPEN` (41 control rows
 total).
