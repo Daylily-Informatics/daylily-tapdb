@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 import daylily_tapdb.runtime_info as runtime_info
@@ -1387,8 +1388,9 @@ def test_template_import_cli_accepts_explicit_dry_run_and_documents_both_modes(
     assert calls[0]["dry_run"] is True
     assert json.loads(result.output)["dry_run"] is True
     assert help_result.exit_code == 0
-    assert "--apply" in help_result.output
-    assert "--dry-run" in help_result.output
+    help_text = unstyle(help_result.output)
+    assert "--apply" in help_text
+    assert "--dry-run" in help_text
 
 
 def test_object_cli_commands_use_exact_selectors_and_dry_run_defaults(monkeypatch):

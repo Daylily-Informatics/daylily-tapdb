@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from daylily_tapdb.cli import framework_app, spec
@@ -231,10 +232,11 @@ def test_framework_info_help_describes_the_tapdb_command() -> None:
     assert framework_app is not None
 
     result = runner.invoke(framework_app, ["info", "--help"])
+    help_text = unstyle(result.output)
 
     assert result.exit_code == 0, result.output
-    assert "shared sanitized runtime-information payload" in result.output
-    assert "--json" in result.output
+    assert "shared sanitized runtime-information payload" in help_text
+    assert "--json" in help_text
     registry_info = framework_app._cli_core_yo_registry.get_command(("info",))
     assert registry_info is not None
     assert registry_info.callback.__module__ == "daylily_tapdb.cli"

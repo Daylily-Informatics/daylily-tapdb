@@ -662,9 +662,7 @@ def test_playwright_template_editor_keeps_focus_and_saves(browser, gui_server):
     sync_api.expect(page.locator("[data-testid='tapdb-json-editor']")).to_be_visible()
 
     editor = page.locator("[data-testid='tapdb-json-editor'] textarea").first
-    editor.click()
-    editor.press("Meta+A")
-    editor.type('{"templates": []}', delay=2)
+    editor.fill('{"templates": []}')
 
     assert page.evaluate(
         "document.activeElement === document.querySelector(\"[data-testid='tapdb-json-editor'] textarea\")"

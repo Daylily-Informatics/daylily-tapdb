@@ -1,6 +1,7 @@
 """Postgres integration test for Phase 2 acceptance."""
 
 import random
+import secrets
 import time
 import uuid
 from pathlib import Path
@@ -68,12 +69,12 @@ def _operator_dsn(pytestconfig) -> str:
     )
 
 
-def _dsn_for_role(dsn: str, role: str) -> str:
+def _dsn_for_role(dsn: str, role: str, password: str) -> str:
     from sqlalchemy.engine import make_url
 
     return (
         make_url(dsn)
-        .set(username=role, password="")
+        .set(username=role, password=password)
         .render_as_string(hide_password=False)
     )
 
@@ -92,6 +93,7 @@ def _provision_runtime_principal(
     from psycopg2 import sql
 
     role = f"tapdb_test_runtime_{uuid.uuid4().hex[:20]}"
+    password = secrets.token_urlsafe(24)
     connection = psycopg2.connect(operator_dsn)
     connection.autocommit = False
     cursor = connection.cursor()
@@ -99,8 +101,8 @@ def _provision_runtime_principal(
         cursor.execute(
             sql.SQL(
                 "CREATE ROLE {} LOGIN NOSUPERUSER NOBYPASSRLS "
-                "NOCREATEDB NOCREATEROLE NOREPLICATION"
-            ).format(sql.Identifier(role))
+                "NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD {}"
+            ).format(sql.Identifier(role), sql.Literal(password))
         )
         cursor.execute("SELECT current_database()")
         database = cursor.fetchone()[0]
@@ -176,7 +178,7 @@ def _provision_runtime_principal(
     finally:
         cursor.close()
         connection.close()
-    return _dsn_for_role(operator_dsn, role)
+    return _dsn_for_role(operator_dsn, role, password)
 
 
 def _install_bound_schema(

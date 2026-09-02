@@ -383,6 +383,7 @@ def test_pg_legacy_branch_campaign_logs_falls_back_to_journal(
     output: _OutputRecorder,
     follow: bool,
 ) -> None:
+    monkeypatch.setattr(Path, "exists", lambda _path: False)
     monkeypatch.setattr(
         pg,
         "_get_pg_service_cmd",
@@ -408,6 +409,7 @@ def test_pg_legacy_branch_campaign_logs_falls_back_to_journal(
 def test_pg_legacy_branch_campaign_journal_failures_are_reported(
     monkeypatch: pytest.MonkeyPatch, output: _OutputRecorder, effect: Exception
 ) -> None:
+    monkeypatch.setattr(Path, "exists", lambda _path: False)
     monkeypatch.setattr(
         pg,
         "_get_pg_service_cmd",
