@@ -67,6 +67,7 @@ class TestFailFastConnection:
                 app_username="pytest",
                 domain_code="T",
                 owner_repo_name=None,
+                config_identity="/abs/tapdb-config.yaml",
                 echo_sql=False,
                 engine_type="local",
             )

@@ -28,10 +28,10 @@ SYSTEM_USER_TEMPLATE_CODE = (
     f"{SYSTEM_USER_TEMPLATE_CATEGORY}/{SYSTEM_USER_TEMPLATE_TYPE}/"
     f"{SYSTEM_USER_TEMPLATE_SUBTYPE}/{SYSTEM_USER_TEMPLATE_VERSION}"
 )
-SYSTEM_USER_OWNER_REPO = "daylily-tapdb"
-
 _SYSTEM_USER_WHERE = """
     gi.is_deleted = FALSE
+    AND gi.domain_code = tapdb_current_domain_code()
+    AND gi.issuer_app_code = tapdb_current_owner_repo_name()
     AND gi.polymorphic_discriminator = 'actor_instance'
     AND gi.category = 'actor'
     AND gi.type = 'user'
@@ -42,51 +42,6 @@ _ACTIVE_EXPR = "COALESCE(NULLIF(gi.json_addl->>'is_active', '')::boolean, TRUE)"
 _REQUIRE_PASSWORD_CHANGE_EXPR = (
     "COALESCE(NULLIF(gi.json_addl->>'require_password_change', '')::boolean, FALSE)"
 )
-
-
-def _is_postgresql_session(session: Session) -> bool:
-    bind = getattr(session, "bind", None)
-    if bind is None and hasattr(session, "get_bind"):
-        try:
-            bind = session.get_bind()
-        except Exception:
-            bind = None
-    dialect = getattr(bind, "dialect", None)
-    return str(getattr(dialect, "name", "") or "").strip().lower() == "postgresql"
-
-
-def _current_owner_repo_name(session: Session) -> str:
-    row = session.execute(
-        text("SELECT current_setting('session.current_owner_repo_name', true)")
-    ).fetchone()
-    if not row or row[0] is None:
-        return ""
-    return str(row[0])
-
-
-def _set_local_owner_repo_name(session: Session, owner_repo_name: str) -> None:
-    session.execute(
-        text("SELECT set_config('session.current_owner_repo_name', :owner, true)"),
-        {"owner": owner_repo_name},
-    )
-
-
-def _prepare_system_user_insert_owner(session: Session) -> str | None:
-    """Use TapDB ownership for shared system-user inserts, then restore caller scope."""
-    if not _is_postgresql_session(session):
-        return None
-    previous_owner = _current_owner_repo_name(session)
-    if previous_owner != SYSTEM_USER_OWNER_REPO:
-        _set_local_owner_repo_name(session, SYSTEM_USER_OWNER_REPO)
-    return previous_owner
-
-
-def _restore_system_user_insert_owner(
-    session: Session, previous_owner: str | None
-) -> None:
-    if previous_owner is None:
-        return
-    _set_local_owner_repo_name(session, previous_owner)
 
 
 @dataclass
@@ -201,7 +156,8 @@ def _get_system_user_template_uid(session: Session) -> int:
               AND type = :type
               AND subtype = :subtype
               AND version = :version
-              AND issuer_app_code = 'daylily-tapdb'
+              AND domain_code = tapdb_current_domain_code()
+              AND issuer_app_code = tapdb_current_owner_repo_name()
               AND upper(NULLIF(instance_prefix, '')) = 'SYS'
             ORDER BY
               CASE WHEN bstatus = 'active' THEN 0 ELSE 1 END,
@@ -373,9 +329,9 @@ def create_or_get(
         RETURNING uid
         """
     )
-    previous_owner: str | None = None
+    nested = None
     try:
-        previous_owner = _prepare_system_user_insert_owner(session)
+        nested = session.begin_nested()
         inserted = session.execute(
             insert_sql,
             {
@@ -385,15 +341,14 @@ def create_or_get(
             },
         ).fetchone()
         if inserted:
+            nested.commit()
             created = get_by_uid(session, int(inserted[0]), include_inactive=True)
             if created:
                 return created, True
     except IntegrityError:
         # Another session may have created this login identifier concurrently.
-        pass
-    finally:
-        _restore_system_user_insert_owner(session, previous_owner)
-
+        if nested is not None and getattr(nested, "is_active", True):
+            nested.rollback()
     existing = get_by_login_identifier(session, normalized_login, include_inactive=True)
     if existing:
         return existing, False
@@ -413,12 +368,8 @@ def set_last_login(session: Session, user_uid: int | str) -> None:
                     TRUE
                 ),
                 modified_dt = NOW()
-            WHERE gi.uid = :uid
-              AND gi.is_deleted = FALSE
-              AND gi.polymorphic_discriminator = 'actor_instance'
-              AND gi.category = '{SYSTEM_USER_TEMPLATE_CATEGORY}'
-              AND gi.type = '{SYSTEM_USER_TEMPLATE_TYPE}'
-              AND gi.subtype = '{SYSTEM_USER_TEMPLATE_SUBTYPE}'
+            WHERE {_SYSTEM_USER_WHERE}
+              AND gi.uid = :uid
             """
         ),
         {"uid": int(user_uid), "last_login_dt": last_login_dt},

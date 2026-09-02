@@ -8,7 +8,7 @@ import subprocess
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 from urllib.parse import urlencode
 
 import typer
@@ -18,6 +18,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from daylily_tapdb import TAPDBConnection
+from daylily_tapdb.backup.engine import sanitized_libpq_environment
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config
 from daylily_tapdb.euid import (
     AUDIT_LOG_PREFIX,
@@ -25,6 +26,13 @@ from daylily_tapdb.euid import (
     GENERIC_TEMPLATE_PREFIX,
 )
 from daylily_tapdb.governance import GovernanceContext
+from daylily_tapdb.migration_identity import (
+    MigrationPreflightError,
+    apply_migration_preflight,
+    build_migration_preflight,
+    load_json_receipt,
+    write_json_receipt,
+)
 from daylily_tapdb.schema_inventory import (
     diff_schema_inventory,
     drift_entry_counts,
@@ -64,6 +72,7 @@ console = Console()
 
 _MERIDIAN_PREFIX_RE = re.compile(r"^[0-9A-HJ-KMNP-TV-Z]{1,4}$")
 _RESERVED_PREFIXES = {"GX", "TGX", "WX", "WSX", "XX", "AY"}
+_TAPDB_CORE_OWNER = "daylily-tapdb"
 
 
 def _normalize_instance_prefix(prefix: str) -> str:
@@ -119,16 +128,18 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
     """Persist required identity prefix config and ensure backing sequences."""
     cfg = _get_db_config(env)
     prefixes = _required_identity_prefixes(env)
-    governance = GovernanceContext.load(
+    core_governance = GovernanceContext.load(
         domain_code=str(cfg["domain_code"]),
-        owner_repo_name=str(cfg["owner_repo_name"]),
+        owner_repo_name=_TAPDB_CORE_OWNER,
         domain_registry_path=str(cfg["domain_registry_path"]),
         prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
     )
     for prefix in prefixes.values():
-        governance.require_prefix(prefix)
-    domain_code = governance.domain_code
-    owner_repo_name = governance.owner_repo_name
+        core_governance.require_prefix(prefix)
+    domain_code = core_governance.domain_code
+    owner_repo_name = str(cfg["owner_repo_name"]).strip()
+    if not owner_repo_name:
+        raise ValueError("owner_repo_name is required for identity prefix sync")
     values_sql = ",\n        ".join(
         "("
         f"{_quoted_sql_literal(entity)}, "
@@ -143,14 +154,33 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
         for prefix in sorted(set(prefixes.values()))
     )
     sql = f"""
+    BEGIN;
+
+    DO $tapdb$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM tapdb_identity_prefix_config AS existing
+        JOIN (VALUES {values_sql})
+          AS required(entity, domain_code, issuer_app_code, prefix)
+          USING (entity, domain_code, issuer_app_code)
+        WHERE existing.prefix IS DISTINCT FROM required.prefix
+      ) THEN
+        RAISE EXCEPTION
+          'Existing TapDB identity prefix configuration conflicts with the required registry';
+      END IF;
+    END
+    $tapdb$;
+
     INSERT INTO tapdb_identity_prefix_config(entity, domain_code, issuer_app_code, prefix)
     VALUES {values_sql}
-    ON CONFLICT (entity, domain_code, issuer_app_code) DO UPDATE
-      SET prefix = EXCLUDED.prefix, updated_dt = NOW();
+    ON CONFLICT (entity, domain_code, issuer_app_code) DO NOTHING;
 
     {sequences_sql}
+
+    COMMIT;
     """
-    success, psql_out = _run_psql(env, sql=sql)
+    success, psql_out = _run_psql(env, sql=sql, connection_role="operator")
     if not success:
         raise RuntimeError(f"Failed to sync identity prefix config: {psql_out[:200]}")
 
@@ -170,50 +200,63 @@ def _ensure_instance_prefix_sequence(env: "Environment", prefix: str) -> None:
     seq_name = _shared_sequence_name(prefix)
 
     sql = f"""
-    CREATE SEQUENCE IF NOT EXISTS "{seq_name}";
+    BEGIN;
+    CREATE SEQUENCE IF NOT EXISTS "{seq_name}" CACHE 1 NO CYCLE;
+    LOCK TABLE generic_template, generic_instance,
+      generic_instance_lineage, audit_log IN ACCESS EXCLUSIVE MODE;
 
-    -- Initialize sequence so next nextval() yields max(existing numeric suffix) + 1.
-    -- Also: never move the sequence backwards (avoid reusing previously-issued EUIs).
-    WITH
-      desired AS (
-        SELECT
-          COALESCE(
-            (
-              SELECT max(euid_seq)
-              FROM (
-                SELECT euid_seq FROM generic_template WHERE euid_prefix = '{prefix}'
-                UNION ALL
-                SELECT euid_seq FROM generic_instance WHERE euid_prefix = '{prefix}'
-                UNION ALL
-                SELECT euid_seq FROM generic_instance_lineage WHERE euid_prefix = '{prefix}'
-                UNION ALL
-                SELECT euid_seq FROM audit_log WHERE euid_prefix = '{prefix}'
-              ) all_euid_rows
-            ),
-            0
-          ) + 1 AS next_val
-      ),
-      seq_state AS (
-        SELECT last_value, is_called FROM "{seq_name}"
-      ),
-      seq_next AS (
-        SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END AS next_val
-        FROM seq_state
-      ),
-      final_next AS (
-        SELECT GREATEST(
-          (SELECT next_val FROM desired),
-          (SELECT next_val FROM seq_next)
-        ) AS next_val
-      )
-    SELECT setval(
-      '"{seq_name}"',
-      (SELECT next_val FROM final_next),
-      false
-    );
+    DO $tapdb$
+    DECLARE
+      desired_next BIGINT;
+      current_next BIGINT;
+      sequence_increment BIGINT;
+      sequence_maximum BIGINT;
+      sequence_cycles BOOLEAN;
+      sequence_cache BIGINT;
+    BEGIN
+      SELECT COALESCE(max(euid_seq), 0) + 1
+      INTO desired_next
+      FROM (
+        SELECT euid_seq FROM generic_template WHERE euid_prefix = '{prefix}'
+        UNION ALL
+        SELECT euid_seq FROM generic_instance WHERE euid_prefix = '{prefix}'
+        UNION ALL
+        SELECT euid_seq FROM generic_instance_lineage WHERE euid_prefix = '{prefix}'
+        UNION ALL
+        SELECT euid_seq FROM audit_log WHERE euid_prefix = '{prefix}'
+      ) all_euid_rows;
+
+      SELECT
+        CASE WHEN sequence_state.is_called
+          THEN sequence_state.last_value + sequence_catalog.seqincrement
+          ELSE sequence_state.last_value
+        END,
+        sequence_catalog.seqincrement,
+        sequence_catalog.seqmax,
+        sequence_catalog.seqcycle,
+        sequence_catalog.seqcache
+      INTO current_next, sequence_increment, sequence_maximum,
+        sequence_cycles, sequence_cache
+      FROM "{seq_name}" AS sequence_state
+      CROSS JOIN pg_sequence AS sequence_catalog
+      WHERE sequence_catalog.seqrelid = '"{seq_name}"'::regclass;
+
+      IF sequence_increment <> 1 OR sequence_cycles OR sequence_cache <> 1 THEN
+        RAISE EXCEPTION
+          'Sequence {seq_name} has ambiguous issuance settings; expected INCREMENT 1, NO CYCLE, CACHE 1';
+      END IF;
+      IF current_next < desired_next THEN
+        IF desired_next > sequence_maximum THEN
+          RAISE EXCEPTION 'Sequence {seq_name} cannot advance without wrapping';
+        END IF;
+        EXECUTE 'ALTER SEQUENCE "{seq_name}" RESTART WITH ' || desired_next;
+      END IF;
+    END
+    $tapdb$;
+    COMMIT;
     """
 
-    success, psql_out = _run_psql(env, sql=sql)
+    success, psql_out = _run_psql(env, sql=sql, connection_role="operator")
     if not success:
         raise RuntimeError(
             f"Failed to ensure sequence for prefix {prefix}: {psql_out[:200]}"
@@ -241,6 +284,7 @@ def _write_migration_baseline(env: "Environment") -> None:
             applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """,
+        connection_role="operator",
     )
     if not ok:
         raise RuntimeError(out)
@@ -253,6 +297,7 @@ def _write_migration_baseline(env: "Environment") -> None:
                 "INSERT INTO _tapdb_migrations (filename) "
                 f"VALUES ('{filename}') ON CONFLICT (filename) DO NOTHING"
             ),
+            connection_role="operator",
         )
         if not ok:
             raise RuntimeError(out)
@@ -303,6 +348,41 @@ def _get_db_config(env: Environment) -> dict:
     """Get database configuration for the explicit target."""
     _ = env
     return get_db_config()
+
+
+def _auth_for_connection_role(
+    cfg: Mapping[str, Any], connection_role: str
+) -> dict[str, Any]:
+    """Select explicit runtime or separately authenticated operator credentials."""
+
+    if connection_role == "runtime":
+        return {
+            "user": cfg["user"],
+            "password": cfg.get("password") if "password" in cfg else None,
+            "secret_arn": cfg.get("secret_arn") or None,
+            "iam_auth": str(cfg.get("iam_auth") or "").strip().lower()
+            in {"true", "1", "yes", "on"},
+        }
+    if connection_role != "operator":
+        raise ValueError("connection_role must be 'runtime' or 'operator'")
+    if cfg.get("operator_configured") is not True:
+        raise RuntimeError(
+            "This operation requires explicit target.operator credentials"
+        )
+    operator_user = str(cfg.get("operator_user") or "").strip()
+    runtime_user = str(cfg.get("user") or "").strip()
+    if not operator_user or operator_user == runtime_user:
+        raise RuntimeError(
+            "target.operator.user must be non-empty and distinct from target.user"
+        )
+    return {
+        "user": operator_user,
+        "password": cfg.get("operator_password")
+        if "operator_password" in cfg
+        else None,
+        "secret_arn": cfg.get("operator_secret_arn") or None,
+        "iam_auth": cfg.get("operator_iam_auth") is True,
+    }
 
 
 def _configured_schema_name(env: Environment) -> Optional[str]:
@@ -398,6 +478,7 @@ def _run_psql(
     file: Path = None,
     database: str = None,
     user: Optional[str] = None,
+    connection_role: str = "runtime",
 ) -> tuple[bool, str]:
     """Run psql command and return (success, output).
 
@@ -406,6 +487,8 @@ def _run_psql(
     (``sslmode=verify-full``) and uses IAM auth or Secrets Manager.
     """
     cfg = _get_db_config(env)
+    auth = _auth_for_connection_role(cfg, connection_role)
+    selected_user = user or str(auth["user"])
     db = database or cfg["database"]
     schema_name = (
         _configured_schema_name(env) if _uses_configured_database(database) else None
@@ -415,24 +498,30 @@ def _run_psql(
     if cfg.get("engine_type") == "aurora":
         from daylily_tapdb.aurora.schema_deployer import AuroraSchemaDeployer
 
-        iam_auth = cfg.get("iam_auth", "true").lower() in ("true", "1", "yes")
         aurora_sql = sql
         aurora_file = file
         if apply_search_path:
+            context_sql = (
+                _set_operator_context_sql(schema_name, cfg)
+                if connection_role == "operator"
+                else _set_runtime_context_sql(schema_name, cfg)
+            )
             if file:
-                aurora_sql = _read_file_with_schema_search_path(schema_name, file)
+                aurora_sql = f"{context_sql};\n{file.read_text(encoding='utf-8')}"
                 aurora_file = None
             elif sql:
-                aurora_sql = _with_schema_search_path(schema_name, sql)
+                aurora_sql = f"{context_sql};\n{sql}"
+        elif connection_role == "operator" and sql:
+            aurora_sql = f"{_operator_role_assertion_sql()};\n{sql}"
         return AuroraSchemaDeployer.run_psql(
             host=cfg["host"],
             port=int(cfg["port"]),
-            user=user or cfg["user"],
+            user=selected_user,
             database=db,
             region=cfg.get("region", "us-west-2"),
-            iam_auth=iam_auth,
-            secret_arn=cfg.get("secret_arn") or None,
-            password=cfg.get("password") or None,
+            iam_auth=bool(auth["iam_auth"]),
+            secret_arn=auth["secret_arn"],
+            password=auth["password"],
             hostaddr=cfg.get("hostaddr") or None,
             sql=aurora_sql,
             file=aurora_file,
@@ -449,7 +538,7 @@ def _run_psql(
         "-p",
         cfg["port"],
         "-U",
-        user or cfg["user"],
+        selected_user,
         "-d",
         db,
         "-v",
@@ -457,16 +546,23 @@ def _run_psql(
     ]
 
     if apply_search_path:
-        cmd.extend(["-c", _set_search_path_sql(schema_name)])
+        context_sql = (
+            _set_operator_context_sql(schema_name, cfg)
+            if connection_role == "operator"
+            else _set_runtime_context_sql(schema_name, cfg)
+        )
+        cmd.extend(["-c", context_sql])
+    elif connection_role == "operator":
+        cmd.extend(["-c", _operator_role_assertion_sql()])
 
     if file:
         cmd.extend(["-f", str(file)])
     elif sql:
         cmd.extend(["-c", sql])
 
-    env_vars = os.environ.copy()
-    if cfg["password"]:
-        env_vars["PGPASSWORD"] = cfg["password"]
+    env_vars = sanitized_libpq_environment()
+    if auth["password"]:
+        env_vars["PGPASSWORD"] = str(auth["password"])
 
     try:
         result = subprocess.run(
@@ -496,30 +592,140 @@ def _set_search_path_sql(schema_name: str) -> str:
     return f"SET search_path TO {_quoted_sql_ident(schema_name)}"
 
 
-def _with_schema_search_path(schema_name: str, sql: str) -> str:
-    return f"{_set_search_path_sql(schema_name)};\n{sql}"
+def _set_runtime_context_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
+    domain_code = str(cfg.get("domain_code") or "").strip()
+    owner_repo_name = str(cfg.get("owner_repo_name") or "").strip()
+    if not domain_code or not owner_repo_name:
+        raise ValueError("domain_code and owner_repo_name are required for DB commands")
+    actor = f"cli:{getpass.getuser()}"
+    return "; ".join(
+        [
+            _set_search_path_sql(schema_name),
+            "SET session.current_config_identity = "
+            + _quoted_sql_literal(str(cfg["config_path"])),
+            "SET session.current_schema_name = " + _quoted_sql_literal(schema_name),
+            "SET session.current_domain_code = " + _quoted_sql_literal(domain_code),
+            "SET session.current_owner_repo_name = "
+            + _quoted_sql_literal(owner_repo_name),
+            "SET session.current_tenant_id = "
+            + _quoted_sql_literal(str(cfg.get("tenant_id") or "")),
+            "SET session.current_username = " + _quoted_sql_literal(actor),
+            "SET session.allow_global_rows = "
+            + _quoted_sql_literal(
+                "true" if bool(cfg.get("allow_global_claims")) else "false"
+            ),
+        ]
+    )
 
 
-def _read_file_with_schema_search_path(schema_name: str, file: Path) -> str:
-    return _with_schema_search_path(schema_name, file.read_text(encoding="utf-8"))
+def _set_operator_context_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
+    """Install operator context and prove the authenticated physical DB role."""
+
+    base = _set_runtime_context_sql(schema_name, cfg)
+    base = base.replace(
+        "SET session.current_tenant_id = "
+        + _quoted_sql_literal(str(cfg.get("tenant_id") or "")),
+        "SET session.current_tenant_id = ''",
+    )
+    allow_setting = "true" if bool(cfg.get("allow_global_claims")) else "false"
+    base = base.replace(
+        "SET session.allow_global_rows = " + _quoted_sql_literal(allow_setting),
+        "SET session.allow_global_rows = 'true'",
+    )
+    return f"{base}; {_operator_role_assertion_sql()}"
+
+
+def _operator_role_assertion_sql() -> str:
+    return (
+        "DO $tapdb_operator$ BEGIN "
+        "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = current_user "
+        "AND (rolsuper OR rolbypassrls)) THEN "
+        "RAISE EXCEPTION 'TapDB operator connection must authenticate as a distinct "
+        "SUPERUSER or BYPASSRLS role'; END IF; END $tapdb_operator$"
+    )
+
+
+def _runtime_scope_binding_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
+    """Create one immutable authenticated-principal scope binding.
+
+    Re-applying an identical binding is safe.  Changing any security-relevant
+    field requires an explicit operator migration instead of silently moving a
+    login between tenants or targets.
+    """
+
+    runtime_user = str(cfg.get("user") or "").strip()
+    config_identity = str(cfg["config_path"]).strip()
+    domain_code = str(cfg.get("domain_code") or "").strip().upper()
+    owner_repo_name = str(cfg.get("owner_repo_name") or "").strip().lower()
+    tenant_id = str(cfg.get("tenant_id") or "").strip()
+    if (
+        not runtime_user
+        or not config_identity
+        or not domain_code
+        or not owner_repo_name
+    ):
+        raise ValueError("runtime scope binding requires complete target identity")
+    tenant_sql = "NULL" if not tenant_id else f"{_quoted_sql_literal(tenant_id)}::uuid"
+    values = ", ".join(
+        [
+            _quoted_sql_literal(runtime_user),
+            _quoted_sql_literal(config_identity),
+            _quoted_sql_literal(schema_name),
+            _quoted_sql_literal(domain_code),
+            _quoted_sql_literal(owner_repo_name),
+            tenant_sql,
+            "TRUE" if bool(cfg.get("allow_global_claims")) else "FALSE",
+        ]
+    )
+    exact = " AND ".join(
+        [
+            f"config_identity = {_quoted_sql_literal(config_identity)}",
+            f"schema_name = {_quoted_sql_literal(schema_name)}::name",
+            f"domain_code = {_quoted_sql_literal(domain_code)}",
+            f"issuer_app_code = {_quoted_sql_literal(owner_repo_name)}",
+            f"tenant_id IS NOT DISTINCT FROM {tenant_sql}",
+            "allow_global_rows IS "
+            + ("TRUE" if bool(cfg.get("allow_global_claims")) else "FALSE"),
+        ]
+    )
+    role_literal = _quoted_sql_literal(runtime_user)
+    return (
+        "INSERT INTO tapdb_runtime_principal_scope "
+        "(role_name, config_identity, schema_name, domain_code, issuer_app_code, "
+        f"tenant_id, allow_global_rows) VALUES ({values}) "
+        "ON CONFLICT (role_name) DO NOTHING; "
+        "DO $tapdb_scope_binding$ BEGIN "
+        "IF NOT EXISTS (SELECT 1 FROM tapdb_runtime_principal_scope "
+        f"WHERE role_name = {role_literal}::name AND {exact}) THEN "
+        "RAISE EXCEPTION 'TapDB runtime principal scope binding conflicts with "
+        "the configured target'; END IF; END $tapdb_scope_binding$"
+    )
+
+
+def _with_schema_search_path(
+    schema_name: str, sql: str, *, cfg: Optional[Mapping[str, Any]] = None
+) -> str:
+    setup = (
+        _set_runtime_context_sql(schema_name, cfg)
+        if cfg is not None
+        else _set_search_path_sql(schema_name)
+    )
+    return f"{setup};\n{sql}"
+
+
+def _read_file_with_schema_search_path(
+    schema_name: str,
+    file: Path,
+    *,
+    cfg: Optional[Mapping[str, Any]] = None,
+) -> str:
+    return _with_schema_search_path(
+        schema_name, file.read_text(encoding="utf-8"), cfg=cfg
+    )
 
 
 def _uses_configured_database(database: Optional[str]) -> bool:
     return database is None
-
-
-def _bootstrap_user_candidates(preferred_user: str) -> list[str]:
-    candidates: list[str] = []
-    for candidate in [
-        preferred_user,
-        os.environ.get("USER"),
-        getpass.getuser(),
-        "postgres",
-    ]:
-        normalized = str(candidate or "").strip()
-        if normalized and normalized not in candidates:
-            candidates.append(normalized)
-    return candidates
 
 
 def _ensure_local_role(env: Environment, role_name: str) -> None:
@@ -531,55 +737,52 @@ def _ensure_local_role(env: Environment, role_name: str) -> None:
     if not requested_role:
         return
 
-    ok, out = _run_psql(
-        env,
-        sql="SELECT 1",
-        database="postgres",
-        user=requested_role,
+    password = str(cfg.get("password") or "")
+    password_clause = " PASSWORD " + _quoted_sql_literal(password) if password else ""
+    role_literal = _quoted_sql_literal(requested_role)
+    create_sql = (
+        "DO $tapdb_roles$ DECLARE target_super BOOLEAN; target_bypass BOOLEAN; "
+        "target_createdb BOOLEAN; target_createrole BOOLEAN; "
+        "target_replication BOOLEAN; BEGIN "
+        "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = current_user "
+        "AND (rolsuper OR rolbypassrls)) THEN "
+        "RAISE EXCEPTION 'TapDB operator role must be SUPERUSER or BYPASSRLS'; "
+        "END IF; "
+        f"SELECT rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication "
+        "INTO target_super, target_bypass, target_createdb, target_createrole, "
+        "target_replication "
+        f"FROM pg_roles WHERE rolname = {role_literal}; "
+        "IF NOT FOUND THEN "
+        f"CREATE ROLE {_quoted_sql_ident(requested_role)} LOGIN NOSUPERUSER "
+        f"NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION{password_clause}; "
+        "ELSIF target_super OR target_bypass OR target_createdb "
+        "OR target_createrole OR target_replication THEN "
+        "RAISE EXCEPTION 'TapDB runtime role has forbidden PostgreSQL privileges'; "
+        "END IF; END $tapdb_roles$;"
     )
-    if ok:
-        return
-    if f'role "{requested_role}" does not exist' not in out:
-        return
-
-    for bootstrap_user in _bootstrap_user_candidates(requested_role):
-        if bootstrap_user == requested_role:
-            continue
-        bootstrap_ok, _ = _run_psql(
-            env,
-            sql="SELECT 1",
-            database="postgres",
-            user=bootstrap_user,
+    create_ok, create_out = _run_psql(
+        env,
+        sql=create_sql,
+        database="postgres",
+        connection_role="operator",
+    )
+    if not create_ok:
+        raise RuntimeError(
+            f"Failed to establish safe local PostgreSQL runtime role "
+            f"{requested_role!r}: {create_out}"
         )
-        if not bootstrap_ok:
-            continue
-        create_sql = (
-            "DO $$ BEGIN "
-            f"IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {_quoted_sql_literal(requested_role)}) THEN "
-            f"CREATE ROLE {_quoted_sql_ident(requested_role)} LOGIN SUPERUSER CREATEDB CREATEROLE; "
-            "END IF; "
-            "END $$;"
-        )
-        create_ok, create_out = _run_psql(
-            env,
-            sql=create_sql,
-            database="postgres",
-            user=bootstrap_user,
-        )
-        if not create_ok:
-            raise RuntimeError(
-                f"Failed to create missing local PostgreSQL role {requested_role!r}: {create_out}"
-            )
-        return
 
 
-def _check_db_exists(env: Environment, database: str) -> bool:
+def _check_db_exists(
+    env: Environment, database: str, *, connection_role: str = "runtime"
+) -> bool:
     """Check if database exists."""
     _get_db_config(env)
     success, psql_out = _run_psql(
         env,
         sql=f"SELECT 1 FROM pg_database WHERE datname = '{database}'",
         database="postgres",
+        connection_role=connection_role,
     )
     return success and psql_out.strip() == "1"
 
@@ -645,6 +848,7 @@ def _ensure_schema_exists(env: Environment) -> None:
     success, psql_out = _run_psql(
         env,
         sql=f"CREATE SCHEMA IF NOT EXISTS {_quoted_sql_ident(schema_name)}",
+        connection_role="operator",
     )
     if not success:
         raise RuntimeError(f"Failed to create schema {schema_name!r}: {psql_out}")
@@ -670,6 +874,7 @@ def _run_schema_drift_check(
     with _tapdb_connection_for_env(
         env,
         app_username="tapdb_schema_drift_check",
+        connection_role="operator",
     ) as conn:
         with conn.session_scope(commit=False) as session:
             live = load_live_schema_inventory(session, schema_name=schema_name)
@@ -733,14 +938,21 @@ def _db_callback(ctx: typer.Context) -> None:
 @db_app.command("create")
 def db_create(
     owner: Optional[str] = typer.Option(
-        None, "--owner", "-o", help="Database owner (default: connection user)"
+        None,
+        "--owner",
+        "-o",
+        help="Database owner (must be the configured target.operator.user)",
     ),
 ):
     """Create the TAPDB database for the explicit target."""
     env = Environment.target
     cfg = _get_db_config(env)
     db_name = cfg["database"]
-    db_owner = owner or cfg["user"]
+    operator_user = str(_auth_for_connection_role(cfg, "operator")["user"])
+    db_owner = str(owner or operator_user).strip()
+    if db_owner != operator_user:
+        ccyo_out.error("Database owner must be the configured target.operator.user")
+        raise typer.Exit(1)
 
     ccyo_out.print_text(
         "\n[bold cyan]━━━ Create TAPDB Database (explicit target) ━━━[/bold cyan]"
@@ -755,22 +967,42 @@ def db_create(
         ccyo_out.error(f"{exc}")
         raise typer.Exit(1) from exc
 
-    ok, out = _run_psql(env, sql="SELECT 1", database="postgres")
+    ok, out = _run_psql(
+        env, sql="SELECT 1", database="postgres", connection_role="operator"
+    )
     if not ok:
         ccyo_out.error("Cannot connect to PostgreSQL for this environment")
         ccyo_out.print_text(f"  {out}")
         raise typer.Exit(1)
 
-    if _check_db_exists(env, db_name):
+    if _check_db_exists(env, db_name, connection_role="operator"):
         ccyo_out.warning(f"Database '{db_name}' already exists")
         return
 
     ccyo_out.warning(f"► Creating database '{db_name}'...")
     sql = f'CREATE DATABASE "{db_name}" OWNER "{db_owner}"'
-    success, psql_out = _run_psql(env, sql=sql, database="postgres")
+    success, psql_out = _run_psql(
+        env, sql=sql, database="postgres", connection_role="operator"
+    )
     if not success:
         ccyo_out.error("Failed to create database")
         ccyo_out.print_text(f"  {psql_out}")
+        raise typer.Exit(1)
+
+    hardening_sql = (
+        f"REVOKE CREATE ON DATABASE {_quoted_sql_ident(db_name)} FROM PUBLIC; "
+        f"GRANT CONNECT ON DATABASE {_quoted_sql_ident(db_name)} "
+        f"TO {_quoted_sql_ident(str(cfg['user']))}; "
+        "REVOKE CREATE ON SCHEMA public FROM PUBLIC"
+    )
+    hardened, hardening_out = _run_psql(
+        env,
+        sql=hardening_sql,
+        connection_role="operator",
+    )
+    if not hardened:
+        ccyo_out.error("Database created but privilege hardening failed")
+        ccyo_out.print_text(f"  {hardening_out}")
         raise typer.Exit(1)
 
     ccyo_out.success(f"Database '{db_name}' created")
@@ -790,13 +1022,15 @@ def db_delete(
     cfg = _get_db_config(env)
     db_name = cfg["database"]
 
-    ok, out = _run_psql(env, sql="SELECT 1", database="postgres")
+    ok, out = _run_psql(
+        env, sql="SELECT 1", database="postgres", connection_role="operator"
+    )
     if not ok:
         ccyo_out.error("Cannot connect to PostgreSQL for this environment")
         ccyo_out.print_text(f"  {out}")
         raise typer.Exit(1)
 
-    if not _check_db_exists(env, db_name):
+    if not _check_db_exists(env, db_name, connection_role="operator"):
         ccyo_out.warning(f"Database '{db_name}' does not exist")
         return
 
@@ -812,10 +1046,13 @@ def db_delete(
     FROM pg_stat_activity
     WHERE datname = '{db_name}' AND pid <> pg_backend_pid()
     """
-    _run_psql(env, sql=term_sql, database="postgres")
+    _run_psql(env, sql=term_sql, database="postgres", connection_role="operator")
 
     success, psql_out = _run_psql(
-        env, sql=f'DROP DATABASE "{db_name}"', database="postgres"
+        env,
+        sql=f'DROP DATABASE "{db_name}"',
+        database="postgres",
+        connection_role="operator",
     )
     if not success:
         ccyo_out.error("Failed to delete database")
@@ -866,7 +1103,8 @@ def db_schema_apply(
         ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
-    if _schema_exists(env):
+    schema_preexisted = _schema_exists(env)
+    if schema_preexisted:
         if reinitialize:
             ccyo_out.warning("► Reapplying schema to refresh existing TAPDB objects...")
         else:
@@ -876,7 +1114,59 @@ def db_schema_apply(
             )
     else:
         ccyo_out.warning("► Applying schema...")
-    success, psql_out = _run_psql(env, file=schema_file)
+    rls_file = schema_file.parent / "rls.sql"
+    if not rls_file.is_file():
+        ccyo_out.error(f"Required RLS schema asset not found: {rls_file}")
+        raise typer.Exit(1)
+    schema_name = _get_schema_name(env)
+    runtime_user = str(cfg["user"])
+    operator_user = str(_auth_for_connection_role(cfg, "operator")["user"])
+    operator_context = "\n".join(
+        [
+            f"SET LOCAL search_path TO {_quoted_sql_ident(schema_name)};",
+            "SELECT set_config('session.current_config_identity', "
+            f"{_quoted_sql_literal(str(cfg['config_path']))}, true);",
+            "SELECT set_config('session.current_schema_name', "
+            f"{_quoted_sql_literal(schema_name)}, true);",
+            "SELECT set_config('session.current_domain_code', "
+            f"{_quoted_sql_literal(str(cfg['domain_code']))}, true);",
+            "SELECT set_config('session.current_owner_repo_name', "
+            f"{_quoted_sql_literal(str(cfg['owner_repo_name']))}, true);",
+            "SELECT set_config('session.current_tenant_id', '', true);",
+            "SELECT set_config('session.current_username', "
+            "'migration:schema-apply', true);",
+            "SELECT set_config('session.allow_global_rows', 'true', true);",
+        ]
+    )
+    schema_bundle = (
+        "BEGIN;\n"
+        + operator_context
+        + "\n"
+        + schema_file.read_text(encoding="utf-8")
+        + "\n"
+        + rls_file.read_text(encoding="utf-8")
+        + "\n"
+        + _runtime_scope_binding_sql(schema_name, cfg)
+        + ";\n"
+        + f"GRANT CONNECT ON DATABASE {_quoted_sql_ident(str(cfg['database']))} "
+        + f"TO {_quoted_sql_ident(runtime_user)};\n"
+        + f"GRANT USAGE ON SCHEMA {_quoted_sql_ident(schema_name)} "
+        + f"TO {_quoted_sql_ident(runtime_user)};\n"
+        + "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "
+        + f"{_quoted_sql_ident(schema_name)} TO {_quoted_sql_ident(runtime_user)};\n"
+        + "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA "
+        + f"{_quoted_sql_ident(schema_name)} TO {_quoted_sql_ident(runtime_user)};\n"
+        + f"ALTER DEFAULT PRIVILEGES FOR ROLE {_quoted_sql_ident(operator_user)} "
+        + f"IN SCHEMA {_quoted_sql_ident(schema_name)} GRANT SELECT, INSERT, UPDATE, "
+        + f"DELETE ON TABLES TO {_quoted_sql_ident(runtime_user)};\n"
+        + f"ALTER DEFAULT PRIVILEGES FOR ROLE {_quoted_sql_ident(operator_user)} "
+        + f"IN SCHEMA {_quoted_sql_ident(schema_name)} GRANT USAGE, SELECT, UPDATE "
+        + f"ON SEQUENCES TO {_quoted_sql_ident(runtime_user)};\n"
+        + "REVOKE ALL ON TABLE tapdb_runtime_principal_scope FROM "
+        + f"{_quoted_sql_ident(runtime_user)};\n"
+        + "\nCOMMIT;\n"
+    )
+    success, psql_out = _run_psql(env, sql=schema_bundle, connection_role="operator")
     if not success:
         ccyo_out.error(f"Schema apply failed:\n{psql_out}")
         _log_operation(env.value, "SCHEMA_APPLY_FAILED", psql_out[:200])
@@ -892,11 +1182,12 @@ def db_schema_apply(
         ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
-    try:
-        _write_migration_baseline(env)
-    except Exception as e:
-        ccyo_out.error(f"Failed to write migration baseline: {e}")
-        raise typer.Exit(1)
+    if not schema_preexisted:
+        try:
+            _write_migration_baseline(env)
+        except Exception as e:
+            ccyo_out.error(f"Failed to write migration baseline: {e}")
+            raise typer.Exit(1)
 
     ccyo_out.heading("Tables available:")
     for table in [
@@ -1229,10 +1520,21 @@ def db_nuke(
 @schema_app.command("migrate")
 def db_migrate(
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Show what would be done without making changes"
+        False, "--dry-run", help="Capture preflight evidence without changes"
+    ),
+    apply: bool = typer.Option(
+        False, "--apply", help="Apply exactly a previously captured preflight"
+    ),
+    receipt: Optional[Path] = typer.Option(
+        None, "--receipt", help="Absolute, new JSON receipt output path"
+    ),
+    preflight_receipt: Optional[Path] = typer.Option(
+        None,
+        "--preflight-receipt",
+        help="Absolute dry-run receipt required by --apply",
     ),
 ):
-    """Apply schema migrations/updates to the explicit target."""
+    """Preflight or transactionally apply identity-preserving migrations."""
     env = Environment.target
     cfg = _get_db_config(env)
 
@@ -1243,87 +1545,103 @@ def db_migrate(
     # Check database and schema exist
     if not _check_db_exists(env, cfg["database"]):
         ccyo_out.error(f"Database '{cfg['database']}' does not exist")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     if not _schema_exists(env):
         ccyo_out.error("TAPDB schema not found. Use 'tapdb db schema apply' first.")
-        raise typer.Exit(1)
+        raise SystemExit(1)
+
+    if dry_run and apply:
+        ccyo_out.error("Choose exactly one of --dry-run or --apply")
+        raise SystemExit(2)
+    effective_apply = bool(apply)
+    if receipt is None or not receipt.is_absolute():
+        ccyo_out.error("--receipt must be an absolute, new JSON file path")
+        raise SystemExit(2)
+    if receipt.exists():
+        ccyo_out.error(f"Receipt path already exists: {receipt}")
+        raise SystemExit(2)
+    if effective_apply and (
+        preflight_receipt is None or not preflight_receipt.is_absolute()
+    ):
+        ccyo_out.error("--apply requires an absolute --preflight-receipt path")
+        raise SystemExit(2)
+    if not effective_apply and preflight_receipt is not None:
+        ccyo_out.error("--preflight-receipt is valid only with --apply")
+        raise SystemExit(2)
 
     # Find migration files
     default_migrations_dir = _schema_root_candidates()[0] / "migrations"
     try:
         schema_root = _find_schema_root(required_subpath=Path("migrations"))
     except FileNotFoundError:
-        ccyo_out.warning(f"No migrations directory found at {default_migrations_dir}")
-        ccyo_out.print_text("[dim]Schema is up to date (no migrations to apply).[/dim]")
-        return
+        ccyo_out.error(f"No migrations directory found at {default_migrations_dir}")
+        raise SystemExit(1)
     migrations_dir = schema_root / "migrations"
 
-    migration_files = sorted(migrations_dir.glob("*.sql"))
-    if not migration_files:
-        ccyo_out.print_text(
-            "[dim]No migration files found. Schema is up to date.[/dim]"
-        )
-        return
+    target = {
+        "engine_type": cfg["engine_type"],
+        "host": cfg["host"],
+        "port": cfg["port"],
+        "database": cfg["database"],
+        "schema_name": cfg["schema_name"],
+        "config_identity": cfg["config_path"],
+        "domain_code": cfg["domain_code"],
+        "owner_repo_name": cfg["owner_repo_name"],
+    }
+    try:
+        with _tapdb_connection_for_env(
+            env,
+            app_username="tapdb_schema_migrate",
+            connection_role="operator",
+        ) as tapdb_connection:
+            if not effective_apply:
+                with tapdb_connection.engine.connect() as connection:
+                    transaction = connection.begin()
+                    try:
+                        payload = build_migration_preflight(
+                            connection,
+                            migrations_dir=migrations_dir,
+                            target=target,
+                        )
+                    finally:
+                        transaction.rollback()
+                write_json_receipt(receipt, payload)
+                ccyo_out.success(
+                    f"Preflight captured: {len(payload['pending_migrations'])} pending"
+                )
+                ccyo_out.print_text(f"  Receipt: {receipt}")
+                return
 
-    # Track applied migrations
-    ok, out = _run_psql(
-        env,
-        sql="""
-        CREATE TABLE IF NOT EXISTS _tapdb_migrations (
-            filename TEXT PRIMARY KEY,
-            applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        """,
+            approved = load_json_receipt(preflight_receipt)
+            with tapdb_connection.engine.connect() as connection:
+                transaction = connection.begin()
+                try:
+                    result = apply_migration_preflight(
+                        connection,
+                        migrations_dir=migrations_dir,
+                        preflight=approved,
+                        target=target,
+                    )
+                    connection.exec_driver_sql(
+                        _runtime_scope_binding_sql(_get_schema_name(env), cfg)
+                    )
+                    transaction.commit()
+                except Exception:
+                    transaction.rollback()
+                    raise
+            write_json_receipt(receipt, result.receipt)
+    except (MigrationPreflightError, OSError, ValueError) as exc:
+        _log_operation(env.value, "MIGRATE_FAILED", str(exc)[:200])
+        ccyo_out.error(f"Migration refused: {exc}")
+        raise SystemExit(1) from exc
+
+    applied_names = result.receipt["applied_migrations"]
+    _log_operation(env.value, "MIGRATE", ",".join(applied_names) or "no-op")
+    ccyo_out.success(
+        "Migration applied" if applied_names else "Migration verified as a true no-op"
     )
-    if not ok:
-        ccyo_out.error(f"Failed to ensure migrations table:\n{out}")
-        raise typer.Exit(1)
-
-    # Get already applied migrations (parse conservatively from default psql output)
-    success, psql_out = _run_psql(env, sql="SELECT filename FROM _tapdb_migrations")
-    applied = (
-        {ln.strip() for ln in psql_out.splitlines() if ln.strip().endswith(".sql")}
-        if success
-        else set()
-    )
-
-    pending = [f for f in migration_files if f.name not in applied]
-
-    if not pending:
-        ccyo_out.success("All migrations already applied")
-        return
-
-    ccyo_out.warning(f"► {len(pending)} migration(s) pending:")
-    for mf in pending:
-        ccyo_out.print_text(f"  • {mf.name}")
-
-    if dry_run:
-        ccyo_out.print_text("\n[dim]Dry run - no changes made.[/dim]")
-        return
-
-    for mf in pending:
-        ccyo_out.warning(f"\n► Applying {mf.name}...")
-        success, psql_out = _run_psql(env, file=mf)
-
-        if success:
-            # Record migration
-            filename = mf.name.replace("'", "''")
-            _run_psql(
-                env,
-                sql=(
-                    "INSERT INTO _tapdb_migrations (filename) "
-                    f"VALUES ('{filename}') ON CONFLICT (filename) DO NOTHING"
-                ),
-            )
-            ccyo_out.success(f"{mf.name} applied")
-            _log_operation(env.value, "MIGRATE", mf.name)
-        else:
-            ccyo_out.error(f"Migration failed:\n{psql_out}")
-            _log_operation(env.value, "MIGRATE_FAILED", f"{mf.name}: {psql_out[:100]}")
-            raise typer.Exit(1)
-
-    ccyo_out.success("\nAll migrations applied successfully")
+    ccyo_out.print_text(f"  Receipt: {receipt}")
 
 
 def _warn_legacy_backup_command(legacy: str, replacement: str, *, reason: str) -> None:
@@ -1410,9 +1728,11 @@ def db_backup(
     if data_only:
         cmd.append("--data-only")
 
-    env_vars = os.environ.copy()
+    env_vars = sanitized_libpq_environment()
     if cfg["password"]:
         env_vars["PGPASSWORD"] = cfg["password"]
+    if cfg.get("hostaddr"):
+        env_vars["PGHOSTADDR"] = str(cfg["hostaddr"])
 
     ccyo_out.warning("► Creating backup...")
 
@@ -1645,33 +1965,31 @@ def _tapdb_connection_for_env(
     env: Environment,
     *,
     app_username: str,
+    connection_role: str = "runtime",
 ) -> TAPDBConnection:
     cfg = _get_db_config(env)
     engine_type = str(cfg["engine_type"]).strip().lower()
-    iam_auth = str(cfg["iam_auth"]).strip().lower() in {
-        "true",
-        "1",
-        "yes",
-        "on",
-    }
+    auth = _auth_for_connection_role(cfg, connection_role)
     region = str(cfg["region"]).strip()
-    db_pass = cfg.get("password") if "password" in cfg else None
-    secret_arn = cfg.get("secret_arn") or None
     return TAPDBConnection(
         db_hostname=f"{cfg['host']}:{cfg['port']}",
         db_hostaddr=cfg.get("hostaddr") or None,
-        db_user=cfg["user"],
-        db_pass=db_pass,
-        secret_arn=secret_arn,
+        db_user=auth["user"],
+        db_pass=auth["password"],
+        secret_arn=auth["secret_arn"],
         db_name=cfg["database"],
         engine_type=engine_type,
         region=region,
-        iam_auth=iam_auth,
+        iam_auth=auth["iam_auth"],
         app_username=app_username,
         domain_code=str(cfg["domain_code"]),
         owner_repo_name=str(cfg["owner_repo_name"]),
         schema_name=str(cfg["schema_name"]),
+        tenant_id=str(cfg.get("tenant_id") or "") or None,
+        allow_global_rows=bool(cfg.get("allow_global_claims")),
+        config_identity=str(cfg["config_path"]),
         echo_sql=False,
+        connection_role=connection_role,
     )
 
 
@@ -1692,32 +2010,27 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
     from daylily_tapdb.user_store import create_or_get
 
     engine_type = str(cfg["engine_type"]).strip().lower()
-    iam_auth = str(cfg["iam_auth"]).strip().lower() in (
-        "true",
-        "1",
-        "yes",
-        "on",
-    )
+    auth = _auth_for_connection_role(cfg, "operator")
     region = str(cfg["region"]).strip()
-    db_pass = cfg.get("password") if "password" in cfg else None
-    secret_arn = cfg.get("secret_arn") or None
 
     try:
         with TAPDBConnection(
             db_hostname=f"{cfg['host']}:{cfg['port']}",
             db_hostaddr=cfg.get("hostaddr") or None,
-            db_user=cfg["user"],
-            db_pass=db_pass,
-            secret_arn=secret_arn,
+            db_user=auth["user"],
+            db_pass=auth["password"],
+            secret_arn=auth["secret_arn"],
             db_name=cfg["database"],
             engine_type=engine_type,
             region=region,
-            iam_auth=iam_auth,
+            iam_auth=auth["iam_auth"],
             app_username="tapdb_admin",
             domain_code=str(cfg["domain_code"]),
             owner_repo_name=str(cfg["owner_repo_name"]),
             schema_name=str(cfg["schema_name"]),
+            config_identity=str(cfg["config_path"]),
             echo_sql=False,
+            connection_role="operator",
         ) as conn:
             with conn.session_scope(commit=True) as session:
                 user, created = create_or_get(
@@ -1788,7 +2101,7 @@ def db_seed(
         seed_config_dirs = _resolve_seed_config_dirs(config_path)
     except FileNotFoundError as e:
         ccyo_out.error(f"{e}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     ccyo_out.success("Seed config directories:")
     for directory in seed_config_dirs:
@@ -1798,12 +2111,12 @@ def db_seed(
     if not _check_db_exists(env, cfg["database"]):
         ccyo_out.error(f"Database '{cfg['database']}' does not exist")
         ccyo_out.print_text("  Create with: [cyan]tapdb db create[/cyan]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     if not _schema_exists(env):
         ccyo_out.error("TAPDB schema not found")
         ccyo_out.print_text("  Initialize with: [cyan]tapdb db schema apply[/cyan]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     ccyo_out.warning("► Loading template configurations...")
     templates, issues = _validate_template_configs(seed_config_dirs, strict=True)
@@ -1824,7 +2137,7 @@ def db_seed(
             if issue.template_code:
                 detail += f" [{issue.template_code}]"
             ccyo_out.print_text(f"  • {detail}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     if not templates:
         ccyo_out.warning("No templates found in configured seed directories")
@@ -1840,7 +2153,7 @@ def db_seed(
             ccyo_out.print_text(f"  • {key}")
             for source in sources:
                 ccyo_out.print_text(f"      - {source}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     ccyo_out.success(f"Found {len(templates)} template(s)")
 
@@ -1872,6 +2185,7 @@ def db_seed(
         with _tapdb_connection_for_env(
             env,
             app_username="tapdb_template_seed",
+            connection_role="operator",
         ) as conn:
             with conn.session_scope(commit=True) as session:
                 summary = _loader_seed_templates(
@@ -1890,7 +2204,7 @@ def db_seed(
                 )
     except Exception as exc:
         ccyo_out.error(f"Template seed failed: {exc}")
-        raise typer.Exit(1) from exc
+        raise SystemExit(1) from exc
 
     # Summary
     ccyo_out.print_text("\n[bold]Seed Summary:[/bold]")
@@ -1909,7 +2223,7 @@ def db_seed(
     )
 
     if failed > 0:
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
 
 @db_app.command("setup")
@@ -1979,9 +2293,9 @@ def db_setup(
     ccyo_out.print_text("\n[bold]Step 2/5: Apply Schema[/bold]")
     db_schema_apply(reinitialize=recreate)
 
-    # Step 3: Apply migrations
-    ccyo_out.print_text("\n[bold]Step 3/5: Apply Migrations[/bold]")
-    db_migrate(dry_run=False)
+    # Step 3: Fresh schema apply records the exact packaged migration baseline.
+    ccyo_out.print_text("\n[bold]Step 3/5: Record Migration Baseline[/bold]")
+    ccyo_out.success("  Packaged migrations baselined by schema apply")
 
     # Step 4: Seed templates
     ccyo_out.print_text("\n[bold]Step 4/5: Seed Templates[/bold]")
@@ -2053,10 +2367,55 @@ def reset_schema(
 
 def run_migrations(
     env: Environment = Environment.target,
-    dry_run: bool = False,
+    *,
+    dry_run: bool = True,
+    apply: bool = False,
+    receipt: Optional[Path] = None,
+    preflight_receipt: Optional[Path] = None,
 ) -> None:
     _ = env
-    db_migrate(dry_run=dry_run)
+    if not dry_run and not apply and receipt is None and preflight_receipt is None:
+        preflight_path, result_path = _next_bootstrap_migration_receipt_paths()
+        db_migrate(
+            dry_run=True,
+            apply=False,
+            receipt=preflight_path,
+            preflight_receipt=None,
+        )
+        db_migrate(
+            dry_run=False,
+            apply=True,
+            receipt=result_path,
+            preflight_receipt=preflight_path,
+        )
+        return
+    db_migrate(
+        dry_run=dry_run,
+        apply=apply,
+        receipt=receipt,
+        preflight_receipt=preflight_receipt,
+    )
+
+
+def _next_bootstrap_migration_receipt_paths() -> tuple[Path, Path]:
+    """Resolve the next immutable receipt pair under this target's runtime.
+
+    The smallest unused ordinal makes path selection deterministic for the
+    current explicit target while preserving evidence from earlier bootstrap
+    attempts, including a preflight whose apply failed.
+    """
+    runtime_dir = (
+        get_config_path().resolve().parent / "runtime" / "migrations" / "receipts"
+    )
+    for ordinal in range(1, 1_000_000):
+        stem = f"bootstrap-migrate-{ordinal:06d}"
+        preflight_path = runtime_dir / f"{stem}-preflight.json"
+        result_path = runtime_dir / f"{stem}-result.json"
+        if not preflight_path.exists() and not result_path.exists():
+            return preflight_path, result_path
+    raise RuntimeError(
+        f"No unused bootstrap migration receipt pair remains under {runtime_dir}"
+    )
 
 
 def seed_templates(

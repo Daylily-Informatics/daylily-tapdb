@@ -590,6 +590,9 @@ def _ensure_actor_user_row(
         domain_code=str(cfg["domain_code"]),
         owner_repo_name=str(cfg["owner_repo_name"]),
         schema_name=str(cfg["schema_name"]),
+        tenant_id=str(cfg.get("tenant_id") or "") or None,
+        allow_global_rows=bool(cfg.get("allow_global_claims")),
+        config_identity=str(cfg["config_path"]),
     ) as conn:
         with conn.session_scope(commit=True) as session:
             user, _ = create_or_get(

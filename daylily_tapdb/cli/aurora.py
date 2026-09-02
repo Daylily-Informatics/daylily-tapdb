@@ -223,8 +223,7 @@ def aurora_create(
     if resolved_cidr == "0.0.0.0/0" and publicly_accessible:
         ccyo_out.warning(
             "⚠️  WARNING: Creating publicly accessible cluster open to "
-            "all IPs (0.0.0.0/0). Consider restricting --cidr to your IP.",
-            err=True,
+            "all IPs (0.0.0.0/0). Consider restricting --cidr to your IP."
         )
 
     _ensure_boto3()

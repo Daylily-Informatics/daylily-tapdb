@@ -107,6 +107,9 @@ def test_identity_prefix_sync_writes_expected_config(
     assert "EDG" in joined
     assert "ADT" in joined
     assert "daylily-tapdb" in joined
+    assert "DO NOTHING" in joined
+    assert "DO UPDATE" not in joined
+    assert "Existing TapDB identity prefix configuration conflicts" in joined
 
 
 def test_identity_prefix_sync_uses_configured_owner_repo(
@@ -116,6 +119,7 @@ def test_identity_prefix_sync_uses_configured_owner_repo(
     cfg_path = _write_config(
         tmp_path / "zebra-tapdb-config.yaml",
         owner_repo_name="zebra-day",
+        prefix_owner_repo_name="daylily-tapdb",
     )
     set_cli_context(config_path=cfg_path)
     sql_calls: list[str] = []
@@ -138,11 +142,11 @@ def test_identity_prefix_sync_requires_owner_registry_claim(
     cfg_path = _write_config(
         tmp_path / "bad-owner-tapdb-config.yaml",
         owner_repo_name="zebra-day",
-        prefix_owner_repo_name="daylily-tapdb",
+        prefix_owner_repo_name="zebra-day",
     )
     set_cli_context(config_path=cfg_path)
 
-    with pytest.raises(ValueError, match="owned by 'daylily-tapdb', not 'zebra-day'"):
+    with pytest.raises(ValueError, match="owned by 'zebra-day', not 'daylily-tapdb'"):
         db_mod._sync_identity_prefix_config(db_mod.Environment.target)
 
 

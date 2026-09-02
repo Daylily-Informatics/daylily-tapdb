@@ -303,7 +303,9 @@ def _artifact_name(backup_class: str) -> str:
     return engine.DEFAULT_ARTIFACT_NAME
 
 
-def open_session(cfg: dict[str, Any], *, app_username: str):
+def open_session(
+    cfg: dict[str, Any], *, app_username: str, connection_role: str = "runtime"
+):
     """Open a TAPDB session for the configured target.
 
     Deliberately mirrors the CLI's connection construction rather than reusing
@@ -311,7 +313,8 @@ def open_session(cfg: dict[str, Any], *, app_username: str):
     """
     from daylily_tapdb.connection import TAPDBConnection
 
-    iam_auth = str(cfg.get("iam_auth") or "").strip().lower() in {
+    connection_cfg = connection_config_for_role(cfg, connection_role)
+    iam_auth = str(connection_cfg.get("iam_auth") or "").strip().lower() in {
         "true",
         "1",
         "yes",
@@ -321,26 +324,112 @@ def open_session(cfg: dict[str, Any], *, app_username: str):
     # legitimate value under trust auth, and TAPDBConnection distinguishes
     # "" (fine) from None (rejected). Collapsing them breaks every
     # trust-authenticated local target.
-    db_pass = cfg.get("password") if "password" in cfg else None
+    db_pass = connection_cfg.get("password") if "password" in connection_cfg else None
     return TAPDBConnection(
-        db_hostname=f"{cfg['host']}:{cfg['port']}",
-        db_hostaddr=cfg.get("hostaddr") or None,
-        db_user=cfg["user"],
+        db_hostname=f"{connection_cfg['host']}:{connection_cfg['port']}",
+        db_hostaddr=connection_cfg.get("hostaddr") or None,
+        db_user=connection_cfg["user"],
         db_pass=db_pass,
-        secret_arn=cfg.get("secret_arn") or None,
-        db_name=cfg["database"],
-        engine_type=str(cfg.get("engine_type") or "local").strip().lower(),
-        region=str(cfg.get("region") or "us-west-2").strip(),
+        secret_arn=connection_cfg.get("secret_arn") or None,
+        db_name=connection_cfg["database"],
+        engine_type=str(connection_cfg.get("engine_type") or "local").strip().lower(),
+        region=str(connection_cfg.get("region") or "us-west-2").strip(),
         iam_auth=iam_auth,
         app_username=app_username,
-        domain_code=str(cfg["domain_code"]),
-        owner_repo_name=str(cfg["owner_repo_name"]),
-        schema_name=str(cfg["schema_name"]),
+        domain_code=str(connection_cfg["domain_code"]),
+        owner_repo_name=str(connection_cfg["owner_repo_name"]),
+        schema_name=str(connection_cfg["schema_name"]),
+        tenant_id=connection_cfg.get("tenant_id") or None,
+        allow_global_rows=bool(connection_cfg.get("allow_global_claims")),
+        config_identity=str(connection_cfg["config_path"]),
+        connection_role=connection_role,
     )
 
 
-def _target_identity(cfg: dict[str, Any]) -> dict[str, Any]:
+def connection_config_for_role(
+    cfg: dict[str, Any], connection_role: str
+) -> dict[str, Any]:
+    """Select explicit runtime or distinct operator authentication fields."""
+
+    if connection_role == "runtime":
+        return dict(cfg)
+    if connection_role != "operator":
+        raise ValueError("connection_role must be 'runtime' or 'operator'")
+    if cfg.get("operator_configured") is not True:
+        raise RuntimeError(
+            "full backup and restore require target.operator credentials"
+        )
+    operator_user = str(cfg.get("operator_user") or "").strip()
+    runtime_user = str(cfg.get("user") or "").strip()
+    if not operator_user or operator_user == runtime_user:
+        raise RuntimeError(
+            "target.operator.user must be non-empty and distinct from target.user"
+        )
+    selected = dict(cfg)
+    selected.update(
+        {
+            "user": operator_user,
+            "password": (
+                cfg.get("operator_password") if "operator_password" in cfg else None
+            ),
+            "secret_arn": cfg.get("operator_secret_arn") or None,
+            "iam_auth": cfg.get("operator_iam_auth") or False,
+            "tenant_id": None,
+            "allow_global_claims": True,
+        }
+    )
+    return selected
+
+
+def _connection_role_for_backup_class(backup_class: str) -> str | None:
+    """Return the database role whose visibility defines an artifact.
+
+    Provider snapshots are created by the RDS API, not by a PostgreSQL
+    session, so assigning them a database role would be a category error.
+    """
+
+    if backup_class == BACKUP_CLASS_FULL:
+        return "operator"
+    if backup_class == BACKUP_CLASS_TEMPLATE_PACK:
+        return "runtime"
+    if backup_class == BACKUP_CLASS_PROVIDER_SNAPSHOT:
+        return None
+    raise ValueError(f"Unknown backup class: {backup_class!r}")
+
+
+def _target_identity(
+    cfg: dict[str, Any], *, backup_class: str = BACKUP_CLASS_FULL
+) -> dict[str, Any]:
     """Identity recorded in every manifest -- deliberately credential-free."""
+    tenant_id = str(cfg.get("tenant_id") or "").strip() or None
+    if backup_class == BACKUP_CLASS_FULL:
+        data_scope = {
+            "mode": "physical_schema",
+            "tenant_id": None,
+            "row_security": "bypassed",
+            "physical_schema_complete": True,
+            "restore_mode": "isolated_or_in_place",
+        }
+    elif backup_class == BACKUP_CLASS_TEMPLATE_PACK:
+        data_scope = {
+            "mode": "tenant_and_global" if tenant_id else "global_only",
+            "tenant_id": tenant_id,
+            "row_security": "enforced",
+            "physical_schema_complete": False,
+            "restore_mode": "not_applicable",
+        }
+    elif backup_class == BACKUP_CLASS_PROVIDER_SNAPSHOT:
+        data_scope = {
+            "mode": "provider_cluster_snapshot",
+            "tenant_id": None,
+            "row_security": "not_applicable",
+            # This field is the logical schema-completeness claim consumed by
+            # pg_restore preflight. A provider receipt cannot make that claim.
+            "physical_schema_complete": False,
+            "restore_mode": "provider_cutover",
+        }
+    else:
+        raise ValueError(f"Unknown backup class: {backup_class!r}")
     return {
         "client_id": cfg.get("client_id"),
         "database_name": cfg.get("database_name"),
@@ -353,6 +442,7 @@ def _target_identity(cfg: dict[str, Any]) -> dict[str, Any]:
         "port": str(cfg.get("port") or ""),
         "cluster_identifier": cfg.get("cluster_identifier") or None,
         "target_label": target_label(cfg),
+        "data_scope": data_scope,
     }
 
 
@@ -440,6 +530,80 @@ def _governance_block(cfg: dict[str, Any]) -> dict[str, Any]:
     return entries
 
 
+def _not_applicable_drift() -> dict[str, Any]:
+    return {
+        "has_drift": None,
+        "counts": {},
+        "asset_checksums": [],
+        "status": "not_applicable",
+    }
+
+
+def _excluded_state_for_backup_class(backup_class: str) -> list[dict[str, Any]]:
+    """Describe exclusions without applying full-logical claims to other classes."""
+
+    if backup_class == BACKUP_CLASS_FULL:
+        return [
+            item
+            for item in excluded_state_payload()
+            if item.get("key") != "rows_outside_rls_scope"
+        ]
+    if backup_class == BACKUP_CLASS_TEMPLATE_PACK:
+        return [
+            {
+                "key": "non_template_database_state",
+                "title": "Non-template database state",
+                "disposition": "excluded",
+                "detail": "Only RLS-visible active template definitions are exported.",
+            },
+            {
+                "key": "destination_owned_template_identity",
+                "title": "Destination-owned template identity",
+                "disposition": "excluded",
+                "detail": "Database EUIDs, row timestamps, and sequence state are omitted.",
+            },
+            {
+                "key": "rows_outside_rls_scope",
+                "title": "Rows outside the runtime RLS scope",
+                "disposition": "excluded",
+                "detail": "The template pack contains only rows visible to the runtime role.",
+            },
+        ]
+    if backup_class == BACKUP_CLASS_PROVIDER_SNAPSHOT:
+        return [
+            {
+                "key": "tapdb_content_inventory",
+                "title": "TapDB content inventory",
+                "disposition": "excluded",
+                "detail": (
+                    "The receipt references an opaque provider-held cluster snapshot; "
+                    "its contents are not asserted until a provider restore is inspected."
+                ),
+            },
+            {
+                "key": "config_and_external_identity",
+                "title": "TapDB config and external identity-provider state",
+                "disposition": "excluded",
+                "detail": "Neither local config nor Cognito state is part of an RDS snapshot.",
+            },
+        ]
+    raise ValueError(f"Unknown backup class: {backup_class!r}")
+
+
+def _state_inventory_for_backup_class(backup_class: str) -> list[dict[str, Any]]:
+    """Return only inventory claims that apply to the selected backup class."""
+
+    if backup_class == BACKUP_CLASS_FULL:
+        return [
+            item
+            for item in state_inventory_payload()
+            if item.get("key") != "rows_outside_rls_scope"
+        ]
+    if backup_class in {BACKUP_CLASS_TEMPLATE_PACK, BACKUP_CLASS_PROVIDER_SNAPSHOT}:
+        return []
+    raise ValueError(f"Unknown backup class: {backup_class!r}")
+
+
 # ---------------------------------------------------------------------------
 # plan
 # ---------------------------------------------------------------------------
@@ -458,37 +622,130 @@ def plan_backup(
     checks: list[CheckResult] = []
     would_capture: dict[str, Any] = {}
 
-    dump_version = engine.client_version("pg_dump")
+    if resolved_class == BACKUP_CLASS_PROVIDER_SNAPSHOT:
+        from daylily_tapdb.backup import snapshots
+
+        checks.append(
+            CheckResult(
+                id="client.pg_dump",
+                status=STATUS_SKIP,
+                detail="not used by provider-snapshot",
+            )
+        )
+        cluster_identifier = str(
+            settings.get("provider_snapshots_cluster_identifier")
+            or cfg.get("cluster_identifier")
+            or ""
+        ).strip()
+        try:
+            snapshots.require_enabled(cfg, settings)
+            if not cluster_identifier:
+                raise ValueError("provider snapshot cluster identifier is required")
+            checks.append(
+                CheckResult(
+                    id="provider.snapshot_config",
+                    status=STATUS_PASS,
+                    detail=f"configured cluster {cluster_identifier}",
+                )
+            )
+        except Exception as exc:
+            checks.append(
+                CheckResult(
+                    id="provider.snapshot_config",
+                    status=STATUS_FAIL,
+                    detail=str(exc),
+                )
+            )
+        would_capture = {
+            "provider_snapshot": {
+                "cluster_identifier": cluster_identifier or None,
+                "inventory": "opaque_until_provider_restore",
+            },
+            "data_scope": _target_identity(cfg, backup_class=resolved_class)[
+                "data_scope"
+            ],
+            "state_inventory": [],
+            "excluded_state": _excluded_state_for_backup_class(resolved_class),
+        }
+        checks.append(_free_space_check(storage, settings))
+        return BackupPlan(
+            backup_class=resolved_class,
+            target_label=target_label(cfg),
+            schema_name=str(cfg["schema_name"]),
+            storage=storage.describe(),
+            checks=checks,
+            would_capture=would_capture,
+        )
+
+    dump_version = (
+        engine.client_version("pg_dump")
+        if resolved_class == BACKUP_CLASS_FULL
+        else None
+    )
     checks.append(
         CheckResult(
             id="client.pg_dump",
-            status=STATUS_PASS if dump_version else STATUS_FAIL,
-            detail=dump_version or "pg_dump not found on PATH",
+            status=(
+                STATUS_PASS
+                if dump_version
+                else (
+                    STATUS_FAIL if resolved_class == BACKUP_CLASS_FULL else STATUS_SKIP
+                )
+            ),
+            detail=(
+                dump_version
+                or (
+                    "pg_dump not found on PATH"
+                    if resolved_class == BACKUP_CLASS_FULL
+                    else "not used by template-pack"
+                )
+            ),
         )
     )
 
     try:
-        with open_session(cfg, app_username="tapdb_backup_plan") as conn:
+        connection_role = _connection_role_for_backup_class(resolved_class)
+        assert connection_role is not None
+        with open_session(
+            cfg,
+            app_username="tapdb_backup_plan",
+            connection_role=connection_role,
+        ) as conn:
             with conn.session_scope(commit=False) as session:
                 schema_name = str(cfg["schema_name"])
                 versions = introspect.server_version(session)
-                tables = introspect.list_tables(session, schema_name)
-                sequences = introspect.capture_sequences(session, schema_name)
-                drift = _schema_drift(session, cfg)
+                visible_tables = introspect.list_tables(session, schema_name)
+                if resolved_class == BACKUP_CLASS_FULL:
+                    tables = visible_tables
+                    sequences = introspect.capture_sequences(session, schema_name)
+                    drift = _schema_drift(session, cfg)
+                else:
+                    tables = (
+                        ["generic_template"]
+                        if "generic_template" in visible_tables
+                        else []
+                    )
+                    sequences = []
+                    drift = _not_applicable_drift()
 
                 would_capture = {
                     "tables": tables,
                     "table_count": len(tables),
                     "sequence_count": len(sequences),
                     "postgres": versions,
+                    "data_scope": _target_identity(cfg, backup_class=resolved_class)[
+                        "data_scope"
+                    ],
                     # Issue #89 item 2: the state inventory says what a backup
                     # covers *and what it does not*. It existed only as an
                     # unused export, so the one command whose whole job is
                     # answering "what would this capture?" never showed it --
                     # and the excluded half is the part an operator most needs
                     # before assuming a restore is sufficient.
-                    "state_inventory": state_inventory_payload(),
-                    "excluded_state": excluded_state_payload(),
+                    "state_inventory": _state_inventory_for_backup_class(
+                        resolved_class
+                    ),
+                    "excluded_state": _excluded_state_for_backup_class(resolved_class),
                 }
 
                 checks.append(
@@ -512,53 +769,71 @@ def plan_backup(
                     CheckResult(
                         id="schema.drift",
                         status=(
-                            STATUS_PASS
-                            if not drifted
-                            else (STATUS_FAIL if strict_drift else STATUS_WARN)
+                            STATUS_SKIP
+                            if resolved_class != BACKUP_CLASS_FULL
+                            else (
+                                STATUS_PASS
+                                if not drifted
+                                else (STATUS_FAIL if strict_drift else STATUS_WARN)
+                            )
                         ),
                         detail=(
-                            "no drift"
-                            if not drifted
-                            else "live schema differs from the schema assets"
+                            "not applicable to template-pack"
+                            if resolved_class != BACKUP_CLASS_FULL
+                            else (
+                                "no drift"
+                                if not drifted
+                                else "live schema differs from the schema assets"
+                            )
                         ),
                         data=drift.get("counts", {}),
                     )
                 )
 
                 server_version_text = versions.get("server_version")
-                try:
-                    engine.assert_dump_client_is_new_enough(
-                        client_version_text=dump_version,
-                        server_version_text=server_version_text,
-                    )
-                    # Say what was actually compared. A bare "✓" with no detail
-                    # reads as though the check failed to render, and it hides
-                    # the two numbers an operator needs when it *does* fail.
-                    client_major = engine.parse_version_major(dump_version)
-                    server_major = engine.parse_version_major(server_version_text)
+                if resolved_class != BACKUP_CLASS_FULL:
                     checks.append(
                         CheckResult(
                             id="version.compatible",
-                            status=STATUS_PASS,
-                            detail=(
-                                f"pg_dump {client_major} can dump server {server_major}"
-                                if client_major and server_major
-                                else "version comparison unavailable"
-                            ),
-                            data={
-                                "pg_dump_major": client_major,
-                                "server_major": server_major,
-                            },
+                            status=STATUS_SKIP,
+                            detail="pg_dump is not used by template-pack",
                         )
                     )
-                except Exception as exc:
-                    checks.append(
-                        CheckResult(
-                            id="version.compatible",
-                            status=STATUS_FAIL,
-                            detail=str(exc),
+                else:
+                    try:
+                        engine.assert_dump_client_is_new_enough(
+                            client_version_text=dump_version,
+                            server_version_text=server_version_text,
                         )
-                    )
+                        # Say what was actually compared. A bare "✓" with no
+                        # detail reads as though the check failed to render,
+                        # and it hides the two numbers an operator needs when
+                        # it *does* fail.
+                        client_major = engine.parse_version_major(dump_version)
+                        server_major = engine.parse_version_major(server_version_text)
+                        checks.append(
+                            CheckResult(
+                                id="version.compatible",
+                                status=STATUS_PASS,
+                                detail=(
+                                    f"pg_dump {client_major} can dump server {server_major}"
+                                    if client_major and server_major
+                                    else "version comparison unavailable"
+                                ),
+                                data={
+                                    "pg_dump_major": client_major,
+                                    "server_major": server_major,
+                                },
+                            )
+                        )
+                    except Exception as exc:
+                        checks.append(
+                            CheckResult(
+                                id="version.compatible",
+                                status=STATUS_FAIL,
+                                detail=str(exc),
+                            )
+                        )
     except Exception as exc:
         checks.append(
             CheckResult(
@@ -755,95 +1030,124 @@ def _capture(
     schema_name = str(cfg["schema_name"])
     artifact = staging / _artifact_name(backup_class)
 
-    with open_session(cfg, app_username="tapdb_backup_create") as conn:
-        # A dedicated repeatable-read connection, not a scoped session: the
-        # snapshot must outlive every read *and* the dump subprocess, and a
-        # scoped session cannot export one at all (see snapshot_transaction).
-        with introspect.snapshot_transaction(conn.engine) as (session, snapshot):
-            backend = introspect.resolved_backend_address(session)
-            versions = introspect.server_version(session)
-            drift = _schema_drift(session, cfg)
-            if drift.get("has_drift") and not allow_drift:
-                raise BackupVerificationError(
-                    "Live schema has drifted from the schema assets. Re-run with "
-                    "allow_drift to capture anyway.",
-                    detail={"drift": drift.get("counts", {})},
-                )
+    connection_role = _connection_role_for_backup_class(backup_class)
+    if connection_role is None:
+        from daylily_tapdb.backup import snapshots
 
-            row_counts = introspect.capture_row_counts(session, schema_name)
-            representatives = introspect.capture_representative_objects(
-                session, schema_name
+        receipt = (
+            snapshots.describe_cluster_snapshot(
+                cfg, settings, snapshot_identifier=existing_snapshot
             )
-            migrations = introspect.capture_migrations(session, schema_name)
-
-            if backup_class == BACKUP_CLASS_TEMPLATE_PACK:
-                pack = template_pack.build_template_pack(
-                    session, schema_name, note=note
+            if existing_snapshot
+            else snapshots.create_cluster_snapshot(cfg, settings, now=now)
+        )
+        artifact.write_bytes(canonical_bytes(receipt))
+        content_inventory = {
+            "snapshot_identifier": receipt.get("snapshot_identifier"),
+            "cluster_identifier": receipt.get("cluster_identifier"),
+            "engine_version": receipt.get("engine_version"),
+            "encrypted": receipt.get("encrypted"),
+            "capture_scope": "provider_cluster_snapshot",
+            "tapdb_inventory": "opaque_until_provider_restore",
+        }
+        versions = {"server_version": receipt.get("engine_version")}
+        snapshot = None
+        backend = {"cluster_identifier": receipt.get("cluster_identifier")}
+        drift = _not_applicable_drift()
+        row_counts = {}
+        representatives = []
+        migrations = []
+        sequences = []
+    else:
+        connection_cfg = connection_config_for_role(cfg, connection_role)
+        with open_session(
+            cfg,
+            app_username="tapdb_backup_create",
+            connection_role=connection_role,
+        ) as conn:
+            # A dedicated repeatable-read connection, not a scoped session: the
+            # snapshot must outlive every read *and* the dump subprocess, and a
+            # scoped session cannot export one at all (see snapshot_transaction).
+            with introspect.snapshot_transaction(conn) as (session, snapshot):
+                backend = introspect.resolved_backend_address(session)
+                versions = introspect.server_version(session)
+                drift = (
+                    _schema_drift(session, cfg)
+                    if backup_class == BACKUP_CLASS_FULL
+                    else _not_applicable_drift()
                 )
-                problems = template_pack.validate_template_pack(pack)
-                if problems:
+                if drift.get("has_drift") and not allow_drift:
                     raise BackupVerificationError(
-                        "Exported template pack failed validation.",
-                        detail={"problems": problems},
+                        "Live schema has drifted from the schema assets. Re-run with "
+                        "allow_drift to capture anyway.",
+                        detail={"drift": drift.get("counts", {})},
                     )
-                artifact.write_bytes(canonical_bytes(pack))
-                content_inventory = template_pack.pack_summary(pack)
-            elif backup_class == BACKUP_CLASS_PROVIDER_SNAPSHOT:
-                from daylily_tapdb.backup import snapshots
 
-                receipt = (
-                    snapshots.describe_cluster_snapshot(
-                        cfg, settings, snapshot_identifier=existing_snapshot
+                if backup_class == BACKUP_CLASS_TEMPLATE_PACK:
+                    pack = template_pack.build_template_pack(
+                        session, schema_name, note=note
                     )
-                    if existing_snapshot
-                    else snapshots.create_cluster_snapshot(cfg, settings, now=now)
-                )
-                artifact.write_bytes(canonical_bytes(receipt))
-                content_inventory = {
-                    "snapshot_identifier": receipt.get("snapshot_identifier"),
-                    "cluster_identifier": receipt.get("cluster_identifier"),
-                    "engine_version": receipt.get("engine_version"),
-                    "encrypted": receipt.get("encrypted"),
-                }
-            else:
-                # Degrade rather than lie: a snapshot we cannot pin the dump
-                # to would yield manifest counts that silently disagree with
-                # the archive, which is worse than an honest `best_effort`.
-                # Only a *remote* target can serve the dump from a different
-                # backend than the snapshot session. A local connection over
-                # loopback or a Unix socket always reaches the same postmaster,
-                # so pinning there buys nothing and PGHOSTADDR would only get
-                # in the way.
-                pinned_snapshot = snapshot
-                if (
-                    snapshot
-                    and str(cfg.get("engine_type") or "").lower() == "aurora"
-                    and not backend.get("address")
-                ):
-                    pinned_snapshot = None
-                content_inventory = _run_dump(
-                    cfg,
-                    schema_name=schema_name,
-                    artifact=artifact,
-                    snapshot=pinned_snapshot,
-                    backend=backend,
-                )
-                if snapshot and pinned_snapshot is None:
-                    snapshot = None
-
-            # Sequences are non-transactional: read after the dump so the
-            # recorded value is a lower bound on the live one. Verification
-            # asserts >=, which is what makes EUID reuse impossible.
-            sequences = introspect.capture_sequences(session, schema_name)
+                    problems = template_pack.validate_template_pack(pack)
+                    if problems:
+                        raise BackupVerificationError(
+                            "Exported template pack failed validation.",
+                            detail={"problems": problems},
+                        )
+                    artifact.write_bytes(canonical_bytes(pack))
+                    content_inventory = template_pack.pack_summary(pack) | {
+                        "visibility_scope": _target_identity(
+                            cfg, backup_class=backup_class
+                        )["data_scope"]
+                    }
+                    row_counts = {"generic_template": len(pack["templates"])}
+                    representatives = []
+                    migrations = []
+                    sequences = []
+                else:
+                    row_counts = introspect.capture_row_counts(session, schema_name)
+                    representatives = introspect.capture_representative_objects(
+                        session, schema_name
+                    )
+                    migrations = introspect.capture_migrations(session, schema_name)
+                    # Degrade rather than lie: a snapshot we cannot pin the dump
+                    # to would yield manifest counts that silently disagree with
+                    # the archive, which is worse than an honest `best_effort`.
+                    # Only a remote target can serve the dump from a different
+                    # backend than the snapshot session. A local connection
+                    # always reaches the same postmaster.
+                    pinned_snapshot = snapshot
+                    if (
+                        snapshot
+                        and str(cfg.get("engine_type") or "").lower() == "aurora"
+                        and not backend.get("address")
+                    ):
+                        pinned_snapshot = None
+                    content_inventory = _run_dump(
+                        connection_cfg,
+                        schema_name=schema_name,
+                        artifact=artifact,
+                        snapshot=pinned_snapshot,
+                        backend=backend,
+                        transaction_context=conn.transaction_context(),
+                    )
+                    if snapshot and pinned_snapshot is None:
+                        snapshot = None
+                    # Sequences are non-transactional: read after the dump so
+                    # the recorded value is a lower bound on the live one.
+                    sequences = introspect.capture_sequences(session, schema_name)
 
     manifest = BackupManifest(
         backup_id=backup_id,
         backup_class=backup_class,
         tool=_tool_block(),
-        target_identity=_target_identity(cfg),
+        target_identity=_target_identity(cfg, backup_class=backup_class),
         postgres=versions,
         consistency={
-            "mode": CONSISTENCY_SNAPSHOT if snapshot else CONSISTENCY_BEST_EFFORT,
+            "mode": (
+                "provider_snapshot"
+                if backup_class == BACKUP_CLASS_PROVIDER_SNAPSHOT
+                else (CONSISTENCY_SNAPSHOT if snapshot else CONSISTENCY_BEST_EFFORT)
+            ),
             "snapshot": snapshot,
             "backend": backend,
         },
@@ -851,14 +1155,18 @@ def _capture(
             "applied": migrations,
             "asset_checksums": drift.get("asset_checksums", []),
         },
-        schema_drift=drift.get("counts", {}) | {"has_drift": drift.get("has_drift")},
+        schema_drift=(
+            drift.get("counts", {}) | {"has_drift": drift.get("has_drift")}
+            if backup_class == BACKUP_CLASS_FULL
+            else {"status": "not_applicable", "has_drift": None}
+        ),
         row_counts=row_counts,
         sequences=sequences,
         representative_objects=representatives,
         content_inventory=content_inventory,
         governance=_governance_block(cfg),
         included_assets=[AssetRef.from_file(artifact)],
-        excluded_state=excluded_state_payload(),
+        excluded_state=_excluded_state_for_backup_class(backup_class),
         storage=storage.describe(),
         encryption={"mode": settings.get("encryption_mode", "none")},
         retention={"keep_last": settings.get("keep_last")},
@@ -912,6 +1220,7 @@ def _run_dump(
     schema_name: str,
     artifact: Path,
     snapshot: Optional[str],
+    transaction_context: Any,
     backend: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Run pg_dump and return the archive's own content inventory.
@@ -923,7 +1232,10 @@ def _run_dump(
     Plan section 3.2 requires pinning via `PGHOSTADDR`, which was recorded in
     the manifest but never actually applied.
     """
+    from daylily_tapdb.security_context import transaction_context_pgoptions
+
     env = engine.client_env(cfg)
+    env["PGOPTIONS"] = transaction_context_pgoptions(transaction_context)
     # Pin to the address the *client* resolves, never to the one the server
     # reports for itself.
     #

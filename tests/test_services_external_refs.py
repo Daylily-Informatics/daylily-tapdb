@@ -49,17 +49,66 @@ def _request(
 
 
 class _FakeResponse:
-    def __init__(self, payload: object):
-        self._payload = payload
+    def __init__(
+        self,
+        payload: object,
+        *,
+        content_type: str = "application/json",
+        status: int = 200,
+    ):
+        self._raw = json.dumps(payload).encode("utf-8")
+        self._offset = 0
+        self.headers = {"Content-Type": content_type}
+        self.status = status
 
-    def read(self) -> bytes:
-        return json.dumps(self._payload).encode("utf-8")
+    def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            chunk = self._raw[self._offset :]
+        else:
+            chunk = self._raw[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
 
-    def __enter__(self):
-        return self
 
-    def __exit__(self, exc_type, exc, tb):
-        return False
+class _FakeConnection:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeTransport:
+    def __init__(self, response: _FakeResponse):
+        self.response = response
+        self.requests: list[tuple[eg._V1ProxyTarget, object, float]] = []
+        self.connections: list[_FakeConnection] = []
+
+    def open(self, target, endpoint, *, timeout):
+        connection = _FakeConnection()
+        self.connections.append(connection)
+        self.requests.append((target, endpoint, timeout))
+        return connection, self.response
+
+
+def _policy() -> eg.V1ProxyPolicy:
+    return eg.V1ProxyPolicy(
+        allowed_hosts=frozenset({"atlas.example"}),
+        timeout_seconds=3,
+    )
+
+
+def _install_public_proxy(monkeypatch, payload: object) -> _FakeTransport:
+    transport = _FakeTransport(_FakeResponse(payload))
+    monkeypatch.setattr(eg, "_open_pinned_https", transport.open)
+    monkeypatch.setattr(
+        eg.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (eg.socket.AF_INET, eg.socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    return transport
 
 
 def test_resolve_external_graph_refs_builds_href_and_sorts():
@@ -201,70 +250,150 @@ def test_get_external_ref_by_index_raises_for_out_of_range():
 
 
 def test_fetch_remote_graph_builds_expected_url_and_headers(monkeypatch):
-    captured = {}
-
-    def _fake_urlopen(request, timeout):
-        captured["url"] = request.full_url
-        captured["headers"] = dict(request.header_items())
-        captured["timeout"] = timeout
-        return _FakeResponse({"elements": {"nodes": [], "edges": []}})
-
-    monkeypatch.setattr(eg, "urlopen", _fake_urlopen)
+    transport = _install_public_proxy(
+        monkeypatch, {"elements": {"nodes": [], "edges": []}}
+    )
     request = _request(
         headers={"cookie": "sid=abc", "authorization": "Bearer xyz"},
     )
 
-    payload = eg.fetch_remote_graph(request, _ref(auth_mode="same_origin"), depth=3)
+    payload = eg.fetch_remote_graph(
+        request,
+        _ref(base_url="https://atlas.example"),
+        depth=3,
+        policy=_policy(),
+    )
 
     assert payload == {"elements": {"nodes": [], "edges": []}}
-    assert captured["timeout"] == 20
-    assert captured["url"] == (
-        "https://atlas.local/api/graph/data?start_euid=AT-1&depth=3&tenant_id=tenant-1"
+    target, endpoint, timeout = transport.requests[0]
+    assert 0 < timeout <= 3
+    assert target.request_target == (
+        "/api/graph/data?start_euid=AT-1&depth=3&tenant_id=tenant-1"
     )
-    assert captured["headers"]["Cookie"] == "sid=abc"
-    assert captured["headers"]["Authorization"] == "Bearer xyz"
+    assert target.host == "atlas.example"
+    assert endpoint[3] == ("93.184.216.34", 443)
+    assert transport.connections[0].closed is True
 
 
 def test_fetch_remote_graph_requires_absolute_http_url():
     request = _request()
     ref = _ref(base_url="atlas.local")
-    with pytest.raises(RuntimeError, match="absolute http\\(s\\) URL"):
-        eg.fetch_remote_graph(request, ref, depth=1)
+    with pytest.raises(RuntimeError, match="absolute https URL"):
+        eg.fetch_remote_graph(request, ref, depth=1, policy=_policy())
 
 
 def test_fetch_remote_graph_rejects_non_object_json(monkeypatch):
-    monkeypatch.setattr(eg, "urlopen", lambda *_a, **_k: _FakeResponse(["bad"]))
+    _install_public_proxy(monkeypatch, ["bad"])
     request = _request()
     with pytest.raises(RuntimeError, match="JSON object"):
-        eg.fetch_remote_graph(request, _ref(), depth=1)
+        eg.fetch_remote_graph(
+            request,
+            _ref(base_url="https://atlas.example"),
+            depth=1,
+            policy=_policy(),
+        )
 
 
 def test_fetch_remote_object_detail_passes_tenant_id(monkeypatch):
-    captured = {}
-
-    def _fake_urlopen(request, timeout):
-        captured["url"] = request.full_url
-        captured["timeout"] = timeout
-        return _FakeResponse({"uid": 5, "euid": "AT-9"})
-
-    monkeypatch.setattr(eg, "urlopen", _fake_urlopen)
+    transport = _install_public_proxy(monkeypatch, {"uid": 5, "euid": "AT-9"})
     request = _request()
 
-    payload = eg.fetch_remote_object_detail(request, _ref(), euid="AT-9")
+    payload = eg.fetch_remote_object_detail(
+        request,
+        _ref(base_url="https://atlas.example"),
+        euid="AT-9",
+        policy=_policy(),
+    )
 
     assert payload == {"uid": 5, "euid": "AT-9"}
-    assert captured["timeout"] == 20
-    assert captured["url"] == "https://atlas.local/api/object/AT-9?tenant_id=tenant-1"
+    target, _endpoint, timeout = transport.requests[0]
+    assert 0 < timeout <= 3
+    assert target.request_target == ("/api/object/AT-9?tenant_id=tenant-1")
 
 
-def test_apply_forwarded_auth_same_origin_mismatch_raises():
-    request = _request(netloc="local-admin:8911")
-    headers: dict[str, str] = {}
-    with pytest.raises(RuntimeError, match="matching request origin"):
-        eg._apply_forwarded_auth(
-            request,
-            _ref(auth_mode="same_origin", base_url="https://atlas.local"),
-            headers,
+def test_v1_proxy_resolves_once_and_uses_the_validated_endpoint(monkeypatch):
+    calls = 0
+
+    def _resolve(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        address = "93.184.216.34" if calls == 1 else "127.0.0.1"
+        return [(eg.socket.AF_INET, eg.socket.SOCK_STREAM, 6, "", (address, 443))]
+
+    transport = _FakeTransport(_FakeResponse({"ok": True}))
+    monkeypatch.setattr(eg.socket, "getaddrinfo", _resolve)
+    monkeypatch.setattr(eg, "_open_pinned_https", transport.open)
+
+    assert eg._fetch_v1_json(
+        "https://atlas.example/path", policy=_policy(), label="Remote"
+    ) == {"ok": True}
+    assert calls == 1
+    assert transport.requests[0][1][3] == ("93.184.216.34", 443)
+
+
+def test_pinned_https_connects_validated_socket_with_original_tls_name(monkeypatch):
+    calls: dict[str, object] = {}
+
+    class _Socket:
+        def settimeout(self, value):
+            calls["timeout"] = value
+
+        def connect(self, value):
+            calls["connect"] = value
+
+        def setsockopt(self, *value):
+            calls["setsockopt"] = value
+
+        def close(self):
+            calls["closed"] = True
+
+    class _Context:
+        def wrap_socket(self, value, *, server_hostname):
+            calls["wrapped"] = value
+            calls["server_hostname"] = server_hostname
+            return "tls-socket"
+
+    raw_socket = _Socket()
+    monkeypatch.setattr(eg.socket, "socket", lambda *_args: raw_socket)
+    monkeypatch.setattr(eg.ssl, "create_default_context", lambda: _Context())
+    target = eg._V1ProxyTarget(
+        host="atlas.example",
+        port=443,
+        host_header="atlas.example",
+        request_target="/path",
+        endpoints=(),
+    )
+    endpoint = (
+        eg.socket.AF_INET,
+        eg.socket.SOCK_STREAM,
+        6,
+        ("93.184.216.34", 443),
+    )
+
+    connection = eg._PinnedHTTPSConnection(target, endpoint, timeout=3)
+    connection.connect()
+
+    assert calls["timeout"] == 3
+    assert calls["connect"] == ("93.184.216.34", 443)
+    assert calls["wrapped"] is raw_socket
+    assert calls["server_hostname"] == "atlas.example"
+    assert connection.sock == "tls-socket"
+
+
+def test_v1_proxy_rejects_private_dns_resolution(monkeypatch):
+    monkeypatch.setattr(
+        eg.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (eg.socket.AF_INET, eg.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))
+        ],
+    )
+    with pytest.raises(RuntimeError, match="non-public address"):
+        eg.fetch_remote_graph(
+            _request(),
+            _ref(base_url="https://atlas.example"),
+            depth=1,
+            policy=_policy(),
         )
 
 

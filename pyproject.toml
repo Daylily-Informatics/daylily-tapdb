@@ -95,8 +95,8 @@ admin = [
 tapdb = "daylily_tapdb.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Daylily-Informatics/tapdb-core"
-Repository = "https://github.com/Daylily-Informatics/tapdb-core.git"
+Homepage = "https://github.com/Daylily-Informatics/daylily-tapdb"
+Repository = "https://github.com/Daylily-Informatics/daylily-tapdb.git"
 Documentation = "https://daylily-tapdb.readthedocs.io"
 
 [tool.setuptools.packages.find]
@@ -123,6 +123,7 @@ admin = [
 [tool.setuptools.data-files]
 "schema" = ["schema/tapdb_schema.sql", "schema/rls.sql"]
 "schema/migrations" = ["schema/migrations/*.sql"]
+"docs" = ["docs/*.md"]
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"
@@ -136,12 +137,10 @@ addopts = "-v --tb=short"
 
 [tool.coverage.run]
 source = ["daylily_tapdb", "admin"]
-omit = [
-    "daylily_tapdb/cli/*",
-]
+branch = true
 
 [tool.coverage.report]
-fail_under = 85
+fail_under = 90
 show_missing = true
 skip_covered = true
 
@@ -166,10 +165,28 @@ ignore = ["E501"]
 "tests/test_backup_snapshots.py" = ["N803"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
+follow_imports = "skip"
+# TapDB's older dynamically mapped ORM and Typer surfaces are not yet globally
+# strict-clean. Keep the release gate explicit and expand it as those modules
+# are modernized; every new 9.2 implementation module is checked here.
+files = [
+    "daylily_tapdb/advisory_locks.py",
+    "daylily_tapdb/migration_identity.py",
+    "daylily_tapdb/runtime_info.py",
+    "daylily_tapdb/security_context.py",
+    "daylily_tapdb/services/external_refs.py",
+    "daylily_tapdb/services/graph_payloads.py",
+    "daylily_tapdb/services/object_operations.py",
+    "daylily_tapdb/services/object_search.py",
+    "daylily_tapdb/templates/repository.py",
+    "daylily_tapdb/web/dag_v2.py",
+    "daylily_tapdb/cli/objects.py",
+    "daylily_tapdb/cli/templates.py",
+]
 
 [tool.bandit]
 targets = ["daylily_tapdb", "admin"]

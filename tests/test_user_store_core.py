@@ -28,6 +28,21 @@ class _RowResult:
         return [self._row]
 
 
+class _Nested:
+    def __init__(self):
+        self.is_active = True
+        self.committed = False
+        self.rolled_back = False
+
+    def commit(self):
+        self.is_active = False
+        self.committed = True
+
+    def rollback(self):
+        self.is_active = False
+        self.rolled_back = True
+
+
 class _FakeSession:
     def __init__(self, row=(1,)):
         self.row = row
@@ -37,6 +52,10 @@ class _FakeSession:
         captured_params = dict(params or {})
         self.calls.append((str(stmt), captured_params))
         return _RowResult(self.row)
+
+    def begin_nested(self):
+        self.nested = _Nested()
+        return self.nested
 
 
 class _QueuedPostgresSession:
@@ -52,6 +71,10 @@ class _QueuedPostgresSession:
         if self.rows:
             return _RowResult(self.rows.pop(0))
         return _RowResult(None)
+
+    def begin_nested(self):
+        self.nested = _Nested()
+        return self.nested
 
 
 def test_normalize_login_identifier_normalizes_case_and_whitespace():
@@ -77,6 +100,8 @@ def test_select_user_columns_contains_expected_aliases_and_filters():
     assert "AS role" in sql
     assert "AS is_active" in sql
     assert "AS require_password_change" in sql
+    assert "gi.domain_code = tapdb_current_domain_code()" in sql
+    assert "gi.issuer_app_code = tapdb_current_owner_repo_name()" in sql
     assert "polymorphic_discriminator = 'actor_instance'" in sql
     assert "gi.category = 'actor'" in sql
     assert "gi.type = 'user'" in sql
@@ -93,7 +118,8 @@ def test_get_system_user_template_uid_returns_uid_and_uses_expected_params():
     assert "FROM generic_template" in stmt
     assert "NULLIF(instance_prefix, '')" in stmt
     assert "upper(NULLIF(instance_prefix, '')) = 'SYS'" in stmt
-    assert "AND issuer_app_code = 'daylily-tapdb'" in stmt
+    assert "AND domain_code = tapdb_current_domain_code()" in stmt
+    assert "AND issuer_app_code = tapdb_current_owner_repo_name()" in stmt
     assert "uid DESC" in stmt
     assert params == {
         "category": m.SYSTEM_USER_TEMPLATE_CATEGORY,
@@ -116,14 +142,16 @@ def test_get_system_user_template_uid_raises_when_template_prefix_missing():
         m._get_system_user_template_uid(session)
 
 
-def test_get_system_user_template_uid_filters_to_tapdb_owned_sys_template():
+def test_get_system_user_template_uid_filters_to_exact_bound_runtime_scope():
     session = _FakeSession(row=(42, "SYS"))
 
     assert m._get_system_user_template_uid(session) == 42
 
     stmt, _ = session.calls[0]
-    assert "AND issuer_app_code = 'daylily-tapdb'" in stmt
+    assert "AND domain_code = tapdb_current_domain_code()" in stmt
+    assert "AND issuer_app_code = tapdb_current_owner_repo_name()" in stmt
     assert "AND upper(NULLIF(instance_prefix, '')) = 'SYS'" in stmt
+    assert "daylily-tapdb" not in stmt
 
 
 def test_set_last_login_writes_timestamp_and_uid(monkeypatch: pytest.MonkeyPatch):
@@ -135,6 +163,8 @@ def test_set_last_login_writes_timestamp_and_uid(monkeypatch: pytest.MonkeyPatch
     stmt, params = session.calls[0]
     assert "SET json_addl = jsonb_set" in stmt
     assert "modified_dt = NOW()" in stmt
+    assert "gi.domain_code = tapdb_current_domain_code()" in stmt
+    assert "gi.issuer_app_code = tapdb_current_owner_repo_name()" in stmt
     assert params["uid"] == 7
     assert params["last_login_dt"] == "2026-03-29T12:30:00+00:00"
 
@@ -396,12 +426,10 @@ def test_create_or_get_inserts_new_user(monkeypatch: pytest.MonkeyPatch):
     assert lookup_calls == [("new@example.com", True)]
 
 
-def test_create_or_get_switches_to_tapdb_owner_for_system_user_insert(
+def test_create_or_get_never_switches_the_principal_bound_owner_scope(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    session = _QueuedPostgresSession(
-        rows=[("bloom",), ("daylily-tapdb",), (77,), ("bloom",)]
-    )
+    session = _QueuedPostgresSession(rows=[(77,)])
     created_user = SimpleNamespace(uid=77, username="new@example.com")
 
     monkeypatch.setattr(
@@ -427,16 +455,9 @@ def test_create_or_get_switches_to_tapdb_owner_for_system_user_insert(
     assert created is True
     assert user is created_user
     statements = [stmt for stmt, _params in session.calls]
-    assert "current_setting('session.current_owner_repo_name', true)" in statements[0]
-    assert (
-        "set_config('session.current_owner_repo_name', :owner, true)" in statements[1]
-    )
-    assert session.calls[1][1] == {"owner": "daylily-tapdb"}
-    assert "INSERT INTO generic_instance" in statements[2]
-    assert (
-        "set_config('session.current_owner_repo_name', :owner, true)" in statements[3]
-    )
-    assert session.calls[3][1] == {"owner": "bloom"}
+    assert len(statements) == 1
+    assert "INSERT INTO generic_instance" in statements[0]
+    assert "set_config" not in statements[0]
 
 
 def test_create_or_get_retries_lookup_after_integrity_error(
@@ -446,6 +467,10 @@ def test_create_or_get_retries_lookup_after_integrity_error(
     calls = {"count": 0}
 
     class _IntegritySession:
+        def begin_nested(self):
+            self.nested = _Nested()
+            return self.nested
+
         def execute(self, stmt, params=None):
             calls["count"] += 1
             raise m.IntegrityError("insert failed", params, Exception("boom"))

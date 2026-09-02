@@ -282,6 +282,7 @@ class TestConnection:
             "app_username": "pytest",
             "domain_code": "Z",
             "owner_repo_name": "daylily-tapdb",
+            "config_identity": "/abs/tapdb-config.yaml",
             "echo_sql": False,
             "engine_type": "local",
         }

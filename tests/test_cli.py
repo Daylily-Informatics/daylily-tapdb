@@ -157,12 +157,15 @@ class TestRootCLI:
 
         assert result.exit_code == 0
         payload = json.loads(result.output)
-        assert payload["target"] == "explicit"
-        assert payload["client_id"] == "testclient"
-        assert payload["database_name"] == "testdb"
-        assert payload["schema_name"] == "tapdb_testdb"
-        assert payload["postgres"]["target"] == "explicit"
-        assert payload["postgres"]["schema_name"] == "tapdb_testdb"
+        assert payload["config"]["target"] == "explicit"
+        assert payload["scope"]["client_id"] == "testclient"
+        assert payload["scope"]["database_name"] == "testdb"
+        assert payload["database"]["schema_name"] == "tapdb_testdb"
+        assert "target" not in payload
+        assert "client_id" not in payload
+        assert "database_name" not in payload
+        assert "schema_name" not in payload
+        assert "postgres" not in payload
         assert "tapdb_env" not in payload
         assert "check_all_envs" not in payload
 

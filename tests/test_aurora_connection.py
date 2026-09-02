@@ -257,6 +257,7 @@ def test_tapdb_connection_aurora_delegates_to_builder(_ca_bundle, monkeypatch):
         domain_code="Z",
         owner_repo_name="daylily-tapdb",
         schema_name="tapdb_test",
+        config_identity="/abs/tapdb-config.yaml",
     )
     assert "sslmode=verify-full" in conn._db_url
     assert "tapdb_dev" in conn._db_url
@@ -286,6 +287,7 @@ def test_tapdb_connection_aurora_passes_hostaddr(_ca_bundle, monkeypatch):
         domain_code="Z",
         owner_repo_name="daylily-tapdb",
         schema_name="tapdb_test",
+        config_identity="/abs/tapdb-config.yaml",
     )
 
     assert "hostaddr=127.0.0.1" in conn._db_url
@@ -315,6 +317,7 @@ def test_tapdb_connection_aurora_defaults_to_explicit_password_auth(
         domain_code="Z",
         owner_repo_name="daylily-tapdb",
         schema_name="tapdb_test",
+        config_identity="/abs/tapdb-config.yaml",
     )
 
     assert "plain-pw" in conn._db_url
@@ -337,6 +340,7 @@ def test_tapdb_connection_aurora_requires_hostname(monkeypatch):
             domain_code="Z",
             owner_repo_name="daylily-tapdb",
             schema_name="tapdb_test",
+            config_identity="/abs/tapdb-config.yaml",
         )
 
 
@@ -370,6 +374,7 @@ def test_tapdb_connection_local_unchanged(monkeypatch):
         domain_code="Z",
         owner_repo_name="daylily-tapdb",
         schema_name="tapdb_test",
+        config_identity="/abs/tapdb-config.yaml",
     )
     assert called["url"] == "postgresql://alice:@localhost:5533/tapdb"
 

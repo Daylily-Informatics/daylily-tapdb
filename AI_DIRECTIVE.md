@@ -1,337 +1,204 @@
 # AI Directive: daylily-tapdb
 
-## Purpose
-This document instructs AI agents how to operate `daylily-tapdb` safely and predictably.
-Use it when you are building, running, or integrating TAPDB as:
-1. a Python library, and
-2. a CLI-managed database + service runtime.
+Use this document when changing, operating, or integrating TapDB. The public
+API, CLI help, schema assets, and active docs are authoritative when this file
+and code disagree.
 
-Primary goals:
-- preserve data integrity,
-- keep EUID behavior compliant with Meridian,
-- prevent runtime collisions when multiple TAPDB clients run under one OS account.
+## Purpose and boundary
 
-## Operating Policy
-1. Prefer TAPDB public APIs and TAPDB CLI commands for lifecycle operations.
-2. Do not use ad-hoc SQL for standard create/schema/seed/bootstrap flows.
-3. Do not assume global shared runtime state.
-4. For local engine configs, host must be exactly `localhost`.
-5. Treat destructive operations as opt-in only.
-6. Treat native `tenant_id` columns as canonical tenant scope for TAPDB rows.
-7. When a command needs machine-readable output, use the root-global `--json` flag before the subcommand name.
+TapDB is a typed object, lineage, audit, external-reference, and transactional
+messaging substrate. It is not an untyped graph database, workflow engine, or
+application-domain authority. Keep business meaning, workflow policy, and
+service-specific access decisions in the consuming repository.
 
-## Required Context (Strict Namespace)
-TAPDB is namespace-isolated. For commands that touch config/runtime/db/ui/cognito/users/aurora/info, require both:
-- `client-id`
-- `database-name`
+Prefer public TapDB APIs and CLI commands. Do not use ad hoc SQL for normal
+object creation, schema lifecycle, seeding, or repair.
 
-Provide runtime context explicitly:
-- CLI: `--config <path> --env <name>`
+## Explicit target rule
 
-Use `--client-id` and `--database-name` only for config creation commands such
-as `tapdb --config <path> db-config init`.
+Every stateful CLI operation uses one explicit config:
 
-Resolution precedence:
-1. explicit `--config`
-2. config metadata from that file
-3. no runtime fallback
+```bash
+tapdb --config <path> ...
+tapdb --config <path> --json info
+```
 
-If runtime config is missing, commands should fail with actionable guidance.
+There is no `--env` runtime selector and no ambient config, database, schema,
+localhost, or public-schema fallback. `meta.client_id`, `meta.database_name`,
+`meta.owner_repo_name`, registry paths, and the complete `target` live in the
+same config. `--client-id` and `--database-name` are config-initialization or
+migration metadata, not alternate runtime selectors.
 
-## Namespace Path Model
-Config root:
-- `~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml`
+The normal local setup is:
 
-Runtime root per environment:
-- `~/.config/tapdb/<client-id>/<database-name>/<env>/`
-
-Runtime files:
-- UI PID: `.../<env>/ui/ui.pid`
-- UI logs: `.../<env>/ui/ui.log`
-- UI certs: `.../<env>/ui/certs/localhost.crt` and `localhost.key`
-- Postgres data: `.../<env>/postgres/data/`
-- Postgres log: `.../<env>/postgres/postgresql.log`
-- Lock metadata: `.../<env>/locks/instance.lock`
-
-Never use shared global runtime files like `~/.tapdb/ui.pid` or `~/.tapdb/ui.log` for active flows.
-
-## Canonical Command Groups (No Overlap)
-Use these functional groups only:
-
-0. `tapdb config`
-- Generic config file operations.
-- Does not replace namespace-aware `db-config init`.
-
-1. `tapdb bootstrap`
-- Orchestration command.
-- Handles create/start/schema/seed and optionally GUI startup.
-- Main entry point for local and aurora setup.
-
-2. `tapdb pg`
-- Runtime/service control only.
-- Local Postgres init/start/stop/status/logs.
-
-3. `tapdb db`
-- Logical database operations only.
-- DB create/delete, schema apply/status/reset/migrate, data seed.
-- `data backup` / `data restore` are **deprecated**; use `tapdb backup`.
-
-3a. `tapdb backup`
-- Backup and recovery lifecycle only.
-- `plan`, `create`, `verify`, `list`, `restore-plan`, `restore`, `rehearse`.
-- Schema-scoped logical backups, staged restores, rehearsals, hash-chained
-  receipts. See `docs/backup-and-recovery.md`.
-- Exit codes are contractual: `0` ok, `1` ran and found a problem, `2` could
-  not run.
-
-4. `tapdb aurora`
-- Cloud infrastructure lifecycle only.
-- Provision/delete/status/list/connect for Aurora resources.
-
-5. `tapdb ui`
-- Admin UI process lifecycle only.
-- start/stop/status/logs/restart, plus HTTPS cert helpers.
-
-6. `tapdb users`
-- Actor-backed auth user lifecycle commands.
-
-7. `tapdb cognito`
-- Cognito lifecycle and validation flows.
-- Integrates TAPDB config with `daylily-auth-cognito` (`daycog`) config files.
-
-## Bootstrap-First Workflow
-Preferred setup path:
-
-```sh
-tapdb --config ~/.config/tapdb/<client>/<database>/tapdb-config.yaml db-config init \
+```bash
+tapdb --config <path> db-config init \
   --client-id <client> \
   --database-name <database> \
-  --owner-repo-name <repo-name> \
-  --domain-code dev=<domain-code> \
+  --owner-repo-name <owner-repository> \
+  --domain-code <domain-code> \
   --domain-registry-path /abs/path/to/domain_code_registry.json \
   --prefix-ownership-registry-path /abs/path/to/prefix_ownership_registry.json \
-  --env dev
+  --engine-type local \
+  --host localhost \
+  --port 5533 \
+  --ui-port 8911 \
+  --user <database-role> \
+  --database <physical-database> \
+  --schema-name <schema>
 
-# Local runtime + logical setup + optional GUI
-tapdb --config ~/.config/tapdb/<client>/<database>/tapdb-config.yaml --env dev bootstrap local
-
-# or Aurora infra + logical setup + optional GUI
-tapdb --config ~/.config/tapdb/<client>/<database>/tapdb-config.yaml --env dev \
-  bootstrap aurora --cluster <cluster-id> --region <region>
+tapdb --config <path> bootstrap local --no-gui
 ```
 
-Use `--no-gui` when you need headless setup.
+Use `tapdb --help` and subcommand help for the current option set. Do not copy
+old command shapes from historical plans.
 
-## Core Template Policy
-Bundled TAPDB core templates are intentionally minimal:
-1. `SYS/actor/system_user/1.0`
-2. `MSG/message/webhook_event/1.0`
+## Command ownership
 
-Operational rules:
-1. Treat these as TAPDB-native baseline templates.
-2. Do not add client-domain workflow/action/content packs to TAPDB core repo.
-3. If domain packs are needed, provide them via client repos or external config
-   directories and seed them explicitly.
-4. Example registry fixtures for isolated TAPDB-only runs live under
-   `daylily_tapdb/etc/`.
+- `tapdb db-config init` creates the explicit namespaced target config;
+  `tapdb config` provides generic config-file operations.
+- `tapdb bootstrap` orchestrates local or Aurora setup.
+- `tapdb pg` controls the configured local PostgreSQL runtime.
+- `tapdb db` owns database, schema, migration, seed, and config validation.
+- `tapdb backup` owns plan, create, verify, list, restore, and rehearsal.
+- `tapdb validation` assesses evidence without persisting an assessment.
+- `tapdb repair` creates explicit repair evidence without rewriting the subject.
+- `tapdb templates` manages repository-owned template packs.
+- `tapdb objects` performs exact-selector governed object operations.
+- `tapdb ui` controls the standalone admin server.
+- `tapdb users` manages actor-backed TapDB users.
+- `tapdb cognito` manages the TapDB side of Cognito integration.
+- `tapdb aurora` manages optional cloud infrastructure.
 
-Template loading precedence (seed + validate):
-1. TAPDB core config always loads first.
-2. Client `--config` directory (if supplied) loads second.
-3. Duplicate template keys across sources are hard-fail (no override).
-4. `tapdb db config validate` still requires namespace context even though it does not connect to DB.
+Destructive operations remain explicit. Never turn a dry run, plan, review, or
+preflight into an apply without the exact required confirmation or receipt.
 
-## Config Schema Expectations
-Namespace config (`tapdb-config.yaml`) should include:
+## Core templates
 
-```yaml
-meta:
-  config_version: 3
-  client_id: <client-id>
-  database_name: <database-name>
-  owner_repo_name: <repo-name>
-  domain_registry_path: </abs/path/to/domain_code_registry.json>
-  prefix_ownership_registry_path: </abs/path/to/prefix_ownership_registry.json>
-admin:
-  auth:
-    mode: tapdb|shared_host|disabled
-  session:
-    secret: <session-secret>
-environments:
-  dev:
-    engine_type: local|aurora
-    host: localhost|<aurora-endpoint>
-    port: "<db-port>"
-    ui_port: "<https-port>"
-    domain_code: <meridian-domain>
-    user: <db-user>
-    password: <db-password>
-    database: <db-name>
-    cognito_user_pool_id: <pool-id>
-    support_email: <optional support contact>
-```
+The bundled core inventory is exactly nine substrate templates:
 
-Rules:
-- local engine must use `host: localhost`.
-- `port` and `ui_port` must be explicit per environment.
-- port conflicts are hard errors (no silent auto-reassignment).
-- `domain_code` must be explicit per environment.
-- registry paths and `owner_repo_name` must be present in `meta`.
+1. `actor/user/system/1.0/`
+2. `set/generic/generic/1.0/`
+3. `governance/validator/definition/1.0/`
+4. `governance/terminology/set/1.0/`
+5. `governance/relationship/constraint/1.0/`
+6. `governance/position/scheme/1.0/`
+7. `evidence/repair/record/1.0/`
+8. `reference/external_identifier/tapdb_object/1.0/`
+9. `message/webhook/event/1.0/`
 
-## Native Tenant Policy
-1. TAPDB stores tenant scope in native `tenant_id` (`UUID`) columns on:
-   - `generic_template`
-   - `generic_instance`
-   - `generic_instance_lineage`
-   - `audit_log`
-   - `outbox_event`
-2. Use native columns for tenancy filters/authorization.
-3. Do not write canonical tenant IDs into `json_addl`, including `json_addl.tenant_id` or `json_addl.properties.tenant_id`.
-4. Legacy rows or external payloads that carry JSON tenant keys must be reported by audit/repair tooling. Compliance repair must add explicit evidence or an approved regulated assessment report; revalidation must not rewrite stored evidence.
+Do not add application-domain packs to TapDB core. Core loads before explicit
+consumer packs, and duplicate coordinates hard-fail rather than override.
 
-## Python Library Usage
-Prefer TAPDB APIs over low-level SQL.
+## EUID and identity rules
 
-```python
-from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory
-from daylily_tapdb.cli.db_config import get_db_config_for_env
+TapDB uses `meridian-euid==0.4.8` with explicit domain and prefix ownership
+registries. Preserve minted EUIDs forever. Never generate, hash, format, or
+document a string that merely looks like a Meridian EUID. A link to
+`/tapdb/object/...` is valid only after the owning TapDB service confirms that
+the object exists.
 
-cfg = get_db_config_for_env(
-    "dev",
-    config_path="~/.config/tapdb/<client>/<database>/tapdb-config.yaml",
-)
+Natural identity claims use
+`InstanceFactory.claim_instance_by_identity(...)` inside an already-active
+transaction. The result is `CREATED` or `EXISTING`; every replay returns the
+stored winner. TapDB does not compare consumer payload fingerprints; clients
+such as Dewey own any divergent-payload `409`. The factory never controls the
+outer transaction.
 
-conn = TAPDBConnection(
-    db_hostname=f"{cfg['host']}:{cfg['port']}",
-    db_user=cfg["user"],
-    db_pass=cfg["password"],
-    db_name=cfg["database"],
-    domain_code=cfg["domain_code"],
-    owner_repo_name=cfg["owner_repo_name"],
-)
+## Relationship and external-reference rules
 
-templates = TemplateManager()
-factory = InstanceFactory(templates, domain_code=cfg["domain_code"])
-```
+Durable relationships exist only in `generic_instance_lineage`. Do not model an
+edge with raw `object_euid`, `target_object_euid`, another `*_object_euid`
+property, or an ad hoc graph blob.
 
-Guidance:
-- Use transactional flows for multi-step writes.
-- On relationship validation failure, fail atomically (no partial writes).
-- Maintain current EUID behavior; do not introduce alternate ID formats.
+Cross-service relationships require all of the following:
 
-## Auth User Storage Policy
-TAPDB auth users are actor-backed objects, not a dedicated user table.
+1. a foreign EUID returned by the target owning service;
+2. a persisted `reference/external_identifier/tapdb_object/1.0/` instance;
+3. authoritative lineage from the local source to that reference;
+4. assertion time and provenance.
 
-Required model:
-1. Store auth users as `generic_instance` rows with:
-   - `polymorphic_discriminator='actor_instance'`
-   - `category='SYS'`
-   - `type='actor'`
-   - `subtype='system_user'`
-   - `version='1.0'`
-2. Use template code: `SYS/actor/system_user/1.0`.
-3. Keep canonical login identity in `json_addl.login_identifier` (lowercased).
-4. Keep role/active/password metadata in `json_addl` fields.
+Metadata may improve display or search but cannot become relationship,
+ownership, tenant, or authorization evidence.
 
-## EUID Requirements (Mandatory)
-Normative spec:
-- `../../lsmc/meridian-euid/SPEC.md`
+## Transaction security
 
-Agent requirements:
-1. Keep Meridian-compatible EUID generation/validation intact.
-2. Use TAPDB EUID helpers where available.
-3. Do not replace EUIDs with UUID-only external identifiers.
-4. Preserve prefix + sequence behavior when creating new entities.
-5. Never rewrite a minted EUID, even when an older environment minted it imperfectly.
+Every PostgreSQL runtime transaction installs these values atomically:
 
-## Cognito Integration Policy
-TAPDB config stores only the pool reference per environment:
-- `environments.<env>.cognito_user_pool_id`
+- exact config identity and schema;
+- Meridian domain and owner repository;
+- tenant scope, including explicit empty global scope;
+- authenticated actor;
+- explicit global-row write policy.
 
-All Cognito app/client/domain auth context is managed in the Daycog flat config file:
-- `~/.config/daycog/config.yaml`
+Missing or malformed context fails closed. Do not catch and continue, install
+checkout-level ambient state, or attribute a write to `unknown`.
 
-Operational requirements:
-1. Use app client name `tapdb` for TAPDB UI.
-2. Validate callback/logout URLs against TAPDB configured HTTPS UI port.
-3. Keep TAPDB and daycog in sync before testing login/signup.
+Protected tables use enabled and forced RLS with both `USING` and `WITH CHECK`
+policies. Runtime roles must be `NOSUPERUSER NOBYPASSRLS`. Schema/bootstrap and
+migration code must opt into `connection_role="operator"`; never use that role
+to bypass application runtime checks.
 
-## GUI + API Route Reality
-HTML/UI routes in `admin/main.py` include:
-- auth/session: `/login`, `/signup`, `/logout`, `/auth/login`, `/auth/callback`, `/change-password`
-- authenticated pages: `/`, `/query`, `/templates`, `/instances`, `/lineages`, `/object/{euid}`, `/graph`, `/create-instance/{template_euid}`, `/info`
-- admin-only page: `/admin/metrics`
-- public help page: `/help`
+`schema/rls.sql` is canonical for fresh apply, migration, packaged schema
+inventory, backup drift verification, and ad hoc integration schemas. Do not
+duplicate its functions or policies in a fixture.
 
-JSON endpoints:
-- public: `GET /api/graph/data`, `GET /api/templates`, `GET /api/instances`, `GET /api/object/{euid}`
-- admin-only: `POST /api/lineage`, `DELETE /api/object/{euid}`
+## Web auth and embedding
 
-Backup routes in `admin/main.py` (all admin-only):
-- `GET /api/backups`, `GET /api/backups/status`, `GET /api/backups/plan`
-- `POST /api/backups` (201), `POST /api/backups/{ref}/verify`
-- `POST /api/backups/{ref}/restore/stage`, `POST /api/backups/{ref}/restore/apply`
-- `POST /api/backups/{ref}/rehearse`
+`create_tapdb_gui_app(...)` is the host-authenticated embeddable GUI/JSON
+surface. Supply `TapdbHostBridge(auth_mode="host_session", ...)` when the host
+owns browser auth. TapDB-native auth is for a standalone TapDB login flow.
 
-Embedded GUI backup routes in `daylily_tapdb/gui/router.py` (all admin-only,
-403 otherwise):
-- pages: `GET /admin/backups`, `GET /admin/backups/{ref}/restore`
-- JSON: `GET /api/admin/backups`, `GET /api/admin/backups/status`,
-  `GET /api/admin/backups/{ref}/restore`
-- actions: `POST /admin/backups/create`, `POST /admin/backups/{ref}/verify`,
-  `POST /admin/backups/{ref}/rehearse`, `POST /admin/backups/{ref}/restore`
+Legacy admin JSON reads and all writes require authentication; mutation routes
+also enforce the governed role and apply/dry-run contract. Never document a
+legacy JSON route as public.
 
-All three surfaces call the same `daylily_tapdb.backup` service functions. That
-is enforced at runtime by `tests/test_backup_surfaces_contract.py` — do not add
-a check, a `pg_dump`, or a receipt write to a surface.
+## DAG v2
 
-`/info` includes DB + Cognito runtime details for authenticated users and admin-only DB inventory enumeration.
+New consumers use `mount_tapdb_dag_surfaces(...)` with:
 
-## HTTPS Policy
-TAPDB GUI should run on HTTPS with localhost certs.
+- one existing absolute config path;
+- one immutable, exact `service_id` matching fleet registration;
+- an explicit auth dependency;
+- positive bounded depth, node, and page-size limits.
 
-Preferred:
+Mounting is atomic. Publish `app.state.tapdb_dag_v2_advertisement` only from a
+successful mount; a failure leaves no partial route or advertisement. Stable
+eligibility reasons must remain machine-readable.
 
-```sh
-tapdb ui mkcert
-tapdb ui restart
-```
+The authenticated routes are:
 
-Manual fallback:
+- `GET /api/dag/manifest`
+- `GET /api/dag/v2/object/{euid}`
+- `GET /api/dag/v2/data`
+- `GET /api/dag/v2/search`
 
-```sh
-mkcert -install
-mkcert -cert-file ~/.config/tapdb/<client>/<database>/<env>/ui/certs/localhost.crt \
-  -key-file ~/.config/tapdb/<client>/<database>/<env>/ui/certs/localhost.key \
-  localhost
-```
+Search is bounded opaque-cursor discovery, never ownership proof. Exact lookup
+returns `404 object_not_owned` for a non-owned EUID. Graph output includes
+revision, snapshot, presentation, limits, and truncation. Project only outbound
+typed references backed by persisted EUIDs and lineage. DAG v2 performs no
+outbound fetch and never falls back to v1.
 
-## Multi-Client Safety Checklist
-Before running commands in shared OS accounts:
-1. Verify the intended `--config` path and `--env`.
-2. Run `tapdb --config <path> --env <name> info` and confirm namespace paths.
-3. Confirm DB/UI ports are from active namespace config.
-4. Run `tapdb --config <path> --env <name> cognito status <env>` and verify pool/app/callback.
+The legacy v1 proxy is disabled unless an operator supplies `V1ProxyPolicy`
+with an exact HTTPS DNS allowlist, timeout, and size cap. It rejects non-public
+resolution and redirects, requires JSON, and forwards no credentials.
 
-## Destructive Operation Guardrails
-Only execute with explicit user intent:
-- `tapdb db delete`
-- `tapdb db schema reset`
-- `tapdb backup restore --mode in-place` (replaces the live schema)
-- `tapdb aurora delete`
-- Cognito delete operations
-- Manual removal of runtime data directories
+See `docs/consumer-discoverability-guide.md` for the tested adoption flow.
 
-`tapdb backup restore` defaults to `--mode isolated`, which restores into a
-separate database and never touches live data. Only `--mode in-place` is
-destructive, and it requires the typed target label
-`<client_id>/<database_name>/<schema_name>@<database>` unless
-`safety.destructive_operations` is `allowed`. Setting that to `blocked` refuses
-in-place restores outright.
+## Testing and release floor
 
-## Agent Delivery Expectations
-When making TAPDB changes:
-1. Explain what changed and why.
-2. Reference exact files modified.
-3. Run tests relevant to changed behavior (`pytest -q` preferred when feasible).
-4. Report remaining risk and known gaps.
+The release path uses PostgreSQL 17 and runs the complete suite without
+deselecting integration tests. It enables local documentation examples and
+requires no unexpected skips. CI also runs Ruff check and format, mypy,
+Bandit, detect-secrets, branch coverage for `daylily_tapdb` and `admin`, wheel
+build, schema-asset inspection, and installed-wheel smoke checks.
+
+Do not weaken RLS, auth, exact identity, no-fallback, or evidence checks to make
+a test pass. Fix the fixture to supply the same explicit contract as runtime.
+
+## Public-safety rule
+
+README, active docs, examples, fixtures, and agent guidance must not include
+private machine paths, credentials, internal hostnames, organization-only
+deployment details, or invented EUIDs. Historical plans may describe older
+states; never promote them over current code and active documentation.

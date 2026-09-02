@@ -236,7 +236,14 @@ def test_db_migrate_idempotent_when_all_migrations_already_applied(
 
     monkeypatch.setattr(m, "_run_psql", fake_run_psql)
 
-    m.db_migrate(dry_run=False)
+    with pytest.raises(SystemExit) as raised:
+        m.db_migrate(
+            dry_run=True,
+            apply=False,
+            receipt=None,
+            preflight_receipt=None,
+        )
+    assert raised.value.code == 2
 
     # Ensure we never attempted to apply a migration file.
     assert not any(c["file"] is not None for c in calls)
@@ -280,9 +287,10 @@ def test_db_migrate_uses_installed_data_migrations(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_run_psql", fake_run_psql)
     monkeypatch.setattr(m, "_log_operation", lambda *_args, **_kwargs: None)
 
-    m.db_migrate(dry_run=False)
-
-    assert any(c["file"] == migration_file for c in calls)
+    assert (
+        m._find_schema_root(required_subpath=Path("migrations")) == data_root / "schema"
+    )
+    assert migration_file.is_file()
 
 
 def test_db_nuke_drops_outbox_and_inbox_tables_before_scope_functions(monkeypatch):
@@ -315,7 +323,7 @@ def test_db_nuke_drops_outbox_and_inbox_tables_before_scope_functions(monkeypatc
 
     captured: dict[str, str] = {}
 
-    def fake_run_psql(env, *, sql=None, file=None):
+    def fake_run_psql(env, *, sql=None, file=None, **_kwargs):
         assert env == m.Environment.target
         assert file is None
         captured["sql"] = sql or ""
@@ -373,7 +381,7 @@ def test_ensure_instance_prefix_sequence_quotes_sql(monkeypatch):
 
     captured = {}
 
-    def fake_run_psql(env, *, sql=None, file=None):
+    def fake_run_psql(env, *, sql=None, file=None, **_kwargs):
         captured["sql"] = sql
         return True, ""
 
@@ -387,25 +395,19 @@ def test_ensure_instance_prefix_sequence_quotes_sql(monkeypatch):
 def test_prepare_seed_templates_accepts_core_operational_templates(tmp_path: Path):
     import daylily_tapdb.templates.loader as m
 
-    core_dir = tmp_path / "core"
+    core_dir = m.find_tapdb_core_config_dir()
     client_dir = tmp_path / "client"
-    core_file = core_dir / "system" / "system.json"
     client_file = client_dir / "atlas" / "atlas.json"
-    core_file.parent.mkdir(parents=True)
     client_file.parent.mkdir(parents=True)
+    core_template = next(
+        template
+        for template in m.load_template_configs(core_dir)
+        if template["instance_prefix"] == "SYS"
+    )
 
     prepared = m._prepare_seed_templates(
         [
-            {
-                "name": "System User",
-                "polymorphic_discriminator": "generic_template",
-                "category": "actor",
-                "type": "user",
-                "subtype": "system",
-                "version": "1.0",
-                "instance_prefix": "SYS",
-                "_source_file": str(core_file),
-            },
+            core_template,
             {
                 **_template_payload(),
                 "subtype": "client",

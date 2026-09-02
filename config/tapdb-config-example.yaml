@@ -3,11 +3,11 @@
 # Save as:
 #   ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml
 #
-# Runtime commands require:
-#   tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml --env <name> ...
+# Runtime commands require the explicit config path:
+#   tapdb --config ~/.config/tapdb/<client-id>/<database-name>/tapdb-config.yaml ...
 
 meta:
-  config_version: 3
+  config_version: 4
   client_id: local
   database_name: tapdb
   owner_repo_name: daylily-tapdb
@@ -47,53 +47,29 @@ admin:
   db_pool_timeout: 30
   db_pool_recycle: 1800
 
-environments:
-  dev:
-    host: localhost
-    port: 5533
-    user: daylily
+target:
+  engine_type: local
+  host: localhost
+  port: 5533
+  ui_port: 8911
+  user: daylily
+  password: ""
+  # Optional fixed runtime tenant. Empty/absent is an explicit global-only
+  # deployment; request parameters never widen this database scope.
+  tenant_id: ""
+  allow_global_claims: false
+  # Required by schema apply/migrate/drift and global template seed. This must
+  # authenticate as a distinct PostgreSQL SUPERUSER or BYPASSRLS role.
+  operator:
+    user: tapdb_operator
     password: ""
-    database: tapdb_dev
-    domain_code: Z
-    support_email: support@example.com
-    cognito_user_pool_id: us-east-1_xxxxxxxxx
-    cognito_app_client_id: client123
-    cognito_app_client_secret: ""
-    cognito_client_name: tapdb
-    cognito_region: us-east-1
-    cognito_domain: tapdb-dev-users.auth.us-east-1.amazoncognito.com
-    cognito_callback_url: https://localhost:8911/auth/callback
-    cognito_logout_url: https://localhost:8911/login
-    aws_profile: lsmc
+    secret_arn: ""
+    iam_auth: false
+  database: tapdb_local
+  schema_name: tapdb_local
+  domain_code: Z
+  support_email: support@example.com
 
-  test:
-    host: localhost
-    port: 5534
-    user: daylily
-    password: ""
-    database: tapdb_test
-    domain_code: Z
-    support_email: support@example.com
-
-  prod:
-    host: example-prod-host
-    port: 5533
-    user: tapdb_admin
-    password: CHANGEME
-    database: tapdb_prod
-    domain_code: Z
-    support_email: support@example.com
-
-  aurora_dev:
-    engine_type: aurora
-    host: tapdb-dev-cluster.cluster-xxxxxxxxxxxx.us-west-2.rds.amazonaws.com
-    port: 5432
-    user: tapdb_admin
-    password: ""
-    database: tapdb_dev
-    domain_code: Z
-    support_email: support@example.com
-    region: us-west-2
-    cluster_identifier: tapdb-dev-cluster
-    iam_auth: true
-    ssl: true
+safety:
+  safety_tier: local
+  destructive_operations: confirm_required

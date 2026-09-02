@@ -27,6 +27,14 @@ JSON_COMMANDS: set[tuple[str | None, str]] = {
     # monitoring caller an unparseable error for spelling the command right.
     ("backup", "health"),
     ("backup", "prune"),
+    ("templates", "export"),
+    ("templates", "import"),
+    ("templates", "inventory"),
+    ("objects", "search"),
+    ("objects", "get"),
+    ("objects", "update"),
+    ("objects", "repair"),
+    ("objects", "delete"),
 }
 
 MUTATING_COMMANDS = {
@@ -76,6 +84,11 @@ MUTATING_COMMANDS = {
     ("backup", "restore"),
     ("backup", "rehearse"),
     ("backup", "prune"),
+    ("templates", "export"),
+    ("templates", "import"),
+    ("objects", "update"),
+    ("objects", "repair"),
+    ("objects", "delete"),
 }
 
 INTERACTIVE_COMMANDS = {
@@ -107,6 +120,10 @@ DRY_RUN_COMMANDS = {
     ("backup", "restore"),
     ("backup", "rehearse"),
     ("backup", "prune"),
+    ("templates", "import"),
+    ("objects", "update"),
+    ("objects", "repair"),
+    ("objects", "delete"),
 }
 
 LONG_RUNNING_COMMANDS = {

@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from daylily_tapdb.euid import normalize_domain_code
+from daylily_tapdb.euid import EUIDConfig, normalize_domain_code
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.sequences import (
     _normalize_instance_prefix,
@@ -61,7 +61,8 @@ TEMPLATE_MODEL_BY_DISCRIMINATOR = {
     "generic_template": generic_template,
 }
 
-_CORE_TEMPLATE_PREFIXES = {"SYS", "MSG", "XRF", "GVR", "GSE"}
+_CORE_TEMPLATE_PREFIXES = frozenset(EUIDConfig().CORE_PREFIXES.values())
+_TAPDB_CORE_OWNER = "daylily-tapdb"
 
 
 def _normalize_domain_scope(domain_code: str | None) -> str:
@@ -178,6 +179,33 @@ def _is_source_under_dir(source_file: str | None, directory: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _core_template_signature(template: dict[str, Any]) -> dict[str, Any]:
+    """Return the exact persisted definition used to authenticate core content."""
+    signature = {key: value for key, value in template.items() if key != "_source_file"}
+    signature["validator_ref"] = normalize_validator_ref(signature.get("validator_ref"))
+    return signature
+
+
+def _is_exact_bundled_core_template(
+    template: dict[str, Any], core_config_dir: Path
+) -> bool:
+    """Authenticate a template against the installed immutable core inventory."""
+    installed_core_dir = find_tapdb_core_config_dir().resolve()
+    if core_config_dir.resolve() != installed_core_dir:
+        return False
+    source_file = str(template.get("_source_file") or "").strip()
+    if not source_file:
+        return False
+    resolved_source = Path(source_file).resolve()
+    for canonical in load_template_configs(installed_core_dir):
+        canonical_source = Path(str(canonical.get("_source_file") or "")).resolve()
+        if canonical_source != resolved_source:
+            continue
+        if _core_template_signature(canonical) == _core_template_signature(template):
+            return True
+    return False
 
 
 def find_config_dir() -> Path:
@@ -856,7 +884,8 @@ def _prepare_seed_templates(
         item = dict(template)
         item["validator_ref"] = normalize_validator_ref(item.get("validator_ref"))
         instance_prefix = str(item.get("instance_prefix") or "").strip().upper()
-        is_core_template = _is_source_under_dir(source_file, core_config_dir)
+        claims_core_source = _is_source_under_dir(source_file, core_config_dir)
+        is_core_template = _is_exact_bundled_core_template(item, core_config_dir)
 
         if not instance_prefix:
             raise ValueError(
@@ -871,7 +900,7 @@ def _prepare_seed_templates(
                 "category cannot equal instance_prefix."
             )
         if (
-            is_core_template
+            claims_core_source
             and normalized_instance_prefix not in _CORE_TEMPLATE_PREFIXES
         ):
             raise ValueError(
@@ -898,6 +927,7 @@ def _validate_seed_ownership(
     *,
     domain_code: str,
     owner_repo_name: str,
+    core_config_dir: Path,
     domain_registry_path: Path,
     prefix_registry_path: Path,
 ) -> None:
@@ -914,10 +944,15 @@ def _validate_seed_ownership(
             raise ValueError(
                 f"Template {_template_code(template)!r} is missing an instance_prefix"
             )
+        uses_bundled_reserved_prefix = prefix in _CORE_TEMPLATE_PREFIXES and (
+            _is_exact_bundled_core_template(template, core_config_dir)
+        )
         _assert_prefix_claimed(
             domain_code=domain_code,
             prefix=prefix,
-            owner_repo_name=owner_repo_name,
+            owner_repo_name=(
+                _TAPDB_CORE_OWNER if uses_bundled_reserved_prefix else owner_repo_name
+            ),
             prefix_registry=prefix_registry,
             source=str(prefix_registry_path),
         )
@@ -950,6 +985,7 @@ def seed_templates(
         prepared_templates,
         domain_code=resolved_domain,
         owner_repo_name=resolved_owner,
+        core_config_dir=core_config_dir,
         domain_registry_path=domain_registry,
         prefix_registry_path=prefix_registry,
     )

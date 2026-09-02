@@ -36,16 +36,18 @@ These layers are used together:
 
 ## Meridian EUIDs
 
-TapDB follows Meridian EUID v0.4.1 canonical formatting:
+TapDB uses `meridian-euid==0.4.8` for canonical Meridian formatting and
+checksum validation:
 
 ```text
 DOMAIN-PREFIX-BODYCHECKSUM
 ```
 
-Example:
+When documentation needs an example, capture the value returned after the
+owning service persists the object:
 
 ```text
-Z-AGX-1AD
+<persisted-euid>
 ```
 
 Important rules:
@@ -100,12 +102,26 @@ ownership input; `meridian-registry` does not centralize prefixes.
 
 The Python connection layer sets session values before work begins:
 
+- `session.current_config_identity` for the exact explicit config path
+- `session.current_schema_name` for the configured PostgreSQL schema
 - `session.current_username` for audit attribution
 - `session.current_domain_code` for Meridian domain scope
 - `session.current_owner_repo_name` for repo ownership scope
+- `session.current_tenant_id` for the optional fixed tenant UUID
+- `session.allow_global_rows` for the explicitly configured global-claim capability
 
-The SQL layer rejects missing session state. Application code must provide both
-domain and owner repo deliberately.
+For an unprivileged runtime login, these settings are assertions rather than
+authority. Forced-RLS accessors derive scope from the operator-owned
+`tapdb_runtime_principal_scope` row keyed by the authenticated PostgreSQL
+principal and reject any mismatching GUC value. Direct `SET`, `PGOPTIONS`, or a
+temporary-schema shadow cannot switch tenants or widen global-row access.
+
+`target.tenant_id` is an optional canonical UUID. When present it fixes every
+config-backed web/CLI transaction to that tenant; request parameters cannot
+change it. Absence deliberately creates a global-only runtime. The distinct
+`target.operator` credentials are required for schema apply, migration, drift
+inventory, and global seed operations and must authenticate as `SUPERUSER` or
+`BYPASSRLS`. Runtime and backup paths never inherit that privilege.
 
 Runtime ownership inputs:
 
@@ -129,11 +145,12 @@ separate and mandatory; Meridian EUID minting is controlled by
 The effective template identity is:
 
 ```text
-(domain_code, category, type, subtype, version)
+(domain_code, issuer_app_code, category, type, subtype, version)
 ```
 
 Domainless template lookup is forbidden. All template queries and uniqueness
-checks must include `domain_code`.
+checks must include both `domain_code` and the owner-scoping
+`issuer_app_code`.
 
 ## Row-Level Scope
 

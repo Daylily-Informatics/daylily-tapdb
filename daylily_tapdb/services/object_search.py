@@ -1,86 +1,62 @@
-"""Reusable TapDB object search for DAG federation."""
+"""SQL-filtered, keyset-paginated TapDB object search."""
 
 from __future__ import annotations
 
+import base64
+import json
 from typing import Any
+
+from sqlalchemy import String, cast, or_
 
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
 
 SEARCH_RECORD_TYPES = {"all", "template", "instance", "lineage"}
+_KINDS = ("template", "instance", "lineage")
+_MODELS = {
+    "template": generic_template,
+    "instance": generic_instance,
+    "lineage": generic_instance_lineage,
+}
 
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _lower(value: Any) -> str:
-    return _clean(value).lower()
-
-
 def _iso(value: Any) -> str | None:
     if value is None:
         return None
-    try:
-        return value.isoformat()
-    except Exception:
-        return _clean(value) or None
+    return value.isoformat() if hasattr(value, "isoformat") else _clean(value) or None
 
 
 def _record_type(value: Any) -> str:
-    normalized = _lower(value) or "all"
-    return normalized if normalized in SEARCH_RECORD_TYPES else "all"
+    normalized = _clean(value).lower() or "all"
+    if normalized not in SEARCH_RECORD_TYPES:
+        raise ValueError("record_type must be one of: all, template, instance, lineage")
+    return normalized
 
 
-def _matches_text(row: Any, q: str) -> bool:
-    if not q:
-        return True
-    haystack = " ".join(
-        _lower(getattr(row, name, None))
-        for name in (
-            "euid",
-            "name",
-            "category",
-            "type",
-            "subtype",
-            "version",
-            "bstatus",
-            "relationship_type",
-        )
-    )
-    return q in haystack
+def _encode_cursor(kind: str, uid: int) -> str:
+    raw = json.dumps({"kind": kind, "uid": int(uid)}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
 
-def _matches_filters(
-    row: Any,
-    *,
-    q: str,
-    euid: str,
-    category: str,
-    type_name: str,
-    subtype: str,
-    tenant_id: str,
-    relationship_type: str,
-) -> bool:
-    if q and not _matches_text(row, q):
-        return False
-    if euid and _lower(getattr(row, "euid", None)) != euid:
-        return False
-    if category and _lower(getattr(row, "category", None)) != category:
-        return False
-    if type_name and _lower(getattr(row, "type", None)) != type_name:
-        return False
-    if subtype and _lower(getattr(row, "subtype", None)) != subtype:
-        return False
-    if tenant_id and _lower(getattr(row, "tenant_id", None)) != tenant_id:
-        return False
-    if (
-        relationship_type
-        and _lower(getattr(row, "relationship_type", None)) != relationship_type
-    ):
-        return False
-    return True
+def _decode_cursor(value: str) -> tuple[str, int] | None:
+    raw = _clean(value)
+    if not raw:
+        return None
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode())
+        kind = str(payload["kind"])
+        uid = int(payload["uid"])
+    except Exception as exc:
+        raise ValueError("cursor is malformed") from exc
+    if kind not in _KINDS or uid < 0:
+        raise ValueError("cursor is malformed")
+    return kind, uid
 
 
 def _to_search_result(
@@ -111,6 +87,52 @@ def _to_search_result(
     }
 
 
+def _apply_filters(
+    query: Any,
+    model: Any,
+    *,
+    q: str,
+    euid: str,
+    category: str,
+    type_name: str,
+    subtype: str,
+    tenant_id: str,
+    relationship_type: str,
+) -> Any:
+    query = query.filter(model.is_deleted.is_(False))
+    if euid:
+        query = query.filter(model.euid == euid)
+    if category:
+        query = query.filter(model.category == category)
+    if type_name:
+        query = query.filter(model.type == type_name)
+    if subtype:
+        query = query.filter(model.subtype == subtype)
+    if tenant_id:
+        query = query.filter(cast(model.tenant_id, String) == tenant_id)
+    if relationship_type:
+        if model is not generic_instance_lineage:
+            return query.filter(False)
+        query = query.filter(model.relationship_type == relationship_type)
+    if q:
+        pattern = f"%{q}%"
+        columns = [
+            model.euid,
+            model.name,
+            model.category,
+            model.type,
+            model.subtype,
+            model.version,
+            model.bstatus,
+        ]
+        if model is generic_instance_lineage:
+            columns.append(model.relationship_type)
+        query = query.filter(
+            or_(*(cast(column, String).ilike(pattern) for column in columns))
+        )
+    return query
+
+
 def search_objects(
     session: Any,
     *,
@@ -124,66 +146,78 @@ def search_objects(
     tenant_id: str = "",
     relationship_type: str = "",
     limit: int = 25,
+    cursor: str = "",
 ) -> dict[str, Any]:
-    """Search TapDB objects across templates, instances, and lineages."""
+    """Search using SQL predicates and a stable ``(kind, uid)`` keyset."""
 
     normalized_record_type = _record_type(record_type)
     selected = (
-        ["template", "instance", "lineage"]
-        if normalized_record_type == "all"
-        else [normalized_record_type]
+        list(_KINDS) if normalized_record_type == "all" else [normalized_record_type]
     )
-    normalized_limit = max(1, min(100, int(limit or 25)))
-    filters = {
-        "q": _lower(q),
-        "euid": _lower(euid),
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer from 1 through 100")
+    normalized_limit = limit
+    decoded = _decode_cursor(cursor)
+    if decoded and decoded[0] not in selected:
+        raise ValueError("cursor does not belong to the selected record_type")
+    cursor_kind_index = _KINDS.index(decoded[0]) if decoded else -1
+    cursor_uid = decoded[1] if decoded else -1
+    filters: dict[str, Any] = {
+        "q": _clean(q),
+        "euid": _clean(euid),
         "record_type": normalized_record_type,
-        "category": _lower(category),
-        "type": _lower(type_name),
-        "subtype": _lower(subtype),
-        "tenant_id": _lower(tenant_id),
-        "relationship_type": _lower(relationship_type),
+        "category": _clean(category),
+        "type": _clean(type_name),
+        "subtype": _clean(subtype),
+        "tenant_id": _clean(tenant_id),
+        "relationship_type": _clean(relationship_type),
         "limit": normalized_limit,
     }
-    models = {
-        "template": generic_template,
-        "instance": generic_instance,
-        "lineage": generic_instance_lineage,
-    }
 
-    results: list[dict[str, Any]] = []
+    found: list[tuple[str, Any]] = []
     for kind in selected:
-        rows = session.query(models[kind]).filter_by(is_deleted=False).all()
-        for row in rows:
-            if _matches_filters(
-                row,
-                q=filters["q"],
-                euid=filters["euid"],
-                category=filters["category"],
-                type_name=filters["type"],
-                subtype=filters["subtype"],
-                tenant_id=filters["tenant_id"],
-                relationship_type=filters["relationship_type"],
-            ):
-                results.append(
-                    _to_search_result(row, record_type=kind, service_name=service_name)
-                )
+        kind_index = _KINDS.index(kind)
+        if decoded and kind_index < cursor_kind_index:
+            continue
+        model = _MODELS[kind]
+        query = _apply_filters(
+            session.query(model),
+            model,
+            q=filters["q"],
+            euid=filters["euid"],
+            category=filters["category"],
+            type_name=filters["type"],
+            subtype=filters["subtype"],
+            tenant_id=filters["tenant_id"],
+            relationship_type=filters["relationship_type"],
+        )
+        if decoded and kind_index == cursor_kind_index:
+            query = query.filter(model.uid > cursor_uid)
+        remaining = normalized_limit + 1 - len(found)
+        if remaining <= 0:
+            break
+        rows = query.order_by(model.uid.asc()).limit(remaining).all()
+        found.extend((kind, row) for row in rows)
 
-    results.sort(
-        key=lambda item: (
-            str(item.get("created_dt") or ""),
-            str(item.get("record_type") or ""),
-            str(item.get("euid") or ""),
-        ),
-        reverse=True,
-    )
-    trimmed = results[:normalized_limit]
+    has_more = len(found) > normalized_limit
+    page_rows = found[:normalized_limit]
+    items = [
+        _to_search_result(row, record_type=kind, service_name=service_name)
+        for kind, row in page_rows
+    ]
+    next_cursor = None
+    if has_more and page_rows:
+        last_kind, last_row = page_rows[-1]
+        next_cursor = _encode_cursor(last_kind, int(last_row.uid))
     return {
-        "items": trimmed,
+        "items": items,
         "page": {
             "limit": normalized_limit,
-            "total": len(results),
-            "next_cursor": None,
+            "returned": len(items),
+            "next_cursor": next_cursor,
         },
         "filters": filters,
     }
+
+
+__all__ = ["SEARCH_RECORD_TYPES", "search_objects"]

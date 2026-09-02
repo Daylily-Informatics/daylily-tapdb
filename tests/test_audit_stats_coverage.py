@@ -201,8 +201,11 @@ def test_runtime_helper_branches_and_cache_cleanup(caplog):
     assert runtime_mod._parse_bool("yes", default=False) is True
     assert runtime_mod._parse_bool("off", default=True) is False
     assert runtime_mod._parse_bool("maybe", default=True) is True
-    assert runtime_mod._audit_username_for_session("  alice  ") == "alice"
-    assert runtime_mod._audit_username_for_session("") == "unknown"
+    with pytest.raises(RuntimeError, match="authenticated actor"):
+        runtime_mod._audit_username_for_session("  alice  ")
+    with pytest.raises(RuntimeError, match="authenticated actor"):
+        runtime_mod._audit_username_for_session("")
+    assert runtime_mod._audit_username_for_session("alice") == "alice"
     with pytest.raises(RuntimeError, match="schema_name"):
         runtime_mod._require_schema_name({})
 

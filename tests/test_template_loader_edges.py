@@ -327,18 +327,45 @@ def test_prepare_seed_templates_rejects_bad_prefixes(tmp_path: Path):
             [_template(category="container", instance_prefix="ABCDE")],
             core_config_dir=tmp_path,
         )
+
+
+@pytest.mark.parametrize(
+    "reserved_prefix",
+    ["TPX", "EDG", "ADT", "SYS", "MSG", "XRF", "GVR", "GSE"],
+)
+def test_prepare_seed_templates_rejects_every_reserved_tapdb_prefix(
+    tmp_path: Path, reserved_prefix: str
+):
     with pytest.raises(ValueError, match="reserved TapDB operational prefix"):
         loader._prepare_seed_templates(
             [
                 _template(
-                    category="actor",
-                    type="user",
-                    subtype="system",
-                    instance_prefix="SYS",
+                    category="client_object",
+                    type="sample",
+                    subtype="generic",
+                    instance_prefix=reserved_prefix,
                 )
             ],
             core_config_dir=tmp_path,
         )
+
+
+def test_prepare_seed_templates_rejects_reserved_prefix_source_path_spoof() -> None:
+    core_dir = loader.find_tapdb_core_config_dir().resolve()
+    canonical = loader.load_template_configs(core_dir)[0]
+    spoof = dict(canonical)
+    spoof["name"] = "Client-authored reserved template"
+
+    with pytest.raises(ValueError, match="reserved TapDB operational prefix"):
+        loader._prepare_seed_templates([spoof], core_config_dir=core_dir)
+
+
+def test_prepare_seed_templates_allows_client_owned_prefix(tmp_path: Path):
+    prepared = loader._prepare_seed_templates(
+        [_template(category="container", type="tube", instance_prefix="SMP")],
+        core_config_dir=tmp_path,
+    )
+    assert prepared[0]["instance_prefix"] == "SMP"
 
 
 def test_prepare_seed_templates_rejects_prefix_as_category(tmp_path: Path):
@@ -398,6 +425,7 @@ def test_validate_seed_ownership_rejects_missing_prefix(tmp_path: Path):
             [_template(instance_prefix="")],
             domain_code="Z",
             owner_repo_name="daylily-tapdb",
+            core_config_dir=tmp_path / "core",
             domain_registry_path=domain_registry,
             prefix_registry_path=prefix_registry,
         )
@@ -530,6 +558,13 @@ def test_seed_templates_counts_outcomes_and_governance_hook(
 
     monkeypatch.setattr(
         loader, "_validate_seed_ownership", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        loader,
+        "_is_exact_bundled_core_template",
+        lambda template, core_config_dir: str(
+            template.get("_source_file") or ""
+        ).startswith(str(core_config_dir)),
     )
     monkeypatch.setattr(
         loader,

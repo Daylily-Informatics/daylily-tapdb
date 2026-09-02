@@ -154,12 +154,15 @@ def test_runtime_connection_sets_search_path_and_audit_username(
         pass
 
     assert ("commit", None) in events
-    assert any(item == ("execute", {"schema_name": "tapdb_testdb"}) for item in events)
-    assert any(item == ("execute", {"code": "Z"}) for item in events)
-    assert any(item == ("execute", {"owner": "lsmc-atlas"}) for item in events)
-    assert any(
-        item == ("execute", {"username": "alice@example.com"}) for item in events
-    )
+    settings = {
+        params["name"]: params["value"]
+        for event, params in events
+        if event == "execute" and isinstance(params, dict) and "name" in params
+    }
+    assert settings["search_path"] == "tapdb_testdb"
+    assert settings["session.current_domain_code"] == "Z"
+    assert settings["session.current_owner_repo_name"] == "lsmc-atlas"
+    assert settings["session.current_username"] == "alice@example.com"
 
 
 def test_runtime_get_db_caches_by_config_and_schema(monkeypatch: pytest.MonkeyPatch):

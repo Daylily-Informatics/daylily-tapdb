@@ -1,8 +1,8 @@
 # Integration and Embedding
 
-This guide lives in the `tapdb-core` repository. The Python import package remains `daylily_tapdb`.
+This guide lives in the `daylily-tapdb` repository. The Python import package is `daylily_tapdb`.
 
-TAPDB can run as a standalone substrate, or it can be embedded inside a larger application. The tapdb-core codebase supports both patterns, but the responsibilities stay sharply divided.
+TAPDB can run as a standalone substrate, or it can be embedded inside a larger application. The `daylily-tapdb` codebase supports both patterns, but the responsibilities stay sharply divided.
 
 ## What TAPDB Owns
 
@@ -27,9 +27,11 @@ TapDB now exposes a reusable library surface in
 - `create_tapdb_web_app(...)` for the full mounted HTML/UI surface
 - `create_tapdb_gui_app(...)` for the new embeddable GUI V1 surface
 - `create_tapdb_gui_router(...)` when a host app wants to include only the GUI router
-- `create_tapdb_dag_router(...)` for canonical root-level `/api/dag/*` routes
+- `mount_tapdb_dag_surfaces(...)` for authenticated DAG v2 discovery, exact
+  ownership lookup, bounded traversal, and search
 - `TapdbHostBridge` for host auth, shell links, template overrides, and host CSS
-- `build_dag_capability_advertisement(...)` for `obs_services`-style discovery
+- `create_tapdb_dag_router(...)` only for a separately authenticated legacy v1
+  surface; its proxy is disabled unless explicitly policy-bound
 
 Install the GUI extra before importing the V1 embeddable GUI in a host app:
 
@@ -43,14 +45,15 @@ admin UI or TapDB-native browser auth.
 The supported embedding pattern is:
 
 ```python
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 
 from daylily_tapdb.web import (
+    DagV2Limits,
     TapdbHostBridge,
     TapdbHostNavLink,
-    create_tapdb_dag_router,
     create_tapdb_gui_app,
     create_tapdb_web_app,
+    mount_tapdb_dag_surfaces,
 )
 
 app = FastAPI()
@@ -73,19 +76,42 @@ app.mount(
         host_bridge=bridge,
     ),
 )
-app.include_router(
-    create_tapdb_dag_router(
-        config_path="/abs/path/to/tapdb-config.yaml",
-        service_name="dewey",
-    ),
-    dependencies=[Depends(my_session_or_service_auth)],
+dag_mount = mount_tapdb_dag_surfaces(
+    app,
+    config_path="/abs/path/to/tapdb-config.yaml",
+    service_id="dewey",
+    display_name="Dewey",
+    auth_dependency=my_session_or_service_auth,
+    limits=DagV2Limits(max_depth=6, max_nodes=500, max_search_page_size=100),
 )
+if not dag_mount.mounted:
+    raise RuntimeError(f"DAG v2 unavailable: {dag_mount.reason}")
 ```
 
 `create_tapdb_web_app(...)` remains available for the legacy full admin surface.
 Use `create_tapdb_gui_app(...)` for the V1 client-embeddable GUI pages.
 
 The standalone `tapdb ui start` path also builds on this same factory.
+
+Legacy DAG v1 is a separate router and is never an unauthenticated fallback.
+An existing host that still requires it must pass a callable dependency that
+rejects anonymous requests with `401` or `403`; omission or a non-callable
+value fails router construction:
+
+```python
+from daylily_tapdb.web import create_tapdb_dag_router
+
+legacy_router = create_tapdb_dag_router(
+    config_path="/abs/path/to/tapdb-config.yaml",
+    auth_dependency=my_session_or_service_auth,
+)
+app.include_router(legacy_router)
+```
+
+Its outbound proxy remains disabled unless the host additionally supplies an
+explicit `V1ProxyPolicy` containing an exact HTTPS DNS allowlist, a timeout no
+greater than ten seconds, and a response limit no greater than five MiB. It
+forwards no cookie or authorization header.
 
 ## V1 Embedded GUI Routes
 
@@ -195,7 +221,7 @@ TAPDB can store, validate, and expose those objects. It should not decide what t
 Dewey is the reference adopter for this embedding model:
 
 - mounted HTML surface at `/tapdb`
-- root-level DAG contract at `/api/dag/*`
+- root manifest at `/api/dag/manifest` and v2 routes at `/api/dag/v2/*`
 - Dewey session or bearer-token auth guarding the root DAG API
 - host shell link and CSS integration through `TapdbHostBridge`
 
@@ -204,13 +230,14 @@ Dewey is the reference adopter for this embedding model:
 This is a TapDB-side example only. It does not require mutating a Dayhoff repo.
 
 ```python
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 
 from daylily_tapdb.web import (
+    DagV2Limits,
     TapdbHostBridge,
     TapdbHostNavLink,
-    create_tapdb_dag_router,
     create_tapdb_gui_app,
+    mount_tapdb_dag_surfaces,
 )
 
 
@@ -250,13 +277,16 @@ app.mount(
         host_bridge=bridge,
     ),
 )
-app.include_router(
-    create_tapdb_dag_router(
-        config_path="/abs/path/to/tapdb-config.yaml",
-        service_name="dayhoff",
-    ),
-    dependencies=[Depends(require_dayhoff_api_user)],
+dag_mount = mount_tapdb_dag_surfaces(
+    app,
+    config_path="/abs/path/to/tapdb-config.yaml",
+    service_id="dayhoff",
+    display_name="Dayhoff",
+    auth_dependency=require_dayhoff_api_user,
+    limits=DagV2Limits(max_depth=6, max_nodes=500, max_search_page_size=100),
 )
+if not dag_mount.mounted:
+    raise RuntimeError(f"DAG v2 unavailable: {dag_mount.reason}")
 ```
 
 ## Related Materials

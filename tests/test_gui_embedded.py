@@ -84,6 +84,27 @@ class _Session:
     def add(self, obj):
         self.added.append(obj)
 
+    def execute(self, statement):
+        entity = statement.column_descriptions[0]["entity"]
+        params = statement.compile().params
+        value = next(iter(params.values()))
+        predicate = str(statement.whereclause)
+        if ".machine_uuid " in predicate:
+            field = "machine_uuid"
+            value = str(value)
+        elif ".uid " in predicate:
+            field = "uid"
+        else:
+            field = "euid"
+        matches = [
+            row
+            for row in self.rows.get(entity, [])
+            if str(getattr(row, field, None)) == str(value)
+        ]
+        return SimpleNamespace(
+            scalar_one_or_none=lambda: matches[0] if matches else None
+        )
+
     def flush(self):
         for index, obj in enumerate(self.added, start=100):
             if getattr(obj, "uid", None) is None:
@@ -132,7 +153,7 @@ def _instance(euid, name, *, category="SMP", type_name="sample", subtype="tube")
 
 
 def _template(
-    euid="Z-XRF-1Q",
+    euid="persisted-template-euid",
     *,
     name="External Object Reference",
     category="reference",
@@ -182,7 +203,7 @@ def _client(monkeypatch, *, role="admin", session=None, nav_links=()):
         session = _Session(
             {
                 generic_template: [_template()],
-                generic_instance: [_instance("Z-SMP-1Q", "Sample 1")],
+                generic_instance: [_instance("persisted-sample-euid", "Sample 1")],
                 generic_instance_lineage: [],
                 audit_log: [],
             }
@@ -264,7 +285,7 @@ def test_gui_search_page_uses_host_css_and_root_safe_links(monkeypatch):
 
     assert response.status_code == 200
     assert "/static/host.css" in response.text
-    assert "/object/Z-SMP-1Q" in response.text
+    assert "/object/persisted-sample-euid" in response.text
     assert "Sample 1" in response.text
 
 
@@ -295,7 +316,7 @@ def test_gui_shell_deduplicates_host_and_builtin_nav_links(monkeypatch):
 
 
 def test_gui_graph_page_includes_visual_viewer(monkeypatch):
-    root = _instance("Z-SMP-1Q", "Sample 1")
+    root = _instance("persisted-sample-euid", "Sample 1")
     child = _instance("Z-CHD-2Q", "Child 1")
 
     monkeypatch.setattr(
@@ -348,7 +369,7 @@ def test_gui_graph_page_includes_visual_viewer(monkeypatch):
     )
     client = _client(monkeypatch)
 
-    response = client.get("/object/Z-SMP-1Q/graph")
+    response = client.get("/object/persisted-sample-euid/graph")
 
     assert response.status_code == 200
     assert 'data-testid="tapdb-graph"' in response.text
@@ -370,11 +391,11 @@ def test_gui_search_rejects_invalid_record_type(monkeypatch):
 def test_gui_object_api_returns_detail_relationships_audit_and_refs(monkeypatch):
     client = _client(monkeypatch)
 
-    response = client.get("/api/object/Z-SMP-1Q")
+    response = client.get("/api/object/persisted-sample-euid")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["obj"]["euid"] == "Z-SMP-1Q"
+    assert payload["obj"]["euid"] == "persisted-sample-euid"
     assert payload["record_type"] == "instance"
     assert payload["relationships"] == {"parent_of": [], "child_of": []}
     assert payload["audit_rows"] == []
@@ -382,7 +403,7 @@ def test_gui_object_api_returns_detail_relationships_audit_and_refs(monkeypatch)
 
 
 def test_gui_object_page_links_visible_euids_to_canonical_details(monkeypatch):
-    source = _instance("Z-SMP-1Q", "Sample 1")
+    source = _instance("persisted-sample-euid", "Sample 1")
     child = _instance("Z-CHD-2Q", "Child 1")
     lineage = SimpleNamespace(
         euid="Z-LIN-3Q",
@@ -403,10 +424,10 @@ def test_gui_object_page_links_visible_euids_to_canonical_details(monkeypatch):
     )
     client = _client(monkeypatch, session=session)
 
-    response = client.get("/object/Z-SMP-1Q")
+    response = client.get("/object/persisted-sample-euid")
 
     assert response.status_code == 200
-    assert 'href="/object/Z-SMP-1Q"' in response.text
+    assert 'href="/object/persisted-sample-euid"' in response.text
     assert 'href="/object/Z-LIN-3Q"' in response.text
     assert 'href="/object/Z-CHD-2Q"' in response.text
 
@@ -423,13 +444,13 @@ def test_gui_admin_pages_require_admin(monkeypatch):
 def test_gui_create_routes_require_admin(monkeypatch):
     client = _client(monkeypatch, role="user")
 
-    page = client.get("/create/Z-XRF-1Q")
+    page = client.get("/create/persisted-template-euid")
     post_page = client.post(
-        "/create/Z-XRF-1Q",
+        "/create/persisted-template-euid",
         data={"name": "Link", "properties_json": "{}"},
     )
     post_api = client.post(
-        "/api/create/Z-XRF-1Q",
+        "/api/create/persisted-template-euid",
         json={"name": "Link", "properties": {}},
     )
 
@@ -638,12 +659,12 @@ def test_gui_templates_page_renders_template_rows(monkeypatch):
 
     assert response.status_code == 200
     assert "External Object Reference" in response.text
-    assert "Z-XRF-1Q" in response.text
-    assert "/object/Z-XRF-1Q" in response.text
-    assert "/create/Z-XRF-1Q" in response.text
+    assert "persisted-template-euid" in response.text
+    assert "/object/persisted-template-euid" in response.text
+    assert "/create/persisted-template-euid" in response.text
     assert "New Template Pack" not in response.text
     assert "Build New Template" in response.text
-    assert "/templates/new?seed_euid=Z-XRF-1Q" in response.text
+    assert "/templates/new?seed_euid=persisted-template-euid" in response.text
 
 
 def test_gui_template_seed_requires_existing_template(monkeypatch):
@@ -779,7 +800,7 @@ def test_gui_home_uses_concrete_search_defaults(monkeypatch):
 
     assert response.status_code == 200
     assert "Search" in response.text
-    assert "Z-XRF-1Q" in response.text
+    assert "persisted-template-euid" in response.text
 
 
 def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
@@ -1052,7 +1073,7 @@ def test_gui_status_redirect_adds_success_notice(monkeypatch):
     session = _Session(
         {
             generic_template: [_template()],
-            generic_instance: [_instance("Z-SMP-1Q", "Sample 1")],
+            generic_instance: [_instance("persisted-sample-euid", "Sample 1")],
             generic_instance_lineage: [],
             audit_log: [],
         }
@@ -1060,14 +1081,17 @@ def test_gui_status_redirect_adds_success_notice(monkeypatch):
     client = _client(monkeypatch, session=session)
 
     response = client.post(
-        "/object/Z-SMP-1Q/status",
-        data={"bstatus": "paused"},
+        "/object/persisted-sample-euid/status",
+        data={"bstatus": "paused", "apply": "true"},
         follow_redirects=False,
     )
-    notice_page = client.get("/object/Z-SMP-1Q?notice=status_updated")
+    notice_page = client.get("/object/persisted-sample-euid?notice=status_updated")
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/object/Z-SMP-1Q?notice=status_updated"
+    assert (
+        response.headers["location"]
+        == "/object/persisted-sample-euid?notice=status_updated"
+    )
     assert session.rows[generic_instance][0].bstatus == "paused"
     assert "Status updated." in notice_page.text
 
@@ -1076,7 +1100,7 @@ def test_gui_name_redirect_adds_success_notice(monkeypatch):
     session = _Session(
         {
             generic_template: [_template()],
-            generic_instance: [_instance("Z-SMP-1Q", "Sample 1")],
+            generic_instance: [_instance("persisted-sample-euid", "Sample 1")],
             generic_instance_lineage: [],
             audit_log: [],
         }
@@ -1084,20 +1108,23 @@ def test_gui_name_redirect_adds_success_notice(monkeypatch):
     client = _client(monkeypatch, session=session)
 
     response = client.post(
-        "/object/Z-SMP-1Q/name",
-        data={"name": "Updated Sample"},
+        "/object/persisted-sample-euid/name",
+        data={"name": "Updated Sample", "apply": "true"},
         follow_redirects=False,
     )
-    notice_page = client.get("/object/Z-SMP-1Q?notice=name_updated")
+    notice_page = client.get("/object/persisted-sample-euid?notice=name_updated")
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/object/Z-SMP-1Q?notice=name_updated"
+    assert (
+        response.headers["location"]
+        == "/object/persisted-sample-euid?notice=name_updated"
+    )
     assert session.rows[generic_instance][0].name == "Updated Sample"
     assert "Name updated." in notice_page.text
 
 
-def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
-    source = _instance("Z-SMP-1Q", "Sample 1")
+def test_gui_object_mutation_apis_preview_then_apply_with_receipts(monkeypatch):
+    source = _instance("persisted-sample-euid", "Sample 1")
     parent = _instance("Z-PAR-22Q", "Parent 1")
     session = _Session(
         {
@@ -1109,20 +1136,50 @@ def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
     )
     client = _client(monkeypatch, session=session)
 
-    json_response = client.post(
-        "/api/object/Z-SMP-1Q/edit-json",
-        json={"properties": {"color": "red"}},
+    identity_before = (source.uid, source.euid, source.template_uid, source.created_dt)
+    json_preview = client.post(
+        "/api/object/persisted-sample-euid/edit-json",
+        json={"json_addl": {"properties": {"color": "red"}}},
     )
-    name_response = client.post(
-        "/api/object/Z-SMP-1Q/name",
+    name_preview = client.post(
+        "/api/object/persisted-sample-euid/name",
         json={"name": "Sample 1 renamed"},
     )
-    status_response = client.post(
-        "/api/object/Z-SMP-1Q/status",
+    status_preview = client.post(
+        "/api/object/persisted-sample-euid/status",
         json={"bstatus": "paused"},
     )
+    assert json_preview.status_code == 200
+    assert json_preview.json()["operation"] == "repair"
+    assert json_preview.json()["dry_run"] is True
+    assert json_preview.json()["applied"] is False
+    assert json_preview.json()["changes"]["subject_mutated"] is False
+    assert name_preview.status_code == 200
+    assert name_preview.json()["dry_run"] is True
+    assert status_preview.status_code == 200
+    assert status_preview.json()["dry_run"] is True
+    assert source.name == "Sample 1"
+    assert source.bstatus == "active"
+    assert source.json_addl == {"properties": {"color": "blue"}}
+    assert session.added == []
+
+    json_response = client.post(
+        "/api/object/persisted-sample-euid/edit-json",
+        json={
+            "json_addl": {"properties": {"color": "red"}},
+            "apply": True,
+        },
+    )
+    name_response = client.post(
+        "/api/object/persisted-sample-euid/name",
+        json={"name": "Sample 1 renamed", "apply": True},
+    )
+    status_response = client.post(
+        "/api/object/persisted-sample-euid/status",
+        json={"bstatus": "paused", "apply": True},
+    )
     lineage_response = client.post(
-        "/api/object/Z-SMP-1Q/lineage",
+        "/api/object/persisted-sample-euid/lineage",
         json={
             "related_euid": "Z-PAR-22Q",
             "direction": "parent",
@@ -1131,21 +1188,36 @@ def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
     )
 
     assert json_response.status_code == 200
-    assert json_response.json()["subject_euid"] == "Z-SMP-1Q"
-    assert json_response.json()["subject_mutated"] is False
-    assert json_response.json()["properties"]["repair_payload"] == {
+    assert json_response.json()["format"] == "tapdb.object-operation-receipt/v1"
+    assert json_response.json()["euid"] == "persisted-sample-euid"
+    assert json_response.json()["applied"] is True
+    assert json_response.json()["changes"]["subject_mutated"] is False
+    assert json_response.json()["changes"]["repair_payload"] == {
         "properties": {"color": "red"}
     }
     assert source.json_addl == {"properties": {"color": "blue"}}
     assert name_response.status_code == 200
-    assert name_response.json() == {"euid": "Z-SMP-1Q", "name": "Sample 1 renamed"}
+    assert name_response.json()["operation"] == "update"
+    assert name_response.json()["applied"] is True
+    assert name_response.json()["changes"]["name"] == {
+        "old": "Sample 1",
+        "new": "Sample 1 renamed",
+    }
     assert source.name == "Sample 1 renamed"
     assert status_response.status_code == 200
-    assert status_response.json() == {"euid": "Z-SMP-1Q", "bstatus": "paused"}
+    assert status_response.json()["operation"] == "update"
+    assert status_response.json()["applied"] is True
+    assert status_response.json()["changes"]["bstatus"] == {
+        "old": "active",
+        "new": "paused",
+    }
     assert source.bstatus == "paused"
+    assert (source.uid, source.euid, source.template_uid, source.created_dt) == (
+        identity_before
+    )
     assert lineage_response.status_code == 200
     assert lineage_response.json()["parent_euid"] == "Z-PAR-22Q"
-    assert lineage_response.json()["child_euid"] == "Z-SMP-1Q"
+    assert lineage_response.json()["child_euid"] == "persisted-sample-euid"
     assert lineage_response.json()["relationship_type"] == "contains"
     assert lineage_response.json()["v0_edge"]["compliance_status"] == "generic"
     assert lineage_response.json()["assessment"]["state"] == "valid_current"
@@ -1154,7 +1226,7 @@ def test_gui_object_mutation_apis_update_json_status_and_lineage(monkeypatch):
 
 
 def test_gui_object_editor_data_assessment_and_revalidation_are_ephemeral(monkeypatch):
-    source = _instance("Z-SMP-1Q", "Sample 1")
+    source = _instance("persisted-sample-euid", "Sample 1")
     session = _Session(
         {
             generic_template: [_template(validator_ref="CUSTOM_VALIDATOR@1")],
@@ -1165,15 +1237,19 @@ def test_gui_object_editor_data_assessment_and_revalidation_are_ephemeral(monkey
     )
     client = _client(monkeypatch, session=session)
 
-    page = client.get("/object/Z-SMP-1Q")
-    editor = client.get("/api/object/Z-SMP-1Q/editor-data")
-    assessment = client.post("/api/object/Z-SMP-1Q/assess")
-    revalidation = client.post("/api/object/Z-SMP-1Q/revalidate")
-    recommendations = client.get("/api/object/Z-SMP-1Q/repair-recommendations")
+    page = client.get("/object/persisted-sample-euid")
+    editor = client.get("/api/object/persisted-sample-euid/editor-data")
+    assessment = client.post("/api/object/persisted-sample-euid/assess")
+    revalidation = client.post("/api/object/persisted-sample-euid/revalidate")
+    recommendations = client.get(
+        "/api/object/persisted-sample-euid/repair-recommendations"
+    )
 
     assert page.status_code == 200
     assert "Ephemeral assessment; repair evidence is explicit." in page.text
-    assert "Create repair" in page.text
+    assert "Create repair (Apply)" in page.text
+    assert 'name="apply" value="true">Set Name (Apply)' in page.text
+    assert 'name="apply" value="true">Set Status (Apply)' in page.text
     assert editor.status_code == 200
     assert editor.json()["validator_ref"] == "CUSTOM_VALIDATOR@1"
     assert editor.json()["assessment"]["subject_mutated"] is False
@@ -1186,8 +1262,8 @@ def test_gui_object_editor_data_assessment_and_revalidation_are_ephemeral(monkey
     assert source.json_addl == {"properties": {"color": "blue"}}
 
 
-def test_gui_repair_api_creates_evidence_without_mutating_subject(monkeypatch):
-    source = _instance("Z-SMP-1Q", "Sample 1")
+def test_gui_repair_api_previews_then_applies_without_mutating_subject(monkeypatch):
+    source = _instance("persisted-sample-euid", "Sample 1")
     session = _Session(
         {
             generic_template: [_template(), _repair_template()],
@@ -1198,19 +1274,41 @@ def test_gui_repair_api_creates_evidence_without_mutating_subject(monkeypatch):
     )
     client = _client(monkeypatch, session=session)
 
-    response = client.post(
-        "/api/object/Z-SMP-1Q/repairs",
+    preview = client.post(
+        "/api/object/persisted-sample-euid/repairs",
         json={
             "reason": "correct color",
             "repair_payload": {"properties": {"color": "green"}},
         },
     )
 
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["operation"] == "repair"
+    assert preview.json()["dry_run"] is True
+    assert preview.json()["applied"] is False
+    assert preview.json()["changes"]["subject_mutated"] is False
+    assert session.added == []
+    assert source.json_addl == {"properties": {"color": "blue"}}
+
+    response = client.post(
+        "/api/object/persisted-sample-euid/repairs",
+        json={
+            "reason": "correct color",
+            "repair_payload": {"properties": {"color": "green"}},
+            "apply": True,
+        },
+    )
+
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["subject_euid"] == "Z-SMP-1Q"
-    assert payload["subject_mutated"] is False
-    assert payload["template_code"] == "evidence/repair/record/1.0/"
+    assert payload["format"] == "tapdb.object-operation-receipt/v1"
+    assert payload["euid"] == "persisted-sample-euid"
+    assert payload["dry_run"] is False
+    assert payload["applied"] is True
+    assert payload["changes"]["subject_mutated"] is False
+    assert payload["changes"]["repair_record"]["template_code"] == (
+        "evidence/repair/record/1.0/"
+    )
     assert session.added[0].json_addl["properties"]["repair_payload"] == {
         "properties": {"color": "green"}
     }
@@ -1218,7 +1316,7 @@ def test_gui_repair_api_creates_evidence_without_mutating_subject(monkeypatch):
 
 
 def test_gui_repair_form_redirects_with_notice(monkeypatch):
-    source = _instance("Z-SMP-1Q", "Sample 1")
+    source = _instance("persisted-sample-euid", "Sample 1")
     session = _Session(
         {
             generic_template: [_template(), _repair_template()],
@@ -1230,23 +1328,123 @@ def test_gui_repair_form_redirects_with_notice(monkeypatch):
     client = _client(monkeypatch, session=session)
 
     response = client.post(
-        "/object/Z-SMP-1Q/repairs",
+        "/object/persisted-sample-euid/repairs",
         data={
             "reason": "correct payload",
             "repair_payload": '{"properties":{"color":"yellow"}}',
+            "apply": "true",
         },
         follow_redirects=False,
     )
-    notice_page = client.get("/object/Z-SMP-1Q?notice=repair_created")
+    notice_page = client.get("/object/persisted-sample-euid?notice=repair_created")
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/object/Z-SMP-1Q?notice=repair_created"
+    assert (
+        response.headers["location"]
+        == "/object/persisted-sample-euid?notice=repair_created"
+    )
     assert "Repair evidence created." in notice_page.text
     assert source.json_addl == {"properties": {"color": "blue"}}
 
 
+def test_gui_mutation_forms_require_clicked_apply_and_do_not_mutate(monkeypatch):
+    source = _instance("persisted-sample-euid", "Sample 1")
+    session = _Session(
+        {
+            generic_template: [_template(), _repair_template()],
+            generic_instance: [source],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    responses = [
+        client.post("/object/persisted-sample-euid/name", data={"name": "Not applied"}),
+        client.post("/object/persisted-sample-euid/status", data={"bstatus": "paused"}),
+        client.post(
+            "/object/persisted-sample-euid/repairs",
+            data={"reason": "not applied", "repair_payload": "{}"},
+        ),
+        client.post(
+            "/object/persisted-sample-euid/edit-json",
+            data={"json_addl": '{"properties":{"color":"red"}}'},
+        ),
+    ]
+
+    assert [response.status_code for response in responses] == [400, 400, 400, 400]
+    assert all(
+        "clicked Apply button" in response.json()["detail"] for response in responses
+    )
+    assert source.name == "Sample 1"
+    assert source.bstatus == "active"
+    assert source.json_addl == {"properties": {"color": "blue"}}
+    assert session.added == []
+
+
+def test_gui_legacy_edit_json_form_applies_repair_evidence_only(monkeypatch):
+    source = _instance("persisted-sample-euid", "Sample 1")
+    identity_before = (source.uid, source.euid, source.template_uid, source.created_dt)
+    session = _Session(
+        {
+            generic_template: [_template(), _repair_template()],
+            generic_instance: [source],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    response = client.post(
+        "/object/persisted-sample-euid/edit-json",
+        data={
+            "json_addl": '{"properties":{"color":"red"}}',
+            "apply": "true",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert (
+        response.headers["location"]
+        == "/object/persisted-sample-euid?notice=repair_created"
+    )
+    assert source.json_addl == {"properties": {"color": "blue"}}
+    assert (source.uid, source.euid, source.template_uid, source.created_dt) == (
+        identity_before
+    )
+    assert session.added[0].json_addl["properties"]["subject_mutated"] is False
+
+
+def test_gui_mutation_apis_reject_templates_even_when_apply_is_explicit(monkeypatch):
+    template = _template()
+    session = _Session(
+        {
+            generic_template: [template, _repair_template()],
+            generic_instance: [],
+            generic_instance_lineage: [],
+            audit_log: [],
+        }
+    )
+    client = _client(monkeypatch, session=session)
+
+    name = client.post(
+        f"/api/object/{template.euid}/name",
+        json={"name": "Forbidden", "apply": True},
+    )
+    repair = client.post(
+        f"/api/object/{template.euid}/repairs",
+        json={"reason": "Forbidden", "repair_payload": {}, "apply": True},
+    )
+
+    assert name.status_code == 403
+    assert repair.status_code == 403
+    assert template.name == "External Object Reference"
+    assert session.added == []
+
+
 def test_gui_lineage_api_requires_v0_metadata_for_canonical_edges(monkeypatch):
-    source = _instance("Z-SMP-1Q", "Sample 1")
+    source = _instance("persisted-sample-euid", "Sample 1")
     parent = _instance("Z-PAR-22Q", "Parent 1")
     session = _Session(
         {
@@ -1259,7 +1457,7 @@ def test_gui_lineage_api_requires_v0_metadata_for_canonical_edges(monkeypatch):
     client = _client(monkeypatch, session=session)
 
     response = client.post(
-        "/api/object/Z-SMP-1Q/lineage",
+        "/api/object/persisted-sample-euid/lineage",
         json={
             "related_euid": "Z-PAR-22Q",
             "direction": "parent",
@@ -1272,7 +1470,7 @@ def test_gui_lineage_api_requires_v0_metadata_for_canonical_edges(monkeypatch):
 
 
 def test_gui_lineage_api_creates_v0_edge_with_evidence(monkeypatch):
-    source = _instance("Z-SMP-1Q", "Sample 1")
+    source = _instance("persisted-sample-euid", "Sample 1")
     parent = _instance("Z-PAR-22Q", "Parent 1")
     session = _Session(
         {
@@ -1285,7 +1483,7 @@ def test_gui_lineage_api_creates_v0_edge_with_evidence(monkeypatch):
     client = _client(monkeypatch, session=session)
 
     response = client.post(
-        "/api/object/Z-SMP-1Q/lineage",
+        "/api/object/persisted-sample-euid/lineage",
         json={
             "related_euid": "Z-PAR-22Q",
             "direction": "parent",
@@ -1305,7 +1503,7 @@ def test_gui_lineage_api_creates_v0_edge_with_evidence(monkeypatch):
     assert payload["v0_edge"]["compliance_status"] == "canonical"
     assert payload["v0_edge"]["edge_type"] == "HOLDS_MATERIAL"
     assert payload["v0_edge"]["semantic_source"]["euid"] == "Z-PAR-22Q"
-    assert payload["v0_edge"]["semantic_target"]["euid"] == "Z-SMP-1Q"
+    assert payload["v0_edge"]["semantic_target"]["euid"] == "persisted-sample-euid"
     assert session.added[0].json_addl["properties"]["v0_edge"]["evidence_refs"] == [
         {"euid": "Z-EVD-1Q"}
     ]
@@ -1315,7 +1513,7 @@ def test_gui_object_mutation_api_rejects_immutable_fields(monkeypatch):
     session = _Session(
         {
             generic_template: [_template()],
-            generic_instance: [_instance("Z-SMP-1Q", "Sample 1")],
+            generic_instance: [_instance("persisted-sample-euid", "Sample 1")],
             generic_instance_lineage: [],
             audit_log: [],
         }
@@ -1323,8 +1521,8 @@ def test_gui_object_mutation_api_rejects_immutable_fields(monkeypatch):
     client = _client(monkeypatch, session=session)
 
     response = client.post(
-        "/api/object/Z-SMP-1Q/name",
-        json={"name": "New", "uid": 999, "template_euid": "Z-XRF-1Q"},
+        "/api/object/persisted-sample-euid/name",
+        json={"name": "New", "uid": 999, "template_euid": "persisted-template-euid"},
     )
 
     assert response.status_code == 400
@@ -1338,7 +1536,7 @@ def test_gui_external_link_creates_typed_object_and_lineage(monkeypatch):
     session = _Session(
         {
             generic_template: [_template()],
-            generic_instance: [_instance("Z-SMP-1Q", "Sample 1")],
+            generic_instance: [_instance("persisted-sample-euid", "Sample 1")],
             generic_instance_lineage: [],
             audit_log: [],
         }
@@ -1366,7 +1564,7 @@ def test_gui_external_link_creates_typed_object_and_lineage(monkeypatch):
     client = _client(monkeypatch, session=session)
 
     response = client.post(
-        "/object/Z-SMP-1Q/external-links/new",
+        "/object/persisted-sample-euid/external-links/new",
         data={
             "system": "bloom",
             "foreign_uid": "M-123",
@@ -1381,7 +1579,7 @@ def test_gui_external_link_creates_typed_object_and_lineage(monkeypatch):
         response.headers["location"] == "/object/Z-XRF-2Q?notice=external_link_created"
     )
     assert len(session.added) == 1
-    assert session.added[0].parent_instance_uid == len("Z-SMP-1Q")
+    assert session.added[0].parent_instance_uid == len("persisted-sample-euid")
     assert session.added[0].child_instance_uid == 201
 
 
@@ -1389,7 +1587,7 @@ def test_gui_external_link_api_creates_typed_object_and_lineage(monkeypatch):
     session = _Session(
         {
             generic_template: [_template()],
-            generic_instance: [_instance("Z-SMP-1Q", "Sample 1")],
+            generic_instance: [_instance("persisted-sample-euid", "Sample 1")],
             generic_instance_lineage: [],
             audit_log: [],
         }
@@ -1420,7 +1618,7 @@ def test_gui_external_link_api_creates_typed_object_and_lineage(monkeypatch):
     client = _client(monkeypatch, session=session)
 
     response = client.post(
-        "/api/object/Z-SMP-1Q/external-links",
+        "/api/object/persisted-sample-euid/external-links",
         json={
             "system": "dewey",
             "foreign_uid": "M-456",
@@ -1431,12 +1629,12 @@ def test_gui_external_link_api_creates_typed_object_and_lineage(monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["source_euid"] == "Z-SMP-1Q"
+    assert payload["source_euid"] == "persisted-sample-euid"
     assert payload["link_euid"] == "Z-XRF-2Q"
     assert payload["lineage_euid"]
     assert payload["relationship_type"] == "external_ref"
     assert len(session.added) == 1
-    assert session.added[0].parent_instance_uid == len("Z-SMP-1Q")
+    assert session.added[0].parent_instance_uid == len("persisted-sample-euid")
     assert session.added[0].child_instance_uid == 201
 
 
@@ -1451,7 +1649,7 @@ def test_gui_external_link_creation_rejects_legacy_template_shape(monkeypatch):
                     prefix="XID",
                 )
             ],
-            generic_instance: [_instance("Z-SMP-1Q", "Sample 1")],
+            generic_instance: [_instance("persisted-sample-euid", "Sample 1")],
             generic_instance_lineage: [],
             audit_log: [],
         }
@@ -1459,7 +1657,7 @@ def test_gui_external_link_creation_rejects_legacy_template_shape(monkeypatch):
     client = _client(monkeypatch, session=session)
 
     response = client.post(
-        "/api/object/Z-SMP-1Q/external-links",
+        "/api/object/persisted-sample-euid/external-links",
         json={
             "system": "dewey",
             "foreign_uid": "M-456",
@@ -1480,6 +1678,72 @@ def test_gui_exports_are_available_from_web_package():
 
     assert callable(create_tapdb_gui_app)
     assert callable(create_tapdb_gui_router)
+
+
+def test_gui_runtime_surfaces_share_the_sanitized_payload(monkeypatch):
+    payload = {
+        "format": "tapdb.runtime-info/v1",
+        "package": {"version": "9.2.0-test"},
+        "python": {},
+        "meridian": {},
+        "git": {},
+        "config": {},
+        "database": {},
+        "scope": {},
+        "storage": {},
+        "ui": {},
+        "dag": {},
+    }
+    monkeypatch.setattr(
+        "daylily_tapdb.runtime_info.build_runtime_info",
+        lambda **_kwargs: payload,
+    )
+    client = _client(monkeypatch)
+
+    response = client.get("/api/admin/runtime")
+    assert response.status_code == 200
+    assert response.json() == payload
+    page = client.get("/admin/runtime")
+    assert page.status_code == 200
+    assert "9.2.0-test" in page.text
+
+
+def test_gui_template_repository_api_and_visible_status(monkeypatch, tmp_path):
+    pack = tmp_path / "repository-templates.json"
+    inventory = {
+        "format": "tapdb.repository-template-inventory/v1",
+        "status": "ok",
+        "items": [{"stored_euid": "persisted-template-euid", "status": "backed-up"}],
+        "counts": {"pending": 0, "backed-up": 1, "failed": 0},
+    }
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.repository_inventory",
+        lambda *_args, **_kwargs: inventory,
+    )
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.export_repository_pack",
+        lambda *_args, **kwargs: {
+            "format": "tapdb.repository-template-receipt/v1",
+            "repository_pack": str(kwargs.get("pack_path") or pack),
+        },
+    )
+    client = _client(monkeypatch)
+
+    response = client.get(
+        "/api/templates/repository/status",
+        params={"repository_pack": str(pack)},
+    )
+    assert response.status_code == 200
+    assert response.json() == inventory
+    page = client.get("/templates", params={"repository_pack": str(pack)})
+    assert page.status_code == 200
+    assert "backed-up" in page.text
+    exported = client.post(
+        "/api/templates/repository/export",
+        json={"repository_pack": str(pack)},
+    )
+    assert exported.status_code == 200
+    assert exported.json()["format"] == "tapdb.repository-template-receipt/v1"
 
 
 def test_gui_extra_and_package_data_contracts_are_declared():

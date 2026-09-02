@@ -7,7 +7,7 @@ Instances are concrete objects created from templates.
 
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import BIGINT, Column, ForeignKey
+from sqlalchemy import BIGINT, CheckConstraint, Column, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import backref, relationship
 
@@ -27,6 +27,27 @@ class generic_instance(tapdb_core):
     """
 
     __tablename__ = "generic_instance"
+    __table_args__ = (
+        CheckConstraint(
+            "identity_key IS NULL OR tenant_id IS NULL",
+            name="ck_generic_instance_identity_key_global",
+        ),
+        CheckConstraint(
+            "identity_key IS NULL OR ("
+            "identity_key ~ '^[a-z][a-z0-9._/-]*:[^[:cntrl:]]+$' "
+            "AND char_length(identity_key) <= 512)",
+            name="ck_generic_instance_identity_key_format",
+        ),
+        Index(
+            "idx_generic_instance_natural_identity",
+            "domain_code",
+            "issuer_app_code",
+            "template_uid",
+            "identity_key",
+            unique=True,
+            postgresql_where=text("identity_key IS NOT NULL"),
+        ),
+    )
     __mapper_args__ = {
         "polymorphic_identity": "generic_instance",
         "polymorphic_on": "polymorphic_discriminator",
@@ -38,6 +59,9 @@ class generic_instance(tapdb_core):
 
     # Override base class column to add UNIQUE constraint on this table only
     machine_uuid = Column(UUID(as_uuid=True), unique=True, nullable=True)
+
+    # Existing rows deliberately remain NULL; callers must claim this value.
+    identity_key = Column(String(512), nullable=True)
 
     template_uid = Column(BIGINT, ForeignKey("generic_template.uid"), nullable=False)
 

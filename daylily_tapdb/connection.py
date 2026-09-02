@@ -9,13 +9,31 @@ Moonshot Phase 2 policy:
 
 Recommended usage:
 
-    with TAPDBConnection() as conn:
+    with TAPDBConnection(
+        db_url=postgresql_url,
+        db_user=runtime_role,
+        engine_type="local",
+        app_username="catalog-api",
+        domain_code="Z",
+        owner_repo_name="catalog-service",
+        schema_name="catalog",
+        config_identity="/abs/path/to/tapdb-config.yaml",
+    ) as conn:
         with conn.session_scope(commit=False) as session:
             rows = session.query(...).all()
 
 For write operations:
 
-    with TAPDBConnection() as conn:
+    with TAPDBConnection(
+        db_url=postgresql_url,
+        db_user=runtime_role,
+        engine_type="local",
+        app_username="catalog-api",
+        domain_code="Z",
+        owner_repo_name="catalog-service",
+        schema_name="catalog",
+        config_identity="/abs/path/to/tapdb-config.yaml",
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             session.add(obj)
 """
@@ -24,9 +42,16 @@ import logging
 from contextlib import contextmanager
 from typing import Generator, Optional
 
-from sqlalchemy import MetaData, create_engine, event, text
+from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session, sessionmaker
+
+from daylily_tapdb.security_context import (
+    TapdbTransactionContext,
+    apply_transaction_context,
+    assert_operator_role,
+    is_postgresql_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +60,10 @@ class TAPDBConnection:
     """
     TAPDB Database Connection Manager.
 
-    Usage (Phase 2 moonshot):
-        # Read-only / query usage
-        with TAPDBConnection() as conn:
-            with conn.session_scope(commit=False) as session:
-                rows = session.query(...).all()
-
-        # Write usage (explicit opt-in commit)
-        with TAPDBConnection() as conn:
-            with conn.session_scope(commit=True) as session:
-                session.add(obj)
-                # commits on success, rolls back on exception
+    Construct connections from one explicit TapDB config. PostgreSQL sessions
+    require the runtime role, audit actor, domain, owner, schema, and exact
+    absolute config identity. Callers then choose a read-only or committing
+    ``session_scope`` and retain control of the transaction boundary.
     """
 
     def __init__(
@@ -70,6 +88,10 @@ class TAPDBConnection:
         domain_code: Optional[str] = None,
         owner_repo_name: Optional[str] = None,
         schema_name: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        allow_global_rows: bool = False,
+        config_identity: Optional[str] = None,
+        connection_role: str = "runtime",
     ):
         """
         Initialize database connection.
@@ -98,6 +120,14 @@ class TAPDBConnection:
             domain_code: Domain code for session scoping (1-4 chars). Required.
             owner_repo_name: Repo-name for session ownership scoping. Required.
             schema_name: PostgreSQL schema to use as this session's search_path.
+            tenant_id: Fixed tenant UUID for this runtime principal, or ``None``
+                for a deliberately global principal.
+            allow_global_rows: Permit the fixed principal to access deliberate
+                global rows in its own domain and owner scope.
+            config_identity: Exact absolute config path bound to the database
+                principal. Required for PostgreSQL sessions.
+            connection_role: ``runtime`` for normal access or ``operator`` for
+                the distinct migration/DDL role.
         """
         self.logger = logging.getLogger(__name__ + ".TAPDBConnection")
 
@@ -109,6 +139,21 @@ class TAPDBConnection:
         self.domain_code = domain_code
         self.owner_repo_name = owner_repo_name
         self.schema_name = (schema_name or "").strip() or None
+        self.tenant_id = tenant_id
+        self.allow_global_rows = allow_global_rows
+        self.config_identity = str(config_identity or "").strip()
+        postgres_target = (
+            engine_type == "aurora"
+            or not db_url
+            or str(db_url).startswith(("postgresql://", "postgresql+"))
+        )
+        if postgres_target and not self.config_identity:
+            raise ValueError(
+                "config_identity is required for PostgreSQL TAPDB sessions"
+            )
+        if connection_role not in {"runtime", "operator"}:
+            raise ValueError("connection_role must be 'runtime' or 'operator'")
+        self.connection_role = connection_role
         if not self.domain_code:
             raise ValueError("domain_code is required")
         if not self.owner_repo_name:
@@ -175,7 +220,6 @@ class TAPDBConnection:
             pool_recycle=pool_recycle,
             pool_pre_ping=True,
         )
-        self._install_connection_checkout_settings()
 
         # Create session factory
         self._Session = sessionmaker(bind=self.engine)
@@ -184,49 +228,9 @@ class TAPDBConnection:
         metadata = MetaData()
         self.AutomapBase = automap_base(metadata=metadata)
 
-    def _install_connection_checkout_settings(self) -> None:
-        """Apply explicit TAPDB session settings whenever a DBAPI connection is used."""
-        dialect = getattr(self.engine, "dialect", None)
-        dialect_name = str(getattr(dialect, "name", "") or "").strip().lower()
-        if dialect_name != "postgresql":
-            return
-        if not self.schema_name:
-            raise ValueError("schema_name is required for PostgreSQL TAPDB sessions.")
-
-        schema_name = self.schema_name
-        domain_code = self.domain_code or ""
-        owner_repo_name = self.owner_repo_name or ""
-        app_username = self.app_username
-
-        def _on_checkout(dbapi_connection, _connection_record, _connection_proxy):
-            cursor = dbapi_connection.cursor()
-            try:
-                cursor.execute(
-                    "SELECT set_config('search_path', %s, false)", (schema_name,)
-                )
-                cursor.execute(
-                    "SET session.current_domain_code = %s",
-                    (domain_code,),
-                )
-                cursor.execute(
-                    "SET session.current_owner_repo_name = %s",
-                    (owner_repo_name,),
-                )
-                cursor.execute(
-                    "SET session.current_username = %s",
-                    (app_username,),
-                )
-            finally:
-                cursor.close()
-
-        event.listen(self.engine, "checkout", _on_checkout)
-
     @staticmethod
     def _is_postgresql_session(session: Session) -> bool:
-        bind = getattr(session, "bind", None)
-        dialect = getattr(bind, "dialect", None)
-        dialect_name = str(getattr(dialect, "name", "") or "").strip().lower()
-        return dialect_name == "postgresql"
+        return is_postgresql_session(session)
 
     def _execute_session_setting(
         self,
@@ -237,32 +241,10 @@ class TAPDBConnection:
         use_savepoint: bool,
         warning: str,
     ) -> bool:
-        """Execute best-effort session setup SQL without poisoning the outer transaction."""
-        nested = None
-        try:
-            if use_savepoint:
-                nested = session.begin_nested()
-            session.execute(text(statement), params or {})
-            if nested is not None:
-                nested.commit()
-            return True
-        except Exception as e:
-            if nested is not None:
-                try:
-                    nested.rollback()
-                except Exception as rollback_error:
-                    self.logger.warning(
-                        f"Could not roll back session setup savepoint: {rollback_error}"
-                    )
-            else:
-                try:
-                    session.rollback()
-                except Exception as rollback_error:
-                    self.logger.warning(
-                        f"Could not roll back session after setup failure: {rollback_error}"
-                    )
-            self.logger.warning(f"{warning}: {e}")
-            return False
+        """Execute required context SQL; any failure aborts the transaction."""
+        del use_savepoint, warning
+        session.execute(text(statement), params or {})
+        return True
 
     def _set_session_timezone_utc(self, session: Session, *, local: bool) -> None:
         """Intentionally leave the session timezone unchanged.
@@ -337,11 +319,32 @@ class TAPDBConnection:
         Returns:
             New SQLAlchemy Session (caller must close)
         """
-        session = self._Session()
-        self._set_session_timezone_utc(session, local=False)
-        self._set_session_search_path(session, local=False)
-        self._set_session_domain_code(session, local=False)
-        return session
+        raise RuntimeError(
+            "get_session() cannot establish a fail-closed transaction context; "
+            "use session_scope()"
+        )
+
+    def transaction_context(self) -> TapdbTransactionContext:
+        """Return the complete immutable context for one database transaction."""
+        return TapdbTransactionContext(
+            config_identity=self.config_identity,
+            schema_name=self.schema_name or "",
+            domain_code=self.domain_code or "",
+            owner_repo_name=self.owner_repo_name or "",
+            tenant_id=self.tenant_id,
+            actor=self.app_username,
+            allow_global_rows=self.allow_global_rows,
+        )
+
+    def install_transaction_context(self, session: object) -> None:
+        """Install this connection's context on a Session or Connection."""
+        apply_transaction_context(
+            session,
+            self.transaction_context(),
+            assert_runtime_role=self.connection_role == "runtime",
+        )
+        if self.connection_role == "operator" and is_postgresql_session(session):
+            assert_operator_role(session)
 
     @contextmanager
     def session_scope(self, commit: bool = False) -> Generator[Session, None, None]:
@@ -362,11 +365,12 @@ class TAPDBConnection:
         session = self._Session()
         trans = session.begin()
         try:
-            # Must happen inside a transaction for SET LOCAL.
-            self._set_session_timezone_utc(session, local=True)
-            self._set_session_search_path(session, local=True)
-            self._set_session_domain_code(session, local=True)
-            self._set_session_username(session)
+            if self._is_postgresql_session(session) and not self.schema_name:
+                raise ValueError(
+                    "schema_name is required for PostgreSQL TAPDB sessions."
+                )
+            if self._is_postgresql_session(session):
+                self.install_transaction_context(session)
             yield session
             if commit:
                 trans.commit()

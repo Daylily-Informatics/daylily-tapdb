@@ -173,10 +173,16 @@ def test_runtime_db_connection_session_scope_sets_search_path_and_audit_username
         pass
 
     assert ("commit", None) in events
-    assert ("execute", {"schema_name": "tapdb_testdb"}) in events
-    assert ("execute", {"code": "Z"}) in events
-    assert ("execute", {"owner": "lsmc-atlas"}) in events
-    assert ("execute", {"username": "alice@example.com"}) in events
+    settings = {
+        params["name"]: params["value"]
+        for event, params in events
+        if event == "execute" and isinstance(params, dict) and "name" in params
+    }
+    assert settings["search_path"] == "tapdb_testdb"
+    assert settings["session.current_domain_code"] == "Z"
+    assert settings["session.current_owner_repo_name"] == "lsmc-atlas"
+    assert settings["session.current_username"] == "alice@example.com"
+    assert settings["session.allow_global_rows"] == "false"
 
 
 def test_runtime_db_connection_requires_identity_scope_for_postgres():
@@ -208,8 +214,9 @@ def test_runtime_db_connection_requires_identity_scope_for_postgres():
         schema_name="tapdb_testdb",
     )
     conn = runtime_mod.RuntimeDBConnection(bundle)
+    conn.app_username = "alice@example.com"
 
-    with pytest.raises(RuntimeError, match="owner_repo_name"):
+    with pytest.raises(ValueError, match="owner_repo_name"):
         with conn.session_scope(commit=True):
             pass
 
@@ -218,7 +225,8 @@ def test_runtime_helpers_handle_non_postgres_and_rollback_paths(caplog):
     assert runtime_mod._parse_bool(None, default=True) is True
     assert runtime_mod._parse_bool("off", default=True) is False
     assert runtime_mod._parse_bool("wat", default=True) is True
-    assert runtime_mod._audit_username_for_session("  ") == "unknown"
+    with pytest.raises(RuntimeError, match="authenticated actor"):
+        runtime_mod._audit_username_for_session("  ")
     assert runtime_mod._require_schema_name({"schema_name": " tapdb_x "}) == "tapdb_x"
     with pytest.raises(RuntimeError, match="schema_name"):
         runtime_mod._require_schema_name({})
@@ -268,9 +276,8 @@ def test_runtime_helpers_handle_non_postgres_and_rollback_paths(caplog):
                 raise RuntimeError("audit unavailable")
             events.append("execute")
 
-    caplog.set_level("WARNING")
-    runtime_mod._set_audit_username(AuditFailSession(), "user@example.com")
-    assert "Could not set session audit username" in caplog.text
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        runtime_mod._set_audit_username(AuditFailSession(), "user@example.com")
 
 
 def test_runtime_engine_cache_key_includes_schema(monkeypatch):

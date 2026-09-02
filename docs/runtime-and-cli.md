@@ -1,6 +1,6 @@
 # Runtime and CLI
 
-This guide lives in the `tapdb-core` repository. The Python import package remains `daylily_tapdb`.
+This guide lives in the `daylily-tapdb` repository. The Python import package is `daylily_tapdb`.
 
 This document describes how TAPDB is operated today: config-first, namespace-scoped, and CLI-driven. It is intentionally about the substrate layer, not about any one application domain.
 
@@ -58,6 +58,8 @@ The root command is `tapdb`. The current help surface shows these top-level grou
 - `bootstrap`
 - `ui`
 - `db`
+- `templates`
+- `objects`
 - `backup`
 - `pg`
 - `users`
@@ -66,9 +68,14 @@ The root command is `tapdb`. The current help surface shows these top-level grou
 
 That split is deliberate:
 
-- `config` initializes or updates the explicit-target TAPDB config.
+- `db-config init` creates the explicit-target TAPDB config; `config` provides
+  generic config-file operations.
 - `pg` manages local or system PostgreSQL processes.
 - `db` manages database lifecycle, schema, migrations, and data seeding.
+- `templates` exports, validates/imports, and inventories one explicit
+  repository-owned template pack.
+- `objects` provides governed search, exact lookup, narrow updates, repair, and
+  soft deletion.
 - `backup` is the backup and recovery lifecycle: `plan`, `create`, `verify`,
   `list`, `restore-plan`, `restore`, `rehearse`. See
   [`docs/backup-and-recovery.md`](backup-and-recovery.md). The older
@@ -94,7 +101,7 @@ The basic local flow is:
 The CLI surfaces for that flow are already present and exercised in tests:
 
 ```bash
-tapdb --config <path> config init \
+tapdb --config <path> db-config init \
   --client-id <client-id> \
   --database-name <database-name> \
   --owner-repo-name <repo-name> \
@@ -105,7 +112,8 @@ tapdb --config <path> config init \
   --host localhost \
   --port 5533 \
   --ui-port 8911 \
-  --user tapdb \
+  --user tapdb_runtime \
+  --operator-user tapdb_operator \
   --database tapdb_<client-id>_<database-name> \
   --schema-name tapdb_<client-id>_<database-name>
 
@@ -118,6 +126,14 @@ tapdb --config <path> bootstrap local --no-gui
 ```
 
 `tapdb bootstrap local` is the preferred orchestration entrypoint for local developer setup. It includes optional flags for `--no-gui`, `--include-workflow`, and `--insecure-dev-defaults` for local-only bootstrap flows. The command is documented by the CLI help and covered by the CLI test suite in [`tests/test_cli.py`](../tests/test_cli.py) and [`tests/test_cli_coverage.py`](../tests/test_cli_coverage.py).
+
+Local initialization creates the cluster as the configured operator, keeps the
+database and schema operator-owned, and creates the runtime login as
+`NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`. The operator
+must be distinct from `target.user`. `target.tenant_id`, when present, is a
+fixed canonical UUID; when absent the runtime is deliberately global-only.
+`target.allow_global_claims` is bound to the authenticated runtime principal
+and cannot be enabled by changing a session GUC.
 
 For local single-repo runs, TAPDB also ships packaged example registry fixtures
 under [`daylily_tapdb/etc`](../daylily_tapdb/etc). They are useful for docs
@@ -176,16 +192,24 @@ regulated report is explicitly published.
 
 `tapdb info` is the operator-facing status surface. It reports:
 
-- resolved namespace context
-- effective config path
-- UI PID and log locations
-- runtime root
-- Postgres probe status
-- optional JSON output via `--json`
+- TapDB package, Python, Meridian, and Git revision/dirty status
+- exact config path, SHA-256 fingerprint, and namespace identity
+- database reachability plus the non-secret target and schema names
+- domain, owner, tenant-scope, backup-storage, UI, and DAG status
 
-For CLI v2, JSON is a root-global flag, so use `tapdb --config <path> --json info` rather than a command-local JSON switch.
+The payload never includes passwords, tokens, environment dumps, raw config, or
+Cognito settings. Both `tapdb --config <path> --json info` and the retained
+command-local form `tapdb --config <path> info --json` emit the same sanitized
+JSON contract.
 
-It also performs best-effort `psql` probes when available. The implementation lives in [`daylily_tapdb/cli/__init__.py`](../daylily_tapdb/cli/__init__.py), and the runtime context resolution lives in [`daylily_tapdb/cli/context.py`](../daylily_tapdb/cli/context.py).
+It performs a bounded best-effort `psql` probe when available. The shared
+payload implementation lives in
+[`daylily_tapdb/runtime_info.py`](../daylily_tapdb/runtime_info.py); CLI, API,
+embedded GUI, and legacy admin surfaces render that same contract.
+The canonical top-level keys are `format`, `package`, `python`, `meridian`,
+`git`, `config`, `database`, `scope`, `storage`, `ui`, and `dag`. Target,
+schema, and namespace values exist only in their corresponding nested sections;
+there are no duplicate top-level compatibility aliases.
 
 ## UI Runtime
 

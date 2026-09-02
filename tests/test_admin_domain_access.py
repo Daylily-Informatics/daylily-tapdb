@@ -2,10 +2,17 @@ from __future__ import annotations
 
 from unittest.mock import Mock
 
+import pytest
 from fastapi.testclient import TestClient
 
 import admin.main as admin_main
 from admin.main import app
+
+
+@pytest.fixture(autouse=True)
+def _valid_explicit_admin_config(monkeypatch: pytest.MonkeyPatch):
+    """Middleware tests isolate behavior after startup config validation."""
+    monkeypatch.setattr(admin_main, "_ADMIN_SETTINGS_LOAD_ERROR", None)
 
 
 def test_admin_allows_approved_origin_preflight() -> None:

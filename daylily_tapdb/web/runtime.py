@@ -18,6 +18,11 @@ from daylily_tapdb.cli.db_config import (
     get_admin_settings,
     get_db_config,
 )
+from daylily_tapdb.security_context import (
+    TapdbTransactionContext,
+    apply_transaction_context,
+    is_postgresql_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,18 +39,20 @@ def _parse_bool(value: object, *, default: bool) -> bool:
 
 
 def _audit_username_for_session(value: Optional[str]) -> str:
-    return (value or "").strip() or "unknown"
+    normalized = str(value or "")
+    if normalized != normalized.strip() or not normalized:
+        raise RuntimeError(
+            "An authenticated actor is required for TapDB runtime access"
+        )
+    return normalized
 
 
 def _set_audit_username(session: Session, username: Optional[str]) -> None:
-    """Set per-transaction audit username for TAPDB triggers (best-effort)."""
-    try:
-        session.execute(
-            text("SET LOCAL session.current_username = :username"),
-            {"username": _audit_username_for_session(username)},
-        )
-    except Exception as exc:
-        logger.warning("Could not set session audit username: %s", exc)
+    """Set required audit attribution or fail closed."""
+    session.execute(
+        "SET LOCAL session.current_username = :username",
+        {"username": _audit_username_for_session(username)},
+    )
 
 
 def _require_schema_name(cfg: dict[str, str]) -> str:
@@ -128,9 +135,23 @@ class RuntimeDBConnection:
         session = self._bundle.SessionFactory()
         trans = session.begin()
         try:
-            _set_search_path(session, self._bundle.schema_name)
-            _set_identity_scope(session, self._bundle.cfg)
-            _set_audit_username(session, self.app_username)
+            if is_postgresql_session(session):
+                apply_transaction_context(
+                    session,
+                    TapdbTransactionContext(
+                        config_identity=self._bundle.config_path,
+                        schema_name=self._bundle.schema_name,
+                        domain_code=str(self._bundle.cfg.get("domain_code") or ""),
+                        owner_repo_name=str(
+                            self._bundle.cfg.get("owner_repo_name") or ""
+                        ),
+                        tenant_id=self._bundle.cfg.get("tenant_id") or None,
+                        actor=_audit_username_for_session(self.app_username),
+                        allow_global_rows=bool(
+                            self._bundle.cfg.get("allow_global_claims")
+                        ),
+                    ),
+                )
             yield session
             if commit:
                 trans.commit()
@@ -283,7 +304,7 @@ def get_db(config_path: str) -> RuntimeDBConnection:
 
     cfg = get_db_config(config_path=config_path)
     schema_name = _require_schema_name(cfg)
-    resolved_config_path = str(cfg.get("config_path") or str(config_path)).strip()
+    resolved_config_path = str(cfg["config_path"]).strip()
     key = (resolved_config_path, schema_name)
 
     with _bundle_lock:

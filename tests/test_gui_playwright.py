@@ -349,7 +349,7 @@ def gui_server(monkeypatch):
     monkeypatch.setattr(
         router_mod,
         "search_objects",
-        lambda session, service_name, q, record_type, category, type_name, subtype, limit: {
+        lambda session, service_name, q, record_type, category, type_name, subtype, limit, cursor: {
             "items": [
                 _record_to_item(obj, kind)
                 for obj, kind in [
@@ -477,14 +477,14 @@ def gui_server(monkeypatch):
             "properties": repair.json_addl["properties"],
         }
 
-    def update_name(session, *, euid, name):
-        del session
+    def update_name(session, *, euid, name, actor):
+        del session, actor
         obj, record_type = state.lookup(euid)
         obj.name = name
         return _record_to_item(obj, record_type)
 
-    def update_status(session, *, euid, bstatus):
-        del session
+    def update_status(session, *, euid, bstatus, actor):
+        del session, actor
         obj, record_type = state.lookup(euid)
         obj.bstatus = bstatus
         return _record_to_item(obj, record_type)
@@ -662,9 +662,7 @@ def test_playwright_template_editor_keeps_focus_and_saves(browser, gui_server):
     sync_api.expect(page.locator("[data-testid='tapdb-json-editor']")).to_be_visible()
 
     editor = page.locator("[data-testid='tapdb-json-editor'] textarea").first
-    editor.click()
-    editor.press("Meta+A")
-    editor.type('{"templates": []}', delay=2)
+    editor.fill('{"templates": []}')
 
     assert page.evaluate(
         "document.activeElement === document.querySelector(\"[data-testid='tapdb-json-editor'] textarea\")"

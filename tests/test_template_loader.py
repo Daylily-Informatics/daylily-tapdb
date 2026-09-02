@@ -201,6 +201,7 @@ def test_validate_seed_ownership_requires_registered_domain_and_claim(tmp_path):
             templates,
             domain_code="T",
             owner_repo_name="daylily-tapdb",
+            core_config_dir=tmp_path / "core",
             domain_registry_path=domain_registry,
             prefix_registry_path=prefix_registry,
         )
@@ -229,6 +230,7 @@ def test_validate_seed_ownership_requires_registered_domain_and_claim(tmp_path):
             templates,
             domain_code="T",
             owner_repo_name="daylily-tapdb",
+            core_config_dir=tmp_path / "core",
             domain_registry_path=domain_registry,
             prefix_registry_path=prefix_registry,
         )
@@ -250,6 +252,7 @@ def test_validate_seed_ownership_requires_registered_domain_and_claim(tmp_path):
             templates,
             domain_code="T",
             owner_repo_name="daylily-tapdb",
+            core_config_dir=tmp_path / "core",
             domain_registry_path=domain_registry,
             prefix_registry_path=prefix_registry,
         )
@@ -270,6 +273,9 @@ def test_validate_seed_ownership_accepts_packaged_combined_registry():
         templates,
         domain_code="Z",
         owner_repo_name="daylily-tapdb",
+        core_config_dir=(
+            Path(__file__).resolve().parents[1] / "daylily_tapdb" / "core_config"
+        ),
         domain_registry_path=fixture_dir / "domain_code_registry.json",
         prefix_registry_path=fixture_dir / "prefix_ownership_registry.json",
     )

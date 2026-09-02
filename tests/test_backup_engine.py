@@ -31,6 +31,7 @@ from daylily_tapdb.backup.engine import (
     server_version_major,
 )
 from daylily_tapdb.backup.errors import BackupVersionMismatchError
+from daylily_tapdb.security_context import TapdbTransactionContext
 
 FIXTURE = Path(__file__).parent / "fixtures" / "pg_restore_toc_full.txt"
 
@@ -43,6 +44,17 @@ LOCAL_CFG = {
     "database": "tapdb_shared",
     "schema_name": "tapdb_prod",
 }
+
+
+def _backup_context(schema_name: str = "s") -> TapdbTransactionContext:
+    return TapdbTransactionContext(
+        config_identity=f"test:{schema_name}",
+        schema_name=schema_name,
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        tenant_id=None,
+        actor="tapdb_backup_create",
+    )
 
 
 @pytest.fixture(scope="module")
@@ -262,6 +274,7 @@ def test_dump_is_schema_scoped_and_custom_format(tmp_path: Path):
         cmd.index("--format") : cmd.index("--format") + 2
     ]
     assert "--no-owner" in cmd and "--no-acl" in cmd
+    assert "--enable-row-security" not in cmd
     # The bug this whole subsystem replaces: never enumerate tables.
     assert "-t" not in cmd and "--table" not in cmd
 
@@ -448,17 +461,37 @@ def test_psql_command_is_quiet_and_fails_fast():
 # --------------------------------------------------------------------------
 
 
-def test_local_env_carries_the_password():
+def test_local_env_carries_the_password(monkeypatch):
+    monkeypatch.setenv("PGPASSWORD", "ambient-wrong-target")
+
     env = client_env(LOCAL_CFG)
 
     assert env["PGPASSWORD"] == "s3cret"
     assert "PGSSLMODE" not in env
 
 
-def test_local_env_omits_password_when_unset():
+def test_local_env_omits_password_when_unset(monkeypatch):
+    monkeypatch.setenv("PGPASSWORD", "ambient-secret")
+
     env = client_env({**LOCAL_CFG, "password": ""})
 
     assert "PGPASSWORD" not in env
+
+
+def test_client_env_removes_all_ambient_libpq_and_tapdb_controls(monkeypatch):
+    for key, value in {
+        "PGHOSTADDR": "203.0.113.99",
+        "PGPORT": "1",
+        "PGOPTIONS": "-csearch_path=attacker",
+        "PGSERVICE": "ambient-target",
+        "PGSSLMODE": "disable",
+        "TAPDB_CONFIG": "/tmp/ambient.yaml",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    env = client_env({**LOCAL_CFG, "password": ""})
+
+    assert not any(key.startswith(("PG", "TAPDB_")) for key in env)
 
 
 def test_local_env_pins_hostaddr_when_configured():
@@ -650,6 +683,7 @@ def test_snapshot_pinning_uses_the_client_resolved_address_not_the_servers(
             schema_name="s",
             artifact=tmp_path / "a.dump",
             snapshot="00000008-00000B84-1",
+            transaction_context=_backup_context(),
             # What the *server* reports -- must NOT be used to connect.
             backend={"address": "172.31.80.180", "port": 5432},
         )
@@ -677,6 +711,7 @@ def test_a_local_snapshot_dump_is_not_pinned(tmp_path, monkeypatch):
         raise RuntimeError("stop after the env is built")
 
     monkeypatch.setattr(service.engine, "run_command", _fake_run)
+    monkeypatch.setenv("PGOPTIONS", "-csession.current_tenant_id=ambient-bad")
     with pytest.raises(RuntimeError):
         service._run_dump(
             {
@@ -689,10 +724,24 @@ def test_a_local_snapshot_dump_is_not_pinned(tmp_path, monkeypatch):
             schema_name="s",
             artifact=tmp_path / "a.dump",
             snapshot="00000003-0000000A-1",
+            transaction_context=_backup_context(),
             backend={"address": "::1", "port": 5432},
         )
 
     assert "PGHOSTADDR" not in captured["env"]
+    pgoptions = captured["env"]["PGOPTIONS"]
+    for required in (
+        "-csearch_path=s",
+        "-csession.current_config_identity=test:s",
+        "-csession.current_schema_name=s",
+        "-csession.current_domain_code=Z",
+        "-csession.current_owner_repo_name=daylily-tapdb",
+        "-csession.current_tenant_id=",
+        "-csession.current_username=tapdb_backup_create",
+        "-csession.allow_global_rows=false",
+    ):
+        assert required in pgoptions
+    assert "ambient-bad" not in pgoptions
 
 
 def test_an_aurora_target_without_a_region_is_refused():
@@ -750,6 +799,7 @@ def test_snapshot_pinning_does_not_clobber_a_configured_hostaddr(tmp_path, monke
             schema_name="s",
             artifact=tmp_path / "a.dump",
             snapshot="00000003-0000000A-1",
+            transaction_context=_backup_context(),
             backend={"address": "10.0.1.7", "port": 5432},
         )
 

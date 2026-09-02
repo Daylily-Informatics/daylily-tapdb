@@ -1,14 +1,18 @@
 """Postgres integration test for Phase 2 acceptance."""
 
 import random
+import secrets
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from sqlalchemy import text
 
 from daylily_tapdb.actions.dispatcher import ActionDispatcher
+from daylily_tapdb.backup.service import connection_config_for_role
+from daylily_tapdb.cli.db_config import get_db_config
 from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.factory.instance import InstanceFactory
 from daylily_tapdb.models.audit import audit_log
@@ -28,7 +32,6 @@ from daylily_tapdb.schema_inventory import (
 )
 from daylily_tapdb.templates.manager import TemplateManager
 from daylily_tapdb.templates.mutation import allow_template_mutations
-from tests.conftest import resolve_tapdb_test_dsn
 
 _UNSET = object()
 
@@ -46,6 +49,195 @@ def _conn_kwargs(**overrides):
     return values
 
 
+def _config_identity(pytestconfig) -> str:
+    config_path = str(pytestconfig.getoption("--tapdb-config") or "").strip()
+    if not config_path:
+        pytest.skip("Set --tapdb-config to run Postgres integration tests")
+    return str(Path(config_path).resolve())
+
+
+def _operator_dsn(pytestconfig) -> str:
+    config_identity = _config_identity(pytestconfig)
+    cfg = get_db_config(config_path=config_identity)
+    operator = connection_config_for_role(cfg, "operator")
+    return (
+        "postgresql://"
+        f"{quote(str(operator['user']), safe='')}:"
+        f"{quote(str(operator.get('password') or ''), safe='')}@"
+        f"{operator['host']}:{operator['port']}/"
+        f"{quote(str(operator['database']), safe='')}"
+    )
+
+
+def _dsn_for_role(dsn: str, role: str, password: str) -> str:
+    from sqlalchemy.engine import make_url
+
+    return (
+        make_url(dsn)
+        .set(username=role, password=password)
+        .render_as_string(hide_password=False)
+    )
+
+
+def _provision_runtime_principal(
+    operator_dsn: str,
+    schema_name: str,
+    *,
+    config_identity: str,
+    domain_code: str,
+    owner_repo_name: str,
+    tenant_id: uuid.UUID | None,
+    allow_global_rows: bool,
+) -> str:
+    import psycopg2
+    from psycopg2 import sql
+
+    role = f"tapdb_test_runtime_{uuid.uuid4().hex[:20]}"
+    password = secrets.token_urlsafe(24)
+    connection = psycopg2.connect(operator_dsn)
+    connection.autocommit = False
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            sql.SQL(
+                "CREATE ROLE {} LOGIN NOSUPERUSER NOBYPASSRLS "
+                "NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD {}"
+            ).format(sql.Identifier(role), sql.Literal(password))
+        )
+        cursor.execute("SELECT current_database()")
+        database = cursor.fetchone()[0]
+        cursor.execute(
+            sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                sql.Identifier(database), sql.Identifier(role)
+            )
+        )
+        cursor.execute(
+            sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                sql.Identifier(schema_name), sql.Identifier(role)
+            )
+        )
+        cursor.execute(
+            sql.SQL(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {} TO {}"
+            ).format(sql.Identifier(schema_name), sql.Identifier(role))
+        )
+        cursor.execute(
+            sql.SQL(
+                "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {} TO {}"
+            ).format(sql.Identifier(schema_name), sql.Identifier(role))
+        )
+        cursor.execute("SELECT current_user")
+        operator_role = cursor.fetchone()[0]
+        cursor.execute(
+            sql.SQL(
+                "ALTER DEFAULT PRIVILEGES FOR ROLE {} IN SCHEMA {} "
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {}"
+            ).format(
+                sql.Identifier(operator_role),
+                sql.Identifier(schema_name),
+                sql.Identifier(role),
+            )
+        )
+        cursor.execute(
+            sql.SQL(
+                "ALTER DEFAULT PRIVILEGES FOR ROLE {} IN SCHEMA {} "
+                "GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO {}"
+            ).format(
+                sql.Identifier(operator_role),
+                sql.Identifier(schema_name),
+                sql.Identifier(role),
+            )
+        )
+        cursor.execute(
+            sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(schema_name))
+        )
+        cursor.execute(
+            "INSERT INTO tapdb_runtime_principal_scope ("
+            "role_name, config_identity, schema_name, domain_code, "
+            "issuer_app_code, tenant_id, allow_global_rows) VALUES ("
+            "%s, %s, %s, %s, %s, %s, %s)",
+            (
+                role,
+                config_identity,
+                schema_name,
+                domain_code,
+                owner_repo_name,
+                None if tenant_id is None else str(tenant_id),
+                allow_global_rows,
+            ),
+        )
+        cursor.execute(
+            sql.SQL("REVOKE ALL ON TABLE tapdb_runtime_principal_scope FROM {}").format(
+                sql.Identifier(role)
+            )
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        cursor.close()
+        connection.close()
+    return _dsn_for_role(operator_dsn, role, password)
+
+
+def _install_bound_schema(
+    pytestconfig,
+    schema_name: str,
+    schema_sql_path: Path,
+    *,
+    domain_code: str,
+    owner_repo_name: str = "daylily-tapdb",
+    tenant_id: uuid.UUID | None = None,
+    allow_global_rows: bool = True,
+) -> tuple[str, str, str]:
+    config_identity = _config_identity(pytestconfig)
+    operator_dsn = _operator_dsn(pytestconfig)
+    _install_schema(
+        operator_dsn,
+        schema_name,
+        schema_sql_path,
+        config_identity=config_identity,
+    )
+    runtime_dsn = _provision_runtime_principal(
+        operator_dsn,
+        schema_name,
+        config_identity=config_identity,
+        domain_code=domain_code,
+        owner_repo_name=owner_repo_name,
+        tenant_id=tenant_id,
+        allow_global_rows=allow_global_rows,
+    )
+    return operator_dsn, runtime_dsn, config_identity
+
+
+def _runtime_connection(
+    *,
+    dsn: str,
+    schema_name: str,
+    config_identity: str,
+    app_username: str = "pytest",
+    domain_code: str = "T",
+    owner_repo_name: str = "daylily-tapdb",
+    tenant_id: uuid.UUID | None = None,
+    allow_global_rows: bool = False,
+    connection_role: str = "runtime",
+) -> TAPDBConnection:
+    return TAPDBConnection(
+        **_conn_kwargs(
+            db_url=dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username=app_username,
+            domain_code=domain_code,
+            owner_repo_name=owner_repo_name,
+            tenant_id=tenant_id,
+            allow_global_rows=allow_global_rows,
+            connection_role=connection_role,
+        )
+    )
+
+
 def _set_runtime_prefix_env(monkeypatch, prefix=_UNSET) -> None:
     monkeypatch.delenv("MERIDIAN_ENVIRONMENT", raising=False)
     monkeypatch.delenv("LSMC_ENV", raising=False)
@@ -55,7 +247,9 @@ def _set_runtime_prefix_env(monkeypatch, prefix=_UNSET) -> None:
         monkeypatch.setenv("MERIDIAN_DOMAIN_CODE", prefix)
 
 
-def _install_schema(dsn: str, schema_name: str, schema_sql_path: Path) -> None:
+def _install_schema(
+    dsn: str, schema_name: str, schema_sql_path: Path, *, config_identity: str
+) -> None:
     try:
         import psycopg2
     except Exception as e:  # pragma: no cover
@@ -70,11 +264,18 @@ def _install_schema(dsn: str, schema_name: str, schema_sql_path: Path) -> None:
         cur.close()
         conn.close()
 
-    _apply_schema(dsn, schema_name, schema_sql_path)
+    _apply_schema(
+        dsn,
+        schema_name,
+        schema_sql_path,
+        config_identity=config_identity,
+    )
 
 
-def _apply_schema(dsn: str, schema_name: str, schema_sql_path: Path) -> None:
-    """Apply schema/tapdb_schema.sql into an existing schema.
+def _apply_schema(
+    dsn: str, schema_name: str, schema_sql_path: Path, *, config_identity: str
+) -> None:
+    """Apply the canonical schema and RLS assets into an existing schema.
 
     This intentionally does *not* pre-install pgcrypto.
     schema/tapdb_schema.sql already handles pgcrypto availability/privileges gracefully.
@@ -85,17 +286,34 @@ def _apply_schema(dsn: str, schema_name: str, schema_sql_path: Path) -> None:
         pytest.skip(f"psycopg2 unavailable: {e}")
 
     conn = psycopg2.connect(dsn)
-    conn.autocommit = True
+    conn.autocommit = False
     cur = conn.cursor()
     try:
         cur.execute(f"SET search_path TO {schema_name};")
+        for name, value in (
+            ("session.current_config_identity", config_identity),
+            ("session.current_schema_name", schema_name),
+            ("session.current_domain_code", "T"),
+            ("session.current_owner_repo_name", "daylily-tapdb"),
+            ("session.current_tenant_id", ""),
+            ("session.current_username", "migration:pytest-schema-apply"),
+            ("session.allow_global_rows", "true"),
+        ):
+            cur.execute("SELECT set_config(%s, %s, true)", (name, value))
         cur.execute(schema_sql_path.read_text())
+        cur.execute((schema_sql_path.parent / "rls.sql").read_text())
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         cur.close()
         conn.close()
 
 
-def _drop_schema(dsn: str, schema_name: str) -> None:
+def _drop_schema(
+    dsn: str, schema_name: str, *, runtime_dsns: tuple[str, ...] = ()
+) -> None:
     try:
         import psycopg2
     except Exception:
@@ -106,6 +324,16 @@ def _drop_schema(dsn: str, schema_name: str) -> None:
     cur = conn.cursor()
     try:
         cur.execute(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE;")
+        if runtime_dsns:
+            from psycopg2 import sql
+            from sqlalchemy.engine import make_url
+
+            for runtime_dsn in runtime_dsns:
+                role = make_url(runtime_dsn).username
+                if not role:
+                    raise RuntimeError("test runtime DSN is missing its role")
+                cur.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+                cur.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
     finally:
         cur.close()
         conn.close()
@@ -142,7 +370,13 @@ def _seed_templates(session, tmpl_list: list[dict]) -> None:
         session.flush()
 
 
-def _seed_identity_prefixes(session, prefix: str = "AGX") -> None:
+def _seed_identity_prefixes(
+    session,
+    prefix: str = "AGX",
+    *,
+    domain_code: str = "T",
+    owner_repo_name: str = "daylily-tapdb",
+) -> None:
     session.execute(
         text(
             """
@@ -153,15 +387,18 @@ def _seed_identity_prefixes(session, prefix: str = "AGX") -> None:
                 prefix
             )
             VALUES
-                ('generic_template', 'T', 'daylily-tapdb', :prefix),
-                ('generic_instance', 'T', 'daylily-tapdb', :prefix),
-                ('generic_instance_lineage', 'T', 'daylily-tapdb', :prefix),
-                ('audit_log', 'T', 'daylily-tapdb', :prefix)
-            ON CONFLICT (entity, domain_code, issuer_app_code) DO UPDATE
-              SET prefix = EXCLUDED.prefix, updated_dt = NOW();
+                ('generic_template', :domain_code, :owner_repo_name, :prefix),
+                ('generic_instance', :domain_code, :owner_repo_name, :prefix),
+                ('generic_instance_lineage', :domain_code, :owner_repo_name, :prefix),
+                ('audit_log', :domain_code, :owner_repo_name, :prefix)
+            ON CONFLICT (entity, domain_code, issuer_app_code) DO NOTHING;
             """
         ),
-        {"prefix": prefix},
+        {
+            "prefix": prefix,
+            "domain_code": domain_code,
+            "owner_repo_name": owner_repo_name,
+        },
     )
     session.execute(
         text(f'CREATE SEQUENCE IF NOT EXISTS "{prefix.lower()}_instance_seq"')
@@ -233,19 +470,45 @@ def _integration_templates() -> list[dict]:
 
 
 def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch, pytestconfig):
-    dsn = resolve_tapdb_test_dsn(pytestconfig)
     _set_runtime_prefix_env(monkeypatch)
 
     repo_root = Path(__file__).resolve().parents[1]
     schema_sql_path = repo_root / "schema" / "tapdb_schema.sql"
 
     schema_name = f"tapdb_test_{int(time.time())}_{random.randint(1, 1_000_000_000)}"
-    _install_schema(dsn, schema_name, schema_sql_path)
+    tenant_id = uuid.uuid4()
+    operator_dsn, dsn, config_identity = _install_bound_schema(
+        pytestconfig,
+        schema_name,
+        schema_sql_path,
+        domain_code="T",
+        tenant_id=tenant_id,
+    )
 
     try:
-        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
+        seed_conn = _runtime_connection(
+            dsn=operator_dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-template-seed",
+            tenant_id=tenant_id,
+            allow_global_rows=True,
+            connection_role="operator",
+        )
+        with seed_conn.session_scope(commit=True) as session:
+            _seed_identity_prefixes(session, "AGX")
+            _seed_templates(session, _integration_templates())
+
+        conn = _runtime_connection(
+            dsn=dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-action-runtime",
+            tenant_id=tenant_id,
+            allow_global_rows=True,
+        )
         tm = TemplateManager()
-        factory = InstanceFactory(tm)
+        factory = InstanceFactory(tm, domain_code="T")
 
         class TestDispatcher(ActionDispatcher):
             def do_action_create_note(self, instance, action_ds, captured_data):
@@ -254,11 +517,6 @@ def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch, pytestconfig
         dispatcher = TestDispatcher()
 
         with conn.session_scope(commit=False) as session:
-            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
-            _seed_identity_prefixes(session, "AGX")
-            _seed_templates(session, _integration_templates())
-
-            tenant_id = uuid.uuid4()
             wf = factory.create_instance(
                 session=session,
                 template_code="workflow/assay/hla-typing/1.2",
@@ -293,9 +551,13 @@ def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch, pytestconfig
                 .first()
             )
             assert a is not None
-            assert a.euid.startswith("T:XX-")
+            assert a.euid.startswith("T-XX-")
 
-            action_tmpl = tm.get_template(session, "action/core/create-note/1.0")
+            action_tmpl = tm.get_template(
+                session,
+                "action/core/create-note/1.0",
+                domain_code="T",
+            )
             assert action_tmpl is not None
             assert str(a.template_uid) == str(action_tmpl.uid)
 
@@ -303,7 +565,7 @@ def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch, pytestconfig
             latest_audit_euid = session.execute(
                 text("SELECT euid FROM audit_log ORDER BY uid DESC LIMIT 1")
             ).scalar_one()
-            assert latest_audit_euid.startswith("T:AGX-")
+            assert latest_audit_euid.startswith("T-AGX-")
 
             wf_uid = wf.uid
             session.delete(wf)
@@ -316,20 +578,19 @@ def test_postgres_schema_seed_action_audit_soft_delete(monkeypatch, pytestconfig
 
         conn.engine.dispose()
     finally:
-        _drop_schema(dsn, schema_name)
+        _drop_schema(operator_dsn, schema_name, runtime_dsns=(dsn,))
 
 
 @pytest.mark.parametrize(
     ("prefix_env", "expected_prefix"),
     [
-        ("T", "T:AGX-"),
-        ("S", "S:AGX-"),
+        ("T", "T-AGX-"),
+        ("S", "S-AGX-"),
     ],
 )
 def test_postgres_identity_triggers_respect_runtime_prefix_override(
     monkeypatch, prefix_env, expected_prefix, pytestconfig
 ):
-    dsn = resolve_tapdb_test_dsn(pytestconfig)
     _set_runtime_prefix_env(monkeypatch, prefix_env)
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -338,13 +599,39 @@ def test_postgres_identity_triggers_respect_runtime_prefix_override(
     schema_name = (
         f"tapdb_test_prefix_{int(time.time())}_{random.randint(1, 1_000_000_000)}"
     )
-    _install_schema(dsn, schema_name, schema_sql_path)
+    operator_dsn, dsn, config_identity = _install_bound_schema(
+        pytestconfig,
+        schema_name,
+        schema_sql_path,
+        domain_code=prefix_env,
+    )
 
     try:
-        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
+        seed_conn = _runtime_connection(
+            dsn=operator_dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username=f"pytest-prefix-{prefix_env.lower()}-seed",
+            domain_code=prefix_env,
+            allow_global_rows=True,
+            connection_role="operator",
+        )
+        with seed_conn.session_scope(commit=True) as session:
+            _seed_identity_prefixes(
+                session,
+                "AGX",
+                domain_code=prefix_env,
+            )
+
+        conn = _runtime_connection(
+            dsn=dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username=f"pytest-prefix-{prefix_env.lower()}",
+            domain_code=prefix_env,
+            allow_global_rows=True,
+        )
         with conn.session_scope(commit=False) as session:
-            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
-            _seed_identity_prefixes(session, "AGX")
             row = session.execute(
                 text(
                     """
@@ -379,30 +666,36 @@ def test_postgres_identity_triggers_respect_runtime_prefix_override(
             assert updated.euid_prefix == row.euid_prefix
             assert updated.euid_seq == row.euid_seq
     finally:
-        _drop_schema(dsn, schema_name)
+        _drop_schema(operator_dsn, schema_name, runtime_dsns=(dsn,))
 
 
 def test_postgres_schema_install_is_idempotent(pytestconfig):
-    dsn = resolve_tapdb_test_dsn(pytestconfig)
-
     repo_root = Path(__file__).resolve().parents[1]
     schema_sql_path = repo_root / "schema" / "tapdb_schema.sql"
 
     schema_name = (
         f"tapdb_test_idem_{int(time.time())}_{random.randint(1, 1_000_000_000)}"
     )
-    _install_schema(dsn, schema_name, schema_sql_path)
+    operator_dsn, dsn, config_identity = _install_bound_schema(
+        pytestconfig,
+        schema_name,
+        schema_sql_path,
+        domain_code="T",
+    )
 
     try:
         # Re-applying the schema to the same schema should not error.
-        _apply_schema(dsn, schema_name, schema_sql_path)
+        _apply_schema(
+            operator_dsn,
+            schema_name,
+            schema_sql_path,
+            config_identity=config_identity,
+        )
     finally:
-        _drop_schema(dsn, schema_name)
+        _drop_schema(operator_dsn, schema_name, runtime_dsns=(dsn,))
 
 
 def test_postgres_schema_drift_check_smoke(pytestconfig):
-    dsn = resolve_tapdb_test_dsn(pytestconfig)
-
     repo_root = Path(__file__).resolve().parents[1]
     schema_root = repo_root / "schema"
     schema_sql_path = schema_root / "tapdb_schema.sql"
@@ -410,12 +703,31 @@ def test_postgres_schema_drift_check_smoke(pytestconfig):
     schema_name = (
         f"tapdb_test_drift_{int(time.time())}_{random.randint(1, 1_000_000_000)}"
     )
-    _install_schema(dsn, schema_name, schema_sql_path)
+    operator_dsn, dsn, config_identity = _install_bound_schema(
+        pytestconfig,
+        schema_name,
+        schema_sql_path,
+        domain_code="T",
+    )
 
     try:
-        conn = TAPDBConnection(**_conn_kwargs(db_url=dsn))
-        with conn.session_scope(commit=True) as session:
-            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
+        conn = _runtime_connection(
+            dsn=operator_dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-schema-drift",
+            allow_global_rows=True,
+            connection_role="operator",
+        )
+        seed_conn = _runtime_connection(
+            dsn=operator_dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-schema-drift-seed",
+            allow_global_rows=True,
+            connection_role="operator",
+        )
+        with seed_conn.session_scope(commit=True) as session:
             _seed_identity_prefixes(session, "AGX")
 
         expected = load_expected_schema_inventory(
@@ -434,8 +746,15 @@ def test_postgres_schema_drift_check_smoke(pytestconfig):
         )
         assert clean_diff.has_drift is False
 
-        with conn.session_scope(commit=True) as session:
-            session.execute(text(f"SET LOCAL search_path TO {schema_name}"))
+        operator = _runtime_connection(
+            dsn=operator_dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-schema-drift-operator",
+            connection_role="operator",
+            allow_global_rows=True,
+        )
+        with operator.session_scope(commit=True) as session:
             session.execute(text("DROP INDEX IF EXISTS idx_generic_instance_euid"))
 
         with conn.session_scope(commit=False) as session:
@@ -452,165 +771,109 @@ def test_postgres_schema_drift_check_smoke(pytestconfig):
             "generic_instance.idx_generic_instance_euid" in drifted.missing["indexes"]
         )
     finally:
-        _drop_schema(dsn, schema_name)
+        _drop_schema(operator_dsn, schema_name, runtime_dsns=(dsn,))
 
 
 def test_postgres_restricted_role_schema_install_and_identity_triggers(pytestconfig):
-    """Production-like behavior under restricted role privileges.
-
-    - Connect as a non-superuser role to a fresh DB
-    - Schema install succeeds without UUID extension helpers
-    - Identity/EUID triggers produce bigint ID + Meridian EUID fields
-    """
-    dsn = resolve_tapdb_test_dsn(pytestconfig)
-
-    try:
-        import psycopg2
-    except Exception as e:  # pragma: no cover
-        pytest.skip(f"psycopg2 unavailable: {e}")
-
-    from sqlalchemy.engine import make_url
-
+    """Configured NOBYPASSRLS runtime role is constrained by forced RLS."""
     repo_root = Path(__file__).resolve().parents[1]
     schema_sql_path = repo_root / "schema" / "tapdb_schema.sql"
-
     suffix = f"{int(time.time())}{random.randint(1, 1_000_000)}"[-10:]
-    role = f"tapdb_restricted_{suffix}"
-    db = f"tapdb_restricted_db_{suffix}"
-    pwd = f"pw_{suffix}"
-
-    from psycopg2 import sql as psql
-
-    admin_conn = psycopg2.connect(dsn)
-    admin_conn.autocommit = True
-    admin_cur = admin_conn.cursor()
-    try:
-        admin_cur.execute(
-            psql.SQL("DROP DATABASE IF EXISTS {};").format(psql.Identifier(db))
-        )
-        admin_cur.execute(
-            psql.SQL("DROP ROLE IF EXISTS {};").format(psql.Identifier(role))
-        )
-        admin_cur.execute(
-            psql.SQL("CREATE ROLE {} LOGIN PASSWORD %s;").format(psql.Identifier(role)),
-            [pwd],
-        )
-        # DB is owned by the admin user, not the restricted role.
-        admin_cur.execute(psql.SQL("CREATE DATABASE {};").format(psql.Identifier(db)))
-        admin_cur.execute(
-            psql.SQL("GRANT CONNECT ON DATABASE {} TO {};").format(
-                psql.Identifier(db), psql.Identifier(role)
-            )
-        )
-        # Explicitly prevent extension installs by the restricted role.
-        admin_cur.execute(
-            psql.SQL("REVOKE CREATE ON DATABASE {} FROM PUBLIC;").format(
-                psql.Identifier(db)
-            )
-        )
-        admin_cur.execute(
-            psql.SQL("REVOKE CREATE ON DATABASE {} FROM {};").format(
-                psql.Identifier(db), psql.Identifier(role)
-            )
-        )
-    finally:
-        admin_cur.close()
-        admin_conn.close()
-
-    # NOTE: SQLAlchemy URL stringification hides passwords by default (e.g. "***"),
-    # which breaks psycopg2 auth when we pass the DSN onward.
-    admin_db_dsn = make_url(dsn).set(database=db).render_as_string(hide_password=False)
-    admin_db_conn = psycopg2.connect(admin_db_dsn)
-    admin_db_conn.autocommit = True
-    admin_db_cur = admin_db_conn.cursor()
-
     schema_name = f"tapdb_restricted_schema_{suffix}"
-    try:
-        # Ensure pgcrypto is absent at start.
-        admin_db_cur.execute("DROP EXTENSION IF EXISTS pgcrypto;")
-        admin_db_cur.execute(
-            psql.SQL("CREATE SCHEMA {} AUTHORIZATION {};").format(
-                psql.Identifier(schema_name), psql.Identifier(role)
-            )
-        )
-    finally:
-        admin_db_cur.close()
-        admin_db_conn.close()
-
-    role_db_dsn = (
-        make_url(dsn)
-        .set(username=role, password=pwd, database=db)
-        .render_as_string(hide_password=False)
+    operator_dsn, dsn, config_identity = _install_bound_schema(
+        pytestconfig,
+        schema_name,
+        schema_sql_path,
+        domain_code="T",
+    )
+    other_dsn = _provision_runtime_principal(
+        operator_dsn,
+        schema_name,
+        config_identity=config_identity,
+        domain_code="S",
+        owner_repo_name="daylily-tapdb",
+        tenant_id=None,
+        allow_global_rows=True,
     )
 
     try:
-        # Apply into the pre-created schema; extension install
-        # should be skipped (insufficient_privilege).
-        _apply_schema(role_db_dsn, schema_name, schema_sql_path)
+        seed_conn = _runtime_connection(
+            dsn=operator_dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-restricted-seed",
+            allow_global_rows=True,
+            connection_role="operator",
+        )
+        with seed_conn.session_scope(commit=True) as session:
+            _seed_identity_prefixes(session, "AGX")
 
-        role_conn = psycopg2.connect(role_db_dsn)
-        role_conn.autocommit = True
-        role_cur = role_conn.cursor()
-        try:
-            role_cur.execute(
-                psql.SQL("SET search_path TO {};").format(psql.Identifier(schema_name))
-            )
-            role_cur.execute("SET session.current_domain_code = 'T'")
-            role_cur.execute("SET session.current_owner_repo_name = 'daylily-tapdb'")
-            role_cur.execute(
-                """
-                INSERT INTO tapdb_identity_prefix_config(
-                    entity,
-                    domain_code,
-                    issuer_app_code,
-                    prefix
+        runtime = _runtime_connection(
+            dsn=dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-restricted-runtime",
+            allow_global_rows=True,
+        )
+        with runtime.session_scope(commit=True) as session:
+            role_state = session.execute(
+                text(
+                    "SELECT current_user, rolsuper, rolbypassrls "
+                    "FROM pg_roles WHERE rolname = current_user"
                 )
-                VALUES
-                    ('generic_template', 'T', 'daylily-tapdb', 'AGX'),
-                    ('generic_instance', 'T', 'daylily-tapdb', 'AGX'),
-                    ('generic_instance_lineage', 'T', 'daylily-tapdb', 'AGX'),
-                    ('audit_log', 'T', 'daylily-tapdb', 'AGX')
-                ON CONFLICT (entity, domain_code, issuer_app_code) DO UPDATE
-                  SET prefix = EXCLUDED.prefix, updated_dt = NOW();
-                """
-            )
-            role_cur.execute('CREATE SEQUENCE IF NOT EXISTS "agx_instance_seq"')
+            ).one()
+            assert role_state.current_user
+            assert role_state.rolsuper is False
+            assert role_state.rolbypassrls is False
+            row = session.execute(
+                text(
+                    """
+                    INSERT INTO generic_template (
+                        name, polymorphic_discriminator, category, type, subtype, version,
+                        instance_prefix, bstatus
+                    ) VALUES (
+                        'restricted-template', 'generic_template',
+                        'generic', 'test', 'restricted', '1.0',
+                        'AGX', 'active'
+                    )
+                    RETURNING uid, euid, euid_prefix, euid_seq;
+                    """
+                )
+            ).one()
+            assert isinstance(row.uid, int) and row.uid > 0
+            assert isinstance(row.euid, str) and row.euid.startswith("T-AGX-")
+            assert row.euid_prefix == "AGX"
+            assert isinstance(row.euid_seq, int) and row.euid_seq > 0
 
-            role_cur.execute(
-                """
-                INSERT INTO generic_template (
-                    name, polymorphic_discriminator, category, type, subtype, version,
-                    instance_prefix, bstatus
-                ) VALUES (
-                    'restricted-template', 'generic_template',
-                    'generic', 'test', 'restricted', '1.0',
-                    'AGX', 'active'
-                )
-                RETURNING uid, euid, euid_prefix, euid_seq;
-                """
+        other_scope = _runtime_connection(
+            dsn=other_dsn,
+            schema_name=schema_name,
+            config_identity=config_identity,
+            app_username="pytest-restricted-other-scope",
+            domain_code="S",
+            allow_global_rows=True,
+        )
+        with other_scope.session_scope(commit=False) as session:
+            assert (
+                session.execute(
+                    text(
+                        "SELECT count(*) FROM generic_template "
+                        "WHERE subtype = 'restricted'"
+                    )
+                ).scalar_one()
+                == 0
             )
-            row = role_cur.fetchone()
-            assert row is not None
-            assert isinstance(row[0], int)
-            assert row[0] > 0
-            assert isinstance(row[1], str) and row[1].startswith("T:AGX-")
-            assert row[2] == "AGX"
-            assert isinstance(row[3], int) and row[3] > 0
-        finally:
-            role_cur.close()
-            role_conn.close()
+            assert (
+                session.execute(
+                    text("SELECT current_setting('session.current_schema_name')")
+                ).scalar_one()
+                == schema_name
+            )
+            assert (
+                session.execute(
+                    text("SELECT current_setting('session.current_config_identity')")
+                ).scalar_one()
+                == config_identity
+            )
     finally:
-        # Clean up DB + role using admin connection
-        admin_conn = psycopg2.connect(dsn)
-        admin_conn.autocommit = True
-        admin_cur = admin_conn.cursor()
-        try:
-            admin_cur.execute(
-                psql.SQL("DROP DATABASE IF EXISTS {};").format(psql.Identifier(db))
-            )
-            admin_cur.execute(
-                psql.SQL("DROP ROLE IF EXISTS {};").format(psql.Identifier(role))
-            )
-        finally:
-            admin_cur.close()
-            admin_conn.close()
+        _drop_schema(operator_dsn, schema_name, runtime_dsns=(dsn, other_dsn))

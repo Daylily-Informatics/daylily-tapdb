@@ -1,197 +1,122 @@
 # TapDB DAG Contract
 
-This contract lives in the `tapdb-core` repository. The Python import package remains `daylily_tapdb`.
+The current federation surface is DAG v2 (`tapdb.dag_v2`, contract `dag:v2`).
+It is an authenticated, bounded projection of TapDB objects and authoritative
+lineage. The controlling acceptance specification is preserved at
+[`docs/plans/20260901T100631Z_kahlo_global_dag_tapdb_eligibility_spec.md`](plans/20260901T100631Z_kahlo_global_dag_tapdb_eligibility_spec.md).
 
-This document defines `dag:v1`, the canonical cross-service DAG contract for
-TapDB-backed services and graph aggregators such as Kahlo.
+## Eligibility and mount
 
-## Ownership Rule
+Use `mount_tapdb_dag_surfaces(...)` with one existing absolute config path, one
+immutable exact fleet `service_id`, an explicit auth dependency, and a
+`DagV2Limits` instance containing positive bounds. Mounting is atomic: a
+failure registers no partial routes and publishes no advertisement.
 
-- Ownership is determined by exact EUID hit, not search.
-- A contributing service must return `200` only for EUIDs it owns in that
-  service's current perspective.
-- A contributing service must return `404` for non-owned EUIDs.
-- If more than one service returns `200` for the same exact EUID probe, that is
-  a contract violation. Aggregators must not guess.
+The successful advertisement declares:
 
-## Canonical Endpoints
+- extension `tapdb.dag_v2`;
+- contract `dag:v2`;
+- exact service identity and display name;
+- exact endpoint kinds and paths;
+- positive hard limits;
+- typed-reference, presentation, and snapshot features;
+- `outbound_fetch: false`;
+- a deterministic manifest revision.
 
-All TapDB-backed contributors should expose these routes:
+Consumers reject absent manifests, v1/unknown versions, aliases or identity
+mismatches, non-positive limits, missing endpoint kinds, or `eligible` values
+other than `true`.
 
-- `GET /api/dag/object/{euid}`
-- `GET /api/dag/data?start_euid=<euid>&depth=<n>`
-- `GET /api/dag/search?...filters`
-- `GET /api/dag/external?source_euid=<euid>&ref_index=<i>&depth=<n>`
-- `GET /api/dag/external/object?source_euid=<euid>&ref_index=<i>&euid=<remote_euid>`
+## Authenticated routes
 
-These routes are implemented in `daylily_tapdb.web.create_tapdb_dag_router(...)`.
+### `GET /api/dag/manifest`
 
-## Endpoint Semantics
+Returns the mounted manifest. It requires the same host session or service
+credential as every other v2 route.
 
-### `GET /api/dag/object/{euid}`
+### `GET /api/dag/v2/object/{euid}`
 
-- Returns exact local object detail for an owned EUID.
-- Returns `404` for a non-owned EUID.
-- Search behavior, fuzzy matching, aliases, or partial matches are out of
-  contract.
+Performs exact local lookup. It is the ownership-proof endpoint. A value such
+as `<persisted-euid>` must come from TapDB or another owning service; clients
+must not construct one. A non-owned EUID returns `404 object_not_owned`.
 
-Minimum payload shape:
+The payload contains the local typed object, safe properties, validated graph
+presentation, and outbound typed-reference projections. It does not include
+legacy remote routing metadata.
 
-```json
-{
-  "euid": "Z:BCN-33",
-  "system": "bloom",
-  "record_type": "instance",
-  "type": "container",
-  "subtype": "tube",
-  "json_addl": {},
-  "external_refs": [
-    {
-      "ref_index": 0,
-      "system": "atlas",
-      "root_euid": "Z:AGX-A43V",
-      "graph_expandable": true,
-      "href": "https://atlas.local/api/dag/object/Z:AGX-A43V",
-      "reason": null
-    }
-  ]
-}
+### `GET /api/dag/v2/search`
+
+Performs bounded local discovery with an opaque keyset cursor. Filters execute
+in SQL. `page` contains `limit`, `returned`, and `next_cursor`; it does not
+promise a total count. A search hit is a candidate, never proof of ownership.
+The consumer must call exact lookup before assigning ownership.
+
+### `GET /api/dag/v2/data`
+
+Traverses local persisted lineage from `start_euid` within service hard bounds.
+The caller may request a smaller `depth` or `max_nodes` but cannot exceed the
+manifest. The response carries:
+
+- service and contract identity;
+- `graph_revision` and `snapshot_at`;
+- effective depth/node limits;
+- explicit truncation state and reason;
+- typed nodes with validated presentation metadata;
+- typed lineage edges with relationship semantics, assertion time,
+  provenance, and evidence references;
+- projected outbound typed references.
+
+Traversal rejects self-loops, cycles, cross-domain/owner edges, and unapproved
+cross-tenant edges. A typed global reference must be explicitly approved and
+cannot relax ownership or authorization.
+
+## External references
+
+A v2 cross-service reference is authoritative only when a local source object
+is connected through `generic_instance_lineage` to a persisted
+`reference/external_identifier/tapdb_object/1.0/` instance. The target EUID
+comes from the target owning service. TapDB itself mints the reference and
+lineage EUIDs.
+
+Raw `object_euid`, `target_object_euid`, other `*_object_euid` properties, or
+`external_payload.tapdb_graph` blobs do not create v2 edges and are rejected on
+ordinary nodes.
+
+DAG v2 never fetches the target service. The consumer reads the outbound
+projection, resolves the exact registered target service, authenticates to it,
+validates its manifest, and performs target exact lookup directly.
+
+## Presentation
+
+`properties.graph_presentation` is validated display guidance. Supported data
+describes node role, collapse behavior, expected fan-out relationship types,
+maximum degree, and a reason. It cannot create relationships, establish
+ownership, change tenant scope, or grant traversal access.
+
+## DAG v1 boundary
+
+`create_tapdb_dag_router(...)` is a separate legacy v1 surface. It is not a
+fallback for v2 and should not be mounted by a new adopter. Its outbound proxy
+is disabled by default. An existing deployment may enable it only with an
+explicit `V1ProxyPolicy`: exact HTTPS DNS allowlist, public DNS resolution,
+timeout at most ten seconds, response limit at most five MiB, no redirects,
+JSON content type, and no forwarded credentials.
+
+Every v1 route also requires the host's explicit authentication dependency.
+Missing or non-callable auth fails router construction; the dependency must
+reject anonymous callers with `401` or `403` and return an authenticated
+identity for authorized callers:
+
+```python
+from daylily_tapdb.web import create_tapdb_dag_router
+
+legacy_router = create_tapdb_dag_router(
+    config_path="/abs/path/to/tapdb-config.yaml",
+    auth_dependency=require_service_or_user,
+)
+app.include_router(legacy_router)
 ```
 
-### `GET /api/dag/data`
-
-- Requires `start_euid`.
-- Returns the native DAG rooted at that exact owned object.
-- If the object exists but has no traversable relationships yet, return a
-  one-node graph instead of an error.
-
-Minimum payload shape:
-
-```json
-{
-  "elements": {
-    "nodes": [{ "data": {} }],
-    "edges": [{ "data": {} }]
-  },
-  "meta": {
-    "start_euid": "Z:BCN-33",
-    "depth": 3,
-    "owner_service": "bloom",
-    "contract_version": "dag:v1"
-  }
-}
-```
-
-Node `data` must include at least:
-
-```json
-{
-  "id": "Z:BCN-33",
-  "euid": "Z:BCN-33",
-  "display_label": "Z:BCN-33",
-  "system": "bloom",
-  "type": "container",
-  "subtype": "tube",
-  "href": "/object/Z:BCN-33"
-}
-```
-
-Edge `data` must include at least:
-
-```json
-{
-  "id": "edge-1",
-  "source": "Z:BCN-33",
-  "target": "Z:BCT-3Y",
-  "relationship_type": "contains"
-}
-```
-
-Graph node `data` also includes `external_refs` when the object carries explicit
-TapDB graph refs or is a typed external identifier object.
-
-### `GET /api/dag/search`
-
-- Searches local TapDB objects for UI and aggregator entrypoints.
-- Supports filters for `q`, exact `euid`, `record_type`, `category`, `type`,
-  `subtype`, `tenant_id`, `relationship_type`, and `limit`.
-- Search results are candidates. Exact ownership still comes from
-  `/api/dag/object/{euid}` or an explicit `service_id + euid` request.
-
-Minimum payload shape:
-
-```json
-{
-  "items": [
-    {
-      "system": "bloom",
-      "service": "bloom",
-      "record_type": "instance",
-      "euid": "Z:BCN-33",
-      "display_label": "Specimen tube",
-      "category": "container",
-      "type": "tube",
-      "tenant_id": null,
-      "relationship_type": null,
-      "graph_href": "/api/dag/data?start_euid=Z:BCN-33"
-    }
-  ],
-  "page": {
-    "limit": 25,
-    "total": 1,
-    "next_cursor": null
-  },
-  "meta": {
-    "owner_service": "bloom",
-    "contract_version": "dag:v1"
-  }
-}
-```
-
-### `GET /api/dag/external`
-
-- Expands one explicit external reference from a local object.
-- The service follows the indexed `external_refs` entry and returns a namespaced
-  remote graph payload that can be merged safely into the local DAG view.
-
-### `GET /api/dag/external/object`
-
-- Returns object detail for a node inside a previously expanded external graph.
-
-## Federation Rules
-
-- `external_refs` are the federation contract. Aggregators follow refs; they do
-  not infer cross-system joins from arbitrary fields.
-- Externally merged nodes and edges must be namespaced to avoid collisions with
-  local IDs.
-- A service can be perspective-local only. It does not need to be globally
-  canonical to contribute.
-- Search endpoints are for UI convenience and cross-service entrypoints. They
-  are not a substitute for exact ownership.
-- Typed external identifier objects are valid federation refs when their
-  metadata provides a `system`/`target_system` and `root_euid`/`target_euid`.
-
-## Capability Advertising
-
-Services should advertise the DAG contract through their discovery surface. For
-`obs_services`-style payloads, TapDB provides
-`daylily_tapdb.web.build_dag_capability_advertisement(...)`.
-
-Current canonical capability labels are:
-
-- `exact_lookup`
-- `native_graph`
-- `object_search`
-- `external_graph_expansion`
-
-## Host Integration
-
-TapDB owns this contract in the shared library so host applications do not need
-to reimplement it. A host app should:
-
-1. mount the reusable TapDB HTML surface under a namespaced path such as
-   `/tapdb`
-2. expose the canonical DAG endpoints at root `/api/dag/*`
-3. advertise those endpoints through the host discovery surface
-
-The Dewey implementation is the current reference adopter.
+See the [consumer discoverability guide](consumer-discoverability-guide.md) for
+runnable request flows, typed-reference creation, troubleshooting, and the
+adopter checklist.

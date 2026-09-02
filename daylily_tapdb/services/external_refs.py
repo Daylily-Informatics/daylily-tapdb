@@ -1,23 +1,54 @@
-"""Reusable external graph reference helpers."""
+"""Typed external-reference helpers and the separately gated DAG v1 proxy.
+
+``tapdb.dag_v2`` only projects references backed by a persisted External Object
+Reference instance and ``generic_instance_lineage``.  The older metadata-driven
+resolver remains available solely to an explicitly configured v1 proxy; it is
+never consulted by the v2 graph surface.
+"""
 
 from __future__ import annotations
 
+import http.client
+import ipaddress
 import json
+import re
+import socket
+import ssl
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
+from datetime import datetime
+from functools import lru_cache
 from typing import Any
 from urllib.parse import urlencode, urljoin, urlsplit
-from urllib.request import Request as UrlRequest
-from urllib.request import urlopen
 
 from fastapi import Request
+from sqlalchemy.exc import IntegrityError
+
+from daylily_tapdb.euid import validate_euid
+from daylily_tapdb.models.instance import generic_instance
+from daylily_tapdb.models.lineage import generic_instance_lineage
+from daylily_tapdb.models.template import generic_template
 
 ALLOWED_AUTH_MODES = {"none", "same_origin"}
+EXTERNAL_REFERENCE_TEMPLATE_CODE = "reference/external_identifier/tapdb_object/1.0/"
+EXTERNAL_REFERENCE_IDENTITY_NAMESPACE = "tapdb.external-reference/v1"
+_EXTERNAL_REFERENCE_COORDS = (
+    "reference",
+    "external_identifier",
+    "tapdb_object",
+    "1.0",
+)
 TYPED_EXTERNAL_IDENTIFIER_MARKERS = {
     "external_identifier",
     "external_id",
     "external_reference",
     "tapdb_external_identifier",
 }
+_MAX_V1_RESOLVED_ENDPOINTS = 8
+_SERVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 @dataclass(frozen=True)
@@ -55,6 +86,458 @@ class ExternalGraphRef:
         if self.reason:
             payload["reason"] = self.reason
         return payload
+
+
+@dataclass(frozen=True)
+class V1ProxyPolicy:
+    """Explicit network boundary for the legacy, metadata-driven proxy."""
+
+    allowed_hosts: frozenset[str]
+    timeout_seconds: float = 5.0
+    max_response_bytes: int = 1_048_576
+
+    def __post_init__(self) -> None:
+        normalized = frozenset(_require_dns_name(item) for item in self.allowed_hosts)
+        if not normalized:
+            raise ValueError("v1 proxy requires at least one explicitly allowed host")
+        if not (0 < float(self.timeout_seconds) <= 10):
+            raise ValueError("v1 proxy timeout_seconds must be > 0 and <= 10")
+        if not (0 < int(self.max_response_bytes) <= 5_242_880):
+            raise ValueError("v1 proxy max_response_bytes must be > 0 and <= 5242880")
+        object.__setattr__(self, "allowed_hosts", normalized)
+
+
+@dataclass(frozen=True)
+class _V1ProxyTarget:
+    """One validated URL bound to the exact public socket endpoints resolved."""
+
+    host: str
+    port: int
+    host_header: str
+    request_target: str
+    endpoints: tuple[tuple[int, int, int, tuple[Any, ...]], ...]
+
+
+@dataclass(frozen=True)
+class TypedExternalReferenceSpec:
+    """Caller-supplied descriptor for one persisted foreign object."""
+
+    target_service_id: str
+    target_object_euid: str
+    relationship_type: str
+    asserted_at: datetime
+    assertion_provenance: str
+    target_tenant_id: str | None = None
+    target_object_kind: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_service_id(self.target_service_id)
+        _require_persisted_euid(self.target_object_euid, "target_object_euid")
+        _require_token(self.relationship_type, "relationship_type", max_length=128)
+        if self.target_tenant_id is not None:
+            _require_tenant_id(self.target_tenant_id)
+        if self.target_object_kind is not None:
+            _require_token(
+                self.target_object_kind, "target_object_kind", max_length=128
+            )
+        _require_token(
+            self.assertion_provenance, "assertion_provenance", max_length=512
+        )
+        _normalize_asserted_at(self.asserted_at)
+
+    @property
+    def identity_key(self) -> str:
+        return (
+            f"{EXTERNAL_REFERENCE_IDENTITY_NAMESPACE}:"
+            f"{self.target_service_id}:{self.target_object_euid}"
+        )
+
+
+@dataclass(frozen=True)
+class TypedExternalReferenceResult:
+    """Persisted XRF and authoritative local-to-XRF lineage result."""
+
+    reference: generic_instance
+    lineage: generic_instance_lineage
+    created: bool
+
+
+class UntypedExternalReferenceError(ValueError):
+    """Raised when v2 input attempts to federate untyped metadata."""
+
+
+def _require_token(value: Any, field: str, *, max_length: int) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    text = value
+    if text != text.strip() or not text or len(text) > max_length:
+        raise ValueError(f"{field} must be non-empty, exact, and <= {max_length} chars")
+    if any(ord(char) < 32 or ord(char) == 127 for char in text):
+        raise ValueError(f"{field} must not contain control characters")
+    return text
+
+
+def _require_service_id(value: Any) -> str:
+    text = _require_token(value, "target_service_id", max_length=128)
+    if _SERVICE_ID_RE.fullmatch(text) is None:
+        raise ValueError(
+            "target_service_id must start with an alphanumeric character and "
+            "contain only alphanumerics, '.', '_' or '-'"
+        )
+    return text
+
+
+def _require_external_identifier(
+    value: Any, field: str, *, max_length: int = 255
+) -> str:
+    text = _require_token(value, field, max_length=max_length)
+    if any(char.isspace() for char in text):
+        raise ValueError(f"{field} must not contain whitespace")
+    return text
+
+
+def _require_persisted_euid(value: Any, field: str) -> str:
+    text = _require_external_identifier(value, field)
+    if not validate_euid(text):
+        raise ValueError(f"{field} must be a canonical Meridian EUID")
+    return text
+
+
+def _require_tenant_id(value: Any) -> str:
+    text = _require_external_identifier(value, "target_tenant_id", max_length=36)
+    try:
+        canonical = str(uuid.UUID(text))
+    except ValueError as exc:
+        raise ValueError("target_tenant_id must be a canonical UUID") from exc
+    if text != canonical:
+        raise ValueError("target_tenant_id must be a canonical UUID")
+    return text
+
+
+def _normalize_asserted_at(value: Any) -> str:
+    """Return one timezone-aware ISO-8601 assertion timestamp."""
+
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        text = _require_token(value, "asserted_at", max_length=128)
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError as exc:
+            raise ValueError("asserted_at must be a valid ISO-8601 timestamp") from exc
+    else:
+        raise ValueError("asserted_at must be a datetime or ISO-8601 string")
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("asserted_at must include a timezone")
+    return parsed.isoformat()
+
+
+def _properties(obj: Any) -> dict[str, Any]:
+    json_addl = getattr(obj, "json_addl", None)
+    if not isinstance(json_addl, dict):
+        return {}
+    properties = json_addl.get("properties")
+    return dict(properties) if isinstance(properties, dict) else {}
+
+
+def _active_lineages(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    query = value.filter_by(is_deleted=False) if hasattr(value, "filter_by") else value
+    return list(query.all() if hasattr(query, "all") else query)
+
+
+def is_typed_external_reference(obj: Any) -> bool:
+    """Return whether an instance has the exact reserved XRF coordinates."""
+
+    coordinates_match = (
+        getattr(obj, "category", None),
+        getattr(obj, "type", None),
+        getattr(obj, "subtype", None),
+        getattr(obj, "version", None),
+    ) == _EXTERNAL_REFERENCE_COORDS
+    template = getattr(obj, "parent_template", None)
+    if not coordinates_match or template is None:
+        return False
+    if getattr(template, "domain_code", None) != getattr(obj, "domain_code", None):
+        return False
+    if getattr(template, "issuer_app_code", None) != getattr(
+        obj, "issuer_app_code", None
+    ):
+        return False
+    return _is_exact_xrf_template(template)
+
+
+@lru_cache(maxsize=1)
+def _canonical_xrf_template_definition() -> dict[str, Any]:
+    from daylily_tapdb.templates.loader import (
+        find_tapdb_core_config_dir,
+        load_template_configs,
+    )
+
+    for template in load_template_configs(find_tapdb_core_config_dir()):
+        if (
+            template.get("category"),
+            template.get("type"),
+            template.get("subtype"),
+            template.get("version"),
+            template.get("instance_prefix"),
+        ) == (*_EXTERNAL_REFERENCE_COORDS, "XRF"):
+            return dict(template)
+    raise RuntimeError("Installed TapDB core inventory has no exact XRF template")
+
+
+def _is_exact_xrf_template(template: Any) -> bool:
+    canonical = _canonical_xrf_template_definition()
+    for field in (
+        "name",
+        "polymorphic_discriminator",
+        "category",
+        "type",
+        "subtype",
+        "version",
+        "instance_prefix",
+        "is_singleton",
+        "bstatus",
+        "json_addl",
+    ):
+        if getattr(template, field, None) != canonical.get(field):
+            return False
+    return True
+
+
+def validate_no_untyped_federation_metadata(obj: Any) -> None:
+    """Fail when an ordinary v2 node carries metadata pretending to be an edge."""
+
+    if is_typed_external_reference(obj):
+        return
+    properties = _properties(obj)
+    external_payload = properties.get("external_payload")
+    has_raw_graph = isinstance(external_payload, dict) and bool(
+        external_payload.get("tapdb_graph")
+    )
+    copied_identifier_fields = {
+        key
+        for key in properties
+        if key in {"object_euid", "target_object_euid"} or key.endswith("_object_euid")
+    }
+    if has_raw_graph or copied_identifier_fields:
+        fields = sorted(copied_identifier_fields)
+        if has_raw_graph:
+            fields.append("external_payload.tapdb_graph")
+        raise UntypedExternalReferenceError(
+            "tapdb.dag_v2 requires a typed External Object Reference connected "
+            "by generic_instance_lineage; non-authoritative field(s): "
+            + ", ".join(fields)
+        )
+
+
+def project_outbound_typed_references(obj: Any) -> list[dict[str, Any]]:
+    """Project only authoritative local-object -> typed-XRF lineage relations."""
+
+    validate_no_untyped_federation_metadata(obj)
+    projected: list[dict[str, Any]] = []
+    for lineage in _active_lineages(getattr(obj, "parent_of_lineages", None)):
+        reference = getattr(lineage, "child_instance", None)
+        if reference is None or not is_typed_external_reference(reference):
+            continue
+        properties = _properties(reference)
+        target_service_id = _require_service_id(properties.get("target_service_id"))
+        target_object_euid = _require_persisted_euid(
+            properties.get("target_object_euid"), "target_object_euid"
+        )
+        relationship_type = _require_token(
+            str(getattr(lineage, "relationship_type", "") or ""),
+            "relationship_type",
+            max_length=128,
+        )
+        lineage_properties = _properties(lineage)
+        projection = {
+            "target_service_id": target_service_id,
+            "target_object_euid": target_object_euid,
+            "relationship_type": relationship_type,
+            "asserted_at": _normalize_asserted_at(
+                lineage_properties.get("asserted_at")
+            ),
+            "assertion_provenance": _require_token(
+                lineage_properties.get("assertion_provenance"),
+                "assertion_provenance",
+                max_length=512,
+            ),
+            "external_reference_euid": _require_persisted_euid(
+                getattr(reference, "euid", None), "external_reference_euid"
+            ),
+            "lineage_euid": _require_persisted_euid(
+                getattr(lineage, "euid", None), "lineage_euid"
+            ),
+        }
+        if properties.get("target_tenant_id"):
+            projection["target_tenant_id"] = _require_tenant_id(
+                properties["target_tenant_id"]
+            )
+        if properties.get("target_object_kind"):
+            projection["target_object_kind"] = _require_token(
+                properties["target_object_kind"],
+                "target_object_kind",
+                max_length=128,
+            )
+        projected.append(projection)
+    projected.sort(
+        key=lambda item: (
+            str(item["target_service_id"]),
+            str(item["target_object_euid"]),
+            str(item["relationship_type"]),
+        )
+    )
+    return projected
+
+
+def _find_external_reference_template(session: Any) -> generic_template:
+    template = (
+        session.query(generic_template)
+        .filter_by(
+            category=_EXTERNAL_REFERENCE_COORDS[0],
+            type=_EXTERNAL_REFERENCE_COORDS[1],
+            subtype=_EXTERNAL_REFERENCE_COORDS[2],
+            version=_EXTERNAL_REFERENCE_COORDS[3],
+            instance_prefix="XRF",
+            is_deleted=False,
+        )
+        .one_or_none()
+    )
+    if template is None or not _is_exact_xrf_template(template):
+        raise RuntimeError(
+            "The exact bundled External Object Reference template is not seeded"
+        )
+    return template
+
+
+def create_or_reuse_typed_external_reference(
+    session: Any,
+    *,
+    source: generic_instance,
+    spec: TypedExternalReferenceSpec,
+    instance_factory: Any,
+) -> TypedExternalReferenceResult:
+    """Claim one typed XRF and ensure one authoritative outbound lineage.
+
+    The factory's #93 natural-identity API allocates the XRF.  This function
+    never fabricates or rewrites an EUID; both returned identifiers must have
+    been assigned by the database before this function returns.
+    """
+
+    if getattr(source, "uid", None) is None or not getattr(source, "euid", None):
+        raise ValueError("source must be a persisted TapDB instance")
+    if not hasattr(instance_factory, "claim_instance_by_identity"):
+        raise RuntimeError(
+            "InstanceFactory.claim_instance_by_identity is required for typed XRFs"
+        )
+    _find_external_reference_template(session)
+    source_tenant = getattr(source, "tenant_id", None)
+    asserted_at = _normalize_asserted_at(spec.asserted_at)
+    properties = {
+        "target_service_id": spec.target_service_id,
+        "target_object_euid": spec.target_object_euid,
+        "target_tenant_id": spec.target_tenant_id,
+        "target_object_kind": spec.target_object_kind,
+    }
+    claim = instance_factory.claim_instance_by_identity(
+        session,
+        template_code=EXTERNAL_REFERENCE_TEMPLATE_CODE,
+        identity_key=spec.identity_key,
+        name=f"External reference to {spec.target_service_id}",
+        properties=properties,
+        claimant_tenant_id=None,
+        command_evidence={"contract": EXTERNAL_REFERENCE_IDENTITY_NAMESPACE},
+        create_children=False,
+    )
+    reference = getattr(claim, "instance", None)
+    if reference is None:
+        reference = getattr(claim, "value", None)
+    if reference is None or not getattr(reference, "euid", None):
+        raise RuntimeError("Natural-identity claim did not return a persisted instance")
+    if getattr(reference, "tenant_id", None) is not None:
+        raise RuntimeError("Typed external-reference identity must be global")
+    existing_properties = _properties(reference)
+    if any(existing_properties.get(key) != value for key, value in properties.items()):
+        raise ValueError(
+            "Existing typed external-reference identity has divergent target metadata"
+        )
+
+    lineage = (
+        session.query(generic_instance_lineage)
+        .filter_by(
+            parent_instance_uid=source.uid,
+            child_instance_uid=reference.uid,
+            relationship_type=spec.relationship_type,
+            is_deleted=False,
+        )
+        .one_or_none()
+    )
+    if lineage is None:
+        candidate = generic_instance_lineage(
+            name=f"{source.euid}->{reference.euid}",
+            tenant_id=source_tenant,
+            polymorphic_discriminator="generic_instance_lineage",
+            category="generic",
+            type="lineage",
+            subtype="external_reference",
+            version="1.0.0",
+            bstatus="active",
+            parent_instance_uid=source.uid,
+            child_instance_uid=reference.uid,
+            relationship_type=spec.relationship_type,
+            parent_type=source.polymorphic_discriminator,
+            child_type=reference.polymorphic_discriminator,
+            json_addl={
+                "properties": {
+                    "asserted_at": asserted_at,
+                    "assertion_provenance": spec.assertion_provenance,
+                    "approved_global_link": True,
+                }
+            },
+        )
+        try:
+            with session.begin_nested():
+                session.add(candidate)
+                session.flush()
+            lineage = candidate
+        except IntegrityError:
+            lineage = (
+                session.query(generic_instance_lineage)
+                .filter_by(
+                    parent_instance_uid=source.uid,
+                    child_instance_uid=reference.uid,
+                    relationship_type=spec.relationship_type,
+                    is_deleted=False,
+                )
+                .one_or_none()
+            )
+            if lineage is None:
+                raise RuntimeError(
+                    "Concurrent typed external-reference lineage was not visible"
+                )
+    else:
+        existing_assertion = _properties(lineage)
+        expected_assertion = {
+            "asserted_at": asserted_at,
+            "assertion_provenance": spec.assertion_provenance,
+        }
+        if any(
+            existing_assertion.get(key) != value
+            for key, value in expected_assertion.items()
+        ):
+            raise ValueError(
+                "Existing typed external-reference lineage has divergent assertion metadata"
+            )
+    if not getattr(lineage, "euid", None):
+        raise RuntimeError("Typed external-reference lineage was not persisted")
+    outcome = str(getattr(claim, "outcome", "")).lower()
+    return TypedExternalReferenceResult(
+        reference=reference,
+        lineage=lineage,
+        created=outcome.endswith("created"),
+    )
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -229,8 +712,11 @@ def fetch_remote_graph(
     ref: ExternalGraphRef,
     *,
     depth: int,
+    policy: V1ProxyPolicy,
 ) -> dict[str, Any]:
-    """Fetch a remote graph payload via the configured resolver metadata."""
+    """Fetch a v1 remote graph under an explicit, no-credential proxy policy."""
+
+    del request
 
     if not ref.graph_expandable or not ref.base_url or not ref.graph_data_path:
         raise RuntimeError(ref.reason or "External graph is not expandable")
@@ -241,14 +727,7 @@ def fetch_remote_graph(
 
     url = urljoin(ref.base_url.rstrip("/") + "/", ref.graph_data_path.lstrip("/"))
     url = f"{url}?{urlencode(params)}"
-    url = _require_http_url(url)
-    headers = {"Accept": "application/json"}
-    _apply_forwarded_auth(request, ref, headers)
-    with urlopen(UrlRequest(url, headers=headers), timeout=20) as response:  # nosec B310
-        payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise RuntimeError("Remote graph response must be a JSON object")
-    return payload
+    return _fetch_v1_json(url, policy=policy, label="Remote graph")
 
 
 def fetch_remote_object_detail(
@@ -256,8 +735,11 @@ def fetch_remote_object_detail(
     ref: ExternalGraphRef,
     *,
     euid: str,
+    policy: V1ProxyPolicy,
 ) -> dict[str, Any]:
-    """Fetch remote object detail via the configured resolver metadata."""
+    """Fetch v1 object detail under an explicit, no-credential proxy policy."""
+
+    del request
 
     if (
         not ref.graph_expandable
@@ -274,14 +756,7 @@ def fetch_remote_object_detail(
     if ref.tenant_id:
         joiner = "&" if "?" in url else "?"
         url = f"{url}{joiner}{urlencode({'tenant_id': ref.tenant_id})}"
-    url = _require_http_url(url)
-    headers = {"Accept": "application/json"}
-    _apply_forwarded_auth(request, ref, headers)
-    with urlopen(UrlRequest(url, headers=headers), timeout=20) as response:  # nosec B310
-        payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise RuntimeError("Remote object response must be a JSON object")
-    return payload
+    return _fetch_v1_json(url, policy=policy, label="Remote object")
 
 
 def namespace_external_graph(
@@ -367,37 +842,240 @@ def namespace_external_graph(
     }
 
 
-def _apply_forwarded_auth(
-    request: Request,
-    ref: ExternalGraphRef,
-    headers: dict[str, str],
-) -> None:
-    if ref.auth_mode == "none":
-        return
-    if ref.auth_mode != "same_origin":
-        raise RuntimeError(f"Unsupported auth mode: {ref.auth_mode}")
-
-    if not ref.base_url:
-        raise RuntimeError("same_origin auth requires base_url")
-
-    incoming_origin = f"{request.url.scheme}://{request.url.netloc}"
-    remote_parts = urlsplit(ref.base_url)
-    remote_origin = f"{remote_parts.scheme}://{remote_parts.netloc}"
-    if incoming_origin != remote_origin:
-        raise RuntimeError(
-            "same_origin auth requires matching request origin and base_url"
+def _require_dns_name(value: str) -> str:
+    host = str(value or "")
+    if host != host.strip() or not host or len(host) > 253:
+        raise ValueError("allowed v1 proxy hosts must be exact DNS names")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("allowed v1 proxy hosts must not be IP literals")
+    labels = host.lower().split(".")
+    if any(
+        not label
+        or len(label) > 63
+        or label[0] == "-"
+        or label[-1] == "-"
+        or any(
+            not (char.isascii() and (char.isalnum() or char == "-")) for char in label
         )
-
-    cookie = request.headers.get("cookie")
-    authorization = request.headers.get("authorization")
-    if cookie:
-        headers["Cookie"] = cookie
-    if authorization:
-        headers["Authorization"] = authorization
+        for label in labels
+    ):
+        raise ValueError("allowed v1 proxy hosts must be valid DNS names")
+    return host.lower()
 
 
-def _require_http_url(url: str) -> str:
+def _require_public_resolution(
+    host: str, port: int, *, timeout_seconds: float = 5.0
+) -> tuple[tuple[int, int, int, tuple[Any, ...]], ...]:
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tapdb-v1-dns")
+    try:
+        future = executor.submit(socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM)
+        infos = future.result(timeout=timeout_seconds)
+    except FutureTimeoutError as exc:
+        raise RuntimeError(f"v1 proxy host resolution timed out: {host}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"v1 proxy host resolution failed: {host}") from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    if not infos:
+        raise RuntimeError(f"v1 proxy host resolution returned no addresses: {host}")
+    for _family, _socktype, _protocol, _canonical_name, sockaddr in infos:
+        raw = sockaddr[0]
+        address = ipaddress.ip_address(raw)
+        if not address.is_global:
+            raise RuntimeError(
+                f"v1 proxy host resolved to a non-public address: {host}"
+            )
+    endpoints: list[tuple[int, int, int, tuple[Any, ...]]] = []
+    seen: set[tuple[int, int, int, tuple[Any, ...]]] = set()
+    for family, socktype, protocol, _canonical_name, sockaddr in infos:
+        endpoint = (family, socktype, protocol, tuple(sockaddr))
+        if endpoint not in seen:
+            seen.add(endpoint)
+            endpoints.append(endpoint)
+    if len(endpoints) > _MAX_V1_RESOLVED_ENDPOINTS:
+        raise RuntimeError(
+            f"v1 proxy host resolved to more than {_MAX_V1_RESOLVED_ENDPOINTS} endpoints"
+        )
+    return tuple(endpoints)
+
+
+def _require_v1_proxy_url(
+    url: str, *, policy: V1ProxyPolicy, resolution_timeout: float | None = None
+) -> _V1ProxyTarget:
     parts = urlsplit(url)
-    if parts.scheme not in {"http", "https"} or not parts.netloc:
-        raise RuntimeError("External graph fetch requires an absolute http(s) URL")
-    return url
+    if parts.scheme != "https" or not parts.netloc:
+        raise RuntimeError("TapDB v1 proxy requires an absolute https URL")
+    if parts.username or parts.password or parts.fragment:
+        raise RuntimeError(
+            "TapDB v1 proxy URL must not contain credentials or fragments"
+        )
+    host = (parts.hostname or "").lower()
+    if host not in policy.allowed_hosts:
+        raise RuntimeError("TapDB v1 proxy target host is not explicitly allowed")
+    try:
+        port = parts.port or 443
+    except ValueError as exc:
+        raise RuntimeError("TapDB v1 proxy URL has an invalid port") from exc
+    endpoints = _require_public_resolution(
+        host,
+        port,
+        timeout_seconds=(
+            float(policy.timeout_seconds)
+            if resolution_timeout is None
+            else resolution_timeout
+        ),
+    )
+    request_target = parts.path or "/"
+    if parts.query:
+        request_target += f"?{parts.query}"
+    return _V1ProxyTarget(
+        host=host,
+        port=port,
+        host_header=parts.netloc,
+        request_target=request_target,
+        endpoints=endpoints,
+    )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection that never resolves the validated hostname again."""
+
+    def __init__(
+        self,
+        target: _V1ProxyTarget,
+        endpoint: tuple[int, int, int, tuple[Any, ...]],
+        *,
+        timeout: float,
+    ) -> None:
+        self._tapdb_ssl_context = ssl.create_default_context()
+        super().__init__(
+            target.host,
+            target.port,
+            timeout=timeout,
+            context=self._tapdb_ssl_context,
+        )
+        self._tapdb_endpoint = endpoint
+
+    def connect(self) -> None:
+        family, socktype, protocol, sockaddr = self._tapdb_endpoint
+        raw_socket = socket.socket(family, socktype, protocol)
+        try:
+            raw_socket.settimeout(self.timeout)
+            raw_socket.connect(sockaddr)
+            raw_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.sock = self._tapdb_ssl_context.wrap_socket(
+                raw_socket,
+                server_hostname=self.host,
+            )
+        except Exception:
+            raw_socket.close()
+            raise
+
+
+def _open_pinned_https(
+    target: _V1ProxyTarget,
+    endpoint: tuple[int, int, int, tuple[Any, ...]],
+    *,
+    timeout: float,
+) -> tuple[_PinnedHTTPSConnection, http.client.HTTPResponse]:
+    connection = _PinnedHTTPSConnection(target, endpoint, timeout=timeout)
+    try:
+        connection.request(
+            "GET",
+            target.request_target,
+            headers={"Accept": "application/json", "Host": target.host_header},
+        )
+        return connection, connection.getresponse()
+    except Exception:
+        connection.close()
+        raise
+
+
+def _fetch_v1_json(
+    url: str,
+    *,
+    policy: V1ProxyPolicy,
+    label: str,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + float(policy.timeout_seconds)
+    target = _require_v1_proxy_url(
+        url,
+        policy=policy,
+        resolution_timeout=max(0.001, deadline - time.monotonic()),
+    )
+    last_connection_error: Exception | None = None
+    raw: bytes | None = None
+    for endpoint in target.endpoints:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            last_connection_error = TimeoutError("v1 proxy deadline expired")
+            break
+        connection: _PinnedHTTPSConnection | None = None
+        try:
+            connection, response = _open_pinned_https(
+                target,
+                endpoint,
+                timeout=remaining,
+            )
+            status = int(response.status)
+            if 300 <= status < 400:
+                raise RuntimeError("TapDB v1 proxy does not follow redirects")
+            if status < 200 or status >= 300:
+                raise RuntimeError(f"{label} returned HTTP {status}")
+            content_type = str(response.headers.get("Content-Type") or "").lower()
+            if content_type.split(";", 1)[0].strip() != "application/json":
+                raise RuntimeError(f"{label} response must use application/json")
+            content_length = str(response.headers.get("Content-Length") or "").strip()
+            if content_length:
+                try:
+                    declared_length = int(content_length)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"{label} response has an invalid Content-Length"
+                    ) from exc
+                if declared_length < 0:
+                    raise RuntimeError(
+                        f"{label} response has an invalid Content-Length"
+                    )
+                if declared_length > policy.max_response_bytes:
+                    raise RuntimeError(
+                        f"{label} response exceeds the configured size limit"
+                    )
+            chunks: list[bytes] = []
+            bytes_read = 0
+            while bytes_read <= policy.max_response_bytes:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("v1 proxy deadline expired")
+                sock = getattr(connection, "sock", None)
+                if sock is not None:
+                    sock.settimeout(remaining)
+                chunk = response.read(
+                    min(65_536, policy.max_response_bytes + 1 - bytes_read)
+                )
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                bytes_read += len(chunk)
+            raw = b"".join(chunks)
+            break
+        except (OSError, ssl.SSLError, TimeoutError, http.client.HTTPException) as exc:
+            last_connection_error = exc
+        finally:
+            if connection is not None:
+                connection.close()
+    if raw is None:
+        raise RuntimeError(f"{label} connection failed") from last_connection_error
+    if len(raw) > policy.max_response_bytes:
+        raise RuntimeError(f"{label} response exceeds the configured size limit")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"{label} response must be valid UTF-8 JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{label} response must be a JSON object")
+    return payload

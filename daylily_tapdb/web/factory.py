@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from jinja2 import ChoiceLoader, FileSystemLoader
 
@@ -61,9 +61,10 @@ def _attach_canonical_dag_router(
         return
     router = create_tapdb_dag_router(
         config_path=config_path,
+        auth_dependency=require_tapdb_api_user,
         service_name=service_name,
     )
-    app.include_router(router, dependencies=[Depends(require_tapdb_api_user)])
+    app.include_router(router)
     app.state.tapdb_dag_router_attached = True
 
 

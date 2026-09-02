@@ -14,6 +14,9 @@ def test_ensure_instance_prefix_sequence_sql_uses_euid_seq_and_prefix():
     assert "audit_log" in sql
     assert "regexp_replace(" not in sql
     assert "euid like" not in sql
+    assert "setval(" not in sql
+    assert "desired_next" in sql
+    assert "current_next" in sql
 
 
 @pytest.mark.parametrize("prefix", ["G-X", "UQ", "", "   "])

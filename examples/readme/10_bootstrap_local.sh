@@ -29,6 +29,8 @@ PHYSICAL_DATABASE="${TAPDB_DOCS_PHYSICAL_DATABASE:-tapdb_docs_demo}"
 SCHEMA_NAME="${TAPDB_DOCS_SCHEMA_NAME:-tapdb_docs_demo}"
 DB_PORT="${TAPDB_DOCS_DB_PORT:-15533}"
 UI_PORT="${TAPDB_DOCS_UI_PORT:-18911}"
+OPERATOR_DB_USER="${TAPDB_DOCS_OPERATOR_DB_USER:-tapdb_docs_operator}"
+RUNTIME_DB_USER="${TAPDB_DOCS_RUNTIME_DB_USER:-tapdb_docs_runtime}"
 CONFIG_PATH="${TAPDB_DOCS_CONFIG:-$WORKDIR/.config/tapdb/$CLIENT_ID/$DATABASE_NAME/tapdb-config.yaml}"
 DOMAIN_REGISTRY_PATH="${TAPDB_DOCS_DOMAIN_REGISTRY_PATH:-$WORKDIR/.config/tapdb/domain_code_registry.json}"
 PREFIX_OWNERSHIP_REGISTRY_PATH="${TAPDB_DOCS_PREFIX_OWNERSHIP_REGISTRY_PATH:-$WORKDIR/.config/tapdb/prefix_ownership_registry.json}"
@@ -72,8 +74,11 @@ prefix_registry_path.write_text(
                     "TPX": {"issuer_app_code": owner_repo_name},
                     "EDG": {"issuer_app_code": owner_repo_name},
                     "ADT": {"issuer_app_code": owner_repo_name},
+                    "GSE": {"issuer_app_code": owner_repo_name},
+                    "GVR": {"issuer_app_code": owner_repo_name},
                     "SYS": {"issuer_app_code": owner_repo_name},
                     "MSG": {"issuer_app_code": owner_repo_name},
+                    "XRF": {"issuer_app_code": owner_repo_name},
                 }
             },
         },
@@ -84,7 +89,7 @@ prefix_registry_path.write_text(
 )
 PY
 
-tapdb --config "$CONFIG_PATH" config init \
+tapdb --config "$CONFIG_PATH" db-config init \
     --client-id "$CLIENT_ID" \
     --database-name "$DATABASE_NAME" \
     --owner-repo-name "$OWNER_REPO_NAME" \
@@ -95,10 +100,14 @@ tapdb --config "$CONFIG_PATH" config init \
     --host localhost \
     --port "$DB_PORT" \
     --ui-port "$UI_PORT" \
-    --user tapdb \
+    --user "$RUNTIME_DB_USER" \
+    --operator-user "$OPERATOR_DB_USER" \
     --database "$PHYSICAL_DATABASE" \
     --schema-name "$SCHEMA_NAME" \
     --force
+
+tapdb --config "$CONFIG_PATH" pg init
+tapdb --config "$CONFIG_PATH" pg start-local
 
 tapdb --config "$CONFIG_PATH" bootstrap local --no-gui
 

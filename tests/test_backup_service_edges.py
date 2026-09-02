@@ -69,7 +69,9 @@ def env(pg_instance, _schema_applied, tmp_path):
 def neighbour_schema(env):
     """Create a second schema holding a table with a colliding-ish name."""
     cfg, _ = env
-    with service.open_session(cfg, app_username="pytest") as conn:
+    with service.open_session(
+        cfg, app_username="pytest", connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             session.execute(text("CREATE SCHEMA IF NOT EXISTS stranger"))
             session.execute(
@@ -85,7 +87,9 @@ def neighbour_schema(env):
                 )
             )
     yield "stranger"
-    with service.open_session(cfg, app_username="pytest") as conn:
+    with service.open_session(
+        cfg, app_username="pytest", connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             session.execute(text("DROP SCHEMA IF EXISTS stranger CASCADE"))
 
@@ -110,9 +114,11 @@ def test_a_neighbouring_schema_is_not_captured(env, neighbour_schema):
         "generic_instance_lineage",
         "audit_log",
         "tapdb_identity_prefix_config",
+        "tapdb_runtime_principal_scope",
         "outbox_event",
         "outbox_event_attempt",
         "inbox_message",
+        "tapdb_legacy_outbox_mapping",
         "_tapdb_migrations",
     }
 
@@ -135,8 +141,8 @@ def test_plan_counts_only_the_configured_schema(env, neighbour_schema):
 
     tables = service.plan_backup(cfg, settings).would_capture["tables"]
 
-    # Nine TAPDB tables; the neighbour's table must not inflate the list.
-    assert len(tables) == 9
+    # Eleven TAPDB tables; the neighbour's table must not inflate the list.
+    assert len(tables) == 11
 
 
 # ---------------------------------------------------------------------------

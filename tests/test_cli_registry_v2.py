@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from daylily_tapdb.cli import framework_app, spec
+from daylily_tapdb.cli.db_config import get_db_config
+from daylily_tapdb.runtime_info import build_runtime_info
 
 runner = CliRunner()
 
@@ -84,6 +90,45 @@ def _write_config(path: Path) -> Path:
     return path
 
 
+def test_canonical_example_is_v4_runtime_parseable(tmp_path: Path) -> None:
+    repository_root = Path(__file__).resolve().parents[1]
+    example = repository_root / "config" / "tapdb-config-example.yaml"
+    domain_registry = tmp_path / "domain_code_registry.json"
+    prefix_registry = tmp_path / "prefix_ownership_registry.json"
+    domain_registry.write_text(
+        '{"version":"0.4.0","domains":{"Z":{"name":"test-localhost"}}}\n',
+        encoding="utf-8",
+    )
+    prefix_registry.write_text(
+        '{"version":"0.4.0","ownership":{"Z":{"TPX":'
+        '{"issuer_app_code":"daylily-tapdb"}}}}\n',
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "tapdb-config.yaml"
+    config_text = example.read_text(encoding="utf-8").replace(
+        "~/.config/tapdb/domain_code_registry.json", str(domain_registry)
+    )
+    config_text = config_text.replace(
+        "~/.config/tapdb/prefix_ownership_registry.json", str(prefix_registry)
+    )
+    config_path.write_text(config_text, encoding="utf-8")
+    config_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    cfg = get_db_config(config_path=config_path)
+    payload = build_runtime_info(
+        config_path=config_path,
+        probe_database=False,
+        resolved_config=cfg,
+    )
+
+    assert cfg["target_name"] == "target"
+    assert cfg["engine_type"] == "local"
+    assert cfg["schema_name"] == "tapdb_local"
+    assert payload["format"] == "tapdb.runtime-info/v1"
+    assert payload["config"]["path"] == str(config_path)
+    assert "replace-me" not in json.dumps(payload, sort_keys=True)
+
+
 def test_cli_spec_uses_platform_v2_context_contract() -> None:
     assert spec.policy.profile == "platform-v2"
     assert spec.context is not None
@@ -154,6 +199,73 @@ def test_root_json_is_global_for_version() -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["app"] == "TapDB CLI"
+
+
+def test_framework_info_is_shared_runtime_payload_with_local_or_global_json(
+    tmp_path: Path,
+) -> None:
+    assert framework_app is not None
+    cfg_path = _write_config(tmp_path / "tapdb-config.yaml")
+
+    local = runner.invoke(
+        framework_app,
+        ["--config", str(cfg_path), "info", "--json"],
+    )
+    global_flag = runner.invoke(
+        framework_app,
+        ["--config", str(cfg_path), "--json", "info"],
+    )
+
+    assert local.exit_code == 0, local.output
+    assert global_flag.exit_code == 0, global_flag.output
+    local_payload = json.loads(local.stdout)
+    assert json.loads(global_flag.stdout) == local_payload
+    assert local_payload["format"] == "tapdb.runtime-info/v1"
+    assert local_payload["config"]["path"] == str(cfg_path)
+    assert local_payload["scope"]["client_id"] == "alpha"
+    rendered = json.dumps(local_payload, sort_keys=True)
+    assert "secret123" not in rendered
+    assert "shared-secret" not in rendered
+
+
+def test_framework_info_help_describes_the_tapdb_command() -> None:
+    assert framework_app is not None
+
+    result = runner.invoke(framework_app, ["info", "--help"])
+    help_text = unstyle(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert "shared sanitized runtime-information payload" in help_text
+    assert "--json" in help_text
+    registry_info = framework_app._cli_core_yo_registry.get_command(("info",))
+    assert registry_info is not None
+    assert registry_info.callback.__module__ == "daylily_tapdb.cli"
+
+
+def test_module_entrypoint_uses_shared_runtime_info_command(tmp_path: Path) -> None:
+    cfg_path = _write_config(tmp_path / "tapdb-config.yaml")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "daylily_tapdb.cli",
+            "--config",
+            str(cfg_path),
+            "info",
+            "--json",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["format"] == "tapdb.runtime-info/v1"
+    assert payload["config"]["path"] == str(cfg_path)
 
 
 def test_json_rejected_for_non_json_command(tmp_path: Path) -> None:

@@ -135,11 +135,11 @@ _tapdb_python=""
 if [ -n "${TAPDB_PYTHON:-}" ]; then
     _tapdb_python="$TAPDB_PYTHON"
 else
-    for _tapdb_candidate in python3.13 python3.12 python3.11 python3.10 python3 python; do
+    for _tapdb_candidate in python3.13 python3.12 python3 python; do
         if ! command -v "${_tapdb_candidate}" >/dev/null 2>&1; then
             continue
         fi
-        if "${_tapdb_candidate}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+        if "${_tapdb_candidate}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1; then
             _tapdb_python="${_tapdb_candidate}"
             break
         fi
@@ -147,12 +147,12 @@ else
 fi
 
 if [ -z "${_tapdb_python}" ]; then
-    printf "${_tapdb_red}✗${_tapdb_reset} No supported python interpreter found (need Python >= 3.10).\n"
+    printf "${_tapdb_red}✗${_tapdb_reset} No supported python interpreter found (need Python >= 3.12).\n"
     return 1 2>/dev/null || exit 1
 fi
 
 if [ -x "${_tapdb_venv_dir}/bin/python" ]; then
-    if ! "${_tapdb_venv_dir}/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+    if ! "${_tapdb_venv_dir}/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1; then
         printf "${_tapdb_yellow}⚠${_tapdb_reset} Existing .venv uses unsupported Python; rebuilding with ${_tapdb_python}.\n"
         rm -rf "${_tapdb_venv_dir}"
     fi

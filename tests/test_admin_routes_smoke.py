@@ -123,6 +123,27 @@ class _FakeSession:
             return _FakeQuery(rows)
         raise AssertionError(f"Unexpected query model: {model!r}")
 
+    def execute(self, statement):
+        entity = statement.column_descriptions[0].get("entity")
+        rows = {
+            admin_main.generic_template: self._state["templates"],
+            admin_main.generic_instance: self._state["instances"],
+            admin_main.generic_instance_lineage: self._state["lineages"],
+        }.get(entity)
+        if rows is None:
+            raise AssertionError(f"Unexpected execute entity: {entity!r}")
+        compiled = statement.compile(compile_kwargs={"literal_binds": True})
+        rendered = str(compiled)
+        matching = [row for row in rows if str(row.euid) in rendered]
+
+        class _ScalarResult:
+            def scalar_one_or_none(self):
+                if len(matching) > 1:
+                    raise AssertionError("fixture returned more than one row")
+                return matching[0] if matching else None
+
+        return _ScalarResult()
+
     def add(self, obj):
         if getattr(obj, "euid", None) is None:
             obj.euid = f"TGX{len(self._state['lineages']) + 200}"
@@ -172,7 +193,7 @@ class _FakeConn:
 
 
 @pytest.fixture
-def route_client(monkeypatch: pytest.MonkeyPatch):
+def route_client(monkeypatch: pytest.MonkeyPatch, tmp_path):
     now = datetime.now(timezone.utc)
     parent = SimpleNamespace(
         uid=11,
@@ -450,14 +471,30 @@ def route_client(monkeypatch: pytest.MonkeyPatch):
         admin_main,
         "get_db_config",
         lambda: {
+            "client_id": "admin-smoke",
+            "database_name": "runtime",
             "host": "127.0.0.1",
             "port": 5432,
             "database": "tapdb_dev_runtime",
-            "username": "tapdb",
+            "user": "tapdb",
             "password": "secret",
+            "schema_name": "tapdb_admin_smoke",
+            "domain_code": "Z",
+            "owner_repo_name": "daylily-tapdb",
+            "engine_type": "local",
         },
     )
-    monkeypatch.setattr(admin_main, "get_config_path", lambda: "/tmp/tapdb-config.yaml")
+    config_path = tmp_path / "tapdb-config.yaml"
+    config_path.write_text(
+        "meta:\n"
+        "  config_version: 4\n"
+        "  client_id: admin-smoke\n"
+        "  database_name: runtime\n"
+        "dag_v2:\n"
+        "  service_id: admin-smoke\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(admin_main, "get_config_path", lambda: config_path)
     monkeypatch.setattr(
         admin_main,
         "resolve_tapdb_pool_config",
@@ -508,6 +545,15 @@ def test_auth_and_public_routes(route_client, monkeypatch: pytest.MonkeyPatch):
     assert resp.status_code == 200
     resp = client.get("/info", follow_redirects=False)
     assert resp.status_code == 302
+    for path in (
+        "/api/graph/data",
+        "/api/templates",
+        "/api/instances",
+        "/api/object/GT1",
+    ):
+        resp = client.get(path, follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/login"
 
     # Login submit error path
     monkeypatch.setattr(
@@ -598,7 +644,7 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     )
     assert blocked_create_resp.status_code == 403
 
-    # API routes (public)
+    # Legacy read APIs are authenticated too.
     assert client.get("/api/graph/data").status_code == 200
     assert client.get("/api/templates").status_code == 200
     assert client.get("/api/instances").status_code == 200
@@ -609,10 +655,20 @@ def test_protected_html_and_api_routes(route_client, monkeypatch: pytest.MonkeyP
     resp = client.post("/api/lineage", json={})
     assert resp.status_code == 400
 
-    # Soft-delete an existing object.
-    resp = client.delete("/api/object/GT1")
+    # Templates are read-only through the governed object surface.
+    resp = client.delete("/api/object/GT1?apply=true")
+    assert resp.status_code == 403
+    assert state["templates"][0].is_deleted is False
+
+    # Instance deletion previews by default and requires explicit apply.
+    resp = client.delete("/api/object/GX11")
     assert resp.status_code == 200
-    assert state["templates"][0].is_deleted is True
+    assert resp.json()["dry_run"] is True
+    assert state["instances"][0].is_deleted is False
+    resp = client.delete("/api/object/GX11?apply=true")
+    assert resp.status_code == 200
+    assert resp.json()["applied"] is True
+    assert state["instances"][0].is_deleted is True
 
 
 def test_api_object_detail_includes_external_refs(
@@ -663,6 +719,12 @@ def test_api_external_graph_proxy_route(route_client, monkeypatch: pytest.Monkey
         return _admin_user()
 
     monkeypatch.setattr(auth_mod, "get_current_user", _admin_auth_user)
+    monkeypatch.setattr(
+        admin_main.app.state,
+        "tapdb_v1_proxy_policy",
+        admin_main.V1ProxyPolicy(allowed_hosts=frozenset({"atlas.local"})),
+        raising=False,
+    )
     state["instances"][0].json_addl = {
         "properties": {
             "external_payload": {
@@ -681,9 +743,10 @@ def test_api_external_graph_proxy_route(route_client, monkeypatch: pytest.Monkey
 
     observed = {}
 
-    def _fake_fetch_remote_graph(_request, ref, *, depth):
+    def _fake_fetch_remote_graph(_request, ref, *, depth, policy):
         observed["depth"] = depth
         observed["ref_system"] = ref.system
+        observed["allowed_hosts"] = policy.allowed_hosts
         return {"elements": {"nodes": [{"data": {"id": "AT-PAT-1"}}], "edges": []}}
 
     def _fake_namespace_external_graph(payload, *, ref, ref_index, source_euid):
@@ -707,6 +770,7 @@ def test_api_external_graph_proxy_route(route_client, monkeypatch: pytest.Monkey
     assert observed == {
         "depth": 3,
         "ref_system": "atlas",
+        "allowed_hosts": frozenset({"atlas.local"}),
         "source_euid": "GX11",
         "ref_index": 0,
     }
@@ -721,6 +785,12 @@ def test_api_external_graph_object_proxy_route(
         return _admin_user()
 
     monkeypatch.setattr(auth_mod, "get_current_user", _admin_auth_user)
+    monkeypatch.setattr(
+        admin_main.app.state,
+        "tapdb_v1_proxy_policy",
+        admin_main.V1ProxyPolicy(allowed_hosts=frozenset({"atlas.local"})),
+        raising=False,
+    )
     state["instances"][0].json_addl = {
         "properties": {
             "external_payload": {
@@ -739,9 +809,10 @@ def test_api_external_graph_object_proxy_route(
 
     observed = {}
 
-    def _fake_fetch_remote_object_detail(_request, ref, *, euid):
+    def _fake_fetch_remote_object_detail(_request, ref, *, euid, policy):
         observed["ref_system"] = ref.system
         observed["euid"] = euid
+        observed["allowed_hosts"] = policy.allowed_hosts
         return {"euid": euid, "name": "External Node", "source": ref.system}
 
     monkeypatch.setattr(
@@ -750,15 +821,23 @@ def test_api_external_graph_object_proxy_route(
 
     resp = client.get(
         "/api/graph/external/object",
-        params={"source_euid": "GX11", "ref_index": 0, "euid": "AT-PAT-2"},
+        params={
+            "source_euid": "GX11",
+            "ref_index": 0,
+            "euid": "<persisted-euid>",
+        },
     )
     assert resp.status_code == 200
     assert resp.json() == {
-        "euid": "AT-PAT-2",
+        "euid": "<persisted-euid>",
         "name": "External Node",
         "source": "atlas",
     }
-    assert observed == {"ref_system": "atlas", "euid": "AT-PAT-2"}
+    assert observed == {
+        "ref_system": "atlas",
+        "euid": "<persisted-euid>",
+        "allowed_hosts": frozenset({"atlas.local"}),
+    }
 
 
 def test_home_query_and_audit_panels_admin(
@@ -883,8 +962,10 @@ def test_info_page_includes_inventory_for_admin(
     assert ctx["db_inventory_counts"]["tables"] == 3
     assert ctx["db_inventory_tables"]
     assert ctx["db_inventory_functions"]
-    db_rows = dict(ctx["db_rows"])
-    assert db_rows["runtime_database_name"] == "tapdb_dev_runtime"
+    assert ctx["runtime_info"]["format"] == "tapdb.runtime-info/v1"
+    assert "db_rows" not in ctx
+    assert "cognito_summary_rows" not in ctx
+    assert "cognito_env_rows" not in ctx
 
 
 def test_info_page_hides_inventory_for_non_admin(
@@ -909,6 +990,10 @@ def test_info_page_hides_inventory_for_non_admin(
     assert ctx["db_inventory_visible"] is False
     assert ctx["db_inventory_schema_names"] == []
     assert ctx["db_inventory_tables"] == []
+    assert ctx["runtime_info"]["format"] == "tapdb.runtime-info/v1"
+    assert "db_rows" not in ctx
+    assert "cognito_summary_rows" not in ctx
+    assert "cognito_env_rows" not in ctx
 
 
 def test_graph_page_includes_shared_viewer_controls(

@@ -460,7 +460,18 @@ def pg_init(
 
     ccyo_out.warning("► Running initdb...")
     cfg = get_db_config()
-    initdb_superuser = str(cfg.get("user") or "postgres").strip() or "postgres"
+    initdb_superuser = str(cfg.get("operator_user") or "").strip()
+    runtime_user = str(cfg.get("user") or "").strip()
+    if (
+        cfg.get("operator_configured") is not True
+        or not initdb_superuser
+        or initdb_superuser == runtime_user
+    ):
+        ccyo_out.error(
+            "Local PostgreSQL initialization requires explicit, distinct "
+            "target.operator.user credentials"
+        )
+        raise typer.Exit(1)
 
     # Run initdb
     try:

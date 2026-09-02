@@ -19,7 +19,10 @@ def _normalize_host(value: str) -> str:
     candidate = str(value or "").strip()
     if not candidate:
         return ""
-    parsed = urlsplit(candidate if "://" in candidate else f"//{candidate}")
+    try:
+        parsed = urlsplit(candidate if "://" in candidate else f"//{candidate}")
+    except ValueError:
+        return ""
     netloc = parsed.netloc or parsed.path
     netloc = netloc.rsplit("@", 1)[-1]
     if netloc.startswith("["):
@@ -57,7 +60,10 @@ def is_allowed_origin(origin: str, *, allow_local: bool) -> bool:
     candidate = str(origin or "").strip()
     if not candidate:
         return False
-    parsed = urlsplit(candidate)
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return False
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return False
     host = _normalize_host(candidate)
