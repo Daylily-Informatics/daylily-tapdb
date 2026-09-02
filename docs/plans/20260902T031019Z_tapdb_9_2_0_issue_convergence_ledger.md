@@ -73,13 +73,13 @@ existing `twup` function.
 | DOC-README-001 | docs | Rewrite root README using approved RGBW structure and current code truth | SUCCESS | historical_docs_only | Gate 5 | dag_security_docs | rewritten `README.md`; docs/release contract tests |  | Purpose, model, install, core types, embedding, DAG, security, testing, and release are current and public-safe. |
 | DOC-ACTIVE-001 | docs | Reconcile every active guide with schema, CLI, API, GUI, migration, security, and packaging | SUCCESS | historical_docs_only | Gate 5 | dag_security_docs | active-doc audit plus 31 focused docs/release contract tests and full suite |  | Historical ledgers retain their historical pins/paths; active guidance reflects 9.2. |
 | DOC-CONS-001 | docs | Consumer discoverability guide is complete, linked, and contract-tested | SUCCESS | historical_docs_only | Gate 5 | dag_security_docs | `docs/consumer-discoverability-guide.md`, README/docs index links, snippet/link/anti-pattern tests |  | Includes service mount, manifest, discovery, claims/locks, typed XRF, migration expectations, adopter checklist, and troubleshooting. |
-| TEST-PG-001 | tests | PostgreSQL 17 critical integration suite cannot skip | IN_PROGRESS | contract_test | Gate 5 | orchestrator | local PostgreSQL 16.14 post-review gate: `2,225 passed`, zero skipped, seven warnings in 116.24 seconds; prior PostgreSQL 17 run `33609517506` was green |  | Fresh PostgreSQL 17 acceptance is required for the review-hardening commit. |
+| TEST-PG-001 | tests | PostgreSQL 17 critical integration suite cannot skip | SUCCESS | contract_test | Gate 5 | orchestrator | post-review GitHub PR/push runs `33612568443` and `33612563401`: PostgreSQL 17 ran `2,225 passed`, zero skipped, 95.30% coverage in 279.39 and 317.80 seconds |  | Both independent PostgreSQL 17 acceptance runs passed before merge. |
 | TEST-CONC-001 | tests | Separate-session natural-identity and lock concurrency coverage | SUCCESS | contract_test | Gate 5 | schema_identity | real PostgreSQL separate-session same/different key, winner, timeout, commit, rollback, and connection-reuse tests |  | Transaction and lock lifecycle acceptance is complete locally. |
-| TEST-DAG-001 | tests | All ten DAG v2 acceptance scenarios pass | SUCCESS | contract_test | Gate 5 | dag_security_docs | DAG/XRF/RLS/mount acceptance included in `2,223 passed`; focused DAG/docs runs `99 passed` plus follow-up |  | No v2 acceptance skip. |
+| TEST-DAG-001 | tests | All ten DAG v2 acceptance scenarios pass | SUCCESS | contract_test | Gate 5 | dag_security_docs | DAG/XRF/RLS/mount acceptance included in `2,225 passed`; focused DAG/docs runs `99 passed` plus follow-up |  | No v2 acceptance skip. |
 | TEST-OPS-001 | tests | Template, object, runtime, GUI/API, and repository round-trip coverage | SUCCESS | contract_test | Gate 5 | ops_templates | focused CLI/unit repair `283 passed`; complete operations/browser/database suite in full gate |  | Browser acceptance ran with no skip. |
 | TEST-COV-001 | tests | Branch coverage enabled; overall and changed/new modules at least 90% | SUCCESS | contract_test | Gate 5 | orchestrator | overall 95.30%; 44 changed production modules verified at >=90%, lowest 90.21% |  | CLI exclusions removed and branch coverage enforced. |
-| CI-001 | CI | Ruff, mypy, Bandit, secret scan, full pytest, coverage, docs, build, schema, and installed-wheel smoke | IN_PROGRESS | contract_test | Gate 5 | dag_security_docs | prior push/PR runs `33609511959` and `33609517506` were green; local post-review static, security, full-suite, and coverage gates are green |  | Fresh GitHub gates are required for the review-hardening commit. |
-| REL-PR-001 | release | One green PR closes all eleven issues | IN_PROGRESS | contract_test | Gate 5 | orchestrator | PR `#101`; two automated-review findings plus adjacent owner-isolation hardening fixed and locally verified |  | Commit, fresh review/checks, and reviewed merge remain. |
+| CI-001 | CI | Ruff, mypy, Bandit, secret scan, full pytest, coverage, docs, build, schema, and installed-wheel smoke | SUCCESS | contract_test | Gate 5 | dag_security_docs | post-review GitHub push/PR runs `33612563401` and `33612568443`: all eight jobs green at `c7ca9788c3edc1e435820526f0de2ca7a49d7336` |  | PostgreSQL 17, installed-wheel, static, security, coverage, docs, and build gates passed twice. |
+| REL-PR-001 | release | One green PR closes all eleven issues | IN_PROGRESS | contract_test | Gate 5 | orchestrator | PR `#101`, head `c7ca9788c3edc1e435820526f0de2ca7a49d7336`; both P1 threads answered/resolved; all eight checks green |  | Final ledger commit, checks, and reviewed merge remain. |
 | REL-TAG-001 | release | Annotated immutable bare tag `9.2.0` points to exact merge commit | OPEN | contract_test | Gate 5 | orchestrator | pending |  |  |
 | REL-BUILD-001 | release | Clean artifacts validate version, dependency, assets, checksums, and fresh install | IN_PROGRESS | contract_test | Gate 5 | orchestrator | candidate and GitHub installed-wheel smoke passed |  | Final exact-merge artifact build and checksums remain. |
 | REL-PYPI-001 | release | Invoke `twup` once and verify no-cache PyPI install of 9.2.0 | OPEN | contract_test | Gate 5 | orchestrator | pending |  |  |
@@ -131,6 +131,22 @@ existing `twup` function.
 
 ## Gate 5: Remote Verification Receipt
 
+- Post-review pull-request run `33612568443` completed successfully at head
+  `c7ca9788c3edc1e435820526f0de2ca7a49d7336`; PostgreSQL 17 ran all 2,225
+  tests with zero skips in 279.39 seconds and reported 95.30% branch coverage.
+- Post-review push run `33612563401` independently ran all 2,225 tests with
+  zero skips in 317.80 seconds and reported the same 95.30% coverage.
+- Both runs passed all eight jobs: Ruff and mypy, Bandit and verified-secret
+  scanning, PostgreSQL 17 full-suite and changed-module coverage enforcement,
+  and the 9.2.0 build plus installed-wheel CLI smoke test.
+- Both automated-review P1 threads are answered with regression evidence and
+  resolved. A new automated review was requested at `c7ca978`; the service
+  declined it because its code-review usage allocation was exhausted. The
+  three-agent cross-workstream review, complete local gate, and two complete
+  remote gates cover the review-hardening diff.
+- The ledger-only receipt commit produced by this update must pass the same
+  GitHub gates before merge.
+- Earlier pre-review receipts are retained below as CI-repair provenance.
 - Pre-review pull-request run `33609517506` completed successfully at head
   `99b9cfef8bd4e6492730451351d1bce46778763e`; its PostgreSQL 17 job ran all
   2,223 tests with zero skips in 286.52 seconds.
@@ -155,5 +171,5 @@ All rows terminal: no.
 
 Objective complete: no.
 
-Status counts: 34 `SUCCESS`, five `IN_PROGRESS`, two `OPEN` (41 control rows
+Status counts: 36 `SUCCESS`, three `IN_PROGRESS`, two `OPEN` (41 control rows
 total).
