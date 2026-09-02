@@ -91,7 +91,7 @@ jobs:
     env:
       PGPASSWORD: operator-password
       TAPDB_RUN_DOCS_LOCAL: '1'
-      TAPDB_TEST_CONFIG: ${{ runner.temp }}/tapdb-ci/tapdb-config.yaml
+      TAPDB_TEST_CONFIG: /tmp/tapdb-ci/tapdb-config.yaml
 
     steps:
       - uses: actions/checkout@v4
