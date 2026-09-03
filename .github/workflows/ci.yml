@@ -69,13 +69,23 @@ jobs:
           python -c 'import json, pathlib; report = json.loads(pathlib.Path("detect-secrets.json").read_text()); results = report.get("results"); print("verified secrets detected" if results else "no verified secrets detected"); raise SystemExit(bool(results))'
 
   test:
-    name: PostgreSQL 17 full suite
+    name: PostgreSQL ${{ matrix.postgres_label }} full suite
     runs-on: ubuntu-latest
     needs: [quality, security]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - postgres_label: '16.13'
+            postgres_image: postgres:16.13
+            postgres_major: '16'
+          - postgres_label: '17'
+            postgres_image: postgres:17
+            postgres_major: '17'
 
     services:
       postgres:
-        image: postgres:17
+        image: ${{ matrix.postgres_image }}
         env:
           POSTGRES_USER: tapdb_operator
           POSTGRES_PASSWORD: operator-password
@@ -103,7 +113,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      - name: Install PostgreSQL 17 client and server tools
+      - name: Install PostgreSQL ${{ matrix.postgres_major }} client and server tools
         run: |
           sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
           sudo curl --fail --silent --show-error \
@@ -113,8 +123,10 @@ jobs:
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
-          sudo apt-get install --yes postgresql-17 postgresql-client-17
-          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          sudo apt-get install --yes \
+            "postgresql-${{ matrix.postgres_major }}" \
+            "postgresql-client-${{ matrix.postgres_major }}"
+          echo "/usr/lib/postgresql/${{ matrix.postgres_major }}/bin" >> "$GITHUB_PATH"
 
       - name: Install package and test dependencies
         run: |
@@ -124,7 +136,7 @@ jobs:
       - name: Install Chromium for GUI acceptance
         run: python -m playwright install --with-deps chromium
 
-      - name: Create explicit PostgreSQL 17 runtime role and config
+      - name: Create explicit PostgreSQL ${{ matrix.postgres_label }} runtime role and config
         run: |
           psql -h localhost -p 5432 -U tapdb_operator -d postgres \
             -v ON_ERROR_STOP=1 \
@@ -176,13 +188,13 @@ jobs:
 
       - name: Build distributions
         env:
-          SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.0'
+          SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.1'
         run: |
           python -m pip install --upgrade pip build
           python -m build
 
       - name: Verify wheel schema and migration assets
-        run: python scripts/verify_wheel_assets.py --expected-version 9.2.0
+        run: python scripts/verify_wheel_assets.py --expected-version 9.2.1
 
       - name: Smoke-test the installed wheel
         run: |

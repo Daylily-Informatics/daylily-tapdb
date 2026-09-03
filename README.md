@@ -31,8 +31,10 @@ but never becomes the relationship authority.
 
 ## Install
 
-TapDB 9.2 requires Python 3.12 or newer and PostgreSQL 17 for the supported
-release path.
+TapDB 9.2.1 requires Python 3.12 or newer and supports PostgreSQL 16 and 17.
+Release qualification runs against community PostgreSQL 16.13 and the
+PostgreSQL 17 minor reported by CI. Aurora PostgreSQL has not been independently
+qualified by this release.
 
 ```bash
 python -m pip install "daylily-tapdb[cli,admin,gui]"
@@ -231,12 +233,13 @@ bandit -c pyproject.toml -r daylily_tapdb admin
 python -m build
 ```
 
-Release CI runs the complete suite against PostgreSQL 17, including local-doc
-examples, branch coverage, Ruff, mypy, Bandit, detect-secrets, wheel build, and
-installed-wheel smoke checks. It does not hide integration tests with deselects.
-The mypy file list in `pyproject.toml` covers every new 9.2 implementation
-module; older dynamically mapped ORM and Typer modules are not yet globally
-strict-clean.
+Release CI runs the same complete suite independently against community
+PostgreSQL 16.13 and PostgreSQL 17, including local-doc examples and branch
+coverage. The shared release gates also run Ruff, mypy, Bandit, detect-secrets,
+wheel build, and installed-wheel smoke checks. CI does not hide integration
+tests with deselects. The mypy file list in `pyproject.toml` covers every new
+9.2 implementation module; older dynamically mapped ORM and Typer modules are
+not yet globally strict-clean.
 
 ## Documentation
 

@@ -187,11 +187,14 @@ See `docs/consumer-discoverability-guide.md` for the tested adoption flow.
 
 ## Testing and release floor
 
-The release path uses PostgreSQL 17 and runs the complete suite without
-deselecting integration tests. It enables local documentation examples and
-requires no unexpected skips. CI also runs Ruff check and format, mypy,
-Bandit, detect-secrets, branch coverage for `daylily_tapdb` and `admin`, wheel
-build, schema-asset inspection, and installed-wheel smoke checks.
+TapDB 9.2.1 supports PostgreSQL 16 and 17. Release qualification runs the same
+complete suite against community PostgreSQL 16.13 and the PostgreSQL 17 minor
+reported by CI without deselecting integration tests. Aurora PostgreSQL has not
+been independently qualified by this release. The matrix enables local
+documentation examples and requires no unexpected skips. Shared CI gates also
+run Ruff check and format, mypy, Bandit, detect-secrets, branch coverage for
+`daylily_tapdb` and `admin`, wheel build, schema-asset inspection, and
+installed-wheel smoke checks.
 
 Do not weaken RLS, auth, exact identity, no-fallback, or evidence checks to make
 a test pass. Fix the fixture to supply the same explicit contract as runtime.
