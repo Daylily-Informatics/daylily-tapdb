@@ -1,4 +1,4 @@
-"""Release-level contracts that must hold for TapDB 9.2.0."""
+"""Release-level contracts that must hold for the TapDB 9.2 release line."""
 
 from __future__ import annotations
 
@@ -111,6 +111,7 @@ def test_dag_spec_is_preserved_exactly() -> None:
 
 def test_consumer_guide_and_readme_are_public_safe() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    directive = (ROOT / "AI_DIRECTIVE.md").read_text(encoding="utf-8")
     guide_path = ROOT / "docs/consumer-discoverability-guide.md"
     assert guide_path.is_file()
     guide = guide_path.read_text(encoding="utf-8")
@@ -120,6 +121,12 @@ def test_consumer_guide_and_readme_are_public_safe() -> None:
     assert "/Users/" not in readme
     assert "/Users/" not in guide
     assert "meridian-euid==0.4.8" in readme
+    for text in (readme, directive):
+        normalized = " ".join(text.split())
+        assert "TapDB 9.2.1" in normalized
+        assert "PostgreSQL 16 and 17" in normalized
+        assert "community PostgreSQL 16.13" in normalized
+        assert "Aurora PostgreSQL has not been independently qualified" in normalized
 
 
 def test_active_guides_use_the_current_repository_identity() -> None:
@@ -131,7 +138,16 @@ def test_active_guides_use_the_current_repository_identity() -> None:
 def test_ci_runs_the_complete_release_matrix() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     for required in (
+        "fail-fast: false",
+        "postgres_label: '16.13'",
+        "postgres_image: postgres:16.13",
+        "postgres_major: '16'",
+        "postgres_label: '17'",
         "postgres:17",
+        "postgres_major: '17'",
+        "image: ${{ matrix.postgres_image }}",
+        '"postgresql-${{ matrix.postgres_major }}"',
+        '"postgresql-client-${{ matrix.postgres_major }}"',
         "ruff check",
         "ruff format",
         "mypy",
@@ -144,7 +160,12 @@ def test_ci_runs_the_complete_release_matrix() -> None:
         "--cov-report=json:coverage.json",
         "verify_changed_coverage.py",
         "verify_wheel_assets.py",
+        "SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.1'",
+        "verify_wheel_assets.py --expected-version 9.2.1",
         "python -m build",
     ):
         assert required in workflow
     assert "--deselect" not in workflow
+    assert "PostgreSQL 17 full suite" not in workflow
+    assert "postgresql-17 postgresql-client-17" not in workflow
+    assert "SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.0'" not in workflow
