@@ -380,7 +380,7 @@ def test_gui_graph_page_includes_visual_viewer(monkeypatch):
     )
     monkeypatch.setattr(
         "daylily_tapdb.gui.router.build_graph_v2_payload",
-        lambda obj, record_type, service_id, depth, max_nodes: {
+        lambda obj, record_type, service_id, depth, max_nodes, max_edges=None: {
             "elements": {
                 "nodes": [
                     {

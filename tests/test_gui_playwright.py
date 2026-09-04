@@ -398,7 +398,7 @@ def gui_server(monkeypatch):
     monkeypatch.setattr(
         router_mod,
         "build_graph_v2_payload",
-        lambda obj, *, record_type, service_id, depth, max_nodes: {
+        lambda obj, *, record_type, service_id, depth, max_nodes, max_edges=None: {
             "elements": {
                 "nodes": [
                     {"data": _record_to_item(item, "instance")}
@@ -419,7 +419,10 @@ def gui_server(monkeypatch):
             "meta": {
                 "truncated": False,
                 "truncation_reason": None,
-                "effective_limits": {"max_nodes": max_nodes, "max_edges": 500},
+                "effective_limits": {
+                    "max_nodes": max_nodes,
+                    "max_edges": max_edges,
+                },
             },
         },
     )

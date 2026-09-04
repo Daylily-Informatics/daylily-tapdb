@@ -261,6 +261,39 @@ async def test_graph_namespaces_nodes_bridges_services_and_never_expands_opaque_
 
 
 @pytest.mark.anyio
+async def test_graph_rejects_reserved_fields_in_remote_opaque_projection():
+    client, transport = _client("atlas")
+    root = "persisted-root"
+    transport.graphs[("atlas", root)] = _graph(
+        "atlas",
+        [
+            _node(
+                "atlas",
+                root,
+                identifiers=[
+                    {
+                        "namespace": "doi",
+                        "kind": "publication",
+                        "value": "10.1000/example",
+                        "scope": "public_global",
+                        "relationship_type": "identifies",
+                        "external_reference_euid": "persisted-opaque-reference",
+                        "lineage_euid": "persisted-opaque-lineage",
+                        "assertion_authority": "unit-test",
+                        "asserted_at": "2026-09-04T00:00:00+00:00",
+                        "assertion_provenance": "unit-test-fixture",
+                        "id": "attacker-controlled-node-id",
+                    }
+                ],
+            )
+        ],
+    )
+
+    with pytest.raises(FederationContractError, match="unsupported field.*id"):
+        await client.graph(FederatedObjectKey("atlas", root))
+
+
+@pytest.mark.anyio
 async def test_graph_surfaces_failed_and_unadmitted_branches_as_boundaries():
     client, transport = _client("atlas", "bloom")
     root = "persisted-root"

@@ -1876,6 +1876,16 @@ def test_released_9_2_2_migrates_to_tenant_identity_without_mutating_rows(
                 ).scalar_one()
                 == 0
             )
+            lineage_scope_definition = connection.execute(
+                text("SELECT pg_get_functiondef(CAST(:signature AS regprocedure))"),
+                {
+                    "signature": (
+                        f"{historical_schema}.tapdb_validate_lineage_endpoint_scope()"
+                    )
+                },
+            ).scalar_one()
+            assert "child_subtype = 'opaque'" in lineage_scope_definition
+            assert "public_global" in lineage_scope_definition
 
         for tenant in (uuid.uuid4(), uuid.uuid4()):
             with engine.begin() as connection:

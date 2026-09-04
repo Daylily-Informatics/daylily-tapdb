@@ -2048,6 +2048,7 @@ def create_tapdb_gui_router(
                 service_id=service_id,
                 depth=depth,
                 max_nodes=max_nodes,
+                max_edges=max_edges,
             )
 
         instances = (
@@ -2156,6 +2157,7 @@ def create_tapdb_gui_router(
                     service_id=str(cfg.get("client_id") or "tapdb"),
                     depth=depth,
                     max_nodes=1_000,
+                    max_edges=500,
                 )
         return _render(
             templates,
@@ -2190,6 +2192,7 @@ def create_tapdb_gui_router(
                     service_id=str(cfg.get("client_id") or "tapdb"),
                     depth=depth,
                     max_nodes=1_000,
+                    max_edges=500,
                 )
 
     @router.get("/object/{euid}", response_class=HTMLResponse)

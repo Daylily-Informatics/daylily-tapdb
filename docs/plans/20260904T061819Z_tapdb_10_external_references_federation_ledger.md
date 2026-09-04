@@ -64,14 +64,14 @@ runtime/readiness/inventory, metrics, backups, and DAG-v2 visualization.
 | ID | Area | Requirement / acceptance surface | Status | Category | Approval gate | Owner | Evidence | Root cause | Terminal note |
 |---|---|---|---|---|---|---|---|---|---|
 | `GATE-0` | Baseline | Verify immutable branch point, consumer references, exports, schemas, migrations, CI, clean state, and baseline tests before deletion | SUCCESS | contract_test | Gate 0 | primary agent | Annotated `9.2.2` peels to `be0e4b063f78`; `main` is default and equal; zero open PRs; all five consumer tags were verified locally and against their remotes; baseline `pytest tests -q` -> 2,215 passed, 14 pre-existing environment skips |  | Inventory frozen before runtime deletion; consumer repositories remain read-only |
-| `ID-001` | Identity | Add tenant/global natural-identity migration and explicit scope API; prove immutable before/after state and tenant concurrency | SUCCESS | feature_implementation | Gate 1 | primary agent | Append-only migration, base schema, ORM partial indexes, explicit `IdentityScope`, schema/migration contract tests, migration snapshot tests, and PostgreSQL concurrency tests are green in the 2,161-test local acceptance run | Prior claimant tenancy was evidence only and the uniqueness index was global-only | Migration contains no data rewrite; no UID, EUID, identity key, sequence, template, object, XRF, or lineage is regenerated |
+| `ID-001` | Identity | Add tenant/global natural-identity migration and explicit scope API; prove immutable before/after state and tenant concurrency | SUCCESS | feature_implementation | Gate 1 | primary agent | Append-only migration, base schema, ORM partial indexes, explicit `IdentityScope`, schema/migration contract tests, migration snapshot tests, and PostgreSQL concurrency tests are green in the 2,163-test local acceptance run | Prior claimant tenancy was evidence only and the uniqueness index was global-only | Migration contains no data rewrite; no UID, EUID, identity key, sequence, template, object, XRF, or lineage is regenerated |
 | `XRF-001` | XRF model | Define exact TapDB-object and opaque XRF templates, strict validation, natural keys, and guarded sole write path | SUCCESS | feature_implementation | Gate 1 | primary agent | Exact core template JSON, strict typed targets, canonical validation, SHA-256 opaque identity coordinates, guarded factory/update/delete paths, and focused tests are present; changed-module coverage is 90.85% for the lifecycle module | The old XRF shape mixed target identity with URL/auth routing and permitted generic writes | Two exact XRF templates and the canonical service are now the only supported model |
 | `LIFE-001` | Lifecycle | Implement attach/reuse/detach/reactivation/reverse lookup/authority-scoped reconcile without transaction ownership | SUCCESS | feature_implementation | Gate 1 | primary agent | Attach/replay/shared-target/detach/reactivation/reverse lookup/reconcile/conflict/rollback/RLS/concurrency cases pass in `tests/test_external_references_v10.py` and the complete suite | Applications previously implemented incompatible replacement and ownership behavior | Lifecycle preserves caller transaction ownership and reuses persisted XRF and lineage identities |
 | `DAG-001` | DAG v2 | Add typed projections, exact external-reference search, manifest features, and opaque non-expansion | SUCCESS | feature_implementation | Gate 3 | primary agent | DAG-v2 contract, graph payload, exact-filter, RLS, manifest, rejection, and GUI projection tests pass; `web/dag_v2.py` coverage is 96.16% | Discovery previously depended on copied metadata and DAG-v1 URL routing | DAG v2 now projects canonical references and exact reverse-search matches; opaque identifiers remain non-expandable |
-| `FED-001` | Federation | Add reusable exact-service federated search, owner resolution, and bounded global graph composition | SUCCESS | feature_implementation | Gate 1 | primary agent | Fake-transport tests cover parallel search, exact owner lookup, bridging, cycles, collision safety, bounds, deadline/failure receipts, and opaque non-expansion; module coverage is 95.87% | Kahlo had to infer ownership and merge graphs independently | Core client composes admitted exact DAG-v2 targets without owning credentials, discovery, retries, aliases, or UI |
+| `FED-001` | Federation | Add reusable exact-service federated search, owner resolution, and bounded global graph composition | SUCCESS | feature_implementation | Gate 1 | primary agent | Fake-transport tests cover parallel search, exact owner lookup, bridging, cycles, collision safety, reserved-field rejection, bounds, deadline/failure receipts, and opaque non-expansion; module coverage is 95.93% | Kahlo had to infer ownership and merge graphs independently | Core client composes admitted exact DAG-v2 targets without owning credentials, discovery, retries, aliases, or UI |
 | `CUT-001` | Breaking cut | Remove DAG v1, proxy/network helpers, legacy payloads, metadata pseudo-edges, and GUI writer; converge standalone and embedded web operation on feature-complete `daylily_tapdb.gui`; add negative and parity contracts | SUCCESS | removable_compatibility_debt | Gate 3 | primary agent | `admin.main`, its templates/static app, DAG-v1 modules, proxy routes, legacy factory, legacy payload code, and duplicate GUI writer are absent; explicit route/behavior parity tests, 19 GUI parity tests, embedded tests, and real Chromium tests pass; GUI router coverage is 93.30% | Two web stacks duplicated features and allowed divergent graph/reference writes | `daylily_tapdb.gui` is the sole complete stack; only deliberately retired DAG-v1/proxy and duplicate writer behavior is excluded |
 | `AUDIT-001` | Validation | Add read-only JSON `tapdb validation external-references` audit with redacted samples and nonzero violation exit | SUCCESS | feature_implementation | Gate 1 | primary agent | Canonical/malformed/legacy/mixed/redaction/no-mutation/exit-code tests pass; installed-wheel CLI help smoke passes; module coverage is 94.04% | No bounded way existed to inventory incompatible application-owned shapes before migration | Audit is read-only, emits bounded EUID-only samples, redacts identifier values, and fails nonzero on violations |
-| `TEST-001` | Acceptance | Pass PostgreSQL 16.13/17, migration, RLS, concurrency, browser, security, coverage, build, wheel, and docs gates | SUCCESS | contract_test | Gate 5 | primary agent | Local complete suite: 2,161 passed, 12 environment-only skips, 95.30% branch coverage; all 31 changed modules >=90%; PR run `33856027045` passed against PostgreSQL 16.13 and 17.11 plus quality, security, and installed-wheel build |  | Both exact server lanes, migration/RLS/concurrency/browser/docs tests, changed coverage, and artifact gates passed without deselection |
+| `TEST-001` | Acceptance | Pass PostgreSQL 16.13/17, migration, RLS, concurrency, browser, security, coverage, build, wheel, and docs gates | IN_PROGRESS | contract_test | Gate 5 | primary agent | Review-remediated local complete suite: 2,163 passed, 14 environment/platform skips, 95.32% branch coverage; all 31 changed modules >=90%; all three docs examples pass when explicitly enabled; prior PR run `33856027045` passed against PostgreSQL 16.13 and 17.11 | Automated review found three bounded contract defects after the first green run | Fresh dual-PostgreSQL PR CI and artifact receipts are required for the remediated head |
 | `DOC-001` | Documentation | Overhaul README and active docs; add comprehensive API/federation and tagged-consumer migration guidance | SUCCESS | feature_implementation | Gate 5 | primary agent | README and active architecture/DAG/runtime/GUI/consumer docs were rewritten; new comprehensive external-reference/federation guide and tagged Atlas/Bloom/Ursa/Dewey/Kahlo migration mapping are tested; executable README examples pass | Active docs described multiple generations of graph and admin behavior | Docs now present one canonical GUI, DAG v2, exact discoverability, federation, operator audit, and application ownership boundaries |
 | `REL-001` | Release | Green PR/main CI, merge, exact artifacts, annotated `10.0.0`, GitHub Release, PyPI, hashes, and clean synchronized main | IN_PROGRESS | feature_implementation | Gate 5 | primary agent | Candidate `10.0.0` wheel/sdist build, exact Meridian pin check, `twine check`, and clean external-venv smoke pass; CI now enforces these artifact gates |  | PR, dual-PostgreSQL CI, merge, fresh main CI, immutable tag, GitHub Release, PyPI publication, and final hashes remain |
 
@@ -105,12 +105,20 @@ and terminal note are recorded in the table.
   mutation/repair/validation, inventory, readiness, Meridian, metrics, runtime,
   backups/restores, rich graph exploration, download, and administrator graph
   mutations. Forward cursor pagination was restored during the parity audit.
-- 2026-09-04 local acceptance receipt: `TAPDB_RUN_DOCS_LOCAL=1 python -m
-  pytest tests -q --cov=daylily_tapdb --cov=admin --cov-branch
+- 2026-09-04 local acceptance receipt: `python -m pytest tests -q
+  --cov=daylily_tapdb --cov=admin --cov-branch
   --cov-report=json:coverage.json --cov-fail-under=90` with the activated
-  environment returned 2,161 passed, 12 environment-only skips, and 95.30%
-  branch coverage in 149.74 seconds. The changed-module verifier passed all 31
-  changed production modules at 90% or higher.
+  environment returned 2,163 passed, 14 environment/platform skips, and 95.32%
+  branch coverage in 141.79 seconds. `TAPDB_RUN_DOCS_LOCAL=1 python -m pytest
+  -q tests/test_docs_examples.py` separately passed all three executable
+  examples. The changed-module verifier passed all 31 changed production
+  modules at 90% or higher.
+- 2026-09-04 automated-review remediation receipt: three review findings were
+  accepted and fixed. Tenant sources may now attach only validated
+  `public_global` opaque XRF endpoints; rooted GUI graph requests enforce their
+  accepted `max_edges`; and federation rejects noncanonical/reserved opaque
+  projection fields before node construction. Five focused regressions,
+  including real PostgreSQL and migration-from-`9.2.2` proofs, passed.
 - 2026-09-04 quality/artifact receipt: Ruff check and format, mypy (14 strict
   source files), Bandit, verified detect-secrets, `uv lock --check`, and `git
   diff --check` passed. Candidate wheel/sdist build, wheel asset and exact
@@ -132,10 +140,10 @@ Objective complete: no
 
 Status counts:
 
-- SUCCESS: 10
+- SUCCESS: 9
 - DUPLICATE: 0
 - NO_LONGER_NEEDED: 0
 - FAIL: 0
 - BLOCKED: 0
-- IN_PROGRESS: 1
+- IN_PROGRESS: 2
 - OPEN: 0

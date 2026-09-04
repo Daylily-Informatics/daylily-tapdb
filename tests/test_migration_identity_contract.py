@@ -112,6 +112,8 @@ def test_declared_backfills_have_explicit_preservation_allow_markers():
     assert "setval(" not in tenant_identity
     assert "idx_generic_instance_natural_identity_global" in tenant_identity
     assert "idx_generic_instance_natural_identity_tenant" in tenant_identity
+    assert "child_subtype = 'opaque'" in tenant_identity
+    assert "public_global" in tenant_identity
 
     assets = {item["filename"]: item for item in _migration_assets(migrations)}
     assert assets["20260612_154200_add_template_validator_ref.sql"][

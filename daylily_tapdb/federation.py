@@ -37,6 +37,21 @@ _SEARCH_FILTERS = {
     "external_relationship_type",
     "cursor",
 }
+_OPAQUE_IDENTIFIER_FIELDS = frozenset(
+    {
+        "namespace",
+        "kind",
+        "value",
+        "scope",
+        "canonical_uri",
+        "relationship_type",
+        "assertion_authority",
+        "asserted_at",
+        "assertion_provenance",
+        "external_reference_euid",
+        "lineage_euid",
+    }
+)
 
 
 class FederationContractError(ValueError):
@@ -688,14 +703,27 @@ class DagV2FederationClient:
                                     raise FederationContractError(
                                         "opaque identifier projection must be an object"
                                     )
+                                unsupported = (
+                                    set(identifier) - _OPAQUE_IDENTIFIER_FIELDS
+                                )
+                                if unsupported:
+                                    raise FederationContractError(
+                                        "opaque identifier projection has unsupported "
+                                        "field(s): " + ", ".join(sorted(unsupported))
+                                    )
+                                projected_identifier = {
+                                    key: identifier[key]
+                                    for key in _OPAQUE_IDENTIFIER_FIELDS
+                                    if key in identifier
+                                }
                                 digest = hashlib.sha256(
                                     json.dumps(
                                         [
                                             source_global_id,
-                                            identifier.get("namespace"),
-                                            identifier.get("kind"),
-                                            identifier.get("value"),
-                                            identifier.get("lineage_euid"),
+                                            projected_identifier.get("namespace"),
+                                            projected_identifier.get("kind"),
+                                            projected_identifier.get("value"),
+                                            projected_identifier.get("lineage_euid"),
                                         ],
                                         sort_keys=False,
                                         separators=(",", ":"),
@@ -710,25 +738,25 @@ class DagV2FederationClient:
                                                 "id": opaque_id,
                                                 "global_id": opaque_id,
                                                 "record_type": "external_identifier",
-                                                **dict(identifier),
+                                                **projected_identifier,
                                                 "expandable": False,
                                             }
                                         },
                                     )
-                                    edge_id = f"opaque-bridge::{source_global_id}::{identifier.get('lineage_euid')}"
+                                    edge_id = f"opaque-bridge::{source_global_id}::{projected_identifier.get('lineage_euid')}"
                                     edges[edge_id] = {
                                         "data": {
                                             "id": edge_id,
                                             "source": source_global_id,
                                             "target": opaque_id,
                                             "edge_kind": "external_identifier",
-                                            "relationship_type": identifier.get(
+                                            "relationship_type": projected_identifier.get(
                                                 "relationship_type"
                                             ),
-                                            "lineage_euid": identifier.get(
+                                            "lineage_euid": projected_identifier.get(
                                                 "lineage_euid"
                                             ),
-                                            "assertion_provenance": identifier.get(
+                                            "assertion_provenance": projected_identifier.get(
                                                 "assertion_provenance"
                                             ),
                                         }

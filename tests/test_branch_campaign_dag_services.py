@@ -335,6 +335,41 @@ def test_graph_v2_non_instance_and_max_nodes_truncation():
     assert graph["meta"]["truncation_reason"] == "max_nodes"
 
 
+def test_graph_v2_enforces_max_edges_without_disconnected_nodes():
+    root = _object(1, "<persisted-root-euid>")
+    first = _object(2, "<persisted-first-child-euid>")
+    second = _object(3, "<persisted-second-child-euid>")
+    _lineage(4, "<persisted-edge-a-euid>", root, first)
+    _lineage(5, "<persisted-edge-b-euid>", root, second)
+
+    graph = graphs.build_graph_v2_payload(
+        root,
+        record_type="instance",
+        service_id="local-service",
+        depth=2,
+        max_nodes=10,
+        max_edges=1,
+    )
+
+    assert len(graph["elements"]["edges"]) == 1
+    assert len(graph["elements"]["nodes"]) == 2
+    assert graph["meta"]["truncated"] is True
+    assert graph["meta"]["truncation_reason"] == "max_edges"
+    assert graph["meta"]["effective_limits"]["max_edges"] == 1
+
+
+def test_graph_v2_rejects_invalid_max_edges():
+    with pytest.raises(ValueError, match="max_edges"):
+        graphs.build_graph_v2_payload(
+            _object(1, "<persisted-root-euid>"),
+            record_type="instance",
+            service_id="local-service",
+            depth=1,
+            max_nodes=10,
+            max_edges=False,
+        )
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [

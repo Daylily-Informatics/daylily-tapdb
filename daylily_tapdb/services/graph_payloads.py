@@ -297,6 +297,7 @@ def build_graph_v2_payload(
     service_id: str,
     depth: int,
     max_nodes: int,
+    max_edges: int | None = None,
     snapshot_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Build one bounded, validated, lineage-only DAG v2 snapshot."""
@@ -305,6 +306,10 @@ def build_graph_v2_payload(
         raise ValueError("depth must be a non-negative integer")
     if not isinstance(max_nodes, int) or isinstance(max_nodes, bool) or max_nodes < 1:
         raise ValueError("max_nodes must be a positive integer")
+    if max_edges is not None and (
+        not isinstance(max_edges, int) or isinstance(max_edges, bool) or max_edges < 1
+    ):
+        raise ValueError("max_edges must be a positive integer or None")
     snapshot = snapshot_at or datetime.now(timezone.utc)
     if snapshot.tzinfo is None:
         raise ValueError("snapshot_at must include a timezone")
@@ -368,6 +373,15 @@ def build_graph_v2_payload(
                     reasons.add("max_nodes")
                     continue
                 edge_euid = str(getattr(lineage, "euid", "") or "")
+                if (
+                    edge_euid
+                    and edge_euid not in included_edges
+                    and max_edges is not None
+                    and len(included_edges) >= max_edges
+                ):
+                    truncated = True
+                    reasons.add("max_edges")
+                    continue
                 if edge_euid:
                     included_edges[edge_euid] = lineage
                 if neighbor_euid not in visited:
@@ -400,7 +414,11 @@ def build_graph_v2_payload(
             "snapshot_at": snapshot.astimezone(timezone.utc).isoformat(),
             "truncated": truncated,
             "truncation_reason": truncation_reason,
-            "effective_limits": {"max_depth": depth, "max_nodes": max_nodes},
+            "effective_limits": {
+                "max_depth": depth,
+                "max_nodes": max_nodes,
+                "max_edges": max_edges,
+            },
         },
     }
 

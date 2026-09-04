@@ -527,6 +527,48 @@ def test_canonical_readiness_graph_and_repository_download_routes(
     )
 
 
+def test_canonical_rooted_graph_forwards_the_requested_edge_limit(
+    canonical_gui_client, monkeypatch
+):
+    root = SimpleNamespace(euid="persisted-root")
+    captured = {}
+    monkeypatch.setattr(
+        gui_router,
+        "get_db_config",
+        lambda **_kwargs: {"client_id": "tapdb"},
+    )
+    monkeypatch.setattr(
+        gui_router,
+        "get_db",
+        lambda _path: _GuiConnection(_GuiSession()),
+    )
+    monkeypatch.setattr(
+        gui_router,
+        "find_object_by_euid",
+        lambda _session, euid: (
+            (root, "instance") if euid == root.euid else (None, None)
+        ),
+    )
+
+    def build_graph(_obj, **kwargs):
+        captured.update(kwargs)
+        return {
+            "elements": {"nodes": [], "edges": []},
+            "meta": {"effective_limits": {"max_edges": kwargs["max_edges"]}},
+        }
+
+    monkeypatch.setattr(gui_router, "build_graph_v2_payload", build_graph)
+
+    response = canonical_gui_client.get(
+        "/api/graph",
+        params={"start_euid": root.euid, "max_edges": 1},
+    )
+
+    assert response.status_code == 200
+    assert captured["max_edges"] == 1
+    assert response.json()["meta"]["effective_limits"]["max_edges"] == 1
+
+
 def test_canonical_governed_update_and_delete_api_retain_admin_operations(
     canonical_gui_client, monkeypatch
 ):
