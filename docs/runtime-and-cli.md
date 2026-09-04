@@ -135,6 +135,19 @@ fixed canonical UUID; when absent the runtime is deliberately global-only.
 `target.allow_global_claims` is bound to the authenticated runtime principal
 and cannot be enabled by changing a session GUC.
 
+### Runtime DDL boundary
+
+The bound runtime role is a data-plane principal, not a migration principal.
+Schema apply and receipt-bound migration revoke `CREATE` on the managed TapDB
+schema from `PUBLIC` and the configured runtime role, then verify it is absent.
+Normal table and sequence DML grants are unchanged.
+
+This boundary means `CREATE TABLE IF NOT EXISTS` is not a valid startup, read,
+or write path. A missing consumer table is a provisioning error. Create or
+alter consumer-owned tables only through an explicit migration using a
+separate migration role, then grant the runtime role only the DML it needs.
+Never put the operator credential in an application process.
+
 For local single-repo runs, TAPDB also ships packaged example registry fixtures
 under [`daylily_tapdb/etc`](../daylily_tapdb/etc). They are useful for docs
 examples, tests, and isolated TapDB-only bootstrap flows.

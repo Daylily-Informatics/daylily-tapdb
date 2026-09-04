@@ -31,7 +31,7 @@ but never becomes the relationship authority.
 
 ## Install
 
-TapDB 9.2.1 requires Python 3.12 or newer and supports PostgreSQL 16 and 17.
+TapDB 9.2.2 requires Python 3.12 or newer and supports PostgreSQL 16 and 17.
 Release qualification runs against community PostgreSQL 16.13 and the
 PostgreSQL 17 minor reported by CI. Aurora PostgreSQL has not been independently
 qualified by this release.
@@ -96,8 +96,11 @@ TapDB stores four primary kinds of durable facts:
 All runtime PostgreSQL access installs schema, config identity, domain, owner,
 tenant, actor, and global-row policy together inside the transaction. Row-level
 security is forced on protected tables. Runtime roles with `SUPERUSER` or
-`BYPASSRLS` are rejected; schema operators must opt into the distinct migration
-connection role.
+`BYPASSRLS` are rejected. Schema apply and receipt-bound migration also revoke
+`CREATE` on the managed TapDB schema from `PUBLIC` and its runtime role, while
+leaving runtime DML grants unchanged. Schema operators must use the distinct
+migration connection role; application startup, reads, and writes must never
+create schema objects, including through `CREATE TABLE IF NOT EXISTS`.
 
 ### Bundled templates
 

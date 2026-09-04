@@ -123,7 +123,7 @@ def test_consumer_guide_and_readme_are_public_safe() -> None:
     assert "meridian-euid==0.4.8" in readme
     for text in (readme, directive):
         normalized = " ".join(text.split())
-        assert "TapDB 9.2.1" in normalized
+        assert "TapDB 9.2.2" in normalized
         assert "PostgreSQL 16 and 17" in normalized
         assert "community PostgreSQL 16.13" in normalized
         assert "Aurora PostgreSQL has not been independently qualified" in normalized
@@ -160,8 +160,8 @@ def test_ci_runs_the_complete_release_matrix() -> None:
         "--cov-report=json:coverage.json",
         "verify_changed_coverage.py",
         "verify_wheel_assets.py",
-        "SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.1'",
-        "verify_wheel_assets.py --expected-version 9.2.1",
+        "SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.2'",
+        "verify_wheel_assets.py --expected-version 9.2.2",
         "python -m build",
     ):
         assert required in workflow
@@ -169,3 +169,4 @@ def test_ci_runs_the_complete_release_matrix() -> None:
     assert "PostgreSQL 17 full suite" not in workflow
     assert "postgresql-17 postgresql-client-17" not in workflow
     assert "SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.0'" not in workflow
+    assert "SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.1'" not in workflow

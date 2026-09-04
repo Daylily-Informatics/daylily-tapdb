@@ -702,6 +702,25 @@ def _runtime_scope_binding_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
     )
 
 
+def _runtime_schema_create_guard_sql(schema_name: str, runtime_user: str) -> str:
+    """Remove and verify CREATE only on the configured TapDB schema."""
+
+    schema = str(schema_name).strip()
+    role = str(runtime_user).strip()
+    if not schema or not role:
+        raise ValueError("runtime schema CREATE guard requires schema and role")
+    return (
+        f"REVOKE CREATE ON SCHEMA {_quoted_sql_ident(schema)} FROM PUBLIC; "
+        f"REVOKE CREATE ON SCHEMA {_quoted_sql_ident(schema)} "
+        f"FROM {_quoted_sql_ident(role)}; "
+        "DO $tapdb_runtime_schema_create_guard$ BEGIN "
+        "IF pg_catalog.has_schema_privilege("
+        f"{_quoted_sql_literal(role)}, {_quoted_sql_literal(schema)}, 'CREATE') "
+        "THEN RAISE EXCEPTION 'TapDB runtime role retains CREATE on the managed "
+        "schema'; END IF; END $tapdb_runtime_schema_create_guard$"
+    )
+
+
 def _with_schema_search_path(
     schema_name: str, sql: str, *, cfg: Optional[Mapping[str, Any]] = None
 ) -> str:
@@ -1164,6 +1183,8 @@ def db_schema_apply(
         + f"ON SEQUENCES TO {_quoted_sql_ident(runtime_user)};\n"
         + "REVOKE ALL ON TABLE tapdb_runtime_principal_scope FROM "
         + f"{_quoted_sql_ident(runtime_user)};\n"
+        + _runtime_schema_create_guard_sql(schema_name, runtime_user)
+        + ";\n"
         + "\nCOMMIT;\n"
     )
     success, psql_out = _run_psql(env, sql=schema_bundle, connection_role="operator")
@@ -1625,6 +1646,12 @@ def db_migrate(
                     )
                     connection.exec_driver_sql(
                         _runtime_scope_binding_sql(_get_schema_name(env), cfg)
+                    )
+                    connection.exec_driver_sql(
+                        _runtime_schema_create_guard_sql(
+                            _get_schema_name(env),
+                            str(cfg["user"]),
+                        )
                     )
                     transaction.commit()
                 except Exception:
