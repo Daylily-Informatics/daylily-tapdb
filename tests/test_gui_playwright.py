@@ -304,6 +304,8 @@ def _object_context(state, euid):
         "relationships": {"parent_of": parent_of, "child_of": child_of},
         "audit_rows": state.audit_rows,
         "external_refs": [],
+        "external_identifiers": [],
+        "manual_create_allowed": True,
         "editor": {
             "validator_ref": "UNIVERSAL_PASS@1",
             "assessment": {
@@ -345,11 +347,27 @@ def gui_server(monkeypatch):
     }
 
     monkeypatch.setattr(router_mod, "get_db_config", lambda config_path: cfg)
+    monkeypatch.setattr(
+        router_mod,
+        "get_admin_settings",
+        lambda **_kwargs: {
+            "target_name": "test",
+            "production_like": False,
+            "auth_mode": "host_session",
+            "session_secret": "test-session-secret",
+            "allowed_origins": [],
+        },
+    )
+    monkeypatch.setattr(
+        router_mod,
+        "mount_tapdb_dag_surfaces",
+        lambda *_args, **_kwargs: SimpleNamespace(mounted=True, diagnostic=""),
+    )
     monkeypatch.setattr(router_mod, "get_db", lambda config_path: _Conn(state))
     monkeypatch.setattr(
         router_mod,
         "search_objects",
-        lambda session, service_name, q, record_type, category, type_name, subtype, limit, cursor: {
+        lambda session, service_name, q, record_type, name_like, euid_like, category, type_name, subtype, limit, cursor: {
             "items": [
                 _record_to_item(obj, kind)
                 for obj, kind in [
@@ -359,6 +377,8 @@ def gui_server(monkeypatch):
                 ]
                 if (record_type == "all" or kind == record_type)
                 and (not q or q.lower() in f"{obj.euid} {obj.name}".lower())
+                and (not name_like or name_like.lower() in obj.name.lower())
+                and (not euid_like or euid_like.lower() in obj.euid.lower())
                 and (not category or obj.category.lower() == category.lower())
             ][:limit],
             "page": {"limit": limit, "total": 1, "next_cursor": None},
@@ -377,8 +397,8 @@ def gui_server(monkeypatch):
     )
     monkeypatch.setattr(
         router_mod,
-        "build_graph_payload",
-        lambda obj, record_type, service_name, depth: {
+        "build_graph_v2_payload",
+        lambda obj, *, record_type, service_id, depth, max_nodes, max_edges=None: {
             "elements": {
                 "nodes": [
                     {"data": _record_to_item(item, "instance")}
@@ -395,7 +415,15 @@ def gui_server(monkeypatch):
                     }
                     for item in state.lineages
                 ],
-            }
+            },
+            "meta": {
+                "truncated": False,
+                "truncation_reason": None,
+                "effective_limits": {
+                    "max_nodes": max_nodes,
+                    "max_edges": max_edges,
+                },
+            },
         },
     )
 
@@ -506,47 +534,12 @@ def gui_server(monkeypatch):
             row = state.lineage(related_euid, euid, relationship_type)
         return {"lineage_euid": row.euid, "relationship_type": relationship_type}
 
-    def create_external_link(
-        session,
-        cfg,
-        source_euid,
-        system,
-        foreign_uid,
-        relationship_type,
-        display_url,
-        graph_base_url,
-        graph_data_path,
-        object_detail_path_template,
-        auth_mode,
-    ):
-        del session, cfg, display_url, graph_base_url, graph_data_path
-        del object_detail_path_template, auth_mode
-        link = state.instance(
-            state.next_instance_euid("XRF"),
-            f"{system}:{foreign_uid}",
-            "reference",
-            "external_identifier",
-            "tapdb_object",
-            json_addl={
-                "external_identifier": {"system": system, "foreign_uid": foreign_uid}
-            },
-        )
-        state.instances.append(link)
-        row = state.lineage(source_euid, link.euid, relationship_type)
-        return {
-            "source_euid": source_euid,
-            "link_euid": link.euid,
-            "lineage_euid": row.euid,
-            "relationship_type": relationship_type,
-        }
-
     monkeypatch.setattr(router_mod, "seed_templates", seed_templates)
     monkeypatch.setattr(router_mod, "_create_instance_from_template", create_instance)
     monkeypatch.setattr(router_mod, "_create_object_repair", create_repair)
     monkeypatch.setattr(router_mod, "_update_object_name", update_name)
     monkeypatch.setattr(router_mod, "_update_object_status", update_status)
     monkeypatch.setattr(router_mod, "_add_object_lineage", add_lineage)
-    monkeypatch.setattr(router_mod, "_create_external_link", create_external_link)
     monkeypatch.setattr(
         router_mod,
         "_readiness_payload",
@@ -712,7 +705,7 @@ def test_playwright_create_detail_graph_and_object_mutations(browser, gui_server
     sync_api.expect(page.get_by_text("Browser Plate_well_1")).to_be_visible()
     plate_url = page.url
 
-    page.get_by_role("link", name="Graph").click()
+    page.get_by_role("main").get_by_role("link", name="Graph").click()
     sync_api.expect(page.get_by_text("Graph:")).to_be_visible()
     sync_api.expect(page.locator("[data-testid='tapdb-graph']")).to_be_visible()
     page.wait_for_selector("#tapdb-graph canvas", state="visible", timeout=10000)
@@ -748,13 +741,9 @@ def test_playwright_create_detail_graph_and_object_mutations(browser, gui_server
     sync_api.expect(page.get_by_text("Lineage added.")).to_be_visible()
     sync_api.expect(page.get_by_text("derived_from")).to_be_visible()
 
-    page.get_by_role("link", name="External Link").click()
-    page.get_by_label("System").fill("dewey")
-    page.get_by_label("Foreign UID").fill("M-BROWSER-1")
-    page.get_by_label("Display URL").fill("https://dewey.example/M-BROWSER-1")
-    page.get_by_role("button", name="Create Link").click()
-    sync_api.expect(page.get_by_text("External link created.")).to_be_visible()
-    sync_api.expect(page.get_by_text("dewey:M-BROWSER-1")).to_be_visible()
+    # External references have one canonical library lifecycle. The duplicate
+    # URL-bearing GUI writer is intentionally absent in 10.0.
+    sync_api.expect(page.get_by_role("link", name="External Link")).to_have_count(0)
     page.close()
 
 

@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from daylily_tapdb import runtime_info
-from daylily_tapdb.services import external_refs, graph_payloads
+from daylily_tapdb import external_references, runtime_info
+from daylily_tapdb.services import graph_payloads
 from daylily_tapdb.services.object_search import search_objects
 from daylily_tapdb.web import dag_v2
 
@@ -109,9 +109,9 @@ def test_named_adopter_path_uses_exact_v2_manifests_and_typed_xrf_lineage(
         is dag_v2.DagV2EligibilityReason.SERVICE_IDENTITY_MISMATCH
     )
 
-    real_validator = external_refs.validate_euid
+    real_validator = external_references.validate_euid
     monkeypatch.setattr(
-        external_refs,
+        external_references,
         "validate_euid",
         lambda value: (
             (
@@ -124,14 +124,21 @@ def test_named_adopter_path_uses_exact_v2_manifests_and_typed_xrf_lineage(
     )
 
     def _typed_projection(source_service: str, target_service: str) -> dict:
+        target = external_references.TapDBObjectTarget(
+            target_service_id=target_service,
+            target_object_euid=f"<persisted-{target_service}-object-euid>",
+        )
         reference = SimpleNamespace(
             euid=f"<persisted-{source_service}-to-{target_service}-xrf-euid>",
+            identity_key=target.identity_key,
+            tenant_id=None,
+            is_deleted=False,
             category="reference",
             type="external_identifier",
             subtype="tapdb_object",
             version="1.0",
             parent_template=SimpleNamespace(
-                **external_refs._canonical_xrf_template_definition(),
+                **external_references._canonical_template_definition("tapdb_object"),
                 domain_code="Z",
                 issuer_app_code=source_service,
             ),
@@ -141,6 +148,8 @@ def test_named_adopter_path_uses_exact_v2_manifests_and_typed_xrf_lineage(
                 "properties": {
                     "target_service_id": target_service,
                     "target_object_euid": f"<persisted-{target_service}-object-euid>",
+                    "target_tenant_id": None,
+                    "target_object_kind": None,
                 }
             },
         )
@@ -153,6 +162,10 @@ def test_named_adopter_path_uses_exact_v2_manifests_and_typed_xrf_lineage(
                 "properties": {
                     "asserted_at": "2026-09-02T00:00:00+00:00",
                     "assertion_provenance": "authenticated registry fixture",
+                    "assertion_authority": source_service,
+                    "approved_global_link": True,
+                    "deactivated_at": None,
+                    "deactivation_provenance": None,
                 }
             },
         )
@@ -160,7 +173,9 @@ def test_named_adopter_path_uses_exact_v2_manifests_and_typed_xrf_lineage(
             json_addl={"properties": {}},
             parent_of_lineages=[lineage],
         )
-        return external_refs.project_outbound_typed_references(source)[0]
+        return external_references._project_outbound_external_references(source)[
+            "external_refs"
+        ][0]
 
     path = [
         _typed_projection(source, target)
@@ -190,12 +205,15 @@ def test_active_docs_state_identity_system_user_and_adopter_hard_cuts() -> None:
     assert "not a universal business-domain primitive" in templates
     assert "issue #12" in templates
     assert "reference/external_identifier/tapdb_object/1.0" in templates
+    assert "reference/external_identifier/opaque/1.0" in templates
     assert "Z-AGX-1AD" not in identity
     assert "meridian-euid==0.4.8" in identity
-    assert "`truncated`, `truncation_reason`" in consumer
-    assert "Kahlo hub-only" in consumer
-    assert "excludes OWY" in consumer
-    assert "`zebra-day`/`zebra_day` alias" in consumer
+    assert "`truncated`" in consumer
+    assert "`truncation_reason`" in consumer
+    assert "Kahlo remains the global visualization layer" in consumer
+    assert "DagV2FederationClient" in consumer
+    assert "unresolved boundary" in consumer
+    assert "alias resolution" in consumer
 
 
 def test_ci_secret_scan_and_nested_branch_push_are_real_gates() -> None:

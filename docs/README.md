@@ -7,7 +7,8 @@ This directory holds the support material for the TAPDB substrate. The root [REA
 - [../README.md](../README.md): overview, philosophy, quickstart, and core mental model
 - [architecture.md](architecture.md): deeper architecture, object model, and write-path explanation
 - [architecture/evidence_vs_governance.md](architecture/evidence_vs_governance.md): validator, assessment, repair, and governance doctrine
-- [tapdb_gui_inclusion.md](tapdb_gui_inclusion.md): admin GUI embedding and auth-mode guidance
+- [tapdb_gui_inclusion.md](tapdb_gui_inclusion.md): canonical GUI embedding,
+  full former-admin feature parity, and auth-mode guidance
 
 ## Current Focus
 
@@ -25,6 +26,7 @@ The refactor review and the deeper doc set live in this directory as separate su
 - [runtime-and-cli.md](runtime-and-cli.md)
 - [integration-and-embedding.md](integration-and-embedding.md)
 - [consumer-discoverability-guide.md](consumer-discoverability-guide.md)
+- [external-references-and-federation.md](external-references-and-federation.md)
 - [repository-review.md](repository-review.md)
 
 Those files are the right place for detailed references, policy notes, and implementation guidance that would clutter the root README.

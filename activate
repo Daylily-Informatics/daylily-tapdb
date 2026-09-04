@@ -191,10 +191,10 @@ _tapdb_tapdb="${_tapdb_bin_dir}/tapdb"
 if [ ! -x "${_tapdb_tapdb}" ] || ! _tapdb_distribution_is_editable_from_repo "${_tapdb_repo_root}"; then
     if [ "${_tapdb_smoke}" = "1" ]; then
         printf "${_tapdb_yellow}⚠${_tapdb_reset} tapdb CLI not installed from this repo (smoke mode: skipping install).\n"
-        printf "  Install with: ${_tapdb_cyan}(cd %s && python -m pip install -e \".[cli,admin,aurora,dev]\")${_tapdb_reset}\n" "${_tapdb_repo_root}"
+        printf "  Install with: ${_tapdb_cyan}(cd %s && python -m pip install -e \".[cli,gui,aurora,dev]\")${_tapdb_reset}\n" "${_tapdb_repo_root}"
     else
         printf "${_tapdb_yellow}⚠${_tapdb_reset} tapdb CLI not installed from this repo. Installing...\n"
-        (cd "${_tapdb_repo_root}" && python -m pip install -e ".[cli,admin,aurora,dev]" -q)
+        (cd "${_tapdb_repo_root}" && python -m pip install -e ".[cli,gui,aurora,dev]" -q)
         if [ $? -ne 0 ]; then
             printf "${_tapdb_red}✗${_tapdb_reset} Failed to install tapdb.\n"
             return 1 2>/dev/null || exit 1
@@ -286,7 +286,7 @@ printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db schema reset" "Drop c
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb db data backup" "Backup configured database data"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb cognito setup" "Setup configured Cognito pool binding"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb cognito add-user <email>" "Create Cognito user"
-printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb ui start|stop|status" "Manage admin UI server"
+printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb ui start|stop|status" "Manage the canonical TapDB GUI server"
 printf "${_tapdb_cyan}%-32s${_tapdb_reset} %s\n" "tapdb --help" "Full help"
 printf "\n"
 printf "${_tapdb_bold}Target:${_tapdb_reset} one explicit --config path resolves client_id, database_name, schema_name, and physical database\n"

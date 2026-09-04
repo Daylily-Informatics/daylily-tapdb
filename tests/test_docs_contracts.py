@@ -54,7 +54,7 @@ def test_activate_banner_does_not_advertise_legacy_env_selectors() -> None:
     )
 
 
-def test_embeddable_gui_docs_expose_v1_mount_without_dayhoff_mutation() -> None:
+def test_embeddable_gui_docs_expose_the_only_web_stack_with_full_parity() -> None:
     integration = (REPO_ROOT / "docs" / "integration-and-embedding.md").read_text(
         encoding="utf-8"
     )
@@ -68,11 +68,14 @@ def test_embeddable_gui_docs_expose_v1_mount_without_dayhoff_mutation() -> None:
     assert 'config_path="/abs/path/to/tapdb-config.yaml"' in combined
     assert "Dayhoff-Style Host Example" in integration
     assert "does not require mutating a Dayhoff repo" in integration
-    assert "`create_tapdb_web_app(...)` remains available" in integration
     assert "/tapdb/api/create/{template_euid}" in combined
-    assert "/tapdb/api/object/{euid}/status" in combined
-    assert "/tapdb/api/object/{euid}/external-links" in combined
+    assert "/tapdb/api/object/{euid}/lineage" in combined
     assert "/tapdb/api/admin/readiness" in combined
+    assert "/tapdb/api/admin/backups" in combined
+    assert "full former-admin feature parity" in combined.lower()
+    assert "rich graph" in combined.lower()
+    assert "create_tapdb_web_app(...)` remains available" not in integration
+    assert "/tapdb/api/object/{euid}/external-links" not in combined
 
 
 # ---------------------------------------------------------------------------

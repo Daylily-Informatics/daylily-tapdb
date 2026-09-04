@@ -25,6 +25,7 @@ from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.factory import (
     IdentityClaimOutcome,
+    IdentityScope,
     InstanceFactory,
 )
 from daylily_tapdb.migration_identity import (
@@ -174,7 +175,6 @@ def _schema_and_templates(pg_instance):
 
 def test_postgresql_separate_sessions_claim_one_global_identity(pg_instance):
     barrier = threading.Barrier(2)
-    claimant_tenant = uuid.uuid4()
     identity_key = "labcore:sequencing_run:<persisted-euid>"
 
     def claim(index: int) -> tuple[int, IdentityClaimOutcome, object]:
@@ -187,8 +187,8 @@ def test_postgresql_separate_sessions_claim_one_global_identity(pg_instance):
                     template_code="message/webhook/event/1.0/",
                     identity_key=identity_key,
                     name="Labcore sequencing run",
+                    scope=IdentityScope.GLOBAL,
                     properties={"source": "labcore"},
-                    claimant_tenant_id=claimant_tenant,
                     command_evidence={"command": "register-run"},
                 )
                 return result.instance.uid, result.outcome, result.instance.tenant_id
@@ -203,7 +203,9 @@ def test_postgresql_separate_sessions_claim_one_global_identity(pg_instance):
     assert {row[2] for row in results} == {None}
 
 
-def test_postgresql_two_bound_tenants_contend_for_one_global_identity(pg_instance):
+def test_postgresql_tenant_identity_separates_tenants_and_serializes_same_tenant(
+    pg_instance,
+):
     suffix = uuid.uuid4().hex[:10]
     tenants = [uuid.uuid4(), uuid.uuid4()]
     roles = [f"tapdb_claim_tenant_a_{suffix}", f"tapdb_claim_tenant_b_{suffix}"]
@@ -211,6 +213,7 @@ def test_postgresql_two_bound_tenants_contend_for_one_global_identity(pg_instanc
         f"pytest://natural-identity/tenant-a/{suffix}",
         f"pytest://natural-identity/tenant-b/{suffix}",
     ]
+    tenant_identity_keys: list[str] = []
     operator = create_engine(pg_instance["operator_dsn"])
     created_roles: list[str] = []
     try:
@@ -274,6 +277,7 @@ def test_postgresql_two_bound_tenants_contend_for_one_global_identity(pg_instanc
 
         barrier = threading.Barrier(2)
         identity_key = f"migration-test:cross-tenant:{uuid.uuid4()}"
+        tenant_identity_keys.append(identity_key)
 
         def claim(index: int) -> tuple[int, IdentityClaimOutcome, uuid.UUID]:
             with _tenant_connection(
@@ -291,38 +295,80 @@ def test_postgresql_two_bound_tenants_contend_for_one_global_identity(pg_instanc
                         session,
                         template_code="message/webhook/event/1.0/",
                         identity_key=identity_key,
-                        name="Cross-tenant global claim",
+                        name="Tenant-scoped claim",
+                        scope=IdentityScope.TENANT,
+                        tenant_id=tenants[index],
                         properties={"stable": True},
-                        claimant_tenant_id=tenants[index],
                     )
-                    return result.instance.uid, result.outcome, tenants[index]
+                    return (
+                        result.instance.uid,
+                        result.outcome,
+                        result.instance.tenant_id,
+                    )
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             claims = list(executor.map(claim, range(2)))
 
-        assert len({claim[0] for claim in claims}) == 1
-        assert {claim[1] for claim in claims} == {
-            IdentityClaimOutcome.CREATED,
-            IdentityClaimOutcome.EXISTING,
-        }
+        assert len({claim[0] for claim in claims}) == 2
+        assert {claim[1] for claim in claims} == {IdentityClaimOutcome.CREATED}
+        assert {claim[2] for claim in claims} == set(tenants)
         with operator.begin() as connection:
             _set_operator_context(
                 connection,
                 pg_instance["schema_name"],
                 "pytest:natural-identity-principal-proof",
             )
-            winner = connection.execute(
+            winners = connection.execute(
                 text(
                     "SELECT uid, tenant_id, json_addl FROM generic_instance "
-                    "WHERE identity_key = :identity_key"
+                    "WHERE identity_key = :identity_key ORDER BY tenant_id"
                 ),
                 {"identity_key": identity_key},
-            ).one()
-            assert winner.uid == claims[0][0]
-            assert winner.tenant_id is None
-            assert uuid.UUID(
-                winner.json_addl["identity_claim"]["claimant_tenant_id"]
-            ) in (tenants)
+            ).all()
+            assert {row.uid for row in winners} == {claim[0] for claim in claims}
+            assert {row.tenant_id for row in winners} == set(tenants)
+            assert all(
+                row.json_addl["identity_claim"]["scope"] == "tenant"
+                and uuid.UUID(row.json_addl["identity_claim"]["tenant_id"])
+                == row.tenant_id
+                for row in winners
+            )
+
+        same_tenant_key = f"migration-test:same-tenant:{uuid.uuid4()}"
+        tenant_identity_keys.append(same_tenant_key)
+        same_tenant_barrier = threading.Barrier(2)
+
+        def same_tenant_claim(index: int) -> tuple[int, IdentityClaimOutcome]:
+            with _tenant_connection(
+                pg_instance,
+                role=roles[0],
+                tenant_id=tenants[0],
+                config_identity=config_identities[0],
+                app_username=f"pytest:same-tenant-claim-{index}",
+            ) as runtime:
+                with runtime.session_scope(commit=True) as session:
+                    same_tenant_barrier.wait(timeout=5)
+                    result = InstanceFactory(
+                        TemplateManager(), domain_code="Z"
+                    ).claim_instance_by_identity(
+                        session,
+                        template_code="message/webhook/event/1.0/",
+                        identity_key=same_tenant_key,
+                        name="Same tenant concurrent claim",
+                        scope=IdentityScope.TENANT,
+                        tenant_id=tenants[0],
+                        properties={"stable": True},
+                    )
+                    return result.instance.uid, result.outcome
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            same_tenant_claims = list(executor.map(same_tenant_claim, range(2)))
+
+        assert len({claim[0] for claim in same_tenant_claims}) == 1
+        assert {claim[1] for claim in same_tenant_claims} == {
+            IdentityClaimOutcome.CREATED,
+            IdentityClaimOutcome.EXISTING,
+        }
     finally:
         if created_roles:
             with operator.begin() as connection:
@@ -341,6 +387,26 @@ def test_postgresql_two_bound_tenants_contend_for_one_global_identity(pg_instanc
                         "role_b": roles[1],
                     },
                 )
+                # This session-scoped PostgreSQL fixture is shared with tests
+                # that reconstruct older releases. Physically remove only the
+                # tenant rows minted by this test so a later historical
+                # migration replay is not accidentally tested as a downgrade.
+                if tenant_identity_keys:
+                    connection.exec_driver_sql(
+                        "ALTER TABLE generic_instance DISABLE TRIGGER "
+                        "soft_delete_generic_instance"
+                    )
+                    connection.execute(
+                        text(
+                            "DELETE FROM generic_instance "
+                            "WHERE identity_key = ANY(:identity_keys)"
+                        ),
+                        {"identity_keys": tenant_identity_keys},
+                    )
+                    connection.exec_driver_sql(
+                        "ALTER TABLE generic_instance ENABLE TRIGGER "
+                        "soft_delete_generic_instance"
+                    )
                 for role in created_roles:
                     connection.exec_driver_sql(f'DROP OWNED BY "{role}"')
                     connection.exec_driver_sql(f'DROP ROLE "{role}"')
@@ -362,6 +428,7 @@ def test_postgresql_different_natural_identity_keys_proceed_independently(pg_ins
                     template_code="message/webhook/event/1.0/",
                     identity_key=keys[index],
                     name=f"Independent identity {index}",
+                    scope=IdentityScope.GLOBAL,
                     properties={"index": index},
                 )
                 return result.instance.uid, result.outcome
@@ -382,6 +449,7 @@ def test_postgresql_rolled_back_first_claim_permits_second_create(pg_instance):
         "template_code": "message/webhook/event/1.0/",
         "identity_key": identity_key,
         "name": "Rollback claim",
+        "scope": IdentityScope.GLOBAL,
         "properties": {"stable": True},
     }
 
@@ -437,6 +505,7 @@ def test_postgresql_committed_claim_becomes_visible_to_waiting_replay(pg_instanc
         "template_code": "message/webhook/event/1.0/",
         "identity_key": identity_key,
         "name": "Committed claim",
+        "scope": IdentityScope.GLOBAL,
         "properties": {"stable": True},
     }
 
@@ -483,6 +552,7 @@ def test_postgresql_divergent_replay_returns_existing_winner_for_client_comparis
         "template_code": "message/webhook/event/1.0/",
         "identity_key": identity_key,
         "name": "Immutable identity claim",
+        "scope": IdentityScope.GLOBAL,
         "properties": {"source": "first-request"},
     }
     with _connection(pg_instance, "identity-divergent-create") as connection:
@@ -523,6 +593,7 @@ def test_postgresql_existing_replay_does_not_damage_caller_transaction(pg_instan
         "template_code": "message/webhook/event/1.0/",
         "identity_key": identity_key,
         "name": "Outer transaction identity",
+        "scope": IdentityScope.GLOBAL,
         "properties": {"source": "original"},
     }
     with _connection(pg_instance, "identity-outer-create") as connection:
@@ -569,6 +640,7 @@ def test_postgresql_soft_deleted_identity_is_replayed_not_reassigned(pg_instance
         "template_code": "message/webhook/event/1.0/",
         "identity_key": identity_key,
         "name": "Soft-deleted identity claim",
+        "scope": IdentityScope.GLOBAL,
         "properties": {"source": "preservation-test"},
     }
     with _connection(pg_instance, "identity-soft-delete-create") as connection:
@@ -1615,6 +1687,7 @@ def test_released_9_1_0_schema_migrates_populated_rows_without_identity_change(
             "20260902_010100_legacy_outbox_message_conversion.sql",
             "20260902_020000_force_rls_and_audit_attribution.sql",
             "20260903_031820_runtime_ddl_guard.sql",
+            "20260904_061819_tenant_scoped_natural_identity.sql",
         ]
         assert (
             result.receipt["sequence_pre_state"]
@@ -1646,6 +1719,207 @@ def test_released_9_1_0_schema_migrates_populated_rows_without_identity_change(
         assert instances["active_count"] == 1
         assert instances["soft_deleted_count"] == 1
         assert all(row["identity"]["identity_key"] is None for row in instances["rows"])
+    finally:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                f'DROP SCHEMA IF EXISTS "{historical_schema}" CASCADE'
+            )
+        engine.dispose()
+
+
+def test_released_9_2_2_migrates_to_tenant_identity_without_mutating_rows(
+    pg_instance,
+):
+    repository = Path(__file__).resolve().parents[1]
+    release_commit = subprocess.run(
+        ["git", "rev-parse", "9.2.2^{commit}"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert release_commit == "be0e4b063f78f63f43d21c37070ac61a8450c619"
+    released_schema = subprocess.run(
+        ["git", "show", "9.2.2:schema/tapdb_schema.sql"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "idx_generic_instance_natural_identity_tenant" not in released_schema
+    assert "ck_generic_instance_identity_key_global" in released_schema
+
+    historical_schema = f"tapdb_historical_{uuid.uuid4().hex[:12]}"
+    filename = "20260904_061819_tenant_scoped_natural_identity.sql"
+    migrations_dir = repository / "schema" / "migrations"
+    target = {**_migration_target(pg_instance), "schema_name": historical_schema}
+    engine = create_engine(pg_instance["operator_dsn"])
+    template_uid = 0
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f'CREATE SCHEMA "{historical_schema}"')
+            connection.execute(
+                text("SELECT set_config('search_path', :schema, true)"),
+                {"schema": historical_schema},
+            )
+            connection.exec_driver_sql(released_schema.replace("%", "%%"))
+            _set_operator_context(
+                connection, historical_schema, "migration:released-9.2.2-fixture"
+            )
+            connection.exec_driver_sql(
+                "CREATE SEQUENCE IF NOT EXISTS tpx_instance_seq CACHE 1; "
+                "CREATE SEQUENCE IF NOT EXISTS msg_instance_seq CACHE 1; "
+                "CREATE SEQUENCE IF NOT EXISTS adt_instance_seq CACHE 1"
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO tapdb_identity_prefix_config "
+                    "(entity, domain_code, issuer_app_code, prefix) VALUES "
+                    "('generic_template', 'Z', 'daylily-tapdb', 'TPX'), "
+                    "('audit_log', 'Z', 'daylily-tapdb', 'ADT')"
+                )
+            )
+            template_uid = int(
+                connection.execute(
+                    text(
+                        "INSERT INTO generic_template ("
+                        "name, polymorphic_discriminator, category, type, subtype, "
+                        "version, instance_prefix, instance_polymorphic_identity, "
+                        "json_addl, validator_ref, bstatus, is_singleton, is_deleted"
+                        ") VALUES ("
+                        "'Released 9.2.2 message', 'generic_template', 'message', "
+                        "'webhook', 'event', '1.0', 'MSG', 'generic_instance', "
+                        "'{}'::jsonb, 'UNIVERSAL_PASS@1', 'active', false, false"
+                        ") RETURNING uid"
+                    )
+                ).scalar_one()
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO generic_instance ("
+                    "name, polymorphic_discriminator, category, type, subtype, "
+                    "version, template_uid, identity_key, json_addl, bstatus, "
+                    "is_singleton, is_deleted"
+                    ") VALUES ("
+                    "'Released global identity', 'generic_instance', 'message', "
+                    "'webhook', 'event', '1.0', :template_uid, "
+                    "'catalog:released-global', '{}'::jsonb, 'active', false, false"
+                    ")"
+                ),
+                {"template_uid": template_uid},
+            )
+            prior_migrations = [
+                path.name
+                for path in sorted(migrations_dir.glob("*.sql"))
+                if path.name < filename
+            ]
+            connection.execute(
+                text(
+                    "INSERT INTO _tapdb_migrations (filename) "
+                    "SELECT value FROM jsonb_array_elements_text(CAST(:names AS jsonb))"
+                ),
+                {"names": json.dumps(prior_migrations)},
+            )
+
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            preflight = build_migration_preflight(
+                connection, migrations_dir=migrations_dir, target=target
+            )
+            assert [item["filename"] for item in preflight["pending_migrations"]] == [
+                filename
+            ]
+            pending = preflight["pending_migrations"][0]
+            assert pending["allowed_columns"] == []
+            assert pending["allowed_new_rows"] == []
+            assert pending["allowed_sequences"] == []
+            result = apply_migration_preflight(
+                connection,
+                migrations_dir=migrations_dir,
+                preflight=preflight,
+                target=target,
+            )
+            transaction.commit()
+
+        assert (
+            result.receipt["sequence_pre_state"]
+            == result.receipt["sequence_post_state"]
+        )
+        assert result.receipt["postflight"]["tables"] == preflight["tables"]
+
+        with engine.begin() as connection:
+            _set_operator_context(
+                connection, historical_schema, "migration:released-9.2.2-proof"
+            )
+            indexes = set(
+                connection.execute(
+                    text(
+                        "SELECT indexname FROM pg_indexes WHERE schemaname = :schema "
+                        "AND tablename = 'generic_instance'"
+                    ),
+                    {"schema": historical_schema},
+                ).scalars()
+            )
+            assert "idx_generic_instance_natural_identity" not in indexes
+            assert "idx_generic_instance_natural_identity_global" in indexes
+            assert "idx_generic_instance_natural_identity_tenant" in indexes
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM pg_constraint c "
+                        "JOIN pg_class t ON t.oid = c.conrelid "
+                        "JOIN pg_namespace n ON n.oid = t.relnamespace "
+                        "WHERE n.nspname = :schema "
+                        "AND c.conname = 'ck_generic_instance_identity_key_global'"
+                    ),
+                    {"schema": historical_schema},
+                ).scalar_one()
+                == 0
+            )
+            lineage_scope_definition = connection.execute(
+                text("SELECT pg_get_functiondef(CAST(:signature AS regprocedure))"),
+                {
+                    "signature": (
+                        f"{historical_schema}.tapdb_validate_lineage_endpoint_scope()"
+                    )
+                },
+            ).scalar_one()
+            assert "child_subtype = 'opaque'" in lineage_scope_definition
+            assert "public_global" in lineage_scope_definition
+
+        for tenant in (uuid.uuid4(), uuid.uuid4()):
+            with engine.begin() as connection:
+                _set_operator_context(
+                    connection, historical_schema, "migration:tenant-identity-proof"
+                )
+                connection.execute(
+                    text(
+                        "SELECT set_config('session.current_tenant_id', :tenant, true)"
+                    ),
+                    {"tenant": str(tenant)},
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO generic_instance ("
+                        "name, polymorphic_discriminator, category, type, subtype, "
+                        "version, template_uid, tenant_id, identity_key, json_addl, "
+                        "bstatus, is_singleton, is_deleted"
+                        ") VALUES ("
+                        "'Tenant identity', 'generic_instance', 'message', 'webhook', "
+                        "'event', '1.0', :template_uid, :tenant, "
+                        "'catalog:shared-tenant-key', '{}'::jsonb, 'active', false, false"
+                        ")"
+                    ),
+                    {"template_uid": template_uid, "tenant": tenant},
+                )
+
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            replay = build_migration_preflight(
+                connection, migrations_dir=migrations_dir, target=target
+            )
+            transaction.rollback()
+        assert replay["pending_migrations"] == []
     finally:
         with engine.begin() as connection:
             connection.exec_driver_sql(
@@ -1859,6 +2133,7 @@ def test_seed_sequence_alignment_is_exact_noop_and_required_restart_rolls_back(
                 template_code="message/webhook/event/1.0/",
                 identity_key=identity_key,
                 name="Sequence alignment fixture",
+                scope=IdentityScope.GLOBAL,
                 properties={"source": "migration-test"},
             )
 

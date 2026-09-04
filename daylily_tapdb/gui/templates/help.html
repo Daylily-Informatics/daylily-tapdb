@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}TapDB Help{% endblock %}
+{% block content %}
+<section class="band">
+  <h1>TapDB GUI guide</h1>
+  <p>This is TapDB's single supported standalone and embedded web interface.</p>
+</section>
+<section class="band">
+  <h2>Objects and lineage</h2>
+  <p>Use Search to find templates, instances, and lineage. Object pages show canonical relationships, validation evidence, and audit history. Administrators may create ordinary instances, repair governed JSON, change status, and create lineage. Core external-reference templates cannot be written through the generic forms.</p>
+</section>
+<section class="band">
+  <h2>External references and discovery</h2>
+  <p>Federated TapDB references and opaque external identifiers are displayed separately. TapDB-object references can be followed by DAG-v2 federation clients; opaque identifiers are visible and exactly searchable but are never fetched or expanded.</p>
+</section>
+<section class="band">
+  <h2>Operator tools</h2>
+  <p>Administrators can inspect readiness, schema inventory, Meridian governance, sanitized runtime information, query metrics, backups, restore reviews, and durable receipts. Mutation forms are explicit and fail closed.</p>
+</section>
+<section class="band">
+  <h2>API</h2>
+  <p>The authenticated JSON surfaces mirror GUI operations. DAG v2 is the only graph protocol; DAG v1 and outbound proxy routes are not supported.</p>
+</section>
+{% endblock %}

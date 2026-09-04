@@ -70,17 +70,11 @@ api = [
     "fastapi",
 ]
 
-# Optional embeddable GUI surface for host-session FastAPI apps.
+# Optional canonical GUI surface for standalone and host-session FastAPI apps.
 gui = [
     "fastapi",
     "jinja2",
-]
-
-# Optional Admin UI (FastAPI). Keep out of core installs.
-admin = [
-    "fastapi",
     "uvicorn",
-    "jinja2",
     "python-multipart",
     "itsdangerous",
     "daylily-auth-cognito==2.1.5",
@@ -113,13 +107,6 @@ daylily_tapdb = [
     "gui/templates/*.html",
     "templates/schema/*.json",
 ]
-# Admin UI ships HTML templates + static assets.
-admin = [
-    "templates/*.html",
-    "static/css/*.css",
-    "static/js/*.js",
-]
-
 [tool.setuptools.data-files]
 "schema" = ["schema/tapdb_schema.sql", "schema/rls.sql"]
 "schema/migrations" = ["schema/migrations/*.sql"]
@@ -172,13 +159,15 @@ ignore_missing_imports = true
 follow_imports = "skip"
 # TapDB's older dynamically mapped ORM and Typer surfaces are not yet globally
 # strict-clean. Keep the release gate explicit and expand it as those modules
-# are modernized; every new 9.2 implementation module is checked here.
+# are modernized; every new 10.0 implementation module is checked here.
 files = [
     "daylily_tapdb/advisory_locks.py",
+    "daylily_tapdb/external_reference_audit.py",
+    "daylily_tapdb/external_references.py",
+    "daylily_tapdb/federation.py",
     "daylily_tapdb/migration_identity.py",
     "daylily_tapdb/runtime_info.py",
     "daylily_tapdb/security_context.py",
-    "daylily_tapdb/services/external_refs.py",
     "daylily_tapdb/services/graph_payloads.py",
     "daylily_tapdb/services/object_operations.py",
     "daylily_tapdb/services/object_search.py",

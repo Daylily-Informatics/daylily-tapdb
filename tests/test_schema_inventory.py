@@ -39,6 +39,18 @@ def test_build_expected_schema_inventory_parses_repo_assets():
     assert "tapdb_assert_runtime_role()" in inventory.functions
     assert "audit_update_generic_instance" in inventory.triggers["generic_instance"]
     assert "idx_outbox_event_tenant_created_dt" in inventory.indexes["outbox_event"]
+    assert (
+        "idx_generic_instance_natural_identity_global"
+        in inventory.indexes["generic_instance"]
+    )
+    assert (
+        "idx_generic_instance_natural_identity_tenant"
+        in inventory.indexes["generic_instance"]
+    )
+    assert (
+        "idx_generic_instance_natural_identity"
+        not in inventory.indexes["generic_instance"]
+    )
     assert "generic_template_pkey" in inventory.indexes["generic_template"]
     assert "generic_template_euid_key" in inventory.indexes["generic_template"]
     assert (

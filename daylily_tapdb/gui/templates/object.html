@@ -7,10 +7,8 @@
     <div class="actions">
       <a class="button" href="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/graph') }}">Graph</a>
       {% if user.role == "admin" %}
-      {% if obj.record_type == "template" %}
+      {% if obj.record_type == "template" and manual_create_allowed %}
       <a class="button" href="{{ tapdb_gui_url(request, '/create/' ~ obj.euid) }}">Create Instance</a>
-      {% else %}
-      <a class="button" href="{{ tapdb_gui_url(request, '/object/' ~ obj.euid ~ '/external-links/new') }}">External Link</a>
       {% endif %}
       {% endif %}
     </div>
@@ -21,7 +19,6 @@
 	    {% elif notice == "name_updated" %}Name updated.
 	    {% elif notice == "status_updated" %}Status updated.
     {% elif notice == "lineage_added" %}Lineage added.
-    {% elif notice == "external_link_created" %}External link created.
     {% elif notice == "instance_created" %}Instance created.
     {% else %}{{ notice }}
     {% endif %}
@@ -97,12 +94,22 @@
 </section>
 
 <section class="band">
-  <h2>External References</h2>
-  <table><thead><tr><th>Label</th><th>System</th><th>Remote EUID</th><th>Status</th></tr></thead><tbody>
+  <h2>Federated TapDB References</h2>
+  <table><thead><tr><th>Service</th><th>Target EUID</th><th>Relationship</th><th>Authority</th><th>Assertion</th></tr></thead><tbody>
   {% for ref in external_refs %}
-  <tr><td>{{ ref.label }}</td><td>{{ ref.system }}</td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ ref.root_euid) }}">{{ ref.root_euid }}</a></td><td>{{ "graph-ready" if ref.graph_expandable else ref.reason }}</td></tr>
+  <tr><td>{{ ref.target_service_id }}</td><td><code>{{ ref.target_object_euid }}</code></td><td>{{ ref.relationship_type }}</td><td>{{ ref.assertion_authority }}</td><td>{{ ref.asserted_at }}<br><small>{{ ref.assertion_provenance }}</small></td></tr>
   {% endfor %}
-  {% if not external_refs %}<tr><td colspan="4">No external refs rendered for this object.</td></tr>{% endif %}
+  {% if not external_refs %}<tr><td colspan="5">No canonical federated references.</td></tr>{% endif %}
+  </tbody></table>
+</section>
+
+<section class="band">
+  <h2>Opaque External Identifiers</h2>
+  <table><thead><tr><th>Namespace</th><th>Kind</th><th>Value</th><th>Scope</th><th>Relationship</th><th>Canonical URI</th></tr></thead><tbody>
+  {% for ref in external_identifiers %}
+  <tr><td>{{ ref.namespace }}</td><td>{{ ref.kind }}</td><td><code>{{ ref.value }}</code></td><td>{{ ref.scope }}</td><td>{{ ref.relationship_type }}</td><td>{% if ref.canonical_uri and ref.canonical_uri.startswith('https://') %}<a href="{{ ref.canonical_uri }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</td></tr>
+  {% endfor %}
+  {% if not external_identifiers %}<tr><td colspan="6">No canonical opaque identifiers.</td></tr>{% endif %}
   </tbody></table>
 </section>
 

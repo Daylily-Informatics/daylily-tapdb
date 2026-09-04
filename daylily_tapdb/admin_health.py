@@ -1,4 +1,4 @@
-"""Health and readiness endpoints for the standalone TapDB admin runtime."""
+"""Health and readiness endpoints for the canonical standalone TapDB GUI."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def _public_config_path(config_path: str) -> str:
 
 
 def install_tapdb_admin_health_routes(app: Any, *, config_path: str) -> None:
-    """Attach unauthenticated liveness and readiness endpoints to the admin app."""
+    """Attach unauthenticated liveness and readiness endpoints to the GUI app."""
 
     if getattr(app.state, _HEALTH_ROUTE_ATTR, False):
         return

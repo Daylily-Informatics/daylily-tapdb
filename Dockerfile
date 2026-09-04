@@ -16,7 +16,7 @@ COPY admin ./admin
 COPY daylily_tapdb ./daylily_tapdb
 COPY schema ./schema
 
-RUN uv sync --frozen --no-dev --extra admin --extra cli --extra aurora
+RUN uv sync --frozen --no-dev --extra gui --extra cli --extra aurora
 
 FROM python:3.12-slim-bookworm AS runtime
 

@@ -1,13 +1,10 @@
-"""Embeddable TapDB GUI router.
-
-This module is intentionally separate from ``admin.main``. The legacy admin app
-keeps its current routes, while this package exposes mount-friendly pages that
-client FastAPI apps can adopt without rewriting their existing TapDB usage.
-"""
+"""Canonical standalone and embeddable TapDB GUI."""
 
 from __future__ import annotations
 
 import json
+import secrets
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -15,15 +12,42 @@ from urllib.parse import parse_qs, urlencode
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import (
+    HTMLResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from jinja2 import ChoiceLoader, Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from admin.db_metrics import build_metrics_page_context
+from admin.auth import SESSION_COOKIE_NAME
+from admin.db_metrics import (
+    build_metrics_page_context,
+    request_method_var,
+    request_path_var,
+    stop_all_writers,
+)
+from admin.db_pool import dispose_all_engines
+from admin.domain_access import (
+    build_allowed_origin_regex,
+    build_trusted_hosts,
+    is_allowed_origin,
+    validate_allowed_origins,
+)
 from daylily_tapdb import InstanceFactory, TemplateManager, __version__
-from daylily_tapdb.cli.db_config import get_db_config
+from daylily_tapdb.cli.context import set_cli_context
+from daylily_tapdb.cli.db_config import get_admin_settings, get_db_config
 from daylily_tapdb.euid import validate_euid
+from daylily_tapdb.external_references import (
+    _is_xrf_coordinates,
+    _project_outbound_external_references,
+)
 from daylily_tapdb.governance import GovernanceContext
 from daylily_tapdb.graph_contracts import (
     attach_v0_edge_metadata,
@@ -34,8 +58,10 @@ from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
-from daylily_tapdb.services.external_refs import external_ref_payloads
-from daylily_tapdb.services.graph_payloads import build_graph_payload
+from daylily_tapdb.services.graph_payloads import (
+    build_graph_v2_payload,
+    build_visible_graph_v2_payload,
+)
 from daylily_tapdb.services.object_lookup import find_object_by_euid
 from daylily_tapdb.services.object_operations import (
     ObjectSelector,
@@ -67,11 +93,12 @@ from daylily_tapdb.validation.instantiation_layouts import (
 )
 from daylily_tapdb.web.bridge import (
     TapdbHostBridge,
+    TapdbHostBridgeMount,
     resolve_host_context,
     resolve_host_shell,
 )
-from daylily_tapdb.web.factory import TapdbHostBridgeMount
-from daylily_tapdb.web.runtime import get_db
+from daylily_tapdb.web.dag_v2 import DagV2Limits, mount_tapdb_dag_surfaces
+from daylily_tapdb.web.runtime import dispose_all_runtime_engines, get_db
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -132,15 +159,46 @@ def gui_url(request: Request, path: str) -> str:
 def gui_nav_links(request: Request, shell: dict[str, Any]) -> list[dict[str, str]]:
     """Merge host shell navigation with TapDB's built-in GUI links."""
 
+    user = getattr(getattr(request, "state", None), "user", {}) or {}
+    is_admin = str(user.get("role") or "").strip().lower() == "admin"
     built_in = [
+        {"label": "Overview", "href": gui_url(request, "/admin/overview")},
         {"label": "Search", "href": gui_url(request, "/search")},
+        {"label": "Graph", "href": gui_url(request, "/graph")},
         {"label": "Templates", "href": gui_url(request, "/templates")},
-        {"label": "Readiness", "href": gui_url(request, "/admin/readiness")},
-        {"label": "Meridian", "href": gui_url(request, "/admin/meridian")},
-        {"label": "Metrics", "href": gui_url(request, "/admin/metrics")},
-        {"label": "Runtime", "href": gui_url(request, "/admin/runtime")},
-        {"label": "Backups", "href": gui_url(request, "/admin/backups")},
+        {"label": "Audit", "href": gui_url(request, "/audit")},
+        {"label": "Help", "href": gui_url(request, "/help")},
     ]
+    if is_admin:
+        built_in.extend(
+            [
+                {
+                    "label": "Readiness",
+                    "href": gui_url(request, "/admin/readiness"),
+                },
+                {
+                    "label": "Inventory",
+                    "href": gui_url(request, "/admin/inventory"),
+                },
+                {
+                    "label": "Meridian",
+                    "href": gui_url(request, "/admin/meridian"),
+                },
+                {"label": "Metrics", "href": gui_url(request, "/admin/metrics")},
+                {"label": "Runtime", "href": gui_url(request, "/admin/runtime")},
+                {"label": "Backups", "href": gui_url(request, "/admin/backups")},
+            ]
+        )
+    account_url = shell.get("change_password_url") or gui_url(
+        request, "/change-password"
+    )
+    logout_url = shell.get("logout_url") or gui_url(request, "/logout")
+    built_in.extend(
+        [
+            {"label": "Password", "href": str(account_url)},
+            {"label": "Sign out", "href": str(logout_url)},
+        ]
+    )
     candidates = list(shell.get("nav_links") or []) + built_in
     seen_labels: set[str] = set()
     seen_hrefs: set[str] = set()
@@ -180,7 +238,25 @@ async def require_tapdb_gui_user(request: Request) -> dict[str, Any]:
 
     user = await get_current_user(request)
     if not user:
-        raise HTTPException(status_code=401, detail="tapdb_gui_auth_required")
+        path = str(request.scope.get("path") or "")
+        if path == "/api" or path.startswith("/api/"):
+            raise HTTPException(status_code=401, detail="tapdb_gui_auth_required")
+        next_path = str(request.scope.get("root_path") or "") + path
+        query_string = request.scope.get("query_string") or b""
+        if query_string:
+            next_path += f"?{query_string.decode('utf-8')}"
+        location = gui_url_with_query(request, "/login", next=next_path or "/")
+        raise HTTPException(status_code=302, headers={"Location": location})
+    if user.get("require_password_change"):
+        path = str(request.scope.get("path") or "")
+        if path == "/api" or path.startswith("/api/"):
+            raise HTTPException(
+                status_code=403, detail="tapdb_gui_password_change_required"
+            )
+        raise HTTPException(
+            status_code=302,
+            headers={"Location": gui_url(request, "/change-password")},
+        )
     request.state.user = user
     return user
 
@@ -298,38 +374,6 @@ def _object_relationships(
     return {"parent_of": parent_of, "child_of": child_of}
 
 
-def _lineage_external_refs(obj: Any, record_type: str) -> list[dict[str, Any]]:
-    if record_type != "instance":
-        return []
-    refs: list[dict[str, Any]] = []
-    for lineage in obj.parent_of_lineages.filter_by(is_deleted=False).all():
-        child = getattr(lineage, "child_instance", None)
-        if child is None:
-            continue
-        markers = {
-            str(getattr(child, "category", "") or "").strip().lower(),
-            str(getattr(child, "type", "") or "").strip().lower(),
-            str(getattr(child, "subtype", "") or "").strip().lower(),
-        }
-        if not (
-            markers
-            & {
-                "external_identifier",
-                "external_id",
-                "external_reference",
-                "tapdb_external_identifier",
-            }
-        ):
-            continue
-        for ref in external_ref_payloads(child):
-            item = dict(ref)
-            item["link_euid"] = getattr(child, "euid", None)
-            item["lineage_euid"] = getattr(lineage, "euid", None)
-            item["relationship_type"] = getattr(lineage, "relationship_type", None)
-            refs.append(item)
-    return refs
-
-
 def _audit_rows(session: Any, euid: str, limit: int = 100) -> list[dict[str, Any]]:
     rows = (
         session.query(audit_log)
@@ -362,14 +406,19 @@ def _object_detail_context(
         raise HTTPException(status_code=404, detail=f"Object not found: {euid}")
     payload = _record_to_dict(obj, record_type)
     relationships = _object_relationships(obj, record_type)
-    refs = external_ref_payloads(obj)
-    refs.extend(_lineage_external_refs(obj, record_type))
+    external = (
+        _project_outbound_external_references(obj)
+        if record_type == "instance"
+        else {"external_refs": [], "external_identifiers": []}
+    )
     return {
         "obj": payload,
         "record_type": record_type,
         "relationships": relationships,
         "audit_rows": _audit_rows(session, euid),
-        "external_refs": refs,
+        "external_refs": external["external_refs"],
+        "external_identifiers": external["external_identifiers"],
+        "manual_create_allowed": not _is_xrf_coordinates(obj),
         "editor": editor_data_for_object(session, euid),
     }
 
@@ -725,116 +774,6 @@ def _validate_template_payload(payload: dict[str, Any]) -> list[ConfigIssue]:
     return issues
 
 
-def _external_link_template(session: Any) -> generic_template | None:
-    return (
-        session.query(generic_template)
-        .filter_by(
-            category="reference",
-            type="external_identifier",
-            subtype="tapdb_object",
-            is_deleted=False,
-        )
-        .order_by(generic_template.version.desc())
-        .first()
-    )
-
-
-def _external_link_properties(
-    *,
-    system: str,
-    foreign_uid: str,
-    display_url: str = "",
-    graph_base_url: str = "",
-    graph_data_path: str = "",
-    object_detail_path_template: str = "",
-    auth_mode: str = "none",
-) -> dict[str, Any]:
-    return {
-        "system": system.strip(),
-        "foreign_uid": foreign_uid.strip(),
-        "root_euid": foreign_uid.strip(),
-        "href": display_url.strip(),
-        "external_identifier": {
-            "system": system.strip(),
-            "target_euid": foreign_uid.strip(),
-            "href": display_url.strip() or None,
-            "base_url": graph_base_url.strip() or None,
-            "graph_data_path": graph_data_path.strip() or None,
-            "object_detail_path_template": object_detail_path_template.strip() or None,
-            "auth_mode": auth_mode.strip() or "none",
-        },
-    }
-
-
-def _create_external_link(
-    session: Any,
-    *,
-    cfg: dict[str, Any],
-    source_euid: str,
-    system: str,
-    foreign_uid: str,
-    relationship_type: str,
-    display_url: str = "",
-    graph_base_url: str = "",
-    graph_data_path: str = "",
-    object_detail_path_template: str = "",
-    auth_mode: str = "none",
-) -> dict[str, Any]:
-    missing = [
-        label
-        for label, value in (
-            ("system", system),
-            ("foreign_uid", foreign_uid),
-            ("relationship_type", relationship_type),
-        )
-        if not str(value or "").strip()
-    ]
-    if missing:
-        raise HTTPException(
-            status_code=400,
-            detail="Missing required external link field(s): " + ", ".join(missing),
-        )
-    source = _resolve_instance(session, source_euid, label="Source object")
-    template = _external_link_template(session)
-    if template is None:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "No reference/external_identifier/tapdb_object external link "
-                "template is seeded."
-            ),
-        )
-    factory = InstanceFactory(TemplateManager(), domain_code=str(cfg["domain_code"]))
-    link = factory.create_instance(
-        session,
-        _template_code(template),
-        name=f"{system.strip()}:{foreign_uid.strip()}",
-        properties=_external_link_properties(
-            system=system,
-            foreign_uid=foreign_uid,
-            display_url=display_url,
-            graph_base_url=graph_base_url,
-            graph_data_path=graph_data_path,
-            object_detail_path_template=object_detail_path_template,
-            auth_mode=auth_mode,
-        ),
-        create_children=False,
-    )
-    lineage = _new_lineage(
-        parent=source,
-        child=link,
-        relationship_type=relationship_type,
-    )
-    session.add(lineage)
-    session.flush()
-    return {
-        "source_euid": source.euid,
-        "link_euid": link.euid,
-        "lineage_euid": getattr(lineage, "euid", None),
-        "relationship_type": relationship_type.strip(),
-    }
-
-
 def _create_instance_from_template(
     session: Any,
     *,
@@ -1101,12 +1040,24 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
     )
     with get_db(config_path) as conn:
         with conn.session_scope() as session:
-            external_template = _external_link_template(session)
-            external_template_detail = (
-                _template_code(external_template)
-                if external_template is not None
-                else "No external link template found"
+            external_templates = (
+                session.query(generic_template)
+                .filter_by(
+                    category="reference",
+                    type="external_identifier",
+                    version="1.0",
+                    is_deleted=False,
+                )
+                .filter(generic_template.subtype.in_(("tapdb_object", "opaque")))
+                .all()
             )
+            external_template_codes = sorted(
+                _template_code(template) for template in external_templates
+            )
+            external_templates_ready = external_template_codes == [
+                "reference/external_identifier/opaque/1.0/",
+                "reference/external_identifier/tapdb_object/1.0/",
+            ]
             template_count = len(
                 session.query(generic_template)
                 .filter_by(is_deleted=False)
@@ -1115,9 +1066,10 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
             )
     checks.append(
         {
-            "name": "external_link_template",
-            "ok": external_template is not None,
-            "detail": external_template_detail,
+            "name": "canonical_external_reference_templates",
+            "ok": external_templates_ready,
+            "detail": ", ".join(external_template_codes)
+            or "Canonical external-reference templates are not seeded",
         }
     )
     checks.append(
@@ -1139,6 +1091,174 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
             "index_url": governance.public_domain_registry_index_url,
         },
         "checks": checks,
+    }
+
+
+def _overview_payload(*, config_path: str, username: str) -> dict[str, Any]:
+    with get_db(config_path) as conn:
+        conn.app_username = username
+        with conn.session_scope() as session:
+            counts = {
+                "templates": session.query(generic_template)
+                .filter_by(is_deleted=False)
+                .count(),
+                "instances": session.query(generic_instance)
+                .filter_by(is_deleted=False)
+                .count(),
+                "lineages": session.query(generic_instance_lineage)
+                .filter_by(is_deleted=False)
+                .count(),
+            }
+    return {"counts": counts, "total": sum(counts.values())}
+
+
+def _inventory_payload(*, config_path: str, username: str) -> dict[str, Any]:
+    """Return a bounded, schema-local PostgreSQL inventory for operators."""
+
+    from daylily_tapdb.schema_inventory import load_live_schema_inventory
+
+    with get_db(config_path) as conn:
+        conn.app_username = username
+        with conn.session_scope() as session:
+            database_name = str(
+                session.execute(text("SELECT current_database() ")).scalar() or ""
+            )
+            active_schema = str(
+                session.execute(text("SELECT current_schema() ")).scalar() or ""
+            ).strip()
+            if not active_schema:
+                raise RuntimeError("Active PostgreSQL schema is not configured")
+            search_path = [
+                str(item)
+                for item in (
+                    session.execute(
+                        text("SELECT current_schemas(false) AS schema_names")
+                    ).scalar()
+                    or []
+                )
+            ]
+            schemas = [
+                str(row["schema_name"])
+                for row in session.execute(
+                    text(
+                        """
+                        SELECT nspname AS schema_name
+                        FROM pg_namespace
+                        WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+                          AND nspname NOT LIKE 'pg_toast%'
+                          AND nspname NOT LIKE 'pg_temp_%'
+                        ORDER BY nspname
+                        """
+                    )
+                ).mappings()
+            ]
+            live = load_live_schema_inventory(session, schema_name=active_schema)
+            views = [
+                str(row["view_name"])
+                for row in session.execute(
+                    text(
+                        """
+                        SELECT viewname AS view_name
+                        FROM pg_views
+                        WHERE schemaname = :schema_name
+                        ORDER BY viewname
+                        """
+                    ),
+                    {"schema_name": active_schema},
+                ).mappings()
+            ]
+            materialized_views = [
+                str(row["view_name"])
+                for row in session.execute(
+                    text(
+                        """
+                        SELECT matviewname AS view_name
+                        FROM pg_matviews
+                        WHERE schemaname = :schema_name
+                        ORDER BY matviewname
+                        """
+                    ),
+                    {"schema_name": active_schema},
+                ).mappings()
+            ]
+    trigger_rows = [
+        {"table": table_name, "name": trigger_name}
+        for table_name, trigger_names in sorted(live.triggers.items())
+        for trigger_name in sorted(trigger_names)
+    ]
+    index_rows = [
+        {"table": table_name, "name": index_name}
+        for table_name, index_names in sorted(live.indexes.items())
+        for index_name in sorted(index_names)
+    ]
+    counts = live.counts() | {
+        "schemas": len(schemas),
+        "views": len(views),
+        "materialized_views": len(materialized_views),
+    }
+    return {
+        "database_name": database_name,
+        "active_schema": active_schema,
+        "search_path": search_path,
+        "schemas": schemas,
+        "counts": counts,
+        "tables": sorted(live.tables),
+        "columns": {
+            table_name: sorted(column_names)
+            for table_name, column_names in sorted(live.columns.items())
+        },
+        "views": views,
+        "materialized_views": materialized_views,
+        "sequences": sorted(live.sequences),
+        "functions": sorted(live.functions),
+        "triggers": trigger_rows,
+        "indexes": index_rows,
+    }
+
+
+def _audit_payload(
+    *,
+    config_path: str,
+    user: dict[str, Any],
+    euid: str,
+    changed_by: str,
+    operation_type: str,
+    limit: int,
+) -> dict[str, Any]:
+    from daylily_tapdb.audit import query_audit_trail
+
+    is_admin = str(user.get("role") or "").strip().lower() == "admin"
+    current_identifier = str(user.get("username") or user.get("email") or "").strip()
+    requested_actor = str(changed_by or "").strip()
+    effective_actor = requested_actor if is_admin else current_identifier
+    warning = None
+    if not is_admin and requested_actor and requested_actor != current_identifier:
+        warning = "Non-admin users can view only their own audit activity."
+    normalized_operation = str(operation_type or "").strip().upper()
+    if normalized_operation in {"", "ALL"}:
+        normalized_operation = ""
+    elif normalized_operation not in {"INSERT", "UPDATE", "DELETE"}:
+        raise ValueError("operation_type must be ALL, INSERT, UPDATE, or DELETE")
+    with get_db(config_path) as conn:
+        conn.app_username = current_identifier
+        with conn.session_scope() as session:
+            entries = query_audit_trail(
+                session,
+                changed_by=effective_actor or None,
+                euid=str(euid or "").strip() or None,
+                operation_type=normalized_operation or None,
+                limit=limit,
+            )
+    return {
+        "items": [asdict(entry) for entry in entries],
+        "filters": {
+            "euid": str(euid or "").strip(),
+            "changed_by": effective_actor,
+            "operation_type": normalized_operation or "ALL",
+            "limit": limit,
+        },
+        "can_query_any_actor": is_admin,
+        "warning": warning,
     }
 
 
@@ -1174,20 +1294,114 @@ def create_tapdb_gui_router(
             js_path.read_text(encoding="utf-8"), media_type="application/javascript"
         )
 
+    @router.get("/static/tapdb-graph.js")
+    async def gui_graph_js():
+        js_path = BASE_DIR / "static" / "js" / "tapdb-graph.js"
+        return HTMLResponse(
+            js_path.read_text(encoding="utf-8"), media_type="application/javascript"
+        )
+
     @router.get("/", response_class=HTMLResponse)
     async def home(
         request: Request,
-        q: str = "",
         user: dict[str, Any] = Depends(require_tapdb_gui_user),
     ):
-        return await search_page(
+        overview = _overview_payload(
+            config_path=resolved_config_path,
+            username=str(user.get("username") or ""),
+        )
+        recent = _audit_payload(
+            config_path=resolved_config_path,
+            user=user,
+            euid="",
+            changed_by="",
+            operation_type="ALL",
+            limit=10,
+        )
+        return _render(
+            templates,
             request,
-            q=q,
-            record_type="all",
-            category="",
-            type="",
-            subtype="",
-            limit=25,
+            "overview.html",
+            user=user,
+            overview=overview,
+            recent_audit=recent,
+        )
+
+    @router.get("/admin/overview", response_class=HTMLResponse)
+    async def overview_page(
+        request: Request,
+        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+    ):
+        return await home(request=request, user=user)
+
+    @router.get("/api/admin/overview")
+    async def overview_api(
+        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+    ):
+        return _overview_payload(
+            config_path=resolved_config_path,
+            username=str(user.get("username") or ""),
+        )
+
+    @router.get("/audit", response_class=HTMLResponse)
+    async def audit_page(
+        request: Request,
+        euid: str = "",
+        changed_by: str = "",
+        operation_type: str = "ALL",
+        limit: int = Query(50, ge=1, le=500),
+        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+    ):
+        try:
+            audit = _audit_payload(
+                config_path=resolved_config_path,
+                user=user,
+                euid=euid,
+                changed_by=changed_by,
+                operation_type=operation_type,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return _render(
+            templates,
+            request,
+            "audit.html",
+            user=user,
+            audit=audit,
+        )
+
+    @router.get("/api/audit")
+    async def audit_api(
+        euid: str = "",
+        changed_by: str = "",
+        operation_type: str = "ALL",
+        limit: int = Query(50, ge=1, le=500),
+        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+    ):
+        try:
+            return jsonable_encoder(
+                _audit_payload(
+                    config_path=resolved_config_path,
+                    user=user,
+                    euid=euid,
+                    changed_by=changed_by,
+                    operation_type=operation_type,
+                    limit=limit,
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/help", response_class=HTMLResponse)
+    async def help_page(
+        request: Request,
+        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+    ):
+        return _render(
+            templates,
+            request,
+            "help.html",
             user=user,
         )
 
@@ -1195,6 +1409,8 @@ def create_tapdb_gui_router(
     async def search_page(
         request: Request,
         q: str = "",
+        name_like: str = "",
+        euid_like: str = "",
         record_type: str = "all",
         category: str = "",
         type: str = "",
@@ -1215,6 +1431,8 @@ def create_tapdb_gui_router(
                     session,
                     service_name=str(cfg.get("client_id") or "tapdb"),
                     q=q,
+                    name_like=name_like,
+                    euid_like=euid_like,
                     record_type=record_type,
                     category=category,
                     type_name=type,
@@ -1222,26 +1440,39 @@ def create_tapdb_gui_router(
                     limit=limit,
                     cursor=cursor,
                 )
+        query = {
+            "q": q,
+            "name_like": name_like,
+            "euid_like": euid_like,
+            "record_type": record_type,
+            "category": category,
+            "type": type,
+            "subtype": subtype,
+            "limit": limit,
+            "cursor": cursor,
+        }
+        next_cursor = str(results["page"].get("next_cursor") or "")
         return _render(
             templates,
             request,
             "search.html",
             user=user,
             results=results,
-            query={
-                "q": q,
-                "record_type": record_type,
-                "category": category,
-                "type": type,
-                "subtype": subtype,
-                "limit": limit,
-                "cursor": cursor,
-            },
+            query=query,
+            next_url=(
+                gui_url_with_query(
+                    request, "/search", **{**query, "cursor": next_cursor}
+                )
+                if next_cursor
+                else None
+            ),
         )
 
     @router.get("/api/search")
     async def search_api(
         q: str = "",
+        name_like: str = "",
+        euid_like: str = "",
         record_type: str = "all",
         category: str = "",
         type: str = "",
@@ -1262,6 +1493,8 @@ def create_tapdb_gui_router(
                     session,
                     service_name=str(cfg.get("client_id") or "tapdb"),
                     q=q,
+                    name_like=name_like,
+                    euid_like=euid_like,
                     record_type=record_type,
                     category=category,
                     type_name=type,
@@ -1793,6 +2026,115 @@ def create_tapdb_gui_router(
                     )
                 )
 
+    def _graph_payload(
+        session: Any,
+        *,
+        service_id: str,
+        start_euid: str,
+        depth: int,
+        max_nodes: int,
+        max_edges: int,
+    ) -> dict[str, Any]:
+        exact_start = str(start_euid or "").strip()
+        if exact_start:
+            obj, record_type = find_object_by_euid(session, exact_start)
+            if obj is None or record_type is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Object not found: {exact_start}"
+                )
+            return build_graph_v2_payload(
+                obj,
+                record_type=record_type,
+                service_id=service_id,
+                depth=depth,
+                max_nodes=max_nodes,
+                max_edges=max_edges,
+            )
+
+        instances = (
+            session.query(generic_instance)
+            .filter_by(is_deleted=False)
+            .order_by(generic_instance.uid.asc())
+            .limit(max_nodes + 1)
+            .all()
+        )
+        visible_uids = [int(row.uid) for row in instances[:max_nodes]]
+        if visible_uids:
+            lineages = (
+                session.query(generic_instance_lineage)
+                .filter(
+                    generic_instance_lineage.is_deleted.is_(False),
+                    generic_instance_lineage.parent_instance_uid.in_(visible_uids),
+                    generic_instance_lineage.child_instance_uid.in_(visible_uids),
+                )
+                .order_by(generic_instance_lineage.uid.asc())
+                .limit(max_edges + 1)
+                .all()
+            )
+        else:
+            lineages = []
+        return build_visible_graph_v2_payload(
+            instances,
+            lineages,
+            service_id=service_id,
+            max_nodes=max_nodes,
+            max_edges=max_edges,
+        )
+
+    @router.get("/graph", response_class=HTMLResponse)
+    async def graph_page(
+        request: Request,
+        start_euid: str = "",
+        depth: int = Query(4, ge=0, le=10),
+        max_nodes: int = Query(200, ge=1, le=1_000),
+        max_edges: int = Query(500, ge=1, le=5_000),
+        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+    ):
+        cfg = get_db_config(config_path=resolved_config_path)
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope() as session:
+                graph = _graph_payload(
+                    session,
+                    service_id=str(cfg.get("client_id") or "tapdb"),
+                    start_euid=start_euid,
+                    depth=depth,
+                    max_nodes=max_nodes,
+                    max_edges=max_edges,
+                )
+        return _render(
+            templates,
+            request,
+            "graph.html",
+            user=user,
+            euid=str(start_euid or "").strip(),
+            depth=depth,
+            max_nodes=max_nodes,
+            max_edges=max_edges,
+            graph=graph,
+        )
+
+    @router.get("/api/graph")
+    async def graph_api(
+        start_euid: str = "",
+        depth: int = Query(4, ge=0, le=10),
+        max_nodes: int = Query(200, ge=1, le=1_000),
+        max_edges: int = Query(500, ge=1, le=5_000),
+        user: dict[str, Any] = Depends(require_tapdb_gui_user),
+    ):
+        cfg = get_db_config(config_path=resolved_config_path)
+        with get_db(resolved_config_path) as conn:
+            conn.app_username = user.get("username")
+            with conn.session_scope() as session:
+                return _graph_payload(
+                    session,
+                    service_id=str(cfg.get("client_id") or "tapdb"),
+                    start_euid=start_euid,
+                    depth=depth,
+                    max_nodes=max_nodes,
+                    max_edges=max_edges,
+                )
+
     @router.get("/object/{euid}/graph", response_class=HTMLResponse)
     async def object_graph_page(
         request: Request,
@@ -1809,11 +2151,13 @@ def create_tapdb_gui_router(
                     raise HTTPException(
                         status_code=404, detail=f"Object not found: {euid}"
                     )
-                graph = build_graph_payload(
+                graph = build_graph_v2_payload(
                     obj,
                     record_type=record_type,
-                    service_name=str(cfg.get("client_id") or "tapdb"),
+                    service_id=str(cfg.get("client_id") or "tapdb"),
                     depth=depth,
+                    max_nodes=1_000,
+                    max_edges=500,
                 )
         return _render(
             templates,
@@ -1822,6 +2166,8 @@ def create_tapdb_gui_router(
             user=user,
             euid=euid,
             depth=depth,
+            max_nodes=1_000,
+            max_edges=500,
             graph=graph,
         )
 
@@ -1840,11 +2186,13 @@ def create_tapdb_gui_router(
                     raise HTTPException(
                         status_code=404, detail=f"Object not found: {euid}"
                     )
-                return build_graph_payload(
+                return build_graph_v2_payload(
                     obj,
                     record_type=record_type,
-                    service_name=str(cfg.get("client_id") or "tapdb"),
+                    service_id=str(cfg.get("client_id") or "tapdb"),
                     depth=depth,
+                    max_nodes=1_000,
+                    max_edges=500,
                 )
 
     @router.get("/object/{euid}", response_class=HTMLResponse)
@@ -1867,6 +2215,8 @@ def create_tapdb_gui_router(
             relationships=context["relationships"],
             audit_rows=context["audit_rows"],
             external_refs=context["external_refs"],
+            external_identifiers=context["external_identifiers"],
+            manual_create_allowed=context["manual_create_allowed"],
             editor=context["editor"],
             notice=notice,
             json_text=json.dumps(
@@ -2305,111 +2655,6 @@ def create_tapdb_gui_router(
                     )
                 )
 
-    @router.get("/object/{euid}/external-links/new", response_class=HTMLResponse)
-    async def external_link_page(
-        request: Request,
-        euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        return _render(
-            templates,
-            request,
-            "external_link.html",
-            user=user,
-            euid=euid,
-            error=None,
-            form={},
-        )
-
-    @router.post("/object/{euid}/external-links/new")
-    async def external_link_submit(
-        request: Request,
-        euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        form = await _read_urlencoded_form(request)
-        system = str(form.get("system") or "")
-        foreign_uid = str(form.get("foreign_uid") or "")
-        relationship_type = str(form.get("relationship_type") or "external_ref")
-        display_url = str(form.get("display_url") or "")
-        graph_base_url = str(form.get("graph_base_url") or "")
-        graph_data_path = str(form.get("graph_data_path") or "")
-        object_detail_path_template = str(form.get("object_detail_path_template") or "")
-        auth_mode = str(form.get("auth_mode") or "none")
-        missing = [
-            label
-            for label, value in (
-                ("system", system),
-                ("foreign_uid", foreign_uid),
-                ("relationship_type", relationship_type),
-            )
-            if not str(value or "").strip()
-        ]
-        if missing:
-            raise HTTPException(
-                status_code=400,
-                detail="Missing required external link field(s): " + ", ".join(missing),
-            )
-        cfg = get_db_config(config_path=resolved_config_path)
-        with get_db(resolved_config_path) as conn:
-            conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
-                created = _create_external_link(
-                    session,
-                    cfg=cfg,
-                    source_euid=euid,
-                    system=system,
-                    foreign_uid=foreign_uid,
-                    relationship_type=relationship_type,
-                    display_url=display_url,
-                    graph_base_url=graph_base_url,
-                    graph_data_path=graph_data_path,
-                    object_detail_path_template=object_detail_path_template,
-                    auth_mode=auth_mode,
-                )
-                link_euid = created["link_euid"]
-        return RedirectResponse(
-            gui_url_with_query(
-                request, f"/object/{link_euid}", notice="external_link_created"
-            ),
-            status_code=303,
-        )
-
-    @router.post("/api/object/{euid}/external-links")
-    async def external_link_api(
-        request: Request,
-        euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=400,
-                detail="external link payload must be a JSON object",
-            )
-        cfg = get_db_config(config_path=resolved_config_path)
-        with get_db(resolved_config_path) as conn:
-            conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
-                created = _create_external_link(
-                    session,
-                    cfg=cfg,
-                    source_euid=euid,
-                    system=str(payload.get("system") or ""),
-                    foreign_uid=str(payload.get("foreign_uid") or ""),
-                    relationship_type=str(
-                        payload.get("relationship_type") or "external_ref"
-                    ),
-                    display_url=str(payload.get("display_url") or ""),
-                    graph_base_url=str(payload.get("graph_base_url") or ""),
-                    graph_data_path=str(payload.get("graph_data_path") or ""),
-                    object_detail_path_template=str(
-                        payload.get("object_detail_path_template") or ""
-                    ),
-                    auth_mode=str(payload.get("auth_mode") or "none"),
-                )
-        return jsonable_encoder(created)
-
     @router.get("/admin/readiness", response_class=HTMLResponse)
     async def readiness_page(
         request: Request,
@@ -2429,6 +2674,41 @@ def create_tapdb_gui_router(
     ):
         del user
         return jsonable_encoder(_readiness_payload(config_path=resolved_config_path))
+
+    @router.get("/admin/inventory", response_class=HTMLResponse)
+    async def inventory_page(
+        request: Request,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        try:
+            inventory = _inventory_payload(
+                config_path=resolved_config_path,
+                username=str(user.get("username") or ""),
+            )
+            error = None
+        except Exception as exc:
+            inventory = None
+            error = str(exc)
+        return _render(
+            templates,
+            request,
+            "inventory.html",
+            user=user,
+            inventory=inventory,
+            error=error,
+        )
+
+    @router.get("/api/admin/inventory")
+    async def inventory_api(
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        try:
+            return _inventory_payload(
+                config_path=resolved_config_path,
+                username=str(user.get("username") or ""),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @router.get("/admin/meridian", response_class=HTMLResponse)
     async def meridian_page(
@@ -2540,25 +2820,34 @@ def create_tapdb_gui_router(
     # Backup and recovery lifecycle
     #
     # Every page is paired with a JSON route so the GUI is self-sufficient
-    # when a host app embeds it without mounting the admin service. All of it
+    # when a host app embeds it. All of it
     # is admin-gated, and the restore form posts into
-    # ``views.apply_restore_from_review`` -- the same function the admin API
-    # calls, so the two surfaces cannot enforce different rules.
+    # ``views.apply_restore_from_review`` -- the same function the management
+    # JSON routes call, so HTML and JSON cannot enforce different rules.
     # ------------------------------------------------------------------
 
     def _backup_env():
         from daylily_tapdb.cli.db_config import get_backup_settings
 
-        return (
-            get_db_config(config_path=resolved_config_path),
-            get_backup_settings(config_path=resolved_config_path),
-        )
+        try:
+            return (
+                get_db_config(config_path=resolved_config_path),
+                get_backup_settings(config_path=resolved_config_path),
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "backup_unavailable",
+                    "message": f"Cannot resolve TapDB backup configuration: {exc}",
+                },
+            ) from exc
 
     def _validated_backup_ref(ref: str) -> str:
         """Validate a backup reference from the URL, or 400.
 
-        Delegates to the shared validator so the GUI and the admin API cannot
-        disagree about what a valid reference is.
+        Delegates to the shared validator so GUI HTML and JSON cannot disagree
+        about what a valid reference is.
         """
         from daylily_tapdb.backup.views import validate_backup_ref
 
@@ -2660,13 +2949,22 @@ def create_tapdb_gui_router(
 
     @router.get("/api/admin/backups")
     async def backups_api(
+        backup_class: str | None = Query(None, alias="class"),
+        limit: int | None = Query(None, ge=0, le=1_000),
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         del user
-        from daylily_tapdb.backup import views as backup_views
+        from admin import backups as backups_api
 
         cfg, settings = _backup_env()
-        return jsonable_encoder(backup_views.inventory_context(cfg, settings))
+        return jsonable_encoder(
+            backups_api.list_payload(
+                cfg,
+                settings,
+                backup_class=backup_class,
+                limit=limit,
+            )
+        )
 
     @router.get("/api/admin/backups/status")
     async def backups_status_api(
@@ -2677,6 +2975,140 @@ def create_tapdb_gui_router(
 
         cfg, settings = _backup_env()
         return jsonable_encoder(backup_views.status_context(cfg, settings))
+
+    @router.get("/api/admin/backups/health")
+    async def backups_health_api(
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        """Return the same recovery-health verdict as the backup CLI."""
+        del user
+        from admin import backups as backups_api
+
+        cfg, settings = _backup_env()
+        return jsonable_encoder(backups_api.health_payload(cfg, settings))
+
+    @router.get("/api/admin/backups/plan")
+    async def backups_plan_api(
+        backup_class: str | None = Query(None, alias="class"),
+        strict: bool = Query(False),
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        """Preview a backup without writing an artifact or receipt."""
+        del user
+        from admin import backups as backups_api
+
+        cfg, settings = _backup_env()
+        return jsonable_encoder(
+            backups_api.plan_payload(
+                cfg,
+                settings,
+                backup_class=backup_class,
+                strict=strict,
+            )
+        )
+
+    @router.post("/api/admin/backups", status_code=201)
+    async def backups_create_api(
+        request: Request,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        """Create a backup through the canonical GUI JSON surface."""
+        del user
+        from admin import backups as backups_api
+
+        cfg, settings = _backup_env()
+        return jsonable_encoder(
+            backups_api.create_payload(
+                cfg,
+                settings,
+                body=await _read_optional_json_object(request),
+                actor=backups_api.api_actor(request),
+            )
+        )
+
+    @router.post("/api/admin/backups/{ref}/verify")
+    async def backups_verify_api(
+        request: Request,
+        ref: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        """Verify one backup and return its complete evidence payload."""
+        del user
+        from admin import backups as backups_api
+
+        cfg, settings = _backup_env()
+        body = await _read_optional_json_object(request)
+        return jsonable_encoder(
+            backups_api.verify_payload(
+                cfg,
+                settings,
+                ref=ref,
+                level=str(body.get("level") or "deep"),
+                actor=backups_api.api_actor(request),
+            )
+        )
+
+    @router.post("/api/admin/backups/{ref}/restore/stage")
+    async def backups_restore_stage_api(
+        request: Request,
+        ref: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        """Stage a restore and return the fingerprint; never mutates the target."""
+        del user
+        from admin import backups as backups_api
+
+        cfg, settings = _backup_env()
+        return jsonable_encoder(
+            backups_api.stage_payload(
+                cfg,
+                settings,
+                ref=ref,
+                body=await _read_optional_json_object(request),
+            )
+        )
+
+    @router.post("/api/admin/backups/{ref}/restore/apply")
+    async def backups_restore_apply_api(
+        request: Request,
+        ref: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        """Apply an exactly staged restore through the shared recovery view."""
+        del user
+        from admin import backups as backups_api
+
+        cfg, settings = _backup_env()
+        return jsonable_encoder(
+            backups_api.apply_payload(
+                cfg,
+                settings,
+                ref=ref,
+                body=await _read_optional_json_object(request),
+                actor=backups_api.api_actor(request),
+            )
+        )
+
+    @router.post("/api/admin/backups/{ref}/rehearse")
+    async def backups_rehearse_api(
+        request: Request,
+        ref: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        """Rehearse a restore into a throwaway target and return receipts."""
+        del user
+        from admin import backups as backups_api
+
+        cfg, settings = _backup_env()
+        return jsonable_encoder(
+            backups_api.rehearse_payload(
+                cfg,
+                settings,
+                ref=ref,
+                body=await _read_optional_json_object(request),
+                actor=backups_api.api_actor(request),
+            )
+        )
 
     @router.post("/admin/backups/create")
     async def backups_create(
@@ -2841,7 +3273,7 @@ def create_tapdb_gui_router(
             target_schema=str(form.get("target_schema") or "") or None,
             keep_superseded=bool(form.get("keep_superseded")),
         )
-        # The CLI and the admin API both validate these before use. quote_ident
+        # The CLI and management JSON routes both validate these before use. quote_ident
         # holds the line either way, but a surface that skips the shared
         # validator is a surface that can drift -- and the operator gets a SQL
         # error instead of a clear rejection.
@@ -2891,13 +3323,148 @@ def create_tapdb_gui_app(
     config_path: str,
     host_bridge: TapdbHostBridge | None = None,
 ):
-    """Build a mountable TapDB GUI ASGI app."""
+    """Build TapDB's single standalone and embeddable ASGI application."""
 
-    app = FastAPI(title="TapDB GUI", version=__version__)
-    app.state.tapdb_host_bridge = host_bridge
-    app.include_router(
-        create_tapdb_gui_router(config_path=config_path, host_bridge=host_bridge)
+    resolved_config_path = str(Path(config_path).expanduser().resolve())
+    set_cli_context(config_path=resolved_config_path)
+    settings = get_admin_settings(config_path=resolved_config_path)
+    target_name = str(settings.get("target_name") or "target").strip().lower()
+    production_like = (
+        bool(settings.get("production_like"))
+        or target_name
+        in {
+            "prod",
+            "production",
+        }
+        or target_name.startswith("prod-")
+        or target_name.endswith("-prod")
     )
+    auth_mode = str(settings.get("auth_mode") or "").strip().lower()
+    if production_like:
+        if auth_mode == "disabled":
+            raise RuntimeError(
+                "Refusing to start production-like TapDB GUI with disabled auth"
+            )
+        if (
+            auth_mode == "shared_host"
+            and not str(settings.get("shared_host_session_secret") or "").strip()
+        ):
+            raise RuntimeError(
+                "Refusing to start production-like TapDB GUI shared_host auth "
+                "without admin.auth.shared_host.session_secret"
+            )
+        if not str(settings.get("session_secret") or "").strip():
+            raise RuntimeError(
+                "Refusing to start production-like TapDB GUI without "
+                "admin.session.secret"
+            )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            yield
+        finally:
+            stop_all_writers()
+            dispose_all_engines()
+            dispose_all_runtime_engines()
+
+    app = FastAPI(
+        title="TapDB GUI",
+        description=(
+            "Canonical TapDB object, lineage, audit, recovery, and DAG-v2 interface"
+        ),
+        version=__version__,
+        lifespan=lifespan,
+    )
+    app.state.tapdb_host_bridge = host_bridge
+    app.state.tapdb_gui_canonical = True
+    app.state.tapdb_config_path = resolved_config_path
+
+    @app.middleware("http")
+    async def metrics_request_context(request: Request, call_next):
+        token_path = request_path_var.set(request.url.path)
+        token_method = request_method_var.set(request.method)
+        try:
+            return await call_next(request)
+        finally:
+            request_path_var.reset(token_path)
+            request_method_var.reset(token_method)
+
+    session_secret = str(settings.get("session_secret") or "").strip()
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=session_secret or secrets.token_hex(32),
+        session_cookie=SESSION_COOKIE_NAME,
+        max_age=86400,
+        same_site="lax",
+        https_only=production_like,
+    )
+    allow_local = not production_like
+    allowed_origins = validate_allowed_origins(
+        [str(item) for item in settings.get("allowed_origins") or []],
+        allow_local=allow_local,
+    )
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=build_trusted_hosts(allow_local=allow_local),
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_origin_regex=(
+            None
+            if allowed_origins
+            else build_allowed_origin_regex(allow_local=allow_local)
+        ),
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
+
+    @app.middleware("http")
+    async def enforce_origin_allowlist(request: Request, call_next):
+        origin = request.headers.get("origin")
+        if origin and not is_allowed_origin(origin, allow_local=allow_local):
+            return PlainTextResponse("Origin not allowed", status_code=403)
+        return await call_next(request)
+
+    templates = _build_templates(host_bridge)
+    from daylily_tapdb.gui.auth_routes import create_tapdb_gui_auth_router
+
+    app.include_router(create_tapdb_gui_auth_router(templates=templates))
+    app.include_router(
+        create_tapdb_gui_router(
+            config_path=resolved_config_path,
+            host_bridge=host_bridge,
+        )
+    )
+    from daylily_tapdb.admin_health import install_tapdb_admin_health_routes
+
+    install_tapdb_admin_health_routes(app, config_path=resolved_config_path)
+    cfg = get_db_config(config_path=resolved_config_path)
+    service_id = str(
+        (host_bridge.service_name if host_bridge is not None else "")
+        or cfg.get("client_id")
+        or "tapdb"
+    ).strip()
+    display_name = str(
+        (host_bridge.app_name if host_bridge is not None else "") or service_id
+    ).strip()
+    dag_mount = mount_tapdb_dag_surfaces(
+        app,
+        config_path=resolved_config_path,
+        service_id=service_id,
+        display_name=display_name,
+        auth_dependency=require_tapdb_gui_user,
+        limits=DagV2Limits(
+            max_depth=8,
+            max_nodes=1_000,
+            max_search_page_size=100,
+        ),
+    )
+    if not dag_mount.mounted:
+        raise RuntimeError(f"TapDB DAG v2 mount failed: {dag_mount.diagnostic}")
+    app.state.tapdb_dag_router_attached = True
     if host_bridge is not None and host_bridge.auth_mode == "host_session":
         return TapdbHostBridgeMount(app, host_bridge)
     return app

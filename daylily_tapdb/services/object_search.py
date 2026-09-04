@@ -7,7 +7,21 @@ import json
 from typing import Any
 
 from sqlalchemy import String, cast, or_
+from sqlalchemy.orm import aliased
 
+from daylily_tapdb.external_references import (
+    ExternalIdentifierTarget,
+    TapDBObjectTarget,
+)
+from daylily_tapdb.external_references import (
+    _decode_cursor as _decode_external_cursor,
+)
+from daylily_tapdb.external_references import (
+    _encode_cursor as _encode_external_cursor,
+)
+from daylily_tapdb.external_references import (
+    _projection as _external_projection,
+)
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
@@ -81,7 +95,7 @@ def _to_search_result(
         "tenant_id": _clean(getattr(row, "tenant_id", None)) or None,
         "relationship_type": getattr(row, "relationship_type", None),
         "href": f"/object/{euid or ''}",
-        "graph_href": f"/api/dag/data?start_euid={euid or ''}",
+        "graph_href": f"/api/dag/v2/data?start_euid={euid or ''}",
         "created_dt": _iso(getattr(row, "created_dt", None)),
         "modified_dt": _iso(getattr(row, "modified_dt", None)),
     }
@@ -93,6 +107,8 @@ def _apply_filters(
     *,
     q: str,
     euid: str,
+    name_like: str,
+    euid_like: str,
     category: str,
     type_name: str,
     subtype: str,
@@ -102,6 +118,10 @@ def _apply_filters(
     query = query.filter(model.is_deleted.is_(False))
     if euid:
         query = query.filter(model.euid == euid)
+    if name_like:
+        query = query.filter(cast(model.name, String).ilike(f"%{name_like}%"))
+    if euid_like:
+        query = query.filter(cast(model.euid, String).ilike(f"%{euid_like}%"))
     if category:
         query = query.filter(model.category == category)
     if type_name:
@@ -139,6 +159,8 @@ def search_objects(
     service_name: str,
     q: str = "",
     euid: str = "",
+    name_like: str = "",
+    euid_like: str = "",
     record_type: str = "all",
     category: str = "",
     type_name: str = "",
@@ -165,6 +187,8 @@ def search_objects(
     filters: dict[str, Any] = {
         "q": _clean(q),
         "euid": _clean(euid),
+        "name_like": _clean(name_like),
+        "euid_like": _clean(euid_like),
         "record_type": normalized_record_type,
         "category": _clean(category),
         "type": _clean(type_name),
@@ -185,6 +209,8 @@ def search_objects(
             model,
             q=filters["q"],
             euid=filters["euid"],
+            name_like=filters["name_like"],
+            euid_like=filters["euid_like"],
             category=filters["category"],
             type_name=filters["type"],
             subtype=filters["subtype"],
@@ -220,4 +246,130 @@ def search_objects(
     }
 
 
-__all__ = ["SEARCH_RECORD_TYPES", "search_objects"]
+def search_external_reference_sources(
+    session: Any,
+    *,
+    service_name: str,
+    external_service_id: str = "",
+    external_object_euid: str = "",
+    external_namespace: str = "",
+    external_kind: str = "",
+    external_value: str = "",
+    external_relationship_type: str = "",
+    limit: int = 25,
+    cursor: str = "",
+) -> dict[str, Any]:
+    """Return local sources matching one complete exact external target group."""
+
+    tapdb_values = [str(external_service_id or ""), str(external_object_euid or "")]
+    opaque_values = [
+        str(external_namespace or ""),
+        str(external_kind or ""),
+        str(external_value or ""),
+    ]
+    has_tapdb = any(tapdb_values)
+    has_opaque = any(opaque_values)
+    target: TapDBObjectTarget | ExternalIdentifierTarget
+    if has_tapdb and has_opaque:
+        raise ValueError("external target filter groups are mutually exclusive")
+    if has_tapdb:
+        if not all(tapdb_values):
+            raise ValueError(
+                "external_service_id and external_object_euid are required together"
+            )
+        target = TapDBObjectTarget(tapdb_values[0], tapdb_values[1])
+        subtype = "tapdb_object"
+    elif has_opaque:
+        if not all(opaque_values):
+            raise ValueError(
+                "external_namespace, external_kind, and external_value are required together"
+            )
+        target = ExternalIdentifierTarget(
+            namespace=opaque_values[0],
+            kind=opaque_values[1],
+            value=opaque_values[2],
+            scope="public_global",
+        )
+        subtype = "opaque"
+    else:
+        raise ValueError("one complete external target filter group is required")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer from 1 through 100")
+    after_uid = _decode_external_cursor(cursor)
+    relationship = str(external_relationship_type or "")
+    if relationship and (
+        relationship != relationship.strip() or len(relationship) > 128
+    ):
+        raise ValueError(
+            "external_relationship_type must be exact and at most 128 characters"
+        )
+
+    source_instance = aliased(generic_instance, name="external_source")
+    reference_instance = aliased(generic_instance, name="external_reference")
+    query = (
+        session.query(
+            generic_instance_lineage,
+            source_instance,
+            reference_instance,
+        )
+        .join(
+            source_instance,
+            source_instance.uid == generic_instance_lineage.parent_instance_uid,
+        )
+        .join(
+            reference_instance,
+            reference_instance.uid == generic_instance_lineage.child_instance_uid,
+        )
+        .filter(
+            generic_instance_lineage.is_deleted.is_(False),
+            generic_instance_lineage.uid > after_uid,
+            source_instance.is_deleted.is_(False),
+            reference_instance.is_deleted.is_(False),
+            reference_instance.category == "reference",
+            reference_instance.type == "external_identifier",
+            reference_instance.subtype == subtype,
+            reference_instance.version == "1.0",
+            reference_instance.identity_key == target.identity_key,
+        )
+    )
+    if relationship:
+        query = query.filter(generic_instance_lineage.relationship_type == relationship)
+    rows = query.order_by(generic_instance_lineage.uid.asc()).limit(limit + 1).all()
+    page_rows = rows[:limit]
+    items: list[dict[str, Any]] = []
+    for lineage, source, reference in page_rows:
+        item = _to_search_result(
+            source, record_type="instance", service_name=service_name
+        )
+        _, matched = _external_projection(lineage, reference)
+        item["matched_external_reference"] = matched
+        items.append(item)
+    return {
+        "items": items,
+        "page": {
+            "limit": limit,
+            "returned": len(items),
+            "next_cursor": (
+                _encode_external_cursor(int(page_rows[-1][0].uid))
+                if len(rows) > limit and page_rows
+                else None
+            ),
+        },
+        "filters": {
+            "external_service_id": tapdb_values[0],
+            "external_object_euid": tapdb_values[1],
+            "external_namespace": opaque_values[0],
+            "external_kind": opaque_values[1],
+            "external_value": opaque_values[2],
+            "external_relationship_type": relationship,
+            "record_type": "instance",
+            "limit": limit,
+        },
+    }
+
+
+__all__ = [
+    "SEARCH_RECORD_TYPES",
+    "search_external_reference_sources",
+    "search_objects",
+]

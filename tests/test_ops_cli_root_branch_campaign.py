@@ -767,16 +767,6 @@ def test_build_app_without_boto3_exposes_failing_aurora_stub(
         callback(SimpleNamespace())
 
 
-def test_admin_module_fallback_and_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    assert cli._find_admin_module() == "admin.main:app"
-    monkeypatch.setattr(Path, "exists", lambda _path: False)
-    with pytest.raises(ValueError, match="Cannot find admin module"):
-        cli._find_admin_module()
-
-
 def test_config_init_rejects_namespace_and_invalid_policy_fields(
     config_path: Path,
 ) -> None:

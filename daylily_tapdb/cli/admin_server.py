@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import os
 from pathlib import Path
@@ -19,7 +18,7 @@ _HTTP_CONTEXT_ENV = "TAPDB_ADMIN_HTTP_CONTEXT"
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m daylily_tapdb.cli.admin_server",
-        description="Start the TAPDB admin UI with explicit TapDB context.",
+        description="Start the canonical TapDB GUI with explicit context.",
     )
     parser.add_argument("--config", required=True, help="TapDB config file path")
     parser.add_argument("--host", required=True, help="UI bind host")
@@ -86,18 +85,11 @@ def _read_context_file() -> dict[str, object]:
 
 
 def load_admin_app(*, config_path: str):
-    """Build the TAPDB admin FastAPI app for an explicit config target."""
+    """Build the canonical TapDB GUI for an explicit config target."""
     set_cli_context(config_path=config_path)
-    admin_main = importlib.import_module("admin.main")
-    admin_main = importlib.reload(admin_main)
-    admin_main.app.state.tapdb_admin_module = admin_main
-    from daylily_tapdb.admin_health import install_tapdb_admin_health_routes
+    from daylily_tapdb.gui import create_tapdb_gui_app
 
-    install_tapdb_admin_health_routes(
-        admin_main.app,
-        config_path=config_path,
-    )
-    return admin_main.app
+    return create_tapdb_gui_app(config_path=config_path)
 
 
 def _resolve_tls_mode(explicit_mode: str | None) -> str:
@@ -189,9 +181,9 @@ def build_app():
     config_path = str(context.get("config_path") or "").strip()
     if not config_path:
         raise RuntimeError("TapDB admin context file is incomplete.")
-    from daylily_tapdb.web import create_tapdb_web_app
+    from daylily_tapdb.gui import create_tapdb_gui_app
 
-    return create_tapdb_web_app(config_path=config_path)
+    return create_tapdb_gui_app(config_path=config_path)
 
 
 if __name__ == "__main__":

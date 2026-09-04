@@ -1,39 +1,467 @@
 {% extends "base.html" %}
-{% block title %}{{ euid }} Graph{% endblock %}
-{% block content %}
-<section class="band">
-  <div class="split">
-    <div>
-      <h1>Graph: <a href="{{ tapdb_gui_url(request, '/object/' ~ euid) }}">{{ euid }}</a></h1>
-      <p>{{ graph.elements.nodes|length }} nodes / {{ graph.elements.edges|length }} edges</p>
-    </div>
-    <form method="get" action="{{ tapdb_gui_url(request, '/object/' ~ euid ~ '/graph') }}" class="toolbar">
-      <label>Depth <input type="number" min="0" max="10" name="depth" value="{{ depth }}"></label>
-      <button type="submit">Load</button>
-    </form>
-  </div>
-</section>
 
-<section class="band tapdb-graph-shell">
-  <div class="toolbar tapdb-graph-toolbar">
-    <select id="tapdb-graph-layout-select" aria-label="Graph layout">
-      <option value="breadthfirst">DAG</option>
-      <option value="cose">Force</option>
-      <option value="concentric">Concentric</option>
-      <option value="circle">Circle</option>
-      <option value="grid">Grid</option>
-    </select>
-    <button type="button" id="tapdb-graph-fit" class="secondary">Fit</button>
-    <span id="tapdb-graph-counts"></span>
-  </div>
-  <div class="tapdb-graph-layout">
-    <div id="tapdb-graph" class="tapdb-graph-canvas" data-testid="tapdb-graph" aria-label="Object graph"></div>
-    <aside class="tapdb-graph-sidebar">
-      <h2>Selection</h2>
-      <div id="tapdb-graph-detail" class="tapdb-graph-detail">No selection</div>
-    </aside>
-  </div>
-</section>
+{% block title %}TapDB Graph Explorer{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+<style>
+    :root {
+        --card-bg: var(--tapdb-panel);
+        --secondary-color: var(--tapdb-primary);
+        --bg-color: var(--tapdb-bg);
+        --text-color: var(--tapdb-text);
+        --text-muted: var(--tapdb-muted);
+        --border-color: var(--tapdb-border);
+    }
+    #graph-layout {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        width: min(98vw, 1500px);
+        margin: 0 auto;
+    }
+    #cy-container {
+        display: flex;
+        gap: 1rem;
+        width: 100%;
+        height: 80vh;
+        min-height: 560px;
+    }
+    #tapdb-graph {
+        flex: 1 1 80%;
+        width: 80%;
+        height: 100%;
+        background: #0d1117;
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+    }
+    #sidebar {
+        flex: 1 1 20%;
+        width: 20%;
+        min-width: 280px;
+        max-width: 360px;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        overflow-y: auto;
+    }
+    .control-panel {
+        background: var(--card-bg);
+        padding: 1rem;
+        border-radius: 8px;
+    }
+    .control-panel h3 {
+        margin-bottom: 0.75rem;
+        color: var(--secondary-color);
+        font-size: 1rem;
+    }
+    .control-group {
+        margin-bottom: 0.75rem;
+    }
+    .control-group label {
+        display: block;
+        margin-bottom: 0.25rem;
+        font-size: 0.85rem;
+        color: var(--text-muted);
+    }
+    .control-group input, .control-group select {
+        width: 100%;
+        padding: 0.5rem;
+        border-radius: 4px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-color);
+        color: var(--text-color);
+    }
+    .btn-row {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .btn-row .btn {
+        flex: 1 1 auto;
+    }
+    .btn {
+        display: inline-block;
+        padding: 0.48rem 0.65rem;
+        border: 1px solid var(--tapdb-primary);
+        border-radius: 6px;
+        background: var(--tapdb-primary);
+        color: #fff;
+        text-decoration: none;
+        cursor: pointer;
+    }
+    .btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+    }
+    .range-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.5rem;
+        align-items: center;
+    }
+    .range-row span {
+        color: var(--text-muted);
+        font-size: 0.85rem;
+        min-width: 2rem;
+        text-align: right;
+    }
+    .type-filter-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.35rem 0.5rem;
+        max-height: 160px;
+        overflow-y: auto;
+    }
+    .type-filter-item {
+        font-size: 0.78rem;
+        color: var(--text-color);
+        display: flex;
+        gap: 0.35rem;
+        align-items: center;
+        white-space: nowrap;
+    }
+    .subtype-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        max-height: 180px;
+        overflow-y: auto;
+    }
+    .subtype-chip {
+        border: 1px solid var(--border-color);
+        border-radius: 999px;
+        background: var(--bg-color);
+        color: var(--text-color);
+        font-size: 0.72rem;
+        padding: 0.2rem 0.55rem;
+        cursor: pointer;
+    }
+    .subtype-chip.active {
+        background: var(--secondary-color);
+        color: #fff;
+        border-color: var(--secondary-color);
+    }
+    #node-info {
+        background: var(--card-bg);
+        padding: 1rem;
+        border-radius: 8px;
+        min-height: 180px;
+        max-height: 36vh;
+        overflow-y: auto;
+    }
+    #node-info h3 {
+        margin-bottom: 0.75rem;
+        color: var(--secondary-color);
+    }
+    #node-info-content {
+        font-size: 0.9rem;
+    }
+    #node-info-content p {
+        margin-bottom: 0.5rem;
+    }
+    #node-info-content strong {
+        color: var(--text-muted);
+    }
+    .details-grid {
+        display: grid;
+        grid-template-columns: minmax(130px, 220px) 1fr;
+        gap: 0.35rem 0.75rem;
+        margin-bottom: 0.8rem;
+    }
+    .detail-key {
+        color: var(--text-muted);
+        font-weight: 600;
+        word-break: break-word;
+    }
+    .detail-value {
+        color: var(--text-color);
+        word-break: break-word;
+    }
+    .details-section-title {
+        font-size: 0.82rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--secondary-color);
+        margin: 0.8rem 0 0.35rem 0;
+    }
+    .json-block {
+        margin: 0;
+        padding: 0.65rem;
+        border-radius: 6px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-color);
+        font-size: 0.78rem;
+        line-height: 1.35;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    #graph-mode-status {
+        margin-top: 0.6rem;
+        padding: 0.5rem 0.6rem;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        min-height: 2.1rem;
+    }
+    #graph-mode-status.ok {
+        color: #c9ffd9;
+        border-color: #2f7a4a;
+    }
+    #graph-mode-status.warn {
+        color: #ffd7a8;
+        border-color: #8d6b2f;
+    }
+    #graph-mode-status.error {
+        color: #ffd0d0;
+        border-color: #8b3d3d;
+    }
+    #relationship-dialog {
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background: var(--card-bg);
+        color: var(--text-color);
+        width: min(92vw, 440px);
+    }
+    #relationship-dialog::backdrop {
+        background: rgba(0, 0, 0, 0.45);
+    }
+    #relationship-dialog h3 {
+        margin: 0 0 0.6rem 0;
+        color: var(--secondary-color);
+    }
+    #relationship-dialog p {
+        margin: 0.35rem 0 0.75rem 0;
+        color: var(--text-muted);
+    }
+    #relationship-dialog select {
+        width: 100%;
+        margin-bottom: 0.9rem;
+        padding: 0.5rem;
+        border-radius: 4px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-color);
+        color: var(--text-color);
+    }
+    #relationship-dialog .dialog-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+    }
+    #relationship-dialog button {
+        padding: 0.45rem 0.7rem;
+    }
+    .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+    }
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        font-size: 0.75rem;
+    }
+    .legend-color {
+        width: 12px;
+        height: 12px;
+        border-radius: 2px;
+    }
+    .loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        color: var(--text-muted);
+    }
+    .graph-mermaid-source {
+        min-height: 220px;
+        max-height: 260px;
+        white-space: pre;
+    }
+    @media (max-width: 980px) {
+        #cy-container {
+            flex-direction: column;
+            height: auto;
+            min-height: 0;
+        }
+        #sidebar {
+            width: 100%;
+            min-width: 0;
+            max-width: none;
+            max-height: 42vh;
+        }
+        #tapdb-graph {
+            width: 100%;
+            height: 60vh;
+            min-height: 420px;
+        }
+        #node-info {
+            max-height: 45vh;
+        }
+        .details-grid {
+            grid-template-columns: 1fr;
+        }
+        .type-filter-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if euid %}
+<h1 style="margin-bottom: 0.35rem;">Graph: <a href="{{ tapdb_gui_url(request, '/object/' ~ euid) }}">{{ euid }}</a></h1>
+{% else %}
+<h1 style="margin-bottom: 0.35rem;">TapDB Graph Explorer</h1>
+{% endif %}
+{% set graph_meta = graph.get("meta", {}) %}
+<p style="margin-top: 0;">Canonical DAG v2: persisted lineage only. Leave Start EUID blank to inspect the bounded graph visible to your database role.</p>
+{% if graph_meta.get("truncated") %}<p class="notice warning">Initial bounded result: {{ graph_meta.get("truncation_reason") }}</p>{% endif %}
+
+<div id="graph-layout">
+    <div id="cy-container">
+        <div id="tapdb-graph" data-testid="tapdb-graph" aria-label="Object graph"><div class="loading">Loading graph data...</div></div>
+        <div id="sidebar">
+            <div class="control-panel">
+                <h3>🔍 Navigation</h3>
+                <div class="control-group">
+                    <label for="start-euid">Start EUID</label>
+                    <input type="text" id="start-euid" value="{{ euid }}" placeholder="blank shows visible graph">
+                </div>
+                <div class="control-group">
+                    <label for="depth">Depth</label>
+                    <input type="number" id="depth" value="{{ depth }}" min="0" max="10">
+                </div>
+                <div class="control-group">
+                    <label for="max-nodes">Maximum Nodes</label>
+                    <input type="number" id="max-nodes" value="{{ max_nodes }}" min="1" max="1000">
+                </div>
+                <div class="control-group">
+                    <label for="max-edges">Maximum Edges</label>
+                    <input type="number" id="max-edges" value="{{ max_edges }}" min="1" max="5000">
+                </div>
+                <div class="btn-row">
+                    <button class="btn" type="button" onclick="loadGraph()">Load Graph</button>
+                    <button class="btn" type="button" onclick="cy && cy.fit()">Fit</button>
+                </div>
+            </div>
+
+            <div class="control-panel">
+                <h3>🔎 Search & Find</h3>
+                <div class="control-group">
+                    <label for="search-query">Fuzzy Search</label>
+                    <input type="text" id="search-query" placeholder="Match id, name, type, subtype">
+                </div>
+                <div class="control-group">
+                    <label for="find-euid">Find Exact EUID</label>
+                    <input type="text" id="find-euid" placeholder="Exact EUID in current graph">
+                </div>
+                <div class="btn-row">
+                    <button class="btn" type="button" onclick="applySearch(true)">Apply Search</button>
+                    <button class="btn" type="button" onclick="findAndCenterByEuid()">Find</button>
+                </div>
+            </div>
+
+            <div class="control-panel">
+                <h3>🧰 Filters</h3>
+                <div class="control-group">
+                    <label for="transparency-slider">Connected Edge Count ≤</label>
+                    <div class="range-row">
+                        <input type="range" id="transparency-slider" min="0" max="20" value="1">
+                        <span id="transparency-display">1</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="distance-slider">Relative Distance (0 = all)</label>
+                    <div class="range-row">
+                        <input type="range" id="distance-slider" min="0" max="15" value="0">
+                        <span id="distance-display">0</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>Type Visibility</label>
+                    <div id="type-checkboxes" class="type-filter-grid">
+                        <span style="color: var(--text-muted); font-size: 0.78rem;">Load graph to populate.</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>Subtype Muting</label>
+                    <div id="subtype-buttons" class="subtype-buttons">
+                        <span style="color: var(--text-muted); font-size: 0.78rem;">Load graph to populate.</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="control-panel">
+                <h3>⚙️ Layout</h3>
+                <div class="control-group">
+                    <label for="layout-select">Layout Type</label>
+                    <select id="layout-select" onchange="applyLayout()">
+                        <option value="dagre">Dagre (Hierarchical)</option>
+                        <option value="cose">CoSE (Force-directed)</option>
+                        <option value="breadthfirst">Breadth First</option>
+                        <option value="circle">Circle</option>
+                        <option value="grid">Grid</option>
+                    </select>
+                </div>
+            </div>
+
+            {% if user.role|lower == 'admin' %}
+            <div class="control-panel">
+                <h3>⌨️ Graph Gestures</h3>
+                <div style="font-size: 0.74rem; color: var(--text-muted); line-height: 1.42;">
+                    <div><strong>D + right click</strong>: delete node or edge</div>
+                    <div><strong>3x left click node</strong>: child-wave glow (pink)</div>
+                    <div><strong>3x right click node</strong>: parent-wave glow (aqua)</div>
+                    <div><strong>L + left click node</strong>: pick child, then click parent to create edge</div>
+                    <div><strong>N + left click node</strong>: neighborhood highlight</div>
+                </div>
+                <div id="graph-mode-status">Ready.</div>
+            </div>
+            {% else %}
+            <div class="control-panel">
+                <h3>⌨️ Graph Gestures</h3>
+                <div style="font-size: 0.74rem; color: var(--text-muted); line-height: 1.42;">
+                    <div><strong>3x left click node</strong>: child-wave glow (pink)</div>
+                    <div><strong>3x right click node</strong>: parent-wave glow (aqua)</div>
+                    <div><strong>N + left click node</strong>: neighborhood highlight</div>
+                </div>
+                <div id="graph-mode-status">Read-only graph access.</div>
+            </div>
+            {% endif %}
+
+            <div class="control-panel">
+                <h3>🎨 Legend</h3>
+                <div class="legend" id="legend-items">
+                    <span style="color: var(--text-muted); font-size: 0.85rem;">Loading...</span>
+                </div>
+            </div>
+
+            <div class="control-panel">
+                <h3>💾 Export</h3>
+                <div class="btn-row" style="margin-bottom: 0.75rem;">
+                    <button id="graph-save" class="btn" type="button">Save DAG</button>
+                </div>
+                <div class="details-section-title" style="margin-top: 0;">Mermaid</div>
+                <pre id="graph-mermaid-source" class="json-block graph-mermaid-source">Load a graph to generate Mermaid.</pre>
+            </div>
+        </div>
+    </div>
+
+    <div id="node-info">
+        <h3>📋 Details</h3>
+        <div id="node-info-content">
+            <p style="color: var(--text-muted);">No selection — click a node or edge to see details</p>
+        </div>
+    </div>
+</div>
 
 <section class="band">
   <details>
@@ -43,13 +471,13 @@
         <h2>Nodes</h2>
         <table><thead><tr><th>EUID</th><th>Name</th><th>Type</th></tr></thead><tbody>
         {% for node in graph.elements.nodes %}
-        <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ node.data.euid) }}">{{ node.data.euid }}</a></td><td>{{ node.data.name }}</td><td>{{ node.data.category }}/{{ node.data.type }}</td></tr>
+        <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ node.data.euid) }}">{{ node.data.euid }}</a></td><td>{{ node.data.display_label }}</td><td>{{ node.data.category }}/{{ node.data.type }}</td></tr>
         {% endfor %}
         </tbody></table>
       </div>
       <div>
         <h2>Edges</h2>
-        <table><thead><tr><th>EUID</th><th>Child</th><th>Parent</th><th>Type</th></tr></thead><tbody>
+        <table><thead><tr><th>EUID</th><th>Parent</th><th>Child</th><th>Type</th></tr></thead><tbody>
         {% for edge in graph.elements.edges %}
         <tr><td><a href="{{ tapdb_gui_url(request, '/object/' ~ edge.data.euid) }}">{{ edge.data.euid }}</a></td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ edge.data.source) }}">{{ edge.data.source }}</a></td><td><a href="{{ tapdb_gui_url(request, '/object/' ~ edge.data.target) }}">{{ edge.data.target }}</a></td><td>{{ edge.data.relationship_type }}</td></tr>
         {% endfor %}
@@ -66,190 +494,38 @@
   </details>
 </section>
 <script type="application/json" id="tapdb-graph-payload">{{ graph | tojson }}</script>
+
+{% if user.role|lower == 'admin' %}
+<dialog id="relationship-dialog">
+    <h3>Create Lineage Edge</h3>
+    <p id="relationship-dialog-context"></p>
+    <label for="relationship-type-select" style="font-size: 0.85rem; color: var(--text-muted);">Relationship Type</label>
+    <select id="relationship-type-select">
+        <option value="contains">contains</option>
+        <option value="derived_from">derived_from</option>
+        <option value="references">references</option>
+        <option value="depends_on">depends_on</option>
+        <option value="produces">produces</option>
+        <option value="consumes">consumes</option>
+        <option value="generic" selected>generic</option>
+        <option value="related">related</option>
+    </select>
+    <div class="dialog-actions">
+        <button id="relationship-dialog-cancel" type="button" class="btn">Cancel</button>
+        <button id="relationship-dialog-create" type="button" class="btn btn-success">Create Edge</button>
+    </div>
+</dialog>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js" crossorigin="anonymous"></script>
 <script>
-(function () {
-  const mount = document.getElementById("tapdb-graph");
-  const payloadEl = document.getElementById("tapdb-graph-payload");
-  const detail = document.getElementById("tapdb-graph-detail");
-  const counts = document.getElementById("tapdb-graph-counts");
-  const layoutSelect = document.getElementById("tapdb-graph-layout-select");
-  const fitButton = document.getElementById("tapdb-graph-fit");
-  const basePath = String(window.TAPDB_BASE_PATH || "").replace(/\/$/, "");
-
-  if (!mount || !payloadEl) return;
-  if (!window.cytoscape) {
-    mount.textContent = "Cytoscape failed to load. Check network access to cdn.jsdelivr.net.";
-    return;
-  }
-
-  function escapeHtml(value) {
-    return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
-      return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"}[char];
+    window.TAPDB_GRAPH_CAN_MUTATE = {{ (user.role|lower == 'admin') | tojson }};
+</script>
+<script src="{{ tapdb_gui_url(request, '/static/tapdb-graph.js') }}?v=10.0.0"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        initGraphPage();
     });
-  }
-
-  function objectHref(euid) {
-    return basePath + "/object/" + encodeURIComponent(euid);
-  }
-
-  let payload;
-  try {
-    payload = JSON.parse(payloadEl.textContent || "{}");
-  } catch (error) {
-    mount.textContent = "Graph payload is not valid JSON.";
-    return;
-  }
-
-  const elements = payload.elements || {};
-  const nodes = (elements.nodes || []).map(function (node) {
-    const data = Object.assign({}, node.data || {});
-    data.id = String(data.id || data.euid || data.uid || "");
-    data.display_label = data.display_label || data.name || data.euid || data.id;
-    data.color = data.color || "#1f6feb";
-    return {data: data};
-  }).filter(function (node) {
-    return node.data.id;
-  });
-  const edges = (elements.edges || []).map(function (edge, index) {
-    const data = Object.assign({}, edge.data || {});
-    data.source = String(data.source || "");
-    data.target = String(data.target || "");
-    data.id = String(data.id || data.euid || data.source + "-" + data.target + "-" + index);
-    data.relationship_type = data.relationship_type || "related";
-    return {data: data};
-  }).filter(function (edge) {
-    return edge.data.source && edge.data.target;
-  });
-
-  if (counts) counts.textContent = nodes.length + " nodes / " + edges.length + " edges";
-  if (!nodes.length) {
-    mount.textContent = "No graph nodes returned.";
-    return;
-  }
-
-  const cy = cytoscape({
-    container: mount,
-    elements: nodes.concat(edges),
-    minZoom: 0.12,
-    maxZoom: 3,
-    wheelSensitivity: 0.18,
-    style: [
-      {
-        selector: "node",
-        style: {
-          "background-color": "data(color)",
-          "border-color": "#17202a",
-          "border-width": 1,
-          "color": "#17202a",
-          "font-size": 10,
-          "height": 38,
-          "label": "data(display_label)",
-          "overlay-opacity": 0,
-          "shape": "round-rectangle",
-          "text-background-color": "#ffffff",
-          "text-background-opacity": 0.88,
-          "text-background-padding": 2,
-          "text-halign": "center",
-          "text-max-width": 120,
-          "text-valign": "bottom",
-          "text-wrap": "wrap",
-          "width": 76
-        }
-      },
-      {
-        selector: "edge",
-        style: {
-          "curve-style": "bezier",
-          "font-size": 9,
-          "label": "data(relationship_type)",
-          "line-color": "#98a2b3",
-          "target-arrow-color": "#98a2b3",
-          "target-arrow-shape": "triangle",
-          "text-background-color": "#ffffff",
-          "text-background-opacity": 0.9,
-          "text-background-padding": 1,
-          "text-rotation": "autorotate",
-          "width": 2
-        }
-      },
-      {
-        selector: ":selected",
-        style: {
-          "border-color": "#b42318",
-          "border-width": 3,
-          "line-color": "#b42318",
-          "target-arrow-color": "#b42318"
-        }
-      }
-    ]
-  });
-
-  function showNode(data) {
-    if (!detail) return;
-    const euid = data.euid || data.id;
-    detail.innerHTML =
-      "<dl>" +
-      "<dt>EUID</dt><dd><a href=\"" + objectHref(euid) + "\">" + escapeHtml(euid) + "</a></dd>" +
-      "<dt>Name</dt><dd>" + escapeHtml(data.name || "") + "</dd>" +
-      "<dt>Type</dt><dd>" + escapeHtml([data.category, data.type, data.subtype].filter(Boolean).join("/")) + "</dd>" +
-      "<dt>Status</dt><dd>" + escapeHtml(data.bstatus || "") + "</dd>" +
-      "</dl>";
-  }
-
-  function showEdge(data) {
-    if (!detail) return;
-    detail.innerHTML =
-      "<dl>" +
-      "<dt>Lineage</dt><dd>" + escapeHtml(data.euid || data.id) + "</dd>" +
-      "<dt>Child</dt><dd><a href=\"" + objectHref(data.source) + "\">" + escapeHtml(data.source) + "</a></dd>" +
-      "<dt>Parent</dt><dd><a href=\"" + objectHref(data.target) + "\">" + escapeHtml(data.target) + "</a></dd>" +
-      "<dt>Relationship</dt><dd>" + escapeHtml(data.relationship_type || "") + "</dd>" +
-      "</dl>";
-  }
-
-  function runLayout(name) {
-    const layoutName = name || "breadthfirst";
-    const options = {name: layoutName, fit: true, padding: 42, animate: false};
-    if (layoutName === "breadthfirst") {
-      options.directed = true;
-      options.spacingFactor = 1.15;
-    }
-    if (layoutName === "cose") {
-      options.nodeRepulsion = 6500;
-      options.idealEdgeLength = 120;
-    }
-    cy.layout(options).run();
-  }
-
-  cy.on("tap", "node", function (event) {
-    showNode(event.target.data());
-  });
-  cy.on("tap", "edge", function (event) {
-    showEdge(event.target.data());
-  });
-  cy.on("tap", function (event) {
-    if (event.target === cy && detail) detail.textContent = "No selection";
-  });
-  if (layoutSelect) {
-    layoutSelect.addEventListener("change", function () {
-      runLayout(layoutSelect.value);
-    });
-  }
-  if (fitButton) {
-    fitButton.addEventListener("click", function () {
-      cy.fit(undefined, 36);
-    });
-  }
-
-  runLayout(layoutSelect ? layoutSelect.value : "breadthfirst");
-  setTimeout(function () {
-    cy.resize();
-    cy.fit(undefined, 36);
-  }, 50);
-})();
 </script>
 {% endblock %}

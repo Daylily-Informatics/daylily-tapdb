@@ -2,8 +2,8 @@
 
 Every command here is a thin adapter over ``daylily_tapdb.backup``. No command
 builds a ``pg_dump`` invocation, reimplements a check, or writes a receipt: the
-service does all of that, so the CLI, the admin API, and the GUI cannot drift
-apart in what they actually do.
+service does all of that, so the CLI and canonical GUI's HTML/JSON surfaces
+cannot drift apart in what they actually do.
 
 Exit codes follow the drift-check precedent:
 
@@ -225,7 +225,7 @@ def backup_list(
 
     payload = listing.to_payload()
     if _json_mode():
-        # Carry the same status block the admin API and GUI expose. Without it
+        # Carry the same status block the canonical GUI exposes. Without it
         # the CLI is the one surface that cannot answer "is the backup schedule
         # healthy, and is the receipt chain intact" -- which is exactly what a
         # monitoring job asks. `status_context` is the shared implementation,

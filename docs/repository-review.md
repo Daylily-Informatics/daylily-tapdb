@@ -1,6 +1,6 @@
-# TapDB 9.2 Repository Reconciliation
+# TapDB 10.0 Repository Reconciliation
 
-This is a current-code reconciliation for the TapDB 9.2 release line. It
+This is a current-code reconciliation for the TapDB 10.0 release line. It
 records what was reviewed, the contracts the repository now exposes, the
 deliberate hard cuts, and the work that remains outside TapDB. It is not a
 future documentation plan or a historical migration memo.
@@ -14,9 +14,10 @@ The reconciliation covered:
   governed object operations;
 - Meridian identity, domain/owner/tenant scope, lineage, and external
   references;
-- the shared sanitized runtime-information payload across CLI, API, embedded
-  GUI, and legacy admin;
-- authenticated DAG v2 mounting and the isolated legacy DAG v1 boundary;
+- the shared sanitized runtime-information payload across CLI and the canonical
+  GUI/API;
+- authenticated DAG v2 mounting, exact external-reference search, and bounded
+  federation;
 - backup, restore, receipt, and release-documentation contracts.
 
 The primary operator and adopter references are the root
@@ -65,32 +66,40 @@ prefix ownership registry. The effective owner-scoped template identity is
   identity, database reachability, scope, storage, UI, and DAG status without
   raw config, environment dumps, Cognito fields, passwords, or tokens.
 - DAG v2 routes are mounted atomically behind an explicit host authentication
-  dependency. The separate legacy v1 router also requires an explicit callable
-  authentication dependency; its outbound proxy remains disabled unless an
-  exact restrictive policy is provided.
+  dependency. There is no v1 router, outbound proxy, alias resolution, or
+  compatibility endpoint.
+- Canonical cross-service relationships are typed XRF objects connected by
+  persisted lineage. The public lifecycle owns exact identity, replay,
+  detach/reactivation, authority-scoped reconciliation, and reverse lookup.
+- `daylily_tapdb.gui` is the sole web implementation and retains every valid
+  former `admin.main` feature, including its rich graph interactions. The
+  duplicate external-link writer was intentionally removed.
 - Meridian-shaped EUIDs are accepted only from persisted TapDB rows or another
   owning service. Display labels, external IDs, hashes, and idempotency keys do
   not become synthetic EUIDs.
 
 ## Deliberate Hard Cuts
 
-TapDB 9.2 intentionally does not provide ambient config fallback, `--env`
+TapDB 10.0 intentionally does not provide ambient config fallback, `--env`
 selection, implicit localhost/public-schema behavior, prefix derivation,
 domainless or ownerless template lookup, offset pagination, hard object delete,
-anonymous legacy DAG routes, DAG v1 fallback for v2, or inferred graph edges
-from copied metadata. Missing config, governance evidence, authentication, or
-an exact repository-pack path fails clearly.
+anonymous legacy DAG routes, DAG v1, outbound graph proxying, generic XRF
+writes, or inferred graph edges from copied metadata. Missing config,
+governance evidence, authentication, or an exact repository-pack path fails
+clearly.
 
 ## Remaining Downstream Work and Non-Goals
 
 Consuming services must adopt the v4 config, supply their real auth dependency,
-register their exact DAG v2 service identity, own their domain templates and
-prefix claims, and test their mounted integration. Infrastructure owners remain
+register their exact DAG v2 service identity, adopt canonical external
+references, own their domain templates and prefix claims, and test their
+mounted integration. Infrastructure owners remain
 responsible for PostgreSQL roles, TLS, backup scheduling and durable storage,
 provider snapshot cutover, and alert delivery.
 
 TapDB does not define domain workflows, create organization-specific templates,
-choose tenant policy, fetch remote DAG v2 services, synthesize external object
-identity, or perform a deployment or release on behalf of consumers. Those are
-downstream integration concerns, not missing fallback behavior in this
-repository.
+choose tenant policy, discover a fleet, own transport credentials, validate
+remote business state, or perform a deployment on behalf of consumers. The
+federation client calls only the exact services and authenticated transport an
+application supplies. Those are downstream integration concerns, not missing
+fallback behavior in this repository.

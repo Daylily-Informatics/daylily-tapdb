@@ -1,0 +1,49 @@
+{
+  "$comment": "TapDB reserved canonical template for scoped opaque identifiers",
+  "templates": [
+    {
+      "name": "Opaque External Identifier",
+      "polymorphic_discriminator": "generic_template",
+      "category": "reference",
+      "type": "external_identifier",
+      "subtype": "opaque",
+      "version": "1.0",
+      "instance_prefix": "XRF",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Canonical non-federated external identifier with explicit tenant or public-global scope.",
+        "properties": {
+          "namespace": null,
+          "kind": null,
+          "value": null,
+          "scope": null,
+          "canonical_uri": null
+        },
+        "instantiation_layouts": []
+      },
+      "json_addl_schema": {
+        "type": "object",
+        "required": ["properties", "action_groups", "audit_log", "identity_claim"],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "required": ["namespace", "kind", "value", "scope", "canonical_uri"],
+            "properties": {
+              "namespace": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9._-]*$"},
+              "kind": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9._-]*$"},
+              "value": {"type": "string", "minLength": 1, "maxLength": 2048},
+              "scope": {"enum": ["tenant", "public_global"]},
+              "canonical_uri": {"type": ["string", "null"], "maxLength": 2048}
+            },
+            "additionalProperties": false
+          },
+          "action_groups": {"type": "object", "maxProperties": 0},
+          "audit_log": {"type": "array", "maxItems": 0},
+          "identity_claim": {"type": "object"}
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}

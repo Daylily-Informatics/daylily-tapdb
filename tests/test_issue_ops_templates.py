@@ -1018,6 +1018,8 @@ def test_search_covers_all_sql_filters_record_types_and_cursor_guards():
         service_name="example-service",
         q="record",
         euid="exact-object",
+        name_like="sample",
+        euid_like="object",
         category="assay",
         type_name="sequencing",
         subtype="short_read",
@@ -1032,6 +1034,8 @@ def test_search_covers_all_sql_filters_record_types_and_cursor_guards():
     }
     assert page["items"][0]["modified_dt"]
     assert page["items"][2]["relationship_type"] == "contains"
+    assert page["filters"]["name_like"] == "sample"
+    assert page["filters"]["euid_like"] == "object"
     assert len(session.calls) >= 25
 
     template_cursor = search_objects(
@@ -1064,6 +1068,44 @@ def test_search_covers_all_sql_filters_record_types_and_cursor_guards():
             service_name="example-service",
             record_type="unknown",
         )
+
+
+def test_search_cursor_skips_completed_kinds_and_stops_after_full_page():
+    template = _template()
+    template.uid = 1
+    instance = _instance()
+    instance.uid = 2
+    later_instance = SimpleNamespace(**{**instance.__dict__, "uid": 3})
+
+    instance_cursor = search_objects(
+        _SearchSession({generic_instance: [instance, later_instance]}),
+        service_name="example-service",
+        record_type="instance",
+        limit=1,
+    )["page"]["next_cursor"]
+    resumed = search_objects(
+        _SearchSession({generic_instance: [later_instance]}),
+        service_name="example-service",
+        cursor=instance_cursor,
+        limit=10,
+    )
+    assert [item["uid"] for item in resumed["items"]] == [3]
+
+    full_first_kind = search_objects(
+        _SearchSession(
+            {
+                generic_template: [
+                    template,
+                    SimpleNamespace(**{**template.__dict__, "uid": 4}),
+                ],
+                generic_instance: [instance],
+            }
+        ),
+        service_name="example-service",
+        limit=1,
+    )
+    assert full_first_kind["page"]["returned"] == 1
+    assert full_first_kind["page"]["next_cursor"]
 
 
 def test_runtime_payload_is_shared_shape_and_never_exposes_secrets(tmp_path: Path):
@@ -1240,32 +1282,39 @@ def test_runtime_payload_reports_configured_status_and_clean_git_checkout(
         )
 
 
-def test_cli_groups_and_legacy_read_routes_are_hard_wired_to_authentication():
+def test_cli_groups_and_canonical_read_routes_are_hard_wired_to_authentication():
     assert app is not None
     group_names = {group.name for group in app.registered_groups}
     assert {"templates", "objects"}.issubset(group_names)
 
-    tree = ast.parse(Path("admin/main.py").read_text(encoding="utf-8"))
+    tree = ast.parse(Path("daylily_tapdb/gui/router.py").read_text(encoding="utf-8"))
     expected = {
-        "get_graph_data",
-        "api_list_templates",
-        "api_list_instances",
-        "api_get_object",
+        "graph_api",
+        "templates_page",
+        "search_api",
+        "object_api",
     }
     found = {}
     for node in tree.body:
-        if (
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name in expected
-        ):
-            decorators = {
-                decorator.id
-                for decorator in node.decorator_list
-                if isinstance(decorator, ast.Name)
-            }
-            found[node.name] = decorators
+        for child in ast.walk(node):
+            if (
+                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and child.name in expected
+            ):
+                dependencies = {
+                    default.args[0].id
+                    for default in child.args.defaults
+                    if isinstance(default, ast.Call)
+                    and isinstance(default.func, ast.Name)
+                    and default.func.id == "Depends"
+                    and default.args
+                    and isinstance(default.args[0], ast.Name)
+                }
+                found[child.name] = dependencies
     assert found.keys() == expected
-    assert all("require_auth" in decorators for decorators in found.values())
+    assert all(
+        "require_tapdb_gui_user" in dependencies for dependencies in found.values()
+    )
 
 
 def test_template_cli_commands_share_repository_services(

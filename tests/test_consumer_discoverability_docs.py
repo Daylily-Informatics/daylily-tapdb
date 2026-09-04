@@ -27,21 +27,34 @@ def test_consumer_guide_has_the_complete_discovery_contract() -> None:
         "graph_revision",
         "snapshot_at",
         "truncation",
-        "TypedExternalReferenceSpec",
-        "instance_factory=factory",
+        "ExternalReferenceService",
+        "TapDBObjectTarget",
+        "ExternalIdentifierTarget",
+        "DagV2FederationClient",
+        "FederationLimits",
         "generic_instance_lineage",
-        "V1ProxyPolicy",
         "NOSUPERUSER NOBYPASSRLS",
         "claim_instance_by_identity",
-        "acquire_transaction_advisory_lock",
+        "IdentityScope.GLOBAL",
+        "IdentityScope.TENANT",
         "templates inventory",
         "--json info",
         "--preflight-receipt",
-        "ambiguous_owner",
-        "Identity and scoping",
-        "Backup and recovery",
+        "exactly one owner",
+        "unresolved boundary",
+        "identity and scoping",
+        "backup and recovery",
     ):
         assert required in text
+
+    for removed in (
+        "TypedExternalReferenceSpec",
+        "V1ProxyPolicy",
+        "create_tapdb_dag_router",
+        "/api/dag/data",
+        "/api/dag/object/",
+    ):
+        assert removed not in text
 
 
 def test_consumer_examples_use_only_persisted_euid_placeholders() -> None:
@@ -53,7 +66,7 @@ def test_consumer_examples_use_only_persisted_euid_placeholders() -> None:
 
 
 def test_python_examples_are_syntax_valid() -> None:
-    blocks = re.findall(r"```python\n(.*?)\n```", _text(), flags=re.DOTALL)
+    blocks = re.findall(r"~~~python\n(.*?)\n~~~", _text(), flags=re.DOTALL)
     assert len(blocks) == 2
     for index, block in enumerate(blocks):
         compile(block, f"consumer-guide-block-{index}.py", "exec")
@@ -63,5 +76,8 @@ def test_readme_and_docs_index_link_the_guide() -> None:
     relative = "docs/consumer-discoverability-guide.md"
     assert relative in (ROOT / "README.md").read_text(encoding="utf-8")
     assert "consumer-discoverability-guide.md" in (
+        ROOT / "docs" / "README.md"
+    ).read_text(encoding="utf-8")
+    assert "external-references-and-federation.md" in (
         ROOT / "docs" / "README.md"
     ).read_text(encoding="utf-8")

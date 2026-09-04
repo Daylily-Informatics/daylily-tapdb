@@ -1,60 +1,53 @@
 # Integration and Embedding
 
-This guide lives in the `daylily-tapdb` repository. The Python import package is `daylily_tapdb`.
+TapDB 10 has one web implementation, `daylily_tapdb.gui`. The same factory
+powers the standalone `tapdb ui` process and a GUI mounted inside a FastAPI
+service. There is no separate `admin.main` application.
 
-TAPDB can run as a standalone substrate, or it can be embedded inside a larger application. The `daylily-tapdb` codebase supports both patterns, but the responsibilities stay sharply divided.
+## Ownership boundary
 
-## What TAPDB Owns
+TapDB owns typed persistence, lineage, audit, canonical external references,
+transactional inbox/outbox state, schema lifecycle, backup/recovery, DAG v2,
+and reusable GUI/API surfaces.
 
-TAPDB owns the substrate layer:
+The host owns domain semantics, business policy, its session or service
+credentials, external-system validation, fleet admission, and its surrounding
+UI.
 
-- polymorphic template and instance persistence
-- lineage and traversal
-- audit history
-- transactional outbox and inbox handling
-- admin UI mounting and auth plumbing
-- CLI-driven database lifecycle
-- backup and recovery for its own schema (see
-  [`docs/backup-and-recovery.md`](backup-and-recovery.md))
+## Install
 
-The current object model and relationships are implemented in [`daylily_tapdb/models`](../daylily_tapdb/models) and the outbox/inbox helpers in [`daylily_tapdb/outbox`](../daylily_tapdb/outbox).
+~~~bash
+python -m pip install "daylily-tapdb[gui]"
+~~~
 
-## Reusable Web Surface
+The `gui` extra includes standalone server, forms/session, TapDB-native auth,
+and host-embedding dependencies. There is no `admin` extra.
 
-TapDB now exposes a reusable library surface in
-[`daylily_tapdb.web`](../daylily_tapdb/web):
+## Canonical mount
 
-- `create_tapdb_web_app(...)` for the full mounted HTML/UI surface
-- `create_tapdb_gui_app(...)` for the new embeddable GUI V1 surface
-- `create_tapdb_gui_router(...)` when a host app wants to include only the GUI router
-- `mount_tapdb_dag_surfaces(...)` for authenticated DAG v2 discovery, exact
-  ownership lookup, bounded traversal, and search
-- `TapdbHostBridge` for host auth, shell links, template overrides, and host CSS
-- `create_tapdb_dag_router(...)` only for a separately authenticated legacy v1
-  surface; its proxy is disabled unless explicitly policy-bound
+~~~python
+from fastapi import FastAPI, Request
 
-Install the GUI extra before importing the V1 embeddable GUI in a host app:
-
-```bash
-pip install "daylily-tapdb[gui]"
-```
-
-Use `daylily-tapdb[admin]` instead when the host also needs the legacy TapDB
-admin UI or TapDB-native browser auth.
-
-The supported embedding pattern is:
-
-```python
-from fastapi import FastAPI
-
+from daylily_tapdb.gui import create_tapdb_gui_app
 from daylily_tapdb.web import (
     DagV2Limits,
     TapdbHostBridge,
     TapdbHostNavLink,
-    create_tapdb_gui_app,
-    create_tapdb_web_app,
     mount_tapdb_dag_surfaces,
 )
+
+
+def resolve_operator(request: Request) -> dict | None:
+    operator = request.session.get("operator")
+    if not operator:
+        return None
+    return {
+        "username": operator["email"],
+        "email": operator["email"],
+        "display_name": operator.get("name") or operator["email"],
+        "role": operator.get("role", "user"),
+    }
+
 
 app = FastAPI()
 bridge = TapdbHostBridge(
@@ -64,209 +57,9 @@ bridge = TapdbHostBridge(
     home_url="/ui",
     login_url="/login",
     logout_url="/auth/logout",
+    change_password_url="/account/password",
     nav_links=(TapdbHostNavLink(label="Dashboard", href="/ui"),),
     extra_stylesheets=("/static/console.css",),
-    resolve_user=my_host_user_resolver,
-)
-
-app.mount(
-    "/tapdb",
-    create_tapdb_gui_app(
-        config_path="/abs/path/to/tapdb-config.yaml",
-        host_bridge=bridge,
-    ),
-)
-dag_mount = mount_tapdb_dag_surfaces(
-    app,
-    config_path="/abs/path/to/tapdb-config.yaml",
-    service_id="dewey",
-    display_name="Dewey",
-    auth_dependency=my_session_or_service_auth,
-    limits=DagV2Limits(max_depth=6, max_nodes=500, max_search_page_size=100),
-)
-if not dag_mount.mounted:
-    raise RuntimeError(f"DAG v2 unavailable: {dag_mount.reason}")
-```
-
-`create_tapdb_web_app(...)` remains available for the legacy full admin surface.
-Use `create_tapdb_gui_app(...)` for the V1 client-embeddable GUI pages.
-
-The standalone `tapdb ui start` path also builds on this same factory.
-
-Legacy DAG v1 is a separate router and is never an unauthenticated fallback.
-An existing host that still requires it must pass a callable dependency that
-rejects anonymous requests with `401` or `403`; omission or a non-callable
-value fails router construction:
-
-```python
-from daylily_tapdb.web import create_tapdb_dag_router
-
-legacy_router = create_tapdb_dag_router(
-    config_path="/abs/path/to/tapdb-config.yaml",
-    auth_dependency=my_session_or_service_auth,
-)
-app.include_router(legacy_router)
-```
-
-Its outbound proxy remains disabled unless the host additionally supplies an
-explicit `V1ProxyPolicy` containing an exact HTTPS DNS allowlist, a timeout no
-greater than ten seconds, and a response limit no greater than five MiB. It
-forwards no cookie or authorization header.
-
-## V1 Embedded GUI Routes
-
-When mounted at `/tapdb`, the V1 GUI exposes both HTML pages and JSON APIs:
-
-- `GET /tapdb/search` and `GET /tapdb/api/search`
-- `GET /tapdb/object/{euid}` and `GET /tapdb/api/object/{euid}`
-- `GET /tapdb/object/{euid}/graph` and `GET /tapdb/api/object/{euid}/graph`
-- `POST /tapdb/api/object/{euid}/edit-json`
-- `POST /tapdb/api/object/{euid}/status`
-- `POST /tapdb/api/object/{euid}/lineage`
-- `POST /tapdb/api/object/{euid}/external-links`
-- `GET /tapdb/templates`, `GET /tapdb/templates/new`, and
-  `POST /tapdb/api/templates/validate`
-- `POST /tapdb/api/create/{template_euid}`
-- `GET /tapdb/admin/readiness` and `GET /tapdb/api/admin/readiness`
-- `GET /tapdb/admin/meridian` and
-  `GET /tapdb/api/admin/meridian/validate`
-- `GET /tapdb/admin/metrics` and `GET /tapdb/api/admin/metrics`
-- `GET /tapdb/admin/backups` and `GET /tapdb/api/admin/backups`
-- `GET /tapdb/api/admin/backups/status`
-- `GET /tapdb/admin/backups/{ref}/restore` and
-  `GET /tapdb/api/admin/backups/{ref}/restore`
-- `POST /tapdb/admin/backups/create`
-- `POST /tapdb/admin/backups/{ref}/verify`
-- `POST /tapdb/admin/backups/{ref}/rehearse`
-- `POST /tapdb/admin/backups/{ref}/restore`
-
-Every backup route is admin-only and refuses others with `403`. Each HTML page
-is paired with a JSON route so a host that mounts the GUI without the admin
-API still has a complete backup surface. The apply route goes through the same
-`daylily_tapdb.backup.views.apply_restore_from_review` the admin API uses, so
-the two cannot enforce different rules — see
-[`docs/backup-and-recovery.md`](backup-and-recovery.md).
-
-The external-link API creates the same first-class typed TapDB external
-reference object as the HTML form, then links it to the source object by
-lineage. It does not create inline-only external references.
-
-## Auth Modes
-
-TapDB now supports two embedding stories:
-
-- `tapdb` auth in TapDB config when TapDB owns its own session/login flow
-- `host_session` through `TapdbHostBridge` when a parent app owns browser auth
-
-The older `shared_host` cookie-decoding mode still exists inside the admin app,
-but it is no longer the preferred host integration pattern.
-
-Practical guidance:
-
-- Use `TapdbHostBridge(auth_mode="host_session", ...)` when the parent app
-  already authenticates operators and wants `/tapdb` to inherit host auth and
-  host chrome.
-- Use TapDB-native auth only when TapDB should own its own login screens.
-
-## Client Repository Responsibilities
-
-Client repos should own:
-
-- domain semantics
-- domain template packs
-- workflow semantics
-- integration adapters
-- business-specific tests and fixtures
-
-TapDB should not become the place where domain meaning lives. It is the persistence and object model substrate, not the application authority.
-
-That split is consistent with the current core config pack in [`daylily_tapdb/core_config`](../daylily_tapdb/core_config) and with the template loading policy in [`daylily_tapdb/templates/loader.py`](../daylily_tapdb/templates/loader.py).
-
-## Extension Boundaries
-
-Use TAPDB as the substrate, but keep domain behavior in the owning application repo.
-
-TapDB is a good fit for:
-
-- reusable object models
-- lineage-based relationships
-- versioned templates
-- audit and outbox persistence
-- shared admin/runtime management
-
-Application repos should own:
-
-- customer or lab workflow semantics
-- domain-specific template packs
-- external integrations
-- access policy beyond TAPDB substrate rules
-- user-facing behavior that is not generic enough to belong here
-
-That line matters because TAPDB has been refactored into a reusable base layer. The docs should explain the base layer clearly, but not blur the boundary back into application logic.
-
-## What Not To Outsource
-
-Application repos should not outsource these responsibilities to TAPDB:
-
-- the meaning of domain objects
-- the business meaning of EUIDs
-- the choice of workflow states
-- the shape of domain-specific JSON payloads
-- the orchestration of external APIs
-
-TAPDB can store, validate, and expose those objects. It should not decide what they mean.
-
-## Dewey Reference Pattern
-
-Dewey is the reference adopter for this embedding model:
-
-- mounted HTML surface at `/tapdb`
-- root manifest at `/api/dag/manifest` and v2 routes at `/api/dag/v2/*`
-- Dewey session or bearer-token auth guarding the root DAG API
-- host shell link and CSS integration through `TapdbHostBridge`
-
-## Dayhoff-Style Host Example
-
-This is a TapDB-side example only. It does not require mutating a Dayhoff repo.
-
-```python
-from fastapi import FastAPI, Request
-
-from daylily_tapdb.web import (
-    DagV2Limits,
-    TapdbHostBridge,
-    TapdbHostNavLink,
-    create_tapdb_gui_app,
-    mount_tapdb_dag_surfaces,
-)
-
-
-def resolve_operator(request: Request) -> dict | None:
-    user = request.session.get("operator")
-    if not user:
-        return None
-    return {
-        "username": user["email"],
-        "email": user["email"],
-        "display_name": user.get("name") or user["email"],
-        "role": user.get("role", "user"),
-    }
-
-
-def require_dayhoff_api_user():
-    ...
-
-
-app = FastAPI()
-bridge = TapdbHostBridge(
-    auth_mode="host_session",
-    service_name="dayhoff",
-    app_name="Dayhoff",
-    home_url="/",
-    login_url="/login",
-    logout_url="/logout",
-    nav_links=(TapdbHostNavLink(label="Dashboard", href="/"),),
-    extra_stylesheets=("/static/dayhoff.css",),
     resolve_user=resolve_operator,
 )
 
@@ -277,20 +70,156 @@ app.mount(
         host_bridge=bridge,
     ),
 )
+
 dag_mount = mount_tapdb_dag_surfaces(
     app,
     config_path="/abs/path/to/tapdb-config.yaml",
-    service_id="dayhoff",
-    display_name="Dayhoff",
-    auth_dependency=require_dayhoff_api_user,
+    service_id="dewey",
+    display_name="Dewey",
+    auth_dependency=require_session_or_service_user,
     limits=DagV2Limits(max_depth=6, max_nodes=500, max_search_page_size=100),
 )
 if not dag_mount.mounted:
     raise RuntimeError(f"DAG v2 unavailable: {dag_mount.reason}")
-```
+~~~
 
-## Related Materials
+Mounting the GUI under `/tapdb` keeps HTML and management JSON namespaced.
+Mount DAG v2 at the service root so a fleet client can use the exact paths in
+the manifest.
 
-- [`docs/dag_spec.md`](./dag_spec.md)
-- [`docs/runtime-and-cli.md`](./runtime-and-cli.md)
-- [`docs/tapdb_gui_inclusion.md`](./tapdb_gui_inclusion.md)
+A host may include `create_tapdb_gui_router(...)` directly only when it already
+owns the surrounding FastAPI application and middleware. It is the router from
+the same implementation, not a second feature set.
+
+## GUI and JSON capability map
+
+Full former-admin feature parity is a release contract, not a best-effort
+migration target. The only exclusions are the explicitly removed DAG-v1 proxy
+and duplicate external-link writer.
+
+The canonical GUI includes all valid capabilities formerly served by
+`admin.main`:
+
+| Capability | Representative HTML | Representative JSON |
+|---|---|---|
+| Auth/account | `/login`, `/signup`, `/change-password` | session/auth flow |
+| Overview | `/admin/overview` | `/api/admin/overview` |
+| Search | `/search` | `/api/search` |
+| Rich graph explorer | `/graph`, `/object/{euid}/graph` | `/api/graph`, `/api/object/{euid}/graph` |
+| Object detail | `/object/{euid}` | `/api/object/{euid}` |
+| Create from template | `/create/{template_euid}` | `/api/create/{template_euid}` |
+| Governed update/delete | object forms | `PATCH`/`DELETE /api/objects/{euid}` |
+| Lineage | object form | `POST /api/object/{euid}/lineage` |
+| Assessment/repair | object form | assess, revalidate, recommendations, repair APIs |
+| Template repository | `/templates`, `/templates/new` | validate/import/download APIs |
+| Audit | `/audit` | `/api/audit` |
+| Readiness | `/admin/readiness` | `/api/admin/readiness` |
+| Inventory | `/admin/inventory` | `/api/admin/inventory` |
+| Meridian | `/admin/meridian` | `/api/admin/meridian/validate` |
+| Metrics/runtime | `/admin/metrics`, `/admin/runtime` | corresponding management JSON endpoints |
+| Backup/recovery | `/admin/backups` | `/api/admin/backups/*` |
+
+Search preserves the former advanced-query combinations: free text, independent
+name/EUID contains filters, exact category/type/subtype filters, record kind,
+and forward cursor pagination across templates, instances, and lineage.
+
+The graph explorer retains fuzzy and exact find, degree transparency, distance
+filtering, type visibility, subtype muting, multiple layouts, child/parent
+waves, neighborhood highlighting, admin lineage creation and soft deletion,
+object/edge detail, DAG JSON download, and Mermaid export. It uses canonical
+DAG-v2 builders only. External references and opaque identifiers are displayed
+read-only.
+
+Every JSON request without a user fails with `401`. Every HTML request without
+a user redirects to login. Mutations require an administrator. Governed object
+APIs default to dry-run and require explicit apply where documented.
+
+## Auth modes
+
+### TapDB-native auth
+
+Use `admin.auth.mode: tapdb` when TapDB should own login, signup, password
+challenge, logout, and Cognito Hosted UI flows. Production-like targets require
+a stable session secret and HTTPS-safe configuration.
+
+### Host session bridge
+
+Use `TapdbHostBridge(auth_mode="host_session", ...)` when the parent service
+already owns browser auth. The bridge resolves and normalizes the current user,
+gates every mounted route, redirects anonymous HTML, returns JSON `401` for
+anonymous API requests, and injects only the normalized identity into TapDB.
+
+The host can add navigation, stylesheets, template override directories, and
+request-local display context. Those features do not grant storage or
+authorization authority.
+
+### Disabled auth
+
+`admin.auth.mode: disabled` is local-development-only. The GUI refuses
+production-like configurations that disable auth.
+
+The old shared-cookie decoder is not an embedding fallback. Prefer a host
+resolver that validates its own session and supplies a normalized user.
+
+## DAG v2 auth
+
+The GUI bridge and root DAG API can use different callables because browser and
+service-to-service auth are often different. Every DAG endpoint uses the
+explicit `auth_dependency` provided at mount. The dependency must return a
+stable actor identity or reject the request with `401`/`403`.
+
+The DAG mount has no anonymous path, outbound proxy, or credential-forwarding
+behavior.
+
+## External-reference integration
+
+Consumer code creates cross-service relationships through
+`daylily_tapdb.external_references.ExternalReferenceService` inside its own
+transaction. Do not submit an external-link HTML form or write an XRF through a
+generic endpoint.
+
+Remote validation and synchronization remain in the host. TapDB stores exact
+target identity and source-to-XRF lineage and projects it through DAG v2.
+
+For global search and graph composition, the host or Kahlo supplies an exact
+fleet plus an authenticated `DagV2Transport` to
+`DagV2FederationClient`. TapDB does not discover services or credentials.
+
+## Backup/recovery
+
+The canonical HTTP prefix is `/api/admin/backups`. HTML and JSON call the same
+backup service and staged restore review path, so they cannot implement
+different recovery rules. See [backup and recovery](backup-and-recovery.md).
+
+## Standalone GUI
+
+`tapdb --config <path> ui start` launches the same
+`create_tapdb_gui_app(...)` factory with explicit config context. Status, logs,
+restart, and stop remain under `tapdb ui`.
+
+## Dayhoff-Style Host Example
+
+The canonical mount above is the Dayhoff-style pattern: host-owned session,
+host shell integration, TapDB under `/tapdb`, and root authenticated DAG v2.
+It does not require mutating a Dayhoff repo; each consumer migration is separate
+work.
+
+## Removed integration paths
+
+TapDB 10 deliberately omits:
+
+- `admin.main` and its templates/static application;
+- `create_tapdb_web_app`;
+- a separate `admin` package extra;
+- DAG v1 and its manifest/router;
+- outbound external-graph proxying;
+- URL/auth routing metadata;
+- metadata-derived graph edges;
+- embedded GUI external-link creation;
+- generic XRF writes;
+- compatibility aliases and fallbacks.
+
+Use the [GUI inclusion guide](tapdb_gui_inclusion.md),
+[DAG contract](dag_spec.md), and
+[external-reference and federation guide](external-references-and-federation.md)
+for focused contracts.

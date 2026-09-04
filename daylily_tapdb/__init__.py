@@ -41,10 +41,10 @@ Note:
     ``config_identity`` are all required by PostgreSQL ``TAPDBConnection``
     sessions; every target value comes from one explicit absolute config.
 
-    Only ``actor/user/system/1.0/``, ``message/webhook/event/1.0/``, and
-    ``reference/external_identifier/tapdb_object/1.0/`` are bundled with this
-    package — other template packs are supplied externally and seeded via
-    ``tapdb db data seed``.
+    The package bundles only the ten substrate templates documented in
+    ``docs/template-authoring.md``, including the two canonical external
+    reference templates. Application-domain packs are supplied externally and
+    seeded via ``tapdb db data seed``.
 """
 
 try:
@@ -54,7 +54,7 @@ except ImportError:
 from daylily_tapdb.actions import ActionDispatcher
 from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.euid import EUIDConfig
-from daylily_tapdb.factory import InstanceFactory
+from daylily_tapdb.factory import IdentityScope, InstanceFactory
 from daylily_tapdb.lineage import (
     LineageQueryProxy,
     get_child_lineages,
@@ -144,6 +144,7 @@ __all__ = [
     "TAPDBConnection",
     "TemplateManager",
     "InstanceFactory",
+    "IdentityScope",
     "ActionDispatcher",
     "EUIDConfig",
     "ConfigIssue",

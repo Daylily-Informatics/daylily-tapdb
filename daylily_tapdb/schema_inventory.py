@@ -55,6 +55,12 @@ _INDEX_RE = re.compile(
     r"\"?([A-Za-z_][A-Za-z0-9_]*)\"?",
     re.IGNORECASE,
 )
+_DROP_INDEX_RE = re.compile(
+    r"DROP INDEX(?: CONCURRENTLY)?(?: IF EXISTS)?\s+"
+    r"(?:\"?[A-Za-z_][A-Za-z0-9_]*\"?\.)?"
+    r"\"?([A-Za-z_][A-Za-z0-9_]*)\"?",
+    re.IGNORECASE,
+)
 
 _COLUMN_SKIP_TOKENS = {
     "CONSTRAINT",
@@ -131,6 +137,13 @@ class TapdbSchemaInventory:
         index_name = _normalize_identifier(index_name)
         self.add_table(table_name)
         self.indexes[table_name].add(index_name)
+
+    def remove_index(self, index_name: str) -> None:
+        """Remove an index superseded by a later append-only migration."""
+
+        normalized = _normalize_identifier(index_name)
+        for indexes in self.indexes.values():
+            indexes.discard(normalized)
 
     def counts(self) -> dict[str, int]:
         return {
@@ -522,6 +535,12 @@ def _parse_schema_file(path: Path, inventory: TapdbSchemaInventory) -> None:
 
     for match in _INDEX_RE.finditer(sql):
         inventory.add_index(match.group(2), match.group(1))
+
+    # Asset files are parsed in execution order. A later append-only migration
+    # may replace an earlier index, so the expected inventory must model the
+    # resulting schema rather than the union of every historical CREATE.
+    for match in _DROP_INDEX_RE.finditer(sql):
+        inventory.remove_index(match.group(1))
 
 
 def _parse_table_columns(block: str) -> list[str]:

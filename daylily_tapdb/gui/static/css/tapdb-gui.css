@@ -43,6 +43,17 @@ footer { padding: 1rem; text-align: center; }
 .stack { display: grid; gap: 0.75rem; max-width: 900px; }
 .compact { gap: 0.45rem; }
 .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
+.summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
+.summary-card { display: grid; gap: 0.25rem; padding: 1rem; border: 1px solid var(--tapdb-border); border-radius: 8px; text-decoration: none; }
+.summary-card strong { font-size: 1.7rem; color: var(--tapdb-text); }
+.summary-card span { color: var(--tapdb-muted); }
+.definition-grid { display: grid; grid-template-columns: minmax(8rem, 0.25fr) minmax(0, 1fr); gap: 0.4rem 0.75rem; }
+.definition-grid dt { font-weight: 650; color: var(--tapdb-muted); }
+.definition-grid dd { margin: 0; overflow-wrap: anywhere; }
+.auth-shell { max-width: 32rem; padding-top: 8vh; }
+.auth-card { padding: 1.5rem; }
+.stacked-form { display: grid; gap: 0.85rem; }
+.stacked-form label { display: grid; gap: 0.3rem; color: var(--tapdb-muted); }
 .builder-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -204,9 +215,12 @@ th { color: var(--tapdb-muted); font-weight: 650; }
 pre { overflow: auto; background: #101828; color: #f2f4f7; padding: 1rem; border-radius: 6px; }
 .notice { padding: 0.75rem; border: 1px solid var(--tapdb-border); border-radius: 6px; margin: 0.75rem 0; }
 .notice.ok { border-color: var(--tapdb-ok); color: var(--tapdb-ok); }
+.notice.success { border-color: var(--tapdb-ok); color: var(--tapdb-ok); }
+.notice.warning { border-color: #b54708; color: #b54708; }
+.notice.error,
 .notice.bad { border-color: var(--tapdb-danger); color: var(--tapdb-danger); }
 @media (max-width: 860px) {
-  .topbar, .grid2, .builder-grid, .builder-row { grid-template-columns: 1fr; }
+  .topbar, .grid2, .summary-grid, .builder-grid, .builder-row { grid-template-columns: 1fr; }
   .tapdb-graph-layout { grid-template-columns: 1fr; min-height: auto; }
   .tapdb-graph-canvas { min-height: 26rem; }
   .split { align-items: flex-start; flex-direction: column; }

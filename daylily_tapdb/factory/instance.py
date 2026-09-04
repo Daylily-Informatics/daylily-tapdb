@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Any, Dict, Optional
 
 from pydantic import ValidationError
-from sqlalchemy import select, text
+from sqlalchemy import and_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,11 @@ from daylily_tapdb.validation.instantiation_layouts import (
 logger = logging.getLogger(__name__)
 
 _SYSTEM_USER_COORDS = ("actor", "user", "system")
+_RESERVED_EXTERNAL_REFERENCE_COORDS = {
+    ("reference", "external_identifier", "tapdb_object", "1.0"),
+    ("reference", "external_identifier", "opaque", "1.0"),
+}
+_EXTERNAL_REFERENCE_WRITER_TOKEN = object()
 _IDENTITY_NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9._/-]*$")
 
 
@@ -36,9 +41,16 @@ class IdentityClaimOutcome(str, Enum):
     EXISTING = "existing"
 
 
+class IdentityScope(str, Enum):
+    """Explicit persistence scope for a natural identity claim."""
+
+    GLOBAL = "global"
+    TENANT = "tenant"
+
+
 @dataclass(frozen=True)
 class InstanceIdentityClaim:
-    """Result of claiming one globally-scoped typed instance identity."""
+    """Result of claiming one explicitly scoped typed instance identity."""
 
     instance: generic_instance
     outcome: IdentityClaimOutcome
@@ -69,6 +81,31 @@ def _require_active_postgresql_transaction(session: Session) -> None:
         raise RuntimeError("natural identity claims require PostgreSQL")
     if not session.in_transaction():
         raise RuntimeError("natural identity claims require an active transaction")
+
+
+def _external_reference_writer_token() -> object:
+    """Return the private capability used only by ExternalReferenceService."""
+
+    return _EXTERNAL_REFERENCE_WRITER_TOKEN
+
+
+def _require_generic_template_write_allowed(
+    template: generic_template, *, writer_token: object | None = None
+) -> None:
+    coordinates = (
+        template.category,
+        template.type,
+        template.subtype,
+        template.version,
+    )
+    if (
+        coordinates in _RESERVED_EXTERNAL_REFERENCE_COORDS
+        and writer_token is not _EXTERNAL_REFERENCE_WRITER_TOKEN
+    ):
+        raise PermissionError(
+            "core external-reference templates are writable only through "
+            "daylily_tapdb.external_references.ExternalReferenceService"
+        )
 
 
 def _normalize_domain_code(domain_code: Any) -> Optional[str]:
@@ -263,6 +300,7 @@ class InstanceFactory:
         )
         if not template:
             raise ValueError(f"Template not found: {template_code}")
+        _require_generic_template_write_allowed(template)
 
         # Build json_addl
         json_addl = self._build_json_addl(session, template, properties)
@@ -300,18 +338,32 @@ class InstanceFactory:
         template_code: str,
         identity_key: str,
         name: str,
+        scope: IdentityScope,
+        tenant_id: Optional[uuid.UUID] = None,
         properties: Optional[Dict[str, Any]] = None,
-        claimant_tenant_id: Optional[uuid.UUID] = None,
         command_evidence: Optional[Dict[str, Any]] = None,
         create_children: bool = False,
+        _external_reference_token: object | None = None,
     ) -> InstanceIdentityClaim:
-        """Atomically create or replay a globally-scoped natural identity claim.
+        """Atomically create or replay an explicitly scoped natural identity claim.
 
         The attempted insert is isolated in a nested savepoint. This method
         never commits or rolls back the caller's outer transaction.
         """
         _require_active_postgresql_transaction(session)
         validated_key = validate_identity_key(identity_key)
+        if not isinstance(scope, IdentityScope):
+            raise ValueError(
+                "scope must be IdentityScope.GLOBAL or IdentityScope.TENANT"
+            )
+        if scope is IdentityScope.GLOBAL:
+            if tenant_id is not None:
+                raise ValueError("GLOBAL identity scope forbids tenant_id")
+            persisted_tenant_id = None
+        else:
+            if not isinstance(tenant_id, uuid.UUID):
+                raise ValueError("TENANT identity scope requires a tenant UUID")
+            persisted_tenant_id = tenant_id
         if self.domain_code is None:
             raise ValueError("domain_code is required for natural identity claims")
 
@@ -321,6 +373,9 @@ class InstanceFactory:
         )
         if template is None:
             raise ValueError(f"Template not found: {normalized_template_code}")
+        _require_generic_template_write_allowed(
+            template, writer_token=_external_reference_token
+        )
 
         domain_code, issuer_app_code = session.execute(
             text("SELECT tapdb_current_domain_code(), tapdb_current_owner_repo_name()")
@@ -331,8 +386,9 @@ class InstanceFactory:
         json_addl = self._build_json_addl(session, template, properties)
         self._normalize_system_user_json_addl(template, json_addl)
         json_addl["identity_claim"] = {
-            "claimant_tenant_id": (
-                str(claimant_tenant_id) if claimant_tenant_id is not None else None
+            "scope": scope.value,
+            "tenant_id": (
+                str(persisted_tenant_id) if persisted_tenant_id is not None else None
             ),
             "command_evidence": copy.deepcopy(command_evidence or {}),
             "create_children": bool(create_children),
@@ -343,7 +399,7 @@ class InstanceFactory:
         )
         expected = {
             "name": name,
-            "tenant_id": None,
+            "tenant_id": persisted_tenant_id,
             "polymorphic_discriminator": discriminator,
             "category": template.category,
             "type": template.type,
@@ -356,17 +412,29 @@ class InstanceFactory:
             "is_singleton": bool(template.is_singleton),
         }
 
+        index_elements = [
+            "domain_code",
+            "issuer_app_code",
+            "template_uid",
+            "identity_key",
+        ]
+        if scope is IdentityScope.GLOBAL:
+            index_where = and_(
+                generic_instance.identity_key.is_not(None),
+                generic_instance.tenant_id.is_(None),
+            )
+        else:
+            index_elements.insert(2, "tenant_id")
+            index_where = and_(
+                generic_instance.identity_key.is_not(None),
+                generic_instance.tenant_id.is_not(None),
+            )
         statement = (
             pg_insert(generic_instance.__table__)
             .values(**expected)
             .on_conflict_do_nothing(
-                index_elements=[
-                    "domain_code",
-                    "issuer_app_code",
-                    "template_uid",
-                    "identity_key",
-                ],
-                index_where=generic_instance.identity_key.is_not(None),
+                index_elements=index_elements,
+                index_where=index_where,
             )
             .returning(generic_instance.uid)
         )
@@ -387,6 +455,11 @@ class InstanceFactory:
                 generic_instance.issuer_app_code == issuer_app_code,
                 generic_instance.template_uid == template.uid,
                 generic_instance.identity_key == validated_key,
+                (
+                    generic_instance.tenant_id.is_(None)
+                    if persisted_tenant_id is None
+                    else generic_instance.tenant_id == persisted_tenant_id
+                ),
             )
         ).scalar_one_or_none()
         if instance is None:

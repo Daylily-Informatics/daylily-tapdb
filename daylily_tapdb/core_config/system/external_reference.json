@@ -1,8 +1,8 @@
 {
-  "$comment": "TapDB reserved operational template for typed external object links",
+  "$comment": "TapDB reserved canonical template for federated TapDB object references",
   "templates": [
     {
-      "name": "External Object Reference",
+      "name": "TapDB Object Reference",
       "polymorphic_discriminator": "generic_template",
       "category": "reference",
       "type": "external_identifier",
@@ -12,23 +12,35 @@
       "is_singleton": false,
       "bstatus": "active",
       "json_addl": {
-        "description": "Reserved TapDB operational object for linking local instances to non-local object identifiers through lineage.",
+        "description": "Canonical graph-expandable reference to an object persisted by another exact TapDB service.",
         "properties": {
-          "system": "",
-          "foreign_uid": "",
-          "root_euid": "",
-          "href": "",
-          "external_identifier": {
-            "system": "",
-            "target_euid": "",
-            "href": "",
-            "base_url": "",
-            "graph_data_path": "",
-            "object_detail_path_template": "",
-            "auth_mode": "none"
-          }
+          "target_service_id": null,
+          "target_object_euid": null,
+          "target_tenant_id": null,
+          "target_object_kind": null
         },
         "instantiation_layouts": []
+      },
+      "json_addl_schema": {
+        "type": "object",
+        "required": ["properties", "action_groups", "audit_log", "identity_claim"],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "required": ["target_service_id", "target_object_euid", "target_tenant_id", "target_object_kind"],
+            "properties": {
+              "target_service_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+              "target_object_euid": {"type": "string", "minLength": 1, "maxLength": 255},
+              "target_tenant_id": {"type": ["string", "null"], "format": "uuid"},
+              "target_object_kind": {"type": ["string", "null"], "minLength": 1, "maxLength": 128}
+            },
+            "additionalProperties": false
+          },
+          "action_groups": {"type": "object", "maxProperties": 0},
+          "audit_log": {"type": "array", "maxItems": 0},
+          "identity_claim": {"type": "object"}
+        },
+        "additionalProperties": false
       }
     }
   ]

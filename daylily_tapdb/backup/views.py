@@ -1,10 +1,10 @@
 """Presentation-neutral context and the shared staged-restore apply flow.
 
-The admin API and the embedded GUI both need the same three things: a status
-block, a review context for a staged restore, and a way to apply that restore.
-Building them here rather than in each surface is what makes "the API and the
-GUI do the same thing" a fact rather than a hope -- ``apply_restore_from_review``
-*is* the code path both call, so they cannot diverge in what they check.
+The canonical GUI's JSON and HTML routes both need the same three things: a
+status block, a review context for a staged restore, and a way to apply that
+restore. Building them here rather than in each presentation is what makes
+their shared behavior a fact: ``apply_restore_from_review`` is the code path
+both call, so they cannot diverge in what they check.
 
 Nothing here imports FastAPI, Jinja, or typer. The functions return plain
 dictionaries and dataclasses; turning those into JSON or HTML is the surface's

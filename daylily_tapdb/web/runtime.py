@@ -180,7 +180,7 @@ def _create_engine(
     pool_timeout = int(settings.get("db_pool_timeout") or 30)
     pool_recycle = int(settings.get("db_pool_recycle") or 1800)
 
-    return create_engine(
+    engine = create_engine(
         url,
         echo=echo_sql,
         pool_size=pool_size,
@@ -189,6 +189,12 @@ def _create_engine(
         pool_recycle=pool_recycle,
         pool_pre_ping=True,
     )
+    # The canonical GUI and DAG-v2 routes use this explicit-target pool. Keep
+    # their queries visible in the canonical operator metrics page.
+    from admin.db_metrics import maybe_install_engine_metrics
+
+    maybe_install_engine_metrics(engine, env_name="target")
+    return engine
 
 
 def _attach_aurora_password_provider(
@@ -327,8 +333,8 @@ def get_db(config_path: str) -> RuntimeDBConnection:
     return RuntimeDBConnection(bundle)
 
 
-def _clear_runtime_cache_for_tests() -> None:
-    """Dispose cached engines and clear runtime state for tests."""
+def dispose_all_runtime_engines() -> None:
+    """Dispose every explicit-target runtime pool."""
 
     with _bundle_lock:
         bundles = list(_bundles.values())
@@ -344,3 +350,9 @@ def _clear_runtime_cache_for_tests() -> None:
                 bundle.target_name,
                 exc,
             )
+
+
+def _clear_runtime_cache_for_tests() -> None:
+    """Backward-internal test hook for clearing runtime state."""
+
+    dispose_all_runtime_engines()

@@ -2,6 +2,7 @@
 
 from daylily_tapdb.factory.instance import (
     IdentityClaimOutcome,
+    IdentityScope,
     InstanceFactory,
     InstanceIdentityClaim,
     materialize_actions,
@@ -10,6 +11,7 @@ from daylily_tapdb.factory.instance import (
 
 __all__ = [
     "IdentityClaimOutcome",
+    "IdentityScope",
     "InstanceFactory",
     "InstanceIdentityClaim",
     "materialize_actions",

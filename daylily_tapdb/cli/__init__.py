@@ -177,32 +177,16 @@ def _port_conflict_details(port: int) -> str:
     return f"port {port} is in use ({first})"
 
 
-def _find_admin_module() -> str:
-    """Find the admin module path."""
-    cwd_admin = Path.cwd() / "admin"
-    if cwd_admin.exists() and (cwd_admin / "main.py").exists():
-        return "admin.main:app"
-
-    pkg_admin = Path(__file__).parent.parent.parent / "admin"
-    if pkg_admin.exists() and (pkg_admin / "main.py").exists():
-        return "admin.main:app"
-
-    raise ValueError(
-        "Cannot find admin module. Run from the daylily-tapdb"
-        " repo root, or ensure admin/ is installed."
-    )
-
-
 def _require_admin_extras() -> None:
-    """Fail fast with a clear message if Admin UI extras aren't installed."""
+    """Fail fast with a clear message if canonical GUI extras aren't installed."""
     # Fail early with a clear, actionable list.
     # Note: python-multipart installs module name `multipart`.
     required = ["fastapi", "uvicorn", "jinja2", "multipart", "itsdangerous", "passlib"]
     missing = [m for m in required if importlib.util.find_spec(m) is None]
     if missing:
-        print("Admin UI dependencies are not installed.", file=sys.stderr)
+        print("TapDB GUI dependencies are not installed.", file=sys.stderr)
         print(f"Missing modules: {', '.join(missing)}", file=sys.stderr)
-        print("Install with: pip install 'daylily-tapdb[admin]'", file=sys.stderr)
+        print("Install with: pip install 'daylily-tapdb[gui]'", file=sys.stderr)
         raise SystemExit(1)
 
 
@@ -291,7 +275,7 @@ def build_app():
         )
 
     bootstrap_app = typer.Typer(help="One-command environment bootstrap")
-    ui_app = typer.Typer(help="Admin UI server management commands")
+    ui_app = typer.Typer(help="Canonical TapDB GUI server management commands")
     config_root_app = typer.Typer(help="TAPDB config namespace commands")
     app.add_typer(bootstrap_app, name="bootstrap")
     app.add_typer(ui_app, name="ui")
@@ -360,7 +344,7 @@ def build_app():
             help="Explicit TLS private key path for this invocation",
         ),
     ):
-        """Start the TAPDB Admin UI server."""
+        """Start the canonical TapDB GUI server."""
         from daylily_tapdb.cli.db_config import get_config_path, get_db_config
 
         pid_file, log_file, _ = _ui_runtime_paths()
@@ -381,9 +365,9 @@ def build_app():
         try:
             _require_admin_extras()
         except SystemExit:
-            ccyo_out.error("Admin UI dependencies are not installed.")
+            ccyo_out.error("TapDB GUI dependencies are not installed.")
             ccyo_out.print_text(
-                "  Install with: [cyan]pip install 'daylily-tapdb[admin]'[/cyan]"
+                "  Install with: [cyan]pip install 'daylily-tapdb[gui]'[/cyan]"
             )
             raise typer.Exit(1)
 
@@ -535,7 +519,7 @@ def build_app():
 
     @ui_app.command("stop")
     def ui_stop():
-        """Stop the TAPDB Admin UI server."""
+        """Stop the canonical TapDB GUI server."""
         pid_file, _, _ = _ui_runtime_paths()
         pid = _get_pid(pid_file)
         if not pid:
@@ -564,7 +548,7 @@ def build_app():
 
     @ui_app.command("status")
     def ui_status():
-        """Check the status of the TAPDB Admin UI server."""
+        """Check the status of the canonical TapDB GUI server."""
         pid_file, log_file, _ = _ui_runtime_paths()
         pid = _get_pid(pid_file)
         if pid:
@@ -584,7 +568,7 @@ def build_app():
         ),
         lines: int = typer.Option(50, "--lines", "-n", help="Number of lines to show"),
     ):
-        """View TAPDB Admin UI server logs (tails by default, Ctrl+C to stop)."""
+        """View TapDB GUI server logs (tails by default, Ctrl+C to stop)."""
         _, log_file, _ = _ui_runtime_paths()
         if not log_file.exists():
             ccyo_out.warning("No log file found. Start the server first.")
@@ -614,7 +598,7 @@ def build_app():
             DEFAULT_UI_HOST, "--host", "-h", help="Host to bind to"
         ),
     ):
-        """Restart the TAPDB Admin UI server."""
+        """Restart the canonical TapDB GUI server."""
         ui_stop()
         time.sleep(1)
         ui_start(
@@ -656,7 +640,7 @@ def build_app():
     @bootstrap_app.command("local")
     def bootstrap_local(
         no_gui: bool = typer.Option(
-            False, "--no-gui", help="Skip starting TAPDB Admin UI"
+            False, "--no-gui", help="Skip starting the TapDB GUI"
         ),
         include_workflow: bool = typer.Option(
             False,
@@ -737,7 +721,7 @@ def build_app():
             help="Whether the Aurora writer instance is publicly accessible",
         ),
         no_gui: bool = typer.Option(
-            False, "--no-gui", help="Skip starting TAPDB Admin UI"
+            False, "--no-gui", help="Skip starting the TapDB GUI"
         ),
         include_workflow: bool = typer.Option(
             False,

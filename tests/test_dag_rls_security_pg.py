@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -168,12 +169,23 @@ def dag_rls_schema(pg_instance):
         connection.close()
 
 
-def _insert_template(cursor, *, typed_xrf: bool = False) -> int:
-    coordinates = (
-        ("reference", "external_identifier", "tapdb_object", "1.0", "XRF")
-        if typed_xrf
-        else ("message", "webhook", "event", "1.0", "MSG")
-    )
+def _insert_template(
+    cursor, *, typed_xrf: bool = False, opaque_xrf: bool = False
+) -> int:
+    if typed_xrf and opaque_xrf:
+        raise ValueError("an XRF test template must select one subtype")
+    if typed_xrf:
+        coordinates = (
+            "reference",
+            "external_identifier",
+            "tapdb_object",
+            "1.0",
+            "XRF",
+        )
+    elif opaque_xrf:
+        coordinates = ("reference", "external_identifier", "opaque", "1.0", "XRF")
+    else:
+        coordinates = ("message", "webhook", "event", "1.0", "MSG")
     cursor.execute(
         """
         INSERT INTO generic_template (
@@ -185,7 +197,10 @@ def _insert_template(cursor, *, typed_xrf: bool = False) -> int:
             'active', FALSE, '{}'::jsonb
         ) RETURNING uid
         """,
-        ("typed-xrf" if typed_xrf else "message", *coordinates),
+        (
+            "typed-xrf" if typed_xrf else "opaque-xrf" if opaque_xrf else "message",
+            *coordinates,
+        ),
     )
     return int(cursor.fetchone()[0])
 
@@ -196,13 +211,19 @@ def _insert_instance(
     template_uid: int,
     tenant_id: uuid.UUID | None,
     typed_xrf: bool = False,
+    opaque_xrf: bool = False,
+    opaque_scope: str = "public_global",
     name: str,
 ) -> tuple[int, str, int]:
-    coordinates = (
-        ("reference", "external_identifier", "tapdb_object", "1.0")
-        if typed_xrf
-        else ("message", "webhook", "event", "1.0")
-    )
+    if typed_xrf and opaque_xrf:
+        raise ValueError("an XRF test instance must select one subtype")
+    if typed_xrf:
+        coordinates = ("reference", "external_identifier", "tapdb_object", "1.0")
+    elif opaque_xrf:
+        coordinates = ("reference", "external_identifier", "opaque", "1.0")
+    else:
+        coordinates = ("message", "webhook", "event", "1.0")
+    payload = {"properties": {"scope": opaque_scope}} if opaque_xrf else {}
     cursor.execute(
         """
         INSERT INTO generic_instance (
@@ -211,7 +232,7 @@ def _insert_instance(
             json_addl, bstatus, is_singleton
         ) VALUES (
             %s, %s, 'generic_instance', %s, %s, %s, %s, %s,
-            '{}'::jsonb, 'active', FALSE
+            %s::jsonb, 'active', FALSE
         ) RETURNING uid, euid, euid_seq
         """,
         (
@@ -219,6 +240,7 @@ def _insert_instance(
             None if tenant_id is None else str(tenant_id),
             *coordinates,
             template_uid,
+            json.dumps(payload),
         ),
     )
     uid, euid, euid_seq = cursor.fetchone()
@@ -287,6 +309,7 @@ def test_dag_rls_pg_enforces_lineage_endpoint_scope_and_typed_global_exception(
     ) as cursor:
         message_template = _insert_template(cursor)
         xrf_template = _insert_template(cursor, typed_xrf=True)
+        opaque_xrf_template = _insert_template(cursor, opaque_xrf=True)
         global_xrf_uid, _, _ = _insert_instance(
             cursor,
             template_uid=xrf_template,
@@ -299,6 +322,21 @@ def test_dag_rls_pg_enforces_lineage_endpoint_scope_and_typed_global_exception(
             template_uid=message_template,
             tenant_id=None,
             name="global ordinary object",
+        )
+        global_public_opaque_uid, _, _ = _insert_instance(
+            cursor,
+            template_uid=opaque_xrf_template,
+            tenant_id=None,
+            opaque_xrf=True,
+            name="global public opaque reference",
+        )
+        global_tenant_opaque_uid, _, _ = _insert_instance(
+            cursor,
+            template_uid=opaque_xrf_template,
+            tenant_id=None,
+            opaque_xrf=True,
+            opaque_scope="tenant",
+            name="invalid global tenant-scoped opaque reference",
         )
 
     with _transaction(pg_instance, dag_rls_schema, tenant_id=TENANT_A) as cursor:
@@ -320,6 +358,16 @@ def test_dag_rls_pg_enforces_lineage_endpoint_scope_and_typed_global_exception(
                 parent_uid=tenant_a_parent,
                 child_uid=tenant_a_child,
                 tenant_id=TENANT_A,
+            )
+            > 0
+        )
+        assert (
+            _insert_lineage(
+                cursor,
+                parent_uid=tenant_a_parent,
+                child_uid=global_public_opaque_uid,
+                tenant_id=TENANT_A,
+                approved_global_link=True,
             )
             > 0
         )
@@ -366,6 +414,16 @@ def test_dag_rls_pg_enforces_lineage_endpoint_scope_and_typed_global_exception(
                 cursor,
                 parent_uid=tenant_a_parent,
                 child_uid=global_ordinary_uid,
+                tenant_id=TENANT_A,
+                approved_global_link=True,
+            )
+
+    with pytest.raises(psycopg2.Error, match="unavailable in the current scope"):
+        with _transaction(pg_instance, dag_rls_schema, tenant_id=TENANT_A) as cursor:
+            _insert_lineage(
+                cursor,
+                parent_uid=tenant_a_parent,
+                child_uid=global_tenant_opaque_uid,
                 tenant_id=TENANT_A,
                 approved_global_link=True,
             )

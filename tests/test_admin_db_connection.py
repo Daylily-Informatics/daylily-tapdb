@@ -8,7 +8,6 @@ from sqlalchemy import create_engine as sa_create_engine
 import admin.auth as auth_mod
 import admin.db_metrics as metrics_mod
 import admin.db_pool as pool_mod
-import admin.main as main_mod
 
 
 def test_admin_get_db_reuses_single_engine_bundle(monkeypatch):
@@ -49,9 +48,9 @@ def test_admin_get_db_reuses_single_engine_bundle(monkeypatch):
 
     monkeypatch.setattr(pool_mod, "_create_engine", _fake_create_engine)
 
-    _ = main_mod.get_db()
     _ = auth_mod.get_db()
-    _ = main_mod.get_db()
+    _ = auth_mod.get_db()
+    _ = auth_mod.get_db()
 
     assert calls["count"] == 1
 

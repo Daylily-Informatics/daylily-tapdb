@@ -35,6 +35,7 @@ def test_core_bundle_only_seeds_operational_templates():
         "governance/terminology/set/1.0",
         "governance/validator/definition/1.0",
         "message/webhook/event/1.0",
+        "reference/external_identifier/opaque/1.0",
         "reference/external_identifier/tapdb_object/1.0",
         "set/generic/generic/1.0",
     }

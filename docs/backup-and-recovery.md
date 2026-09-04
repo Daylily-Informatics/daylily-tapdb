@@ -3,8 +3,9 @@
 Operator runbook for the TapDB backup lifecycle: what is captured, how to
 recover, and how to prove a backup would actually work before you need it.
 
-Every operation is available from three surfaces — the `tapdb backup` CLI, the
-admin API, and the embedded GUI — and all three call the same service code, so
+Every operation is available from three adapters — the `tapdb backup` CLI, the
+canonical GUI's management API, and its HTML views — and all three call the
+same service code, so
 the guarantees below hold regardless of which one you use.
 
 ---
@@ -80,7 +81,7 @@ sequence state; see [Template Authoring](template-authoring.md#repository-owned-
 
 ## 3. Reading the status
 
-`tapdb backup list`, `GET /api/backups/status`, and the GUI's Backups page all
+`tapdb backup list`, `GET /api/admin/backups/status`, and the GUI's Backups page all
 report the same four states, derived from receipts:
 
 | Status | Meaning | What to do |
@@ -239,7 +240,7 @@ else's process. The consumer decides.
 
 ### Over HTTP
 
-`GET /api/backups/health` runs the same implementation. Because HTTP has no
+`GET /api/admin/backups/health` runs the same implementation. Because HTTP has no
 exit code, the mapping is:
 
 | CLI exit | HTTP | Body |
@@ -650,15 +651,15 @@ fails if any reaches different code.
 
 | Operation | CLI | Admin API | GUI |
 |---|---|---|---|
-| Plan | `backup plan` | `GET /api/backups/plan` | — |
-| List + status | `backup list` | `GET /api/backups`, `GET /api/backups/status` | `/admin/backups` |
-| Create | `backup create` | `POST /api/backups` → 201 | `POST /admin/backups/create` |
-| Verify | `backup verify` | `POST /api/backups/{ref}/verify` | `POST /admin/backups/{ref}/verify` |
-| Stage a restore | `backup restore-plan` | `POST /api/backups/{ref}/restore/stage` | `GET /admin/backups/{ref}/restore` |
-| Apply a restore | `backup restore` | `POST /api/backups/{ref}/restore/apply` | `POST /admin/backups/{ref}/restore` |
-| Rehearse | `backup rehearse` | `POST /api/backups/{ref}/rehearse` | `POST /admin/backups/{ref}/rehearse` |
+| Plan | `backup plan` | `GET /api/admin/backups/plan` | — |
+| List + status | `backup list` | `GET /api/admin/backups`, `GET /api/admin/backups/status` | `/admin/backups` |
+| Create | `backup create` | `POST /api/admin/backups` → 201 | `POST /admin/backups/create` |
+| Verify | `backup verify` | `POST /api/admin/backups/{ref}/verify` | `POST /admin/backups/{ref}/verify` |
+| Stage a restore | `backup restore-plan` | `POST /api/admin/backups/{ref}/restore/stage` | `GET /admin/backups/{ref}/restore` |
+| Apply a restore | `backup restore` | `POST /api/admin/backups/{ref}/restore/apply` | `POST /admin/backups/{ref}/restore` |
+| Rehearse | `backup rehearse` | `POST /api/admin/backups/{ref}/rehearse` | `POST /admin/backups/{ref}/rehearse` |
 
-Admin API routes require an authenticated admin. GUI backup routes are
+Management API routes require an authenticated admin. GUI backup routes are
 admin-only and refuse everyone else with **403**.
 
 ### API status codes

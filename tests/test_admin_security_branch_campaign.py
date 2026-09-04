@@ -12,7 +12,6 @@ import pytest
 import admin.auth as auth
 import admin.cognito as cognito
 import admin.domain_access as domain_access
-import admin.main as admin_main
 
 
 def _request(*, cookies=None, session=None, root_path="") -> SimpleNamespace:
@@ -357,16 +356,3 @@ def test_admin_domain_access_rejects_an_unusable_parsed_host(monkeypatch):
         domain_access.is_allowed_origin("https://api.dyly.bio", allow_local=False)
         is False
     )
-
-
-@pytest.mark.anyio
-async def test_admin_lifespan_rejects_import_time_config_failure(monkeypatch):
-    monkeypatch.setattr(
-        admin_main,
-        "_ADMIN_SETTINGS_LOAD_ERROR",
-        RuntimeError("malformed explicit config"),
-    )
-
-    with pytest.raises(RuntimeError, match="valid explicit target config"):
-        async with admin_main._lifespan(admin_main.app):
-            pytest.fail("lifespan must not start with defaulted settings")

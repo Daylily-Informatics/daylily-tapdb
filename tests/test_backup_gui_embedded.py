@@ -13,6 +13,7 @@ covered end to end elsewhere.
 from __future__ import annotations
 
 import re
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -141,6 +142,20 @@ def gui(monkeypatch):
                 "daylily_tapdb/etc/prefix_ownership_registry.json"
             ),
         },
+    )
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.get_admin_settings",
+        lambda **_kwargs: {
+            "target_name": "test",
+            "production_like": False,
+            "auth_mode": "host_session",
+            "session_secret": "test-session-secret",
+            "allowed_origins": [],
+        },
+    )
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.mount_tapdb_dag_surfaces",
+        lambda *_args, **_kwargs: SimpleNamespace(mounted=True, diagnostic=""),
     )
     monkeypatch.setattr(
         "daylily_tapdb.cli.db_config.get_backup_settings",

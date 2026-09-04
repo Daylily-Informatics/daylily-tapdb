@@ -23,9 +23,14 @@ def _git_lines(*args: str) -> list[str]:
 def changed_python_modules(base: str) -> list[str]:
     """Return changed and untracked production modules relative to ``base``."""
 
-    changed = set(_git_lines("diff", "--name-only", f"{base}...HEAD"))
-    changed.update(_git_lines("diff", "--name-only"))
-    changed.update(_git_lines("diff", "--cached", "--name-only"))
+    # Deleted modules cannot appear in a coverage report and are verified by
+    # separate import/package-asset contracts. Restrict this gate to code that
+    # will actually ship in the candidate tree.
+    changed = set(
+        _git_lines("diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD")
+    )
+    changed.update(_git_lines("diff", "--name-only", "--diff-filter=ACMR"))
+    changed.update(_git_lines("diff", "--cached", "--name-only", "--diff-filter=ACMR"))
     changed.update(_git_lines("ls-files", "--others", "--exclude-standard"))
     return sorted(
         path

@@ -1,13 +1,13 @@
 """The backup lifecycle service -- the one implementation all surfaces share.
 
-The CLI, the admin API, and the embedded GUI are thin adapters over these
-functions. Nothing here imports typer or FastAPI, and nothing here builds its
-own ``pg_dump`` command: that lives in ``engine.py``, so a fix to how backups
-are taken is a fix everywhere at once.
+The CLI and canonical GUI's HTML/JSON presentations are thin adapters over
+these functions. Nothing here imports typer or FastAPI, and nothing here
+builds its own ``pg_dump`` command: that lives in ``engine.py``, so a fix to
+how backups are taken is a fix everywhere at once.
 
 Every function takes a resolved ``cfg`` (``get_db_config()``) plus ``settings``
 (``get_backup_settings()``) and returns a dataclass with ``to_payload()``.
-Mutating operations emit a receipt centrally, so all three surfaces get an
+Mutating operations emit a receipt centrally, so every presentation gets an
 audit trail without any of them remembering to write one.
 """
 

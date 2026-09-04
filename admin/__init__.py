@@ -1,7 +1,5 @@
-"""
-TAPDB Admin Application.
+"""Internal support modules used by the canonical :mod:`daylily_tapdb.gui`.
 
-FastAPI-based admin interface for managing TAPDB objects.
+This package is not an application or a second web stack.  TapDB exposes one
+GUI factory from ``daylily_tapdb.gui``.
 """
-
-__version__ = "0.1.0"

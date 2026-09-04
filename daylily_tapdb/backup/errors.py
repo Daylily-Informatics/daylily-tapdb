@@ -1,9 +1,9 @@
 """Typed errors for the TAPDB backup and recovery lifecycle.
 
 Every error carries a stable machine-readable ``code``. The CLI maps codes to
-exit statuses, the admin API maps them to HTTP statuses, and the GUI renders
-them as operator-facing notices -- so the code, not the message text, is the
-contract shared across all three surfaces.
+exit statuses, canonical GUI JSON maps them to HTTP statuses, and GUI HTML
+renders them as operator-facing notices -- so the code, not the message text,
+is the contract shared across every presentation.
 """
 
 from __future__ import annotations
