@@ -71,7 +71,7 @@ runtime/readiness/inventory, metrics, backups, and DAG-v2 visualization.
 | `FED-001` | Federation | Add reusable exact-service federated search, owner resolution, and bounded global graph composition | SUCCESS | feature_implementation | Gate 1 | primary agent | Fake-transport tests cover parallel search, exact owner lookup, bridging, cycles, collision safety, bounds, deadline/failure receipts, and opaque non-expansion; module coverage is 95.87% | Kahlo had to infer ownership and merge graphs independently | Core client composes admitted exact DAG-v2 targets without owning credentials, discovery, retries, aliases, or UI |
 | `CUT-001` | Breaking cut | Remove DAG v1, proxy/network helpers, legacy payloads, metadata pseudo-edges, and GUI writer; converge standalone and embedded web operation on feature-complete `daylily_tapdb.gui`; add negative and parity contracts | SUCCESS | removable_compatibility_debt | Gate 3 | primary agent | `admin.main`, its templates/static app, DAG-v1 modules, proxy routes, legacy factory, legacy payload code, and duplicate GUI writer are absent; explicit route/behavior parity tests, 19 GUI parity tests, embedded tests, and real Chromium tests pass; GUI router coverage is 93.30% | Two web stacks duplicated features and allowed divergent graph/reference writes | `daylily_tapdb.gui` is the sole complete stack; only deliberately retired DAG-v1/proxy and duplicate writer behavior is excluded |
 | `AUDIT-001` | Validation | Add read-only JSON `tapdb validation external-references` audit with redacted samples and nonzero violation exit | SUCCESS | feature_implementation | Gate 1 | primary agent | Canonical/malformed/legacy/mixed/redaction/no-mutation/exit-code tests pass; installed-wheel CLI help smoke passes; module coverage is 94.04% | No bounded way existed to inventory incompatible application-owned shapes before migration | Audit is read-only, emits bounded EUID-only samples, redacts identifier values, and fails nonzero on violations |
-| `TEST-001` | Acceptance | Pass PostgreSQL 16.13/17, migration, RLS, concurrency, browser, security, coverage, build, wheel, and docs gates | IN_PROGRESS | contract_test | Gate 5 | primary agent | Local complete suite: 2,161 passed, 12 environment-only skips, 95.30% branch coverage; all 31 changed production modules are at least 90%; Ruff, format, mypy, Bandit, verified-secret scan, lock check, build, wheel-asset check, `twine check`, and isolated installed-wheel API/GUI/CLI smoke pass |  | PostgreSQL 16.13 and 17 CI receipts remain required before merge |
+| `TEST-001` | Acceptance | Pass PostgreSQL 16.13/17, migration, RLS, concurrency, browser, security, coverage, build, wheel, and docs gates | SUCCESS | contract_test | Gate 5 | primary agent | Local complete suite: 2,161 passed, 12 environment-only skips, 95.30% branch coverage; all 31 changed modules >=90%; PR run `33856027045` passed against PostgreSQL 16.13 and 17.11 plus quality, security, and installed-wheel build |  | Both exact server lanes, migration/RLS/concurrency/browser/docs tests, changed coverage, and artifact gates passed without deselection |
 | `DOC-001` | Documentation | Overhaul README and active docs; add comprehensive API/federation and tagged-consumer migration guidance | SUCCESS | feature_implementation | Gate 5 | primary agent | README and active architecture/DAG/runtime/GUI/consumer docs were rewritten; new comprehensive external-reference/federation guide and tagged Atlas/Bloom/Ursa/Dewey/Kahlo migration mapping are tested; executable README examples pass | Active docs described multiple generations of graph and admin behavior | Docs now present one canonical GUI, DAG v2, exact discoverability, federation, operator audit, and application ownership boundaries |
 | `REL-001` | Release | Green PR/main CI, merge, exact artifacts, annotated `10.0.0`, GitHub Release, PyPI, hashes, and clean synchronized main | IN_PROGRESS | feature_implementation | Gate 5 | primary agent | Candidate `10.0.0` wheel/sdist build, exact Meridian pin check, `twine check`, and clean external-venv smoke pass; CI now enforces these artifact gates |  | PR, dual-PostgreSQL CI, merge, fresh main CI, immutable tag, GitHub Release, PyPI publication, and final hashes remain |
 
@@ -116,6 +116,14 @@ and terminal note are recorded in the table.
   diff --check` passed. Candidate wheel/sdist build, wheel asset and exact
   `meridian-euid==0.4.8` verification, `twine check`, and a fresh external-venv
   API/GUI/CLI smoke all passed.
+- 2026-09-04 PR qualification receipt: [PR #104](https://github.com/Daylily-Informatics/daylily-tapdb/pull/104)
+  run `33856027045` passed. The [PostgreSQL 16.13 job](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33856027045/job/100969592123)
+  reported `PostgreSQL 16.13 (Debian 16.13-1.pgdg13+1)` and completed in
+  6m32s. The [PostgreSQL 17 job](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33856027045/job/100969592064)
+  reported `PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2)` and completed in
+  5m37s. The [artifact job](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33856027045/job/100971335833)
+  passed build, `twine check`, packaged-asset validation, and isolated installed
+  wheel API/GUI/CLI smoke.
 
 ## Final report
 
@@ -124,10 +132,10 @@ Objective complete: no
 
 Status counts:
 
-- SUCCESS: 9
+- SUCCESS: 10
 - DUPLICATE: 0
 - NO_LONGER_NEEDED: 0
 - FAIL: 0
 - BLOCKED: 0
-- IN_PROGRESS: 2
+- IN_PROGRESS: 1
 - OPEN: 0
