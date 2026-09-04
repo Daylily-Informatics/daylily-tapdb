@@ -10,6 +10,8 @@ The current architecture centers on these principles:
 - SQLAlchemy polymorphism for typed entities
 - template packs as the source of object shape
 - lineage as the authoritative relationship graph
+- typed XRF objects plus lineage as the cross-service reference contract
+- authenticated DAG v2 and bounded federation as the discovery contract
 - explicit `uid`, `euid`, `domain_code`, `issuer_app_code`, and `tenant_id` separation
 - audit, outbox, and inbox state preserved inside PostgreSQL
 - CLI-driven lifecycle management
@@ -65,19 +67,46 @@ TAPDB uses several identity layers that should not be conflated:
 - `issuer_app_code`: issuing application metadata
 - `tenant_id`: application tenancy scope
 
-The repository code, schema, and CLI all follow that separation. A row can be globally visible, domain-scoped, or tenant-scoped depending on its use case, but those concerns remain distinct.
+The repository code, schema, and CLI all follow that separation. Natural
+identity claims explicitly select `IdentityScope.GLOBAL` or
+`IdentityScope.TENANT`; tenant claims include the tenant in their uniqueness
+boundary. Existing global identities are not rewritten when tenant support is
+introduced.
+
+## External References and Federation
+
+Cross-service relationships use one canonical shape: a local source has a
+persisted lineage edge to an XRF created through `ExternalReferenceService`.
+`TapDBObjectTarget` identifies an exact graph-expandable TapDB object;
+`ExternalIdentifierTarget` represents an explicitly scoped, non-expandable
+identifier. Copied EUID fields, URLs, and graph-shaped metadata are not edges.
+
+`tapdb.dag_v2` projects these references for authenticated exact lookup,
+bounded search, and graph traversal. `DagV2FederationClient` composes a caller's
+explicit fleet through an application-supplied authenticated transport. TapDB
+validates manifests, bounds work, namespaces global node IDs, and preserves
+partial-failure receipts; applications still own credentials, service
+admission, remote validation, and visualization.
 
 ## Runtime Surfaces
 
-The codebase exposes three main surfaces:
+The codebase exposes four main surfaces:
 
 - the `tapdb` CLI for config, bootstrap, schema, runtime, UI, and auth lifecycle
 - the Python library for application code that needs to resolve templates or create instances
+- the single `daylily_tapdb.gui` web stack, used both standalone and embedded
 - PostgreSQL for authoritative storage, triggers, and row-level scoping
 
 The CLI is the operational boundary. Runtime commands always use an explicit
 `--config <path>`. That config resolves one target: client namespace, logical
 database namespace, PostgreSQL schema, and physical database connection.
+
+The canonical GUI retains all legitimate functionality formerly implemented by
+`admin.main`, including account flows, overview, object/template/lineage and
+repair operations, audit, inventory, readiness, Meridian checks, metrics,
+runtime status, backup/recovery, bounded search, and the rich graph explorer.
+The removed DAG-v1 proxy and duplicate external-link writer are not supported
+capabilities and have no compatibility route.
 
 ## What TAPDB Is Not
 

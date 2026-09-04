@@ -65,7 +65,7 @@ old command shapes from historical plans.
 - `tapdb repair` creates explicit repair evidence without rewriting the subject.
 - `tapdb templates` manages repository-owned template packs.
 - `tapdb objects` performs exact-selector governed object operations.
-- `tapdb ui` controls the standalone admin server.
+- `tapdb ui` controls the standalone canonical TapDB GUI server.
 - `tapdb users` manages actor-backed TapDB users.
 - `tapdb cognito` manages the TapDB side of Cognito integration.
 - `tapdb aurora` manages optional cloud infrastructure.
@@ -75,7 +75,7 @@ preflight into an apply without the exact required confirmation or receipt.
 
 ## Core templates
 
-The bundled core inventory is exactly nine substrate templates:
+The bundled core inventory is exactly ten substrate templates:
 
 1. `actor/user/system/1.0/`
 2. `set/generic/generic/1.0/`
@@ -85,7 +85,8 @@ The bundled core inventory is exactly nine substrate templates:
 6. `governance/position/scheme/1.0/`
 7. `evidence/repair/record/1.0/`
 8. `reference/external_identifier/tapdb_object/1.0/`
-9. `message/webhook/event/1.0/`
+9. `reference/external_identifier/opaque/1.0/`
+10. `message/webhook/event/1.0/`
 
 Do not add application-domain packs to TapDB core. Core loads before explicit
 consumer packs, and duplicate coordinates hard-fail rather than override.
@@ -99,7 +100,8 @@ document a string that merely looks like a Meridian EUID. A link to
 the object exists.
 
 Natural identity claims use
-`InstanceFactory.claim_instance_by_identity(...)` inside an already-active
+`InstanceFactory.claim_instance_by_identity(...)` with an explicit
+`IdentityScope.GLOBAL` or `IdentityScope.TENANT` inside an already-active
 transaction. The result is `CREATED` or `EXISTING`; every replay returns the
 stored winner. TapDB does not compare consumer payload fingerprints; clients
 such as Dewey own any divergent-payload `409`. The factory never controls the
@@ -111,12 +113,20 @@ Durable relationships exist only in `generic_instance_lineage`. Do not model an
 edge with raw `object_euid`, `target_object_euid`, another `*_object_euid`
 property, or an ad hoc graph blob.
 
-Cross-service relationships require all of the following:
+Cross-service relationships use only `daylily_tapdb.external_references` and
+require all of the following:
 
 1. a foreign EUID returned by the target owning service;
 2. a persisted `reference/external_identifier/tapdb_object/1.0/` instance;
 3. authoritative lineage from the local source to that reference;
 4. assertion time and provenance.
+
+Use `TapDBObjectTarget` for graph-expandable TapDB targets and
+`ExternalIdentifierTarget` for exact opaque identifiers. Opaque identifiers
+must be explicitly tenant-scoped or `public_global`. Only
+`ExternalReferenceService` may create, reuse, detach, reactivate, reconcile, or
+reverse-query core XRFs. It never commits or rolls back the outer transaction.
+Do not create, update, or delete XRFs through generic object APIs.
 
 Metadata may improve display or search but cannot become relationship,
 ownership, tenant, or authorization evidence.
@@ -152,13 +162,14 @@ duplicate its functions or policies in a fixture.
 
 ## Web auth and embedding
 
-`create_tapdb_gui_app(...)` is the host-authenticated embeddable GUI/JSON
-surface. Supply `TapdbHostBridge(auth_mode="host_session", ...)` when the host
-owns browser auth. TapDB-native auth is for a standalone TapDB login flow.
-
-Legacy admin JSON reads and all writes require authentication; mutation routes
-also enforce the governed role and apply/dry-run contract. Never document a
-legacy JSON route as public.
+`daylily_tapdb.gui.create_tapdb_gui_app(...)` is the only standalone and
+embeddable GUI/JSON implementation. Supply
+`TapdbHostBridge(auth_mode="host_session", ...)` when the host owns browser
+auth. TapDB-native auth is for a standalone TapDB login flow. The former
+`admin.main` application has been removed; internal `admin.*` modules are
+support libraries, not another web stack. All reads and writes require
+authentication, and mutation routes enforce administrator role plus explicit
+apply/dry-run contracts.
 
 ## DAG v2
 
@@ -184,17 +195,22 @@ Search is bounded opaque-cursor discovery, never ownership proof. Exact lookup
 returns `404 object_not_owned` for a non-owned EUID. Graph output includes
 revision, snapshot, presentation, limits, and truncation. Project only outbound
 typed references backed by persisted EUIDs and lineage. DAG v2 performs no
-outbound fetch and never falls back to v1.
+outbound fetch. DAG v1, URL/auth routing metadata, metadata-derived edges,
+external-graph proxying, and protocol fallback do not exist.
 
-The legacy v1 proxy is disabled unless an operator supplies `V1ProxyPolicy`
-with an exact HTTPS DNS allowlist, timeout, and size cap. It rejects non-public
-resolution and redirects, requires JSON, and forwards no credentials.
+For global search or traversal, applications may use
+`daylily_tapdb.federation.DagV2FederationClient` with an exact fleet inventory
+and their own authenticated `DagV2Transport`. TapDB validates manifests and
+payload identities, namespaces node IDs, exposes per-service receipts and
+unresolved boundaries, and enforces hard service, concurrency, jump, node,
+search, and deadline limits. TapDB never owns credentials, discovers services,
+retries aliases, or forwards one service's auth to another.
 
 See `docs/consumer-discoverability-guide.md` for the tested adoption flow.
 
 ## Testing and release floor
 
-TapDB 9.2.2 supports PostgreSQL 16 and 17. Release qualification runs the same
+TapDB 10.0.0 supports PostgreSQL 16 and 17. Release qualification runs the same
 complete suite against community PostgreSQL 16.13 and the PostgreSQL 17 minor
 reported by CI without deselecting integration tests. Aurora PostgreSQL has not
 been independently qualified by this release. The matrix enables local

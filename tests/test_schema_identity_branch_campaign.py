@@ -403,7 +403,11 @@ def test_branch_campaign_factory_claim_requires_scope_and_template():
     )
     with pytest.raises(ValueError, match="domain_code is required"):
         no_scope.claim_instance_by_identity(
-            session, template_code="a/b/c/1.0", identity_key="test:key", name="x"
+            session,
+            template_code="a/b/c/1.0",
+            identity_key="test:key",
+            name="x",
+            scope=instance_module.IdentityScope.GLOBAL,
         )
 
     scoped = instance_module.InstanceFactory(
@@ -411,7 +415,11 @@ def test_branch_campaign_factory_claim_requires_scope_and_template():
     )
     with pytest.raises(ValueError, match="Template not found"):
         scoped.claim_instance_by_identity(
-            session, template_code="a/b/c/1.0", identity_key="test:key", name="x"
+            session,
+            template_code="a/b/c/1.0",
+            identity_key="test:key",
+            name="x",
+            scope=instance_module.IdentityScope.GLOBAL,
         )
 
 

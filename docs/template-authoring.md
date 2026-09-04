@@ -25,12 +25,13 @@ Current built-in core templates are exactly:
 - `evidence/repair/record/1.0`
 - `message/webhook/event/1.0`
 - `reference/external_identifier/tapdb_object/1.0`
+- `reference/external_identifier/opaque/1.0`
 
 There is no passive inheritance of generic client-usable prefixes from TapDB
 core.
 
 For each configured owner scope, an authenticated database operator seeds the
-exact nine definitions shipped in TapDB's installed core directory. The
+exact ten definitions shipped in TapDB's installed core directory. The
 persisted template rows use that configured owner so the owner's NOBYPASSRLS
 runtime can create same-owner System User, external-reference, message, and
 lineage objects. This is a bounded core operation, not a client prefix claim:

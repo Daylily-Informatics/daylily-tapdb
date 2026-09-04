@@ -8,217 +8,17 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
-from daylily_tapdb.graph_contracts import describe_lineage_contract
-from daylily_tapdb.services.external_refs import (
-    external_ref_payloads,
-    is_typed_external_reference,
-    project_outbound_typed_references,
-    validate_no_untyped_federation_metadata,
-)
-
-_CATEGORY_COLORS = {
-    "workflow": "#00FF7F",
-    "workflow_step": "#ADFF2F",
-    "container": "#8B00FF",
-    "content": "#00BFFF",
-    "equipment": "#FF4500",
-    "data": "#FFD700",
-    "actor": "#FF69B4",
-    "action": "#FF8C00",
-    "test_requisition": "#FFA500",
-    "health_event": "#DC143C",
-    "file": "#00FF00",
-    "subject": "#9370DB",
-    "lineage": "#C49BFF",
-    "generic": "#888888",
-}
-
-_GRAPH_PRESENTATION_FIELDS = (
-    "role",
-    "expected_fanout_max",
-    "collapse_by_default",
-    "fanout_reason",
+from daylily_tapdb.external_references import (
+    ExternalReferenceContractError,
+    _is_xrf_coordinates,
+    _project_outbound_external_references,
+    _target_from_reference,
 )
 
 
 def _isoformat_attr(obj: Any, attr: str) -> str | None:
     value = getattr(obj, attr, None)
     return value.isoformat() if value is not None else None
-
-
-def _graph_presentation_payload(obj: Any) -> dict[str, Any]:
-    json_addl = getattr(obj, "json_addl", None)
-    if not isinstance(json_addl, dict):
-        return {}
-    properties = json_addl.get("properties")
-    if not isinstance(properties, dict):
-        return {}
-    graph = properties.get("graph")
-    if not isinstance(graph, dict):
-        return {}
-    return {key: graph[key] for key in _GRAPH_PRESENTATION_FIELDS if key in graph}
-
-
-def build_object_detail_payload(
-    obj: Any,
-    *,
-    record_type: str,
-    service_name: str,
-) -> dict[str, Any]:
-    """Return the canonical object detail payload for the DAG API."""
-
-    json_addl = getattr(obj, "json_addl", None)
-    return {
-        "uid": getattr(obj, "uid", None),
-        "euid": getattr(obj, "euid", None),
-        "name": getattr(obj, "name", None),
-        "display_label": getattr(obj, "name", None) or getattr(obj, "euid", None),
-        "system": service_name,
-        "record_type": record_type,
-        "category": getattr(obj, "category", None),
-        "type": getattr(obj, "type", None),
-        "subtype": getattr(obj, "subtype", None),
-        "version": getattr(obj, "version", None),
-        "bstatus": getattr(obj, "bstatus", None),
-        "json_addl": json_addl,
-        "href": f"/object/{getattr(obj, 'euid', '')}",
-        "created_dt": _isoformat_attr(obj, "created_dt"),
-        "modified_dt": _isoformat_attr(obj, "modified_dt"),
-        "external_refs": external_ref_payloads(obj),
-    }
-
-
-def _node_payload(
-    obj: Any,
-    *,
-    record_type: str,
-    service_name: str,
-) -> dict[str, Any]:
-    category = (
-        str(getattr(obj, "category", "") or "generic").strip().lower() or "generic"
-    )
-    data = {
-        "id": getattr(obj, "euid", None),
-        "euid": getattr(obj, "euid", None),
-        "display_label": getattr(obj, "name", None) or getattr(obj, "euid", None),
-        "name": getattr(obj, "name", None) or getattr(obj, "euid", None),
-        "system": service_name,
-        "record_type": record_type,
-        "category": getattr(obj, "category", None),
-        "type": getattr(obj, "type", None),
-        "subtype": getattr(obj, "subtype", None),
-        "href": f"/object/{getattr(obj, 'euid', '')}",
-        "color": _CATEGORY_COLORS.get(category, _CATEGORY_COLORS["generic"]),
-        "created_dt": _isoformat_attr(obj, "created_dt"),
-        "modified_dt": _isoformat_attr(obj, "modified_dt"),
-        "external_refs": external_ref_payloads(obj),
-    }
-    data.update(_graph_presentation_payload(obj))
-    return {"data": data}
-
-
-def _lineage_edge_payload(lineage: Any, *, service_name: str) -> dict[str, Any] | None:
-    parent = getattr(lineage, "parent_instance", None)
-    child = getattr(lineage, "child_instance", None)
-    if parent is None or child is None:
-        return None
-    contract = describe_lineage_contract(lineage)
-    semantic_source = contract.get("semantic_source")
-    semantic_target = contract.get("semantic_target")
-    return {
-        "data": {
-            "id": getattr(lineage, "euid", None),
-            "euid": getattr(lineage, "euid", None),
-            "source": getattr(child, "euid", None),
-            "target": getattr(parent, "euid", None),
-            "semantic_source_euid": (
-                semantic_source.get("euid")
-                if isinstance(semantic_source, dict)
-                else None
-            )
-            or getattr(parent, "euid", None),
-            "semantic_target_euid": (
-                semantic_target.get("euid")
-                if isinstance(semantic_target, dict)
-                else None
-            )
-            or getattr(child, "euid", None),
-            "relationship_type": getattr(lineage, "relationship_type", None)
-            or "related",
-            "system": service_name,
-            "record_type": "lineage",
-            "v0_edge": contract,
-        }
-    }
-
-
-def build_graph_payload(
-    obj: Any,
-    *,
-    record_type: str,
-    service_name: str,
-    depth: int,
-) -> dict[str, Any]:
-    """Return the canonical graph payload for the DAG API."""
-
-    if record_type != "instance":
-        return {
-            "elements": {
-                "nodes": [
-                    _node_payload(
-                        obj,
-                        record_type=record_type,
-                        service_name=service_name,
-                    )
-                ],
-                "edges": [],
-            }
-        }
-
-    nodes: list[dict[str, Any]] = []
-    edges: list[dict[str, Any]] = []
-    visited_nodes: set[str] = set()
-    visited_edges: set[str] = set()
-
-    def traverse(instance: Any, current_depth: int) -> None:
-        if instance is None:
-            return
-        euid = str(getattr(instance, "euid", "") or "").strip()
-        if not euid or current_depth > depth or euid in visited_nodes:
-            return
-        visited_nodes.add(euid)
-        nodes.append(
-            _node_payload(instance, record_type="instance", service_name=service_name)
-        )
-
-        for lineage in getattr(instance, "parent_of_lineages").filter_by(
-            is_deleted=False
-        ):
-            edge_euid = str(getattr(lineage, "euid", "") or "").strip()
-            if edge_euid and edge_euid not in visited_edges:
-                payload = _lineage_edge_payload(lineage, service_name=service_name)
-                if payload is not None:
-                    edges.append(payload)
-                    visited_edges.add(edge_euid)
-            traverse(getattr(lineage, "child_instance", None), current_depth + 1)
-
-        for lineage in getattr(instance, "child_of_lineages").filter_by(
-            is_deleted=False
-        ):
-            edge_euid = str(getattr(lineage, "euid", "") or "").strip()
-            if edge_euid and edge_euid not in visited_edges:
-                payload = _lineage_edge_payload(lineage, service_name=service_name)
-                if payload is not None:
-                    edges.append(payload)
-                    visited_edges.add(edge_euid)
-            traverse(getattr(lineage, "parent_instance", None), current_depth + 1)
-
-    traverse(obj, 0)
-    if not nodes:
-        nodes.append(
-            _node_payload(obj, record_type=record_type, service_name=service_name)
-        )
-    return {"elements": {"nodes": nodes, "edges": edges}}
 
 
 class DagV2GraphContractError(ValueError):
@@ -259,6 +59,7 @@ def _clean_public_properties(obj: Any) -> dict[str, Any]:
             "auth",
             "auth_mode",
             "graph_data_path",
+            "graph_presentation",
             "object_detail_path_template",
         }:
             continue
@@ -334,7 +135,10 @@ def _v2_node_presentation(obj: Any) -> dict[str, Any]:
 
 
 def _v2_node(obj: Any, *, record_type: str, service_id: str) -> dict[str, Any]:
-    validate_no_untyped_federation_metadata(obj)
+    try:
+        external = _project_outbound_external_references(obj)
+    except ExternalReferenceContractError as exc:
+        raise DagV2GraphContractError(str(exc)) from exc
     euid = getattr(obj, "euid", None)
     data = {
         "id": euid,
@@ -350,7 +154,8 @@ def _v2_node(obj: Any, *, record_type: str, service_id: str) -> dict[str, Any]:
         "created_dt": _isoformat_attr(obj, "created_dt"),
         "modified_dt": _isoformat_attr(obj, "modified_dt"),
         "properties": _clean_public_properties(obj),
-        "external_refs": project_outbound_typed_references(obj),
+        "external_refs": external["external_refs"],
+        "external_identifiers": external["external_identifiers"],
     }
     data["presentation"] = _v2_node_presentation(obj)
     return {"data": data}
@@ -395,8 +200,12 @@ def _validate_lineage_scope(root: Any, lineage: Any, neighbor: Any) -> None:
         bool(properties.get("approved_global_link"))
         and neighbor_tenant is None
         and lineage_tenant == root_tenant
-        and is_typed_external_reference(neighbor)
+        and _is_xrf_coordinates(neighbor)
     ):
+        try:
+            _target_from_reference(neighbor)
+        except ExternalReferenceContractError as exc:
+            raise DagV2GraphContractError(str(exc)) from exc
         return
     raise DagV2GraphContractError(
         "Cross-tenant lineage is forbidden unless it is an approved typed global link"
@@ -592,5 +401,104 @@ def build_graph_v2_payload(
             "truncated": truncated,
             "truncation_reason": truncation_reason,
             "effective_limits": {"max_depth": depth, "max_nodes": max_nodes},
+        },
+    }
+
+
+def build_visible_graph_v2_payload(
+    instances: list[Any],
+    lineages: list[Any],
+    *,
+    service_id: str,
+    max_nodes: int,
+    max_edges: int,
+    snapshot_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Build a bounded DAG-v2 view of every instance visible to one session.
+
+    The caller supplies rows already constrained by PostgreSQL/RLS. This builder
+    never infers edges from metadata: only persisted lineage whose two endpoints
+    are in the visible node set is emitted.
+    """
+
+    if not isinstance(max_nodes, int) or isinstance(max_nodes, bool) or max_nodes < 1:
+        raise ValueError("max_nodes must be a positive integer")
+    if not isinstance(max_edges, int) or isinstance(max_edges, bool) or max_edges < 1:
+        raise ValueError("max_edges must be a positive integer")
+    snapshot = snapshot_at or datetime.now(timezone.utc)
+    if snapshot.tzinfo is None:
+        raise ValueError("snapshot_at must include a timezone")
+
+    ordered_instances = sorted(
+        (row for row in instances if not bool(getattr(row, "is_deleted", False))),
+        key=lambda row: (int(getattr(row, "uid", 0) or 0), str(row.euid or "")),
+    )
+    selected_instances = ordered_instances[:max_nodes]
+    truncated_reasons: set[str] = set()
+    if len(ordered_instances) > max_nodes:
+        truncated_reasons.add("max_nodes")
+
+    visible: dict[str, Any] = {}
+    for instance in selected_instances:
+        euid = str(getattr(instance, "euid", "") or "")
+        if not euid:
+            raise DagV2GraphContractError(
+                "Visible graph instance is missing a persisted EUID"
+            )
+        if euid in visible:
+            raise DagV2GraphContractError(
+                f"Visible graph contains duplicate instance EUID: {euid}"
+            )
+        visible[euid] = instance
+
+    included_lineages: list[Any] = []
+    ordered_lineages = sorted(
+        (row for row in lineages if not bool(getattr(row, "is_deleted", False))),
+        key=lambda row: (int(getattr(row, "uid", 0) or 0), str(row.euid or "")),
+    )
+    for lineage in ordered_lineages:
+        parent = getattr(lineage, "parent_instance", None)
+        child = getattr(lineage, "child_instance", None)
+        if parent is None or child is None:
+            raise DagV2GraphContractError("Lineage endpoint could not be resolved")
+        parent_euid = str(getattr(parent, "euid", "") or "")
+        child_euid = str(getattr(child, "euid", "") or "")
+        if parent_euid not in visible or child_euid not in visible:
+            continue
+        _validate_lineage_scope(parent, lineage, child)
+        if len(included_lineages) >= max_edges:
+            truncated_reasons.add("max_edges")
+            break
+        included_lineages.append(lineage)
+
+    nodes = [
+        _v2_node(instance, record_type="instance", service_id=service_id)
+        for _euid, instance in sorted(visible.items())
+    ]
+    edges = [_v2_edge(lineage, service_id=service_id) for lineage in included_lineages]
+    _assert_acyclic(nodes, edges)
+    revision_input = {"nodes": nodes, "edges": edges}
+    graph_revision = hashlib.sha256(
+        json.dumps(
+            revision_input, sort_keys=True, separators=(",", ":"), default=str
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "elements": {"nodes": nodes, "edges": edges},
+        "meta": {
+            "contract": "dag:v2",
+            "service_id": service_id,
+            "query_mode": "visible_scope",
+            "graph_revision": graph_revision,
+            "snapshot_at": snapshot.astimezone(timezone.utc).isoformat(),
+            "truncated": bool(truncated_reasons),
+            "truncation_reason": (
+                "+".join(sorted(truncated_reasons)) if truncated_reasons else None
+            ),
+            "effective_limits": {
+                "max_depth": None,
+                "max_nodes": max_nodes,
+                "max_edges": max_edges,
+            },
         },
     }

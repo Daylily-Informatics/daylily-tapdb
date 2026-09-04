@@ -21,6 +21,7 @@ thing under test -- that the call happened at all.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -94,7 +95,25 @@ def spy(monkeypatch):
 
 
 @pytest.fixture
-def gui_client():
+def gui_client(monkeypatch):
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.get_admin_settings",
+        lambda **_kwargs: {
+            "target_name": "test",
+            "production_like": False,
+            "auth_mode": "host_session",
+            "session_secret": "test-session-secret",
+            "allowed_origins": [],
+        },
+    )
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.get_db_config",
+        lambda **_kwargs: dict(CFG),
+    )
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.mount_tapdb_dag_surfaces",
+        lambda *_args, **_kwargs: SimpleNamespace(mounted=True, diagnostic=""),
+    )
     bridge = TapdbHostBridge(
         auth_mode="host_session",
         login_url="/login",

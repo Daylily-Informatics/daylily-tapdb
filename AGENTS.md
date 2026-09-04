@@ -11,11 +11,11 @@ Canonical usage contract for AI agents (Augment, Claude, Copilot, etc.).
 
 ## Project Overview
 
-**TAPDB** (Templated Abstract Polymorphic Database) is a flexible object-model library and admin UI for managing typed, versioned, auditable entities.
+**TAPDB** (Templated Abstract Polymorphic Database) is a flexible object-model library and canonical GUI for managing typed, versioned, auditable entities.
 
 - **ORM**: SQLAlchemy declarative base with polymorphic inheritance
 - **Database**: PostgreSQL (local or Aurora)
-- **Admin UI**: FastAPI + Jinja2
+- **GUI**: one standalone and embeddable FastAPI + Jinja2 implementation from `daylily_tapdb.gui`
 - **CLI**: Typer (`tapdb` entrypoint) — does everything
 - **ID system**: Meridian EUID (business identifiers) + BIGINT `uid` primary keys
 
@@ -24,7 +24,8 @@ Canonical usage contract for AI agents (Augment, Claude, Copilot, etc.).
 | Directory | Purpose |
 |---|---|
 | `daylily_tapdb/` | Core library: models, factory, templates, CLI, connections |
-| `admin/` | FastAPI admin UI (routes, auth, templates, static assets) |
+| `admin/` | Internal auth, connection-pool, metrics, and backup adapter support; not a web application |
+| `daylily_tapdb/gui/` | Sole standalone and embeddable GUI/management API implementation |
 | `schema/` | Base SQL schema (`tapdb_schema.sql`) and migrations (`migrations/`) |
 | `tests/` | pytest test suite |
 | `tools/` | DB load-testing (synthetic data generator, pgbench scripts) |
@@ -124,7 +125,7 @@ Ambient `TAPDB_*` and `PG*` values are not authoritative runtime inputs for the 
 
 ```bash
 pip install -e ".[dev]"              # Core + dev tools
-pip install -e ".[dev,admin,cli]"    # Full install with admin UI
+pip install -e ".[dev,gui,cli]"      # Full install with canonical GUI
 ```
 
 ## Do NOT
@@ -137,5 +138,5 @@ pip install -e ".[dev,admin,cli]"    # Full install with admin UI
 - Run `tapdb db delete` or `tapdb db schema reset` without explicit user intent
 - Run `tapdb backup restore --mode in-place` without explicit user intent (the
   default `--mode isolated` is non-destructive)
-- Add a check, a `pg_dump`, or a receipt write to the CLI, admin API, or GUI —
+- Add a check, a `pg_dump`, or a receipt write to the CLI or GUI routes —
   those belong in `daylily_tapdb.backup`, and a contract test enforces it

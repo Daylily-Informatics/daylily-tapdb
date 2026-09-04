@@ -4,7 +4,6 @@ import base64
 import json
 import re
 import sys
-from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,7 +15,6 @@ import admin.auth as auth_mod
 import admin.db_metrics as metrics_mod
 import admin.db_pool as pool_mod
 import admin.domain_access as domain_mod
-import admin.main as admin_main
 
 
 def _signed_cookie(secret: str, payload: dict) -> str:
@@ -244,78 +242,6 @@ def test_db_metrics_writer_cache_and_engine_metrics_callbacks(monkeypatch):
 
     metrics_mod.stop_all_writers()
     assert writer1.stopped == 1
-
-
-def test_admin_inventory_context_scopes_objects_to_active_schema(monkeypatch):
-    class _Mappings:
-        def __init__(self, rows):
-            self._rows = list(rows)
-
-        def mappings(self):
-            return self
-
-        def __iter__(self):
-            return iter(self._rows)
-
-    rows = iter(
-        [
-            SimpleNamespace(scalar=lambda: "tapdb_physical_dev"),
-            SimpleNamespace(scalar=lambda: "tapdb_active"),
-            SimpleNamespace(scalar=lambda: ["tapdb_active"]),
-            _Mappings(
-                [
-                    {"schema_name": "tapdb_active"},
-                    {"schema_name": "tapdb_old"},
-                ]
-            ),
-            _Mappings(
-                [{"schema_name": "tapdb_active", "table_name": "generic_template"}]
-            ),
-            _Mappings([]),
-            _Mappings([]),
-            _Mappings(
-                [{"schema_name": "tapdb_active", "sequence_name": "gx_instance_seq"}]
-            ),
-            _Mappings([]),
-            _Mappings(
-                [
-                    {
-                        "schema_name": "tapdb_active",
-                        "function_signature": "set_generic_template_euid()",
-                    }
-                ]
-            ),
-            _Mappings([]),
-        ]
-    )
-
-    class _Session:
-        def execute(self, _stmt, _params=None):
-            return next(rows)
-
-    class _Conn:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        @contextmanager
-        def session_scope(self):
-            yield _Session()
-
-    monkeypatch.setattr(admin_main, "get_db", lambda: _Conn())
-    ctx = admin_main.load_db_inventory_context()
-
-    assert ctx["db_inventory_physical_db_name"] == "tapdb_physical_dev"
-    assert ctx["db_inventory_active_schema_name"] == "tapdb_active"
-    assert ctx["db_inventory_search_path"] == ["tapdb_active"]
-    assert ctx["db_inventory_schema_names"] == ["tapdb_active", "tapdb_old"]
-    assert ctx["db_inventory_counts"]["schemas"] == 2
-    assert ctx["db_inventory_counts"]["tables"] == 1
-    assert ctx["db_inventory_tables"] == [
-        {"schema_name": "tapdb_active", "table_name": "generic_template"}
-    ]
 
 
 def test_auth_helpers_cover_disabled_and_shared_auth(monkeypatch):

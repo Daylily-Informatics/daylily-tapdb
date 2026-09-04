@@ -1,17 +1,14 @@
 /**
- * TAPDB Admin - Cytoscape Graph Visualization
+ * TapDB canonical DAG-v2 graph explorer.
  */
 
 const TAPDB_BASE_PATH =
     typeof window !== 'undefined' && window.TAPDB_BASE_PATH
         ? String(window.TAPDB_BASE_PATH).replace(/\/+$/, '')
         : '';
-const graphBootstrap =
-    typeof window !== 'undefined' && window.TAPDB_GRAPH_BOOTSTRAP
-        ? window.TAPDB_GRAPH_BOOTSTRAP
-        : {};
-let pendingAutoMergeRef =
-    Number.isInteger(graphBootstrap.defaultMergeRef) ? graphBootstrap.defaultMergeRef : null;
+const CAN_MUTATE = Boolean(
+    typeof window !== 'undefined' && window.TAPDB_GRAPH_CAN_MUTATE
+);
 
 function tapdbUrl(path) {
     const normalized = (path || '').startsWith('/') ? path : `/${path}`;
@@ -27,7 +24,7 @@ let neighborhoodAnchorId = null;
 let neighborhoodDepth = 1;
 let currentGraphMeta = {};
 const tapTracker = new Map();
-const STORAGE_KEY = 'tapdb_graph_controls_v1';
+const STORAGE_KEY = 'tapdb_graph_controls_v2';
 const keyState = {
     d: false,
     l: false,
@@ -150,14 +147,6 @@ const cytoscapeStyle = [
         }
     },
     {
-        selector: 'node[is_external]',
-        style: {
-            'border-style': 'dashed',
-            'border-color': '#f0d79d',
-            'background-opacity': 0.78,
-        }
-    },
-    {
         selector: 'edge',
         style: {
             // Directed edges: always render arrowhead on the *target* end.
@@ -174,23 +163,6 @@ const cytoscapeStyle = [
             'target-distance-from-node': 6,
             'arrow-scale': 1.6,
             'opacity': 1,
-        }
-    },
-    {
-        selector: 'edge[is_external]',
-        style: {
-            'line-style': 'dashed',
-            'line-color': '#c1a967',
-            'target-arrow-color': '#c1a967',
-        }
-    },
-    {
-        selector: 'edge[is_external_bridge]',
-        style: {
-            'line-style': 'dotted',
-            'line-color': '#f7c948',
-            'target-arrow-color': '#f7c948',
-            'width': 3,
         }
     },
     {
@@ -221,6 +193,19 @@ function getNodeType(node) {
 
 function getNodeSubtype(node) {
     return node.data('subtype') || 'unknown';
+}
+
+function colorForCategory(value) {
+    const palette = [
+        '#2563eb', '#7c3aed', '#0891b2', '#059669', '#ca8a04',
+        '#dc2626', '#db2777', '#4f46e5', '#0f766e', '#9333ea',
+    ];
+    const text = String(value || 'unknown');
+    let hash = 0;
+    for (let index = 0; index < text.length; index += 1) {
+        hash = ((hash * 31) + text.charCodeAt(index)) >>> 0;
+    }
+    return palette[hash % palette.length];
 }
 
 function loadPersistedControls() {
@@ -313,6 +298,8 @@ function bindControlEvents() {
     const findEl = document.getElementById('find-euid');
     const startEl = document.getElementById('start-euid');
     const depthEl = document.getElementById('depth');
+    const maxNodesEl = document.getElementById('max-nodes');
+    const maxEdgesEl = document.getElementById('max-edges');
     const saveBtn = document.getElementById('graph-save');
 
     if (transparencyEl) {
@@ -354,7 +341,7 @@ function bindControlEvents() {
         });
     }
 
-    [startEl, depthEl].forEach((input) => {
+    [startEl, depthEl, maxNodesEl, maxEdgesEl].forEach((input) => {
         if (!input) {
             return;
         }
@@ -380,10 +367,10 @@ function installKeyboardHandlers() {
 
     document.addEventListener('keydown', (evt) => {
         const key = (evt.key || '').toLowerCase();
-        if (key === 'd') {
+        if (key === 'd' && CAN_MUTATE) {
             keyState.d = true;
         }
-        if (key === 'l') {
+        if (key === 'l' && CAN_MUTATE) {
             keyState.l = true;
             if (!pendingLineageChildId) {
                 setStatus('Link mode: hold L and click a child node.', 'warn');
@@ -460,8 +447,8 @@ function collectWaveLevels(startNode, direction) {
 
         frontier.forEach((node) => {
             const neighbors = direction === 'children'
-                ? node.incomers('edge').sources()
-                : node.outgoers('edge').targets();
+                ? node.outgoers('edge').targets()
+                : node.incomers('edge').sources();
 
             neighbors.forEach((neighbor) => {
                 const nid = neighbor.id();
@@ -537,13 +524,17 @@ function runNeighborhoodFromNode(node) {
 async function deleteGraphObject(ele) {
     const objectId = ele.data('id');
     const typeLabel = ele.isNode() ? 'node' : 'edge';
-    if (ele.data('is_external') || ele.data('is_external_bridge')) {
-        setStatus(`External ${typeLabel}s are read-only.`, 'warn');
+    if (!CAN_MUTATE) {
+        setStatus(`Administrator access is required to delete a ${typeLabel}.`, 'warn');
+        return;
+    }
+    if (!window.confirm(`Soft-delete ${typeLabel} ${objectId}?`)) {
+        setStatus(`Delete cancelled for ${typeLabel} ${objectId}.`, 'warn');
         return;
     }
 
     try {
-        const response = await fetch(tapdbUrl(`/api/object/${encodeURIComponent(objectId)}`), {
+        const response = await fetch(tapdbUrl(`/api/objects/${encodeURIComponent(objectId)}?apply=true`), {
             method: 'DELETE',
             headers: {
                 'Accept': 'application/json',
@@ -592,7 +583,7 @@ function pickRelationshipType(childId, parentId) {
         return Promise.resolve(trimmed || null);
     }
 
-    contextEl.textContent = `Child: ${childId} -> Parent: ${parentId}`;
+    contextEl.textContent = `Parent: ${parentId} -> Child: ${childId}`;
     selectEl.value = 'generic';
 
     return new Promise((resolve) => {
@@ -623,15 +614,18 @@ function pickRelationshipType(childId, parentId) {
 }
 
 async function createLineageEdge(childId, parentId, relationshipType) {
-    const response = await fetch(tapdbUrl('/api/lineage'), {
+    if (!CAN_MUTATE) {
+        throw new Error('Administrator access is required to create lineage');
+    }
+    const response = await fetch(tapdbUrl(`/api/object/${encodeURIComponent(childId)}/lineage`), {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
         },
         body: JSON.stringify({
-            child_euid: childId,
-            parent_euid: parentId,
+            related_euid: parentId,
+            direction: 'parent',
             relationship_type: relationshipType || 'generic',
         }),
     });
@@ -647,13 +641,17 @@ async function createLineageEdge(childId, parentId, relationshipType) {
         throw new Error(payload.detail || payload.message || `Failed to create edge (${response.status})`);
     }
 
-    const edgeId = payload.euid || `edge-${Date.now()}`;
+    const edgeId = String(payload.lineage_euid || '');
+    if (!edgeId) {
+        throw new Error('TapDB did not return a persisted lineage EUID');
+    }
     cy.add({
         group: 'edges',
         data: {
             id: edgeId,
-            source: childId,
-            target: parentId,
+            euid: edgeId,
+            source: parentId,
+            target: childId,
             relationship_type: relationshipType || 'generic',
         },
     });
@@ -661,7 +659,7 @@ async function createLineageEdge(childId, parentId, relationshipType) {
     refreshLegendFromCurrentGraph();
     applyFiltersAndStyles({ centerSearch: false });
     renderMermaidSource();
-    setStatus(`Created edge ${childId} -> ${parentId} (${relationshipType || 'generic'}).`, 'ok');
+    setStatus(`Created edge ${parentId} -> ${childId} (${relationshipType || 'generic'}).`, 'ok');
 }
 
 function refreshLegendFromCurrentGraph() {
@@ -932,8 +930,8 @@ function initCytoscape(container, elements) {
         container: container,
         elements: elements,
         style: cytoscapeStyle,
-        // With child->parent directionality, use bottom-to-top so parents tend to render above children.
-        layout: { name: 'dagre', rankDir: 'BT', nodeSep: 50, rankSep: 80 },
+        // DAG v2 edges run parent -> child, so top-to-bottom keeps parents above children.
+        layout: { name: 'dagre', rankDir: 'TB', nodeSep: 50, rankSep: 80 },
         minZoom: 0.1,
         maxZoom: 3,
         wheelSensitivity: 0.3,
@@ -945,11 +943,7 @@ function initCytoscape(container, elements) {
         const node = evt.target;
         await showNodeInfo(node.data());
 
-        if (node.data('is_external')) {
-            return;
-        }
-
-        if (pendingLineageChildId) {
+        if (CAN_MUTATE && pendingLineageChildId) {
             const childId = pendingLineageChildId;
             const parentId = node.id();
 
@@ -977,7 +971,7 @@ function initCytoscape(container, elements) {
             return;
         }
 
-        if (keyState.l) {
+        if (CAN_MUTATE && keyState.l) {
             setPendingLineageChild(node);
             return;
         }
@@ -996,7 +990,7 @@ function initCytoscape(container, elements) {
     cy.on('cxttap', 'node', async function(evt) {
         const node = evt.target;
 
-        if (keyState.d) {
+        if (CAN_MUTATE && keyState.d) {
             await deleteGraphObject(node);
             return;
         }
@@ -1018,7 +1012,7 @@ function initCytoscape(container, elements) {
     cy.on('cxttap', 'edge', async function(evt) {
         const edge = evt.target;
 
-        if (keyState.d) {
+        if (CAN_MUTATE && keyState.d) {
             await deleteGraphObject(edge);
             return;
         }
@@ -1028,9 +1022,6 @@ function initCytoscape(container, elements) {
 
     // Double-click to navigate.
     cy.on('dbltap', 'node', function(evt) {
-        if (evt.target.data('is_external')) {
-            return;
-        }
         const euid = evt.target.data('id');
         window.location.href = tapdbUrl(`/object/${encodeURIComponent(euid)}`);
     });
@@ -1078,15 +1069,26 @@ function currentStartEuid() {
     return (document.getElementById('start-euid')?.value || '').trim();
 }
 
+function currentMaxNodes() {
+    const raw = document.getElementById('max-nodes')?.value || '200';
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : 200;
+}
+
+function currentMaxEdges() {
+    const raw = document.getElementById('max-edges')?.value || '500';
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : 500;
+}
+
 function updateHistoryState() {
     const params = new URLSearchParams();
     const startEuid = currentStartEuid();
     params.set('depth', String(currentDepth()));
+    params.set('max_nodes', String(currentMaxNodes()));
+    params.set('max_edges', String(currentMaxEdges()));
     if (startEuid) {
         params.set('start_euid', startEuid);
-    }
-    if (pendingAutoMergeRef !== null) {
-        params.set('merge_ref', String(pendingAutoMergeRef));
     }
     window.history.replaceState({}, '', `${tapdbUrl('/graph')}?${params.toString()}`);
 }
@@ -1221,7 +1223,7 @@ function saveDag() {
 }
 
 function renderNoData(message) {
-    const container = document.getElementById('cy');
+    const container = document.getElementById('tapdb-graph');
     const detail = document.getElementById('node-info-content');
     if (!container) {
         return;
@@ -1290,53 +1292,61 @@ async function ensureGraphSelection(options = {}) {
     return node;
 }
 
-function buildExternalGraphUrl(sourceEuid, refIndex) {
-    const params = new URLSearchParams({
-        source_euid: sourceEuid,
-        ref_index: String(refIndex),
-        depth: String(currentDepth()),
-    });
-    return `${tapdbUrl('/api/dag/external')}?${params.toString()}`;
-}
-
-function buildExternalObjectUrl(sourceEuid, refIndex, euid) {
-    const params = new URLSearchParams({
-        source_euid: sourceEuid,
-        ref_index: String(refIndex),
-        euid,
-    });
-    return `${tapdbUrl('/api/dag/external/object')}?${params.toString()}`;
-}
-
-function renderExternalRefs(refs, sourceEuid, allowMerge) {
+function renderExternalRefs(refs) {
     if (!Array.isArray(refs) || refs.length === 0) {
         return '';
     }
     const rows = refs.map((ref) => {
-        const openRemote = ref.href
-            ? `<a href="${escapeHtml(ref.href)}" class="btn" target="_blank" rel="noreferrer">Open Remote</a>`
-            : '';
-        const mergeButton = allowMerge
-            ? `<button class="btn" onclick="mergeExternalRef('${escapeHtml(sourceEuid)}', ${Number(ref.ref_index || 0)})"` +
-                `${ref.graph_expandable ? '' : ' disabled'}` +
-                `>Merge External Graph</button>`
-            : '';
-        const disabledReason = !ref.graph_expandable && ref.reason
-            ? `<div style="color: var(--text-muted); font-size: 0.8rem;">${escapeHtml(ref.reason)}</div>`
-            : '';
         return `
             <div style="border:1px solid var(--border-color); border-radius:6px; padding:0.65rem; margin-bottom:0.6rem;">
-                <div style="font-weight:600;">${escapeHtml(ref.label || ref.root_euid || 'External reference')}</div>
+                <div style="font-weight:600;">${escapeHtml(ref.target_service_id)} :: ${escapeHtml(ref.target_object_euid)}</div>
                 <div style="font-size:0.82rem; color:var(--text-muted); margin:0.25rem 0 0.5rem 0;">
-                    ${escapeHtml(ref.system || 'external')} :: ${escapeHtml(ref.root_euid || '-')}
-                    ${ref.tenant_id ? ` :: ${escapeHtml(ref.tenant_id)}` : ''}
+                    ${escapeHtml(ref.relationship_type || 'related')} · ${escapeHtml(ref.assertion_authority || '-')}
+                    ${ref.target_tenant_id ? ` · tenant ${escapeHtml(ref.target_tenant_id)}` : ''}
+                    ${ref.target_object_kind ? ` · ${escapeHtml(ref.target_object_kind)}` : ''}
                 </div>
-                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">${openRemote}${mergeButton}</div>
-                ${disabledReason}
+                <div style="font-size:0.78rem; color:var(--text-muted);">Asserted ${escapeHtml(ref.asserted_at || '-')} · XRF ${escapeHtml(ref.external_reference_euid || '-')} · lineage ${escapeHtml(ref.lineage_euid || '-')}</div>
+                <div style="font-size:0.78rem; color:var(--text-muted);">${escapeHtml(ref.assertion_provenance || '')}</div>
             </div>
         `;
     }).join('');
-    return `<div class="details-section-title">External References</div>${rows}`;
+    return `<div class="details-section-title">Federated TapDB References (read-only)</div>${rows}`;
+}
+
+function safeHttpsHref(value) {
+    try {
+        const parsed = new URL(String(value || ''));
+        if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash) {
+            return '';
+        }
+        return parsed.href;
+    } catch (_err) {
+        return '';
+    }
+}
+
+function renderExternalIdentifiers(identifiers) {
+    if (!Array.isArray(identifiers) || identifiers.length === 0) {
+        return '';
+    }
+    const rows = identifiers.map((identifier) => {
+        const canonicalHref = safeHttpsHref(identifier.canonical_uri);
+        const uri = canonicalHref
+            ? `<a href="${escapeHtml(canonicalHref)}" target="_blank" rel="noopener noreferrer">Canonical HTTPS URI</a>`
+            : '';
+        return `
+            <div style="border:1px solid var(--border-color); border-radius:6px; padding:0.65rem; margin-bottom:0.6rem;">
+                <div style="font-weight:600;">${escapeHtml(identifier.namespace)} / ${escapeHtml(identifier.kind)} / ${escapeHtml(identifier.value)}</div>
+                <div style="font-size:0.82rem; color:var(--text-muted); margin:0.25rem 0 0.5rem 0;">
+                    ${escapeHtml(identifier.scope)} · ${escapeHtml(identifier.relationship_type || 'related')} · ${escapeHtml(identifier.assertion_authority || '-')}
+                </div>
+                <div style="font-size:0.78rem; color:var(--text-muted);">Asserted ${escapeHtml(identifier.asserted_at || '-')} · XRF ${escapeHtml(identifier.external_reference_euid || '-')} · lineage ${escapeHtml(identifier.lineage_euid || '-')}</div>
+                <div style="font-size:0.78rem; color:var(--text-muted);">${escapeHtml(identifier.assertion_provenance || '')}</div>
+                ${uri}
+            </div>
+        `;
+    }).join('');
+    return `<div class="details-section-title">Opaque External Identifiers (non-expandable)</div>${rows}`;
 }
 
 function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
@@ -1367,7 +1377,7 @@ function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
         'json_addl',
     ];
     const remainingKeys = Object.keys(merged)
-        .filter((k) => !preferredKeys.includes(k))
+        .filter((k) => !preferredKeys.includes(k) && k !== 'external_refs' && k !== 'external_identifiers')
         .sort();
     const keys = preferredKeys.filter((k) => Object.prototype.hasOwnProperty.call(merged, k)).concat(remainingKeys);
 
@@ -1378,23 +1388,18 @@ function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
 
     const rawObjectPayload = objectData || {};
     const graphPayload = graphData || {};
-    const jsonPayload = Object.prototype.hasOwnProperty.call(merged, 'json_addl')
-        ? merged.json_addl
-        : {};
+    const jsonPayload = Object.prototype.hasOwnProperty.call(merged, 'properties')
+        ? merged.properties
+        : (merged.json_addl || {});
     const externalRefs = Array.isArray(merged.external_refs) ? merged.external_refs : [];
-    const canRenderExternalRefs = isNode && !(graphData && graphData.is_external);
-    const sourceEuid = graphData && graphData.external_source_euid ? graphData.external_source_euid : euid;
-    const externalRefSection = renderExternalRefs(externalRefs, sourceEuid, canRenderExternalRefs);
-    const canViewLocalDetail = !(graphData && graphData.is_external);
+    const externalIdentifiers = Array.isArray(merged.external_identifiers) ? merged.external_identifiers : [];
+    const externalRefSection = isNode ? renderExternalRefs(externalRefs) : '';
+    const externalIdentifierSection = isNode ? renderExternalIdentifiers(externalIdentifiers) : '';
     const graphNodeId = graphData && graphData.id ? graphData.id : euid;
 
     const actions = `
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem;">
-            ${
-                canViewLocalDetail
-                    ? `<a href="${tapdbUrl(`/object/${encodeURIComponent(euid)}`)}" class="btn">View Details</a>`
-                    : ''
-            }
+            <a href="${tapdbUrl(`/object/${encodeURIComponent(euid)}`)}" class="btn">View Details</a>
             ${
                 isNode
                     ? `<button onclick="centerOnNode('${escapeHtml(graphNodeId)}')" class="btn">Center on Node</button>`
@@ -1410,7 +1415,8 @@ function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
         <div class="details-section-title">Raw Object JSON</div>
         <pre class="json-block">${escapeHtml(prettyJson(rawObjectPayload))}</pre>
         ${externalRefSection}
-        <div class="details-section-title">JSON (json_addl)</div>
+        ${externalIdentifierSection}
+        <div class="details-section-title">Canonical Properties</div>
         <pre class="json-block">${escapeHtml(prettyJson(jsonPayload))}</pre>
         <div class="details-section-title">Graph Payload</div>
         <pre class="json-block">${escapeHtml(prettyJson(graphPayload))}</pre>
@@ -1418,7 +1424,7 @@ function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
 }
 
 async function fetchObjectData(euid) {
-    const response = await fetch(tapdbUrl(`/api/dag/object/${encodeURIComponent(euid)}`), {
+    const response = await fetch(tapdbUrl(`/api/dag/v2/object/${encodeURIComponent(euid)}`), {
         headers: {
             Accept: 'application/json',
         },
@@ -1429,88 +1435,15 @@ async function fetchObjectData(euid) {
     return response.json();
 }
 
-async function fetchExternalObjectData(sourceEuid, refIndex, euid) {
-    const response = await fetch(buildExternalObjectUrl(sourceEuid, refIndex, euid), {
-        headers: {
-            Accept: 'application/json',
-        },
-    });
-    if (!response.ok) {
-        let payload = {};
-        try {
-            payload = await response.json();
-        } catch (_err) {
-            payload = {};
-        }
-        throw new Error(payload.detail || `Failed to load external object details (${response.status})`);
-    }
-    return response.json();
-}
-
-async function mergeExternalRef(sourceEuid, refIndex) {
-    if (!cy) {
-        setStatus('Load a graph before merging an external reference.', 'warn');
-        return;
-    }
-
-    try {
-        const response = await fetch(buildExternalGraphUrl(sourceEuid, refIndex), {
-            headers: { Accept: 'application/json' },
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-            throw new Error(payload.detail || `Failed to merge external graph (${response.status})`);
-        }
-
-        const elements = payload.elements || {};
-        const nodes = Array.isArray(elements.nodes) ? elements.nodes : [];
-        const edges = Array.isArray(elements.edges) ? elements.edges : [];
-        const existingIds = new Set(cy.elements().map((ele) => ele.id()));
-        const additions = [];
-        [...nodes, ...edges].forEach((element) => {
-            const id = element && element.data ? element.data.id : null;
-            if (!id || existingIds.has(id)) {
-                return;
-            }
-            additions.push(element);
-            existingIds.add(id);
-        });
-
-        if (additions.length === 0) {
-            setStatus('External graph already merged.', 'warn');
-            return;
-        }
-
-        cy.add(additions);
-        applyLayout(false);
-        refreshLegendFromCurrentGraph();
-        buildTypeAndSubtypeControls();
-        const matches = applyFiltersAndStyles({ centerSearch: false });
-        currentGraphMeta = {
-            ...currentGraphMeta,
-            node_count: cy.nodes().length,
-            edge_count: cy.edges().length,
-        };
-        renderMermaidSource();
-        await ensureGraphSelection({ preferredId: currentStartEuid(), matches });
-        setStatus(`Merged external graph for ${sourceEuid}.`, 'ok');
-    } catch (error) {
-        console.error('Failed to merge external graph:', error);
-        setStatus(`External merge failed: ${error.message}`, 'error');
-    }
-}
-
 async function showNodeInfo(data) {
     const content = document.getElementById('node-info-content');
     if (content) {
         content.innerHTML = '<p style="color: var(--text-muted);">Loading node details...</p>';
     }
     try {
-        const objectData = data.is_external
-            ? await fetchExternalObjectData(data.external_source_euid, data.source_ref_index, data.remote_euid || data.id)
-            : await fetchObjectData(data.id);
+        const objectData = await fetchObjectData(data.id);
         renderDetailsPanel({
-            euid: data.is_external ? (data.remote_euid || data.id) : data.id,
+            euid: data.id,
             objectData,
             graphData: data,
             isNode: true,
@@ -1539,11 +1472,9 @@ async function showEdgeInfo(data) {
         content.innerHTML = '<p style="color: var(--text-muted);">Loading edge details...</p>';
     }
     try {
-        const objectData = (data.is_external || data.is_external_bridge) && data.remote_euid
-            ? await fetchExternalObjectData(data.external_source_euid, data.source_ref_index, data.remote_euid)
-            : await fetchObjectData(data.id);
+        const objectData = await fetchObjectData(data.id);
         renderDetailsPanel({
-            euid: (data.is_external || data.is_external_bridge) ? (data.remote_euid || data.id) : data.id,
+            euid: data.id,
             objectData,
             graphData: data,
             isNode: false,
@@ -1588,7 +1519,7 @@ function applyLayout(shouldPersist = true) {
 
     const layoutName = document.getElementById('layout-select').value;
     const layoutOptions = {
-        dagre: { name: 'dagre', rankDir: 'BT', nodeSep: 50, rankSep: 80 },
+        dagre: { name: 'dagre', rankDir: 'TB', nodeSep: 50, rankSep: 80 },
         cose: { name: 'cose', animate: true, animationDuration: 500 },
         breadthfirst: { name: 'breadthfirst', directed: true, spacingFactor: 1.5 },
         circle: { name: 'circle' },
@@ -1637,18 +1568,15 @@ async function loadGraph() {
 
     const startEuid = currentStartEuid();
     const depth = String(currentDepth());
+    const maxNodes = String(currentMaxNodes());
+    const maxEdges = String(currentMaxEdges());
 
-    const container = document.getElementById('cy');
-    if (!startEuid) {
-        renderNoData('Enter an exact EUID to load the native DAG root.');
-        setStatus('Enter an exact EUID to load a DAG root.', 'warn');
-        return;
-    }
-
+    const container = document.getElementById('tapdb-graph');
     renderNoData('Loading graph data...');
 
     try {
-        let url = `${tapdbUrl('/api/dag/data')}?depth=${encodeURIComponent(depth)}`;
+        let url = `${tapdbUrl('/api/graph')}?depth=${encodeURIComponent(depth)}` +
+            `&max_nodes=${encodeURIComponent(maxNodes)}&max_edges=${encodeURIComponent(maxEdges)}`;
         if (startEuid) {
             url += '&start_euid=' + encodeURIComponent(startEuid);
         }
@@ -1662,7 +1590,13 @@ async function loadGraph() {
         }
 
         const elements = data.elements || { nodes: [], edges: [] };
-        const nodes = Array.isArray(elements.nodes) ? elements.nodes : [];
+        const nodes = Array.isArray(elements.nodes) ? elements.nodes.map((node) => {
+            const data = { ...(node.data || {}) };
+            data.id = String(data.id || data.euid || '');
+            data.display_label = data.display_label || data.name || data.euid || data.id;
+            data.color = data.color || colorForCategory(data.category || data.type || 'unknown');
+            return { data };
+        }).filter((node) => node.data.id) : [];
         const edges = Array.isArray(elements.edges) ? elements.edges : [];
         currentGraphMeta = { ...(data.meta || {}) };
 
@@ -1694,11 +1628,6 @@ async function loadGraph() {
         renderMermaidSource();
 
         updateHistoryState();
-        if (pendingAutoMergeRef !== null && startEuid) {
-            const mergeRef = pendingAutoMergeRef;
-            pendingAutoMergeRef = null;
-            await mergeExternalRef(startEuid, mergeRef);
-        }
         const meta = data.meta || {};
         if (meta.truncated) {
             setStatus(
@@ -1725,19 +1654,14 @@ function updateLegend(typesInGraph) {
         return;
     }
 
-    const staticItems = [
-        '<div class="legend-item"><div class="legend-color" style="background:#666"></div>Local</div>',
-        '<div class="legend-item"><div class="legend-color" style="background:#c1a967"></div>External</div>',
-        '<div class="legend-item"><div class="legend-color" style="background:#f7c948"></div>Bridge</div>',
-    ];
     if (Object.keys(typesInGraph).length === 0) {
-        legendContainer.innerHTML = staticItems.join('');
+        legendContainer.innerHTML = '<span style="color: var(--text-muted); font-size: 0.85rem;">No visible nodes.</span>';
         return;
     }
 
     const sortedTypes = Object.keys(typesInGraph).sort();
 
-    legendContainer.innerHTML = staticItems.join('') + sortedTypes.map((type) => `
+    legendContainer.innerHTML = sortedTypes.map((type) => `
         <div class="legend-item">
             <div class="legend-color" style="background:${typesInGraph[type]}"></div>
             ${escapeHtml(type)}
@@ -1760,5 +1684,4 @@ window.applyLayout = applyLayout;
 window.applySearch = applySearch;
 window.findAndCenterByEuid = findAndCenterByEuid;
 window.centerOnNode = centerOnNode;
-window.mergeExternalRef = mergeExternalRef;
 window.saveDag = saveDag;

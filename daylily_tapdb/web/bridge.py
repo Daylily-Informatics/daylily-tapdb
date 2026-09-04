@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from fastapi import Request
+from fastapi.responses import JSONResponse, RedirectResponse
 
 TapdbUrlResolver = str | Callable[[Request], str]
 TapdbUserResolver = Callable[[Request], Mapping[str, Any] | None]
@@ -136,3 +137,65 @@ def resolve_host_context(
     if not isinstance(payload, Mapping):
         return {}
     return dict(payload)
+
+
+def _requested_path(request: Request) -> str:
+    root_path = str(request.scope.get("root_path") or "").rstrip("/")
+    path = str(request.scope.get("path") or "")
+    target = f"{root_path}{path}" or "/"
+    query_string = request.scope.get("query_string") or b""
+    if query_string:
+        target = f"{target}?{query_string.decode('utf-8')}"
+    return target
+
+
+def _is_api_scope(scope: Mapping[str, Any]) -> bool:
+    path = str(scope.get("path") or "")
+    if path == "/api" or path.startswith("/api/"):
+        return True
+    root_path = str(scope.get("root_path") or "").rstrip("/")
+    if not root_path:
+        return False
+    mounted_api = f"{root_path}/api"
+    return path == mounted_api or path.startswith(f"{mounted_api}/")
+
+
+class TapdbHostBridgeMount:
+    """ASGI wrapper that gates mounted TapDB UIs through host authentication."""
+
+    def __init__(self, app: Any, bridge: TapdbHostBridge) -> None:
+        self.app = app
+        self.bridge = bridge
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http" or self.bridge.auth_mode != "host_session":
+            await self.app(scope, receive, send)
+            return
+
+        path = str(scope.get("path") or "")
+        if path in {"/healthz", "/readyz"}:
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive)
+        user = normalize_host_user(
+            self.bridge.resolve_user(request)
+            if self.bridge.resolve_user is not None
+            else None
+        )
+        if user is None:
+            if _is_api_scope(scope):
+                await JSONResponse(
+                    status_code=401,
+                    content={"detail": "host_session_required"},
+                )(scope, receive, send)
+                return
+
+            login_url = resolve_bridge_url(self.bridge.login_url, request) or "/login"
+            await RedirectResponse(login_url, status_code=302)(scope, receive, send)
+            return
+
+        scoped = dict(scope)
+        scoped["tapdb_host_user"] = user
+        scoped["tapdb_requested_path"] = _requested_path(request)
+        await self.app(scoped, receive, send)

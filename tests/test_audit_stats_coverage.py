@@ -62,6 +62,7 @@ def test_query_audit_trail_builds_filters_and_entries():
         since=changed_at,
         domain_code="Z",
         issuer_app_code="daylily-tapdb",
+        operation_type=" update ",
         limit=7,
         order="asc",
     )
@@ -69,8 +70,10 @@ def test_query_audit_trail_builds_filters_and_entries():
     sql, params = session.calls[0]
     assert "al.changed_by = :changed_by" in sql
     assert "al.rel_table_euid_fk = :euid" in sql
+    assert "UPPER(al.operation_type) = :operation_type" in sql
     assert "ORDER BY al.changed_at ASC" in sql
     assert params["limit"] == 7
+    assert params["operation_type"] == "UPDATE"
     assert rows == [
         audit_mod.AuditEntry(
             euid="Z-SMP-1Q",
@@ -97,6 +100,11 @@ def test_query_audit_trail_defaults_to_desc_order_without_filters():
     assert "WHERE" not in sql
     assert "ORDER BY al.changed_at DESC" in sql
     assert params == {"limit": 500}
+
+
+def test_query_audit_trail_rejects_unknown_operation_type():
+    with pytest.raises(ValueError, match="INSERT, UPDATE, or DELETE"):
+        audit_mod.query_audit_trail(_Session([]), operation_type="UPSERT")
 
 
 def test_template_instance_and_lineage_stats_build_scoped_queries():

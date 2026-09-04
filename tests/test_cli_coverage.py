@@ -112,10 +112,9 @@ def test_pid_file_handling(tmp_path: Path):
     assert not stale.exists()
 
 
-def test_admin_module_and_extras_are_discoverable(monkeypatch: pytest.MonkeyPatch):
-    from daylily_tapdb.cli import _find_admin_module, _require_admin_extras
+def test_gui_extras_are_discoverable(monkeypatch: pytest.MonkeyPatch):
+    from daylily_tapdb.cli import _require_admin_extras
 
-    assert _find_admin_module() == "admin.main:app"
     monkeypatch.setattr(cli_mod.importlib.util, "find_spec", lambda name: object())
     _require_admin_extras()
 

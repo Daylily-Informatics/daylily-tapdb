@@ -36,6 +36,9 @@ class _Related:
     def all(self):
         return list(self._rows)
 
+    def count(self):
+        return len(self._rows)
+
     def __iter__(self):
         return iter(self._rows)
 
@@ -72,6 +75,9 @@ class _Query:
     def all(self):
         return list(self._rows)
 
+    def count(self):
+        return len(self._rows)
+
 
 class _Session:
     def __init__(self, rows):
@@ -84,7 +90,12 @@ class _Session:
     def add(self, obj):
         self.added.append(obj)
 
-    def execute(self, statement):
+    def execute(self, statement, params=None):
+        del params
+        if not hasattr(statement, "column_descriptions"):
+            return SimpleNamespace(
+                mappings=lambda: SimpleNamespace(all=lambda: []),
+            )
         entity = statement.column_descriptions[0]["entity"]
         params = statement.compile().params
         value = next(iter(params.values()))
@@ -198,11 +209,53 @@ def _repair_template():
     )
 
 
+def _patch_gui_app_startup(monkeypatch):
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.set_cli_context",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.get_admin_settings",
+        lambda **_kwargs: {
+            "target_name": "test",
+            "production_like": False,
+            "auth_mode": "disabled",
+            "session_secret": "test-session-secret",
+            "allowed_origins": [],
+        },
+    )
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.get_db_config",
+        lambda **_kwargs: {
+            "client_id": "testclient",
+            "domain_code": "Z",
+            "owner_repo_name": "daylily-tapdb",
+            "domain_registry_path": "daylily_tapdb/etc/domain_code_registry.json",
+            "prefix_ownership_registry_path": (
+                "daylily_tapdb/etc/prefix_ownership_registry.json"
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        "daylily_tapdb.gui.router.mount_tapdb_dag_surfaces",
+        lambda *_args, **_kwargs: SimpleNamespace(mounted=True, diagnostic=None),
+    )
+
+
 def _client(monkeypatch, *, role="admin", session=None, nav_links=()):
+    _patch_gui_app_startup(monkeypatch)
     if session is None:
         session = _Session(
             {
-                generic_template: [_template()],
+                generic_template: [
+                    _template(),
+                    _template(
+                        "persisted-opaque-template-euid",
+                        uid=11,
+                        name="Opaque External Identifier",
+                        subtype="opaque",
+                    ),
+                ],
                 generic_instance: [_instance("persisted-sample-euid", "Sample 1")],
                 generic_instance_lineage: [],
                 audit_log: [],
@@ -239,7 +292,8 @@ def _client(monkeypatch, *, role="admin", session=None, nav_links=()):
     )
 
 
-def test_gui_mount_redirects_unauthenticated_html_and_blocks_api():
+def test_gui_mount_redirects_unauthenticated_html_and_blocks_api(monkeypatch):
+    _patch_gui_app_startup(monkeypatch)
     bridge = TapdbHostBridge(
         auth_mode="host_session",
         login_url="/login",
@@ -256,7 +310,8 @@ def test_gui_mount_redirects_unauthenticated_html_and_blocks_api():
     assert response.json()["detail"] == "host_session_required"
 
 
-def test_gui_mounted_api_blocks_unauthenticated_with_json_401():
+def test_gui_mounted_api_blocks_unauthenticated_with_json_401(monkeypatch):
+    _patch_gui_app_startup(monkeypatch)
     bridge = TapdbHostBridge(
         auth_mode="host_session",
         login_url="/login",
@@ -324,8 +379,8 @@ def test_gui_graph_page_includes_visual_viewer(monkeypatch):
         lambda session, euid: (root if euid == root.euid else None, "instance"),
     )
     monkeypatch.setattr(
-        "daylily_tapdb.gui.router.build_graph_payload",
-        lambda obj, record_type, service_name, depth: {
+        "daylily_tapdb.gui.router.build_graph_v2_payload",
+        lambda obj, record_type, service_id, depth, max_nodes: {
             "elements": {
                 "nodes": [
                     {
@@ -793,14 +848,15 @@ def test_gui_create_form_renders_factory_validation_error(monkeypatch):
     assert 'value="No Login"' in response.text
 
 
-def test_gui_home_uses_concrete_search_defaults(monkeypatch):
+def test_gui_home_is_the_operator_overview(monkeypatch):
     client = _client(monkeypatch)
 
     response = client.get("/")
 
     assert response.status_code == 200
     assert "Search" in response.text
-    assert "persisted-template-euid" in response.text
+    assert "Overview" in response.text
+    assert "active templates" in response.text
 
 
 def test_gui_create_from_template_passes_child_instantiation_flag(monkeypatch):
@@ -984,7 +1040,7 @@ def test_gui_metrics_page_reuses_metrics_context(monkeypatch):
     assert calls == {
         "target": "target",
         "limit": 5000,
-        "config_path": "/tmp/tapdb-config.yaml",
+        "config_path": str(Path("/tmp/tapdb-config.yaml").resolve()),
     }
 
 
@@ -1024,7 +1080,7 @@ def test_gui_metrics_api_reuses_metrics_context(monkeypatch):
     assert calls == {
         "target": "target",
         "limit": 100,
-        "config_path": "/tmp/tapdb-config.yaml",
+        "config_path": str(Path("/tmp/tapdb-config.yaml").resolve()),
     }
 
 
@@ -1036,7 +1092,7 @@ def test_gui_readiness_page_and_api_report_seeded_external_template(monkeypatch)
 
     assert page.status_code == 200
     assert "TapDB GUI ready: True" in page.text
-    assert "external_link_template" in page.text
+    assert "canonical_external_reference_templates" in page.text
     assert api.status_code == 200
     payload = api.json()
     assert payload["ready"] is True
@@ -1048,11 +1104,14 @@ def test_gui_readiness_page_and_api_report_seeded_external_template(monkeypatch)
     checks = {check["name"]: check for check in payload["checks"]}
     assert checks["governance"]["ok"] is True
     assert "public registry 0.1.1" in checks["governance"]["detail"]
-    assert {
-        "name": "external_link_template",
+    assert checks["canonical_external_reference_templates"] == {
+        "name": "canonical_external_reference_templates",
         "ok": True,
-        "detail": "reference/external_identifier/tapdb_object/1.0/",
-    } in payload["checks"]
+        "detail": (
+            "reference/external_identifier/opaque/1.0/, "
+            "reference/external_identifier/tapdb_object/1.0/"
+        ),
+    }
     assert "meridian-registry" in page.text
 
 
@@ -1532,145 +1591,20 @@ def test_gui_object_mutation_api_rejects_immutable_fields(monkeypatch):
     assert session.rows[generic_instance][0].name == "Sample 1"
 
 
-def test_gui_external_link_creates_typed_object_and_lineage(monkeypatch):
-    session = _Session(
-        {
-            generic_template: [_template()],
-            generic_instance: [_instance("persisted-sample-euid", "Sample 1")],
-            generic_instance_lineage: [],
-            audit_log: [],
-        }
-    )
-    created = SimpleNamespace(
-        uid=201,
-        euid="Z-XRF-2Q",
-        polymorphic_discriminator="generic_instance",
-    )
+def test_gui_legacy_external_link_writers_are_removed(monkeypatch):
+    client = _client(monkeypatch)
 
-    class _Factory:
-        def __init__(self, template_manager, *, domain_code):
-            self.domain_code = domain_code
-
-        def create_instance(
-            self, session, template_code, name, properties, create_children
-        ):
-            assert template_code == "reference/external_identifier/tapdb_object/1.0/"
-            assert name == "bloom:M-123"
-            assert properties["foreign_uid"] == "M-123"
-            assert create_children is False
-            return created
-
-    monkeypatch.setattr("daylily_tapdb.gui.router.InstanceFactory", _Factory)
-    client = _client(monkeypatch, session=session)
-
-    response = client.post(
+    html = client.post(
         "/object/persisted-sample-euid/external-links/new",
-        data={
-            "system": "bloom",
-            "foreign_uid": "M-123",
-            "relationship_type": "external_ref",
-            "auth_mode": "none",
-        },
-        follow_redirects=False,
+        data={"system": "legacy", "foreign_uid": "copied-id"},
     )
-
-    assert response.status_code == 303
-    assert (
-        response.headers["location"] == "/object/Z-XRF-2Q?notice=external_link_created"
-    )
-    assert len(session.added) == 1
-    assert session.added[0].parent_instance_uid == len("persisted-sample-euid")
-    assert session.added[0].child_instance_uid == 201
-
-
-def test_gui_external_link_api_creates_typed_object_and_lineage(monkeypatch):
-    session = _Session(
-        {
-            generic_template: [_template()],
-            generic_instance: [_instance("persisted-sample-euid", "Sample 1")],
-            generic_instance_lineage: [],
-            audit_log: [],
-        }
-    )
-    created = SimpleNamespace(
-        uid=201,
-        euid="Z-XRF-2Q",
-        polymorphic_discriminator="generic_instance",
-    )
-
-    class _Factory:
-        def __init__(self, template_manager, *, domain_code):
-            self.domain_code = domain_code
-
-        def create_instance(
-            self, session, template_code, name, properties, create_children
-        ):
-            assert template_code == "reference/external_identifier/tapdb_object/1.0/"
-            assert name == "dewey:M-456"
-            assert properties["external_identifier"]["target_euid"] == "M-456"
-            assert (
-                properties["external_identifier"]["base_url"] == "https://dewey.example"
-            )
-            assert create_children is False
-            return created
-
-    monkeypatch.setattr("daylily_tapdb.gui.router.InstanceFactory", _Factory)
-    client = _client(monkeypatch, session=session)
-
-    response = client.post(
+    api = client.post(
         "/api/object/persisted-sample-euid/external-links",
-        json={
-            "system": "dewey",
-            "foreign_uid": "M-456",
-            "relationship_type": "external_ref",
-            "graph_base_url": "https://dewey.example",
-        },
+        json={"system": "legacy", "foreign_uid": "copied-id"},
     )
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["source_euid"] == "persisted-sample-euid"
-    assert payload["link_euid"] == "Z-XRF-2Q"
-    assert payload["lineage_euid"]
-    assert payload["relationship_type"] == "external_ref"
-    assert len(session.added) == 1
-    assert session.added[0].parent_instance_uid == len("persisted-sample-euid")
-    assert session.added[0].child_instance_uid == 201
-
-
-def test_gui_external_link_creation_rejects_legacy_template_shape(monkeypatch):
-    session = _Session(
-        {
-            generic_template: [
-                _template(
-                    category="external_identifier",
-                    type_name="tapdb",
-                    subtype="object",
-                    prefix="XID",
-                )
-            ],
-            generic_instance: [_instance("persisted-sample-euid", "Sample 1")],
-            generic_instance_lineage: [],
-            audit_log: [],
-        }
-    )
-    client = _client(monkeypatch, session=session)
-
-    response = client.post(
-        "/api/object/persisted-sample-euid/external-links",
-        json={
-            "system": "dewey",
-            "foreign_uid": "M-456",
-            "relationship_type": "external_ref",
-        },
-    )
-
-    assert response.status_code == 422
-    assert (
-        response.json()["detail"]
-        == "No reference/external_identifier/tapdb_object external link template is seeded."
-    )
-    assert session.added == []
+    assert html.status_code == 404
+    assert api.status_code == 404
 
 
 def test_gui_exports_are_available_from_web_package():

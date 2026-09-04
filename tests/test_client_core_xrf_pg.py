@@ -15,12 +15,13 @@ from daylily_tapdb.cli import app
 from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 from daylily_tapdb.connection import TAPDBConnection
 from daylily_tapdb.euid import EUIDConfig
-from daylily_tapdb.factory import InstanceFactory
-from daylily_tapdb.services.external_refs import (
-    TypedExternalReferenceSpec,
-    create_or_reuse_typed_external_reference,
-    project_outbound_typed_references,
+from daylily_tapdb.external_references import (
+    ExternalLinkSpec,
+    ExternalReferenceService,
+    TapDBObjectTarget,
+    _project_outbound_external_references,
 )
+from daylily_tapdb.factory import InstanceFactory
 from daylily_tapdb.services.graph_payloads import _v2_edge
 from daylily_tapdb.templates.manager import TemplateManager
 from daylily_tapdb.user_store import (
@@ -260,7 +261,7 @@ def test_client_runtime_uses_operator_seeded_core_for_xrf_and_user(
             ),
             {"owner": client_owner},
         ).all()
-    assert len(client_templates) == 10
+    assert len(client_templates) == 11
     assert ("reference", "external_identifier", "tapdb_object", "XRF") in (
         client_templates
     )
@@ -339,20 +340,21 @@ def test_client_runtime_uses_operator_seeded_core_for_xrf_and_user(
                 session, source, child, relationship_type="contains"
             )
             ordinary_edge = _v2_edge(ordinary_lineage, service_id="client-service")
-            result = create_or_reuse_typed_external_reference(
-                session,
-                source=source,
-                instance_factory=factory,
-                spec=TypedExternalReferenceSpec(
-                    target_service_id="owning-service",
-                    target_object_euid=str(target_euid),
+            result = ExternalReferenceService(session).attach(
+                source,
+                ExternalLinkSpec(
+                    target=TapDBObjectTarget(
+                        target_service_id="owning-service",
+                        target_object_euid=str(target_euid),
+                    ),
                     relationship_type="references",
+                    assertion_authority="client-service",
                     asserted_at=datetime.now(timezone.utc),
                     assertion_provenance="authenticated exact ownership lookup",
                 ),
             )
             session.refresh(source)
-            projection = project_outbound_typed_references(source)
+            projection = _project_outbound_external_references(source)["external_refs"]
             assert result.reference.issuer_app_code == client_owner
             assert result.reference.tenant_id is None
             assert result.lineage.issuer_app_code == client_owner

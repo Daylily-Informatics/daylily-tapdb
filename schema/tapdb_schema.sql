@@ -201,7 +201,6 @@ CREATE TABLE IF NOT EXISTS generic_instance (
     modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT unique_generic_instance_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq),
-    CONSTRAINT ck_generic_instance_identity_key_global CHECK (identity_key IS NULL OR tenant_id IS NULL),
     CONSTRAINT ck_generic_instance_identity_key_format CHECK (identity_key IS NULL OR (identity_key ~ '^[a-z][a-z0-9._/-]*:[^[:cntrl:]]+$' AND char_length(identity_key) <= 512))
 );
 
@@ -509,11 +508,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_machine_uuid
 CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_machine_uuid
     ON generic_instance(domain_code, issuer_app_code, machine_uuid)
     WHERE machine_uuid IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_natural_identity
+CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_natural_identity_global
     ON generic_instance (
         domain_code, issuer_app_code, template_uid, identity_key
     )
-    WHERE identity_key IS NOT NULL;
+    WHERE identity_key IS NOT NULL AND tenant_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_natural_identity_tenant
+    ON generic_instance (
+        domain_code, issuer_app_code, tenant_id, template_uid, identity_key
+    )
+    WHERE identity_key IS NOT NULL AND tenant_id IS NOT NULL;
 
 -- outbox_event indexes
 CREATE INDEX IF NOT EXISTS idx_outbox_event_status_next_attempt_at

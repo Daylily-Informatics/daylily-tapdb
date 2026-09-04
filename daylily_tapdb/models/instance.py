@@ -29,23 +29,29 @@ class generic_instance(tapdb_core):
     __tablename__ = "generic_instance"
     __table_args__ = (
         CheckConstraint(
-            "identity_key IS NULL OR tenant_id IS NULL",
-            name="ck_generic_instance_identity_key_global",
-        ),
-        CheckConstraint(
             "identity_key IS NULL OR ("
             "identity_key ~ '^[a-z][a-z0-9._/-]*:[^[:cntrl:]]+$' "
             "AND char_length(identity_key) <= 512)",
             name="ck_generic_instance_identity_key_format",
         ),
         Index(
-            "idx_generic_instance_natural_identity",
+            "idx_generic_instance_natural_identity_global",
             "domain_code",
             "issuer_app_code",
             "template_uid",
             "identity_key",
             unique=True,
-            postgresql_where=text("identity_key IS NOT NULL"),
+            postgresql_where=text("identity_key IS NOT NULL AND tenant_id IS NULL"),
+        ),
+        Index(
+            "idx_generic_instance_natural_identity_tenant",
+            "domain_code",
+            "issuer_app_code",
+            "tenant_id",
+            "template_uid",
+            "identity_key",
+            unique=True,
+            postgresql_where=text("identity_key IS NOT NULL AND tenant_id IS NOT NULL"),
         ),
     )
     __mapper_args__ = {

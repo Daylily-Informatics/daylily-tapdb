@@ -89,6 +89,9 @@ def test_declared_backfills_have_explicit_preservation_allow_markers():
     runtime_ddl_guard = (
         migrations / "20260903_031820_runtime_ddl_guard.sql"
     ).read_text(encoding="utf-8")
+    tenant_identity = (
+        migrations / "20260904_061819_tenant_scoped_natural_identity.sql"
+    ).read_text(encoding="utf-8")
 
     assert "tapdb-allow-column: generic_template.validator_ref" in validator
     assert "tapdb-transformation: generic_template.validator_ref" in validator
@@ -103,6 +106,12 @@ def test_declared_backfills_have_explicit_preservation_allow_markers():
     assert "tapdb-allow-new-rows:" not in runtime_ddl_guard
     assert "tapdb-allow-sequence:" not in runtime_ddl_guard
     assert "tapdb-transformation:" not in runtime_ddl_guard
+    assert "UPDATE generic_instance" not in tenant_identity
+    assert "INSERT INTO" not in tenant_identity
+    assert "nextval(" not in tenant_identity
+    assert "setval(" not in tenant_identity
+    assert "idx_generic_instance_natural_identity_global" in tenant_identity
+    assert "idx_generic_instance_natural_identity_tenant" in tenant_identity
 
     assets = {item["filename"]: item for item in _migration_assets(migrations)}
     assert assets["20260612_154200_add_template_validator_ref.sql"][
@@ -119,6 +128,11 @@ def test_declared_backfills_have_explicit_preservation_allow_markers():
     assert guard_asset["allowed_new_rows"] == []
     assert guard_asset["allowed_sequences"] == []
     assert guard_asset["allowed_transformations"] == []
+    tenant_asset = assets["20260904_061819_tenant_scoped_natural_identity.sql"]
+    assert tenant_asset["allowed_columns"] == []
+    assert tenant_asset["allowed_new_rows"] == []
+    assert tenant_asset["allowed_sequences"] == []
+    assert tenant_asset["allowed_transformations"] == []
 
 
 @pytest.mark.parametrize(

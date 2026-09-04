@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}TapDB Schema Inventory{% endblock %}
+{% block content %}
+<section class="band">
+  <h1>PostgreSQL inventory</h1>
+  <p>Read-only inventory for the active TapDB schema. No credentials or connection secrets are displayed.</p>
+  {% if error %}<p class="notice bad">{{ error }}</p>{% endif %}
+  {% if inventory %}
+  <dl class="definition-grid">
+    <dt>Database</dt><dd>{{ inventory.database_name }}</dd>
+    <dt>Active schema</dt><dd>{{ inventory.active_schema }}</dd>
+    <dt>Search path</dt><dd>{{ inventory.search_path | join(', ') }}</dd>
+  </dl>
+  {% endif %}
+</section>
+{% if inventory %}
+<section class="band"><h2>Counts</h2><pre>{{ inventory.counts | tojson(indent=2) }}</pre></section>
+{% for key in ['schemas', 'tables', 'views', 'materialized_views', 'sequences', 'functions', 'triggers', 'indexes', 'columns'] %}
+<section class="band"><h2>{{ key | replace('_', ' ') | title }}</h2><pre>{{ inventory[key] | tojson(indent=2) }}</pre></section>
+{% endfor %}
+{% endif %}
+{% endblock %}

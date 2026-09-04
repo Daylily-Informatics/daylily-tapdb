@@ -7,9 +7,8 @@ import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
-from daylily_tapdb.services.external_refs import ExternalGraphRef, V1ProxyPolicy
 from daylily_tapdb.services.graph_payloads import DagV2GraphContractError
-from daylily_tapdb.web import dag, dag_v2, runtime
+from daylily_tapdb.web import dag_v2, runtime
 
 
 class _Conn:
@@ -443,111 +442,6 @@ def test_branch_campaign_v2_state_assignment_failure_rolls_back_all_mount_state(
     assert not hasattr(app.state, "tapdb_dag_v2_mount")
     assert not hasattr(app.state, "tapdb_dag_v2_advertisement")
     assert not hasattr(app.state, "tapdb_dag_v2_mount_fingerprint")
-
-
-def test_branch_campaign_legacy_service_name_resolution(monkeypatch):
-    monkeypatch.setattr(
-        dag,
-        "resolve_context",
-        lambda **_kwargs: SimpleNamespace(client_id="resolved-service"),
-    )
-    assert dag._service_name_for("/config.yaml", None) == "resolved-service"
-    monkeypatch.setattr(
-        dag, "resolve_context", lambda **_kwargs: SimpleNamespace(client_id="")
-    )
-    assert dag._service_name_for("/config.yaml", None) == "tapdb"
-
-
-def _legacy_client(monkeypatch, *, policy=None):
-    conn = _Conn()
-    monkeypatch.setattr(dag.dag_runtime, "get_db", lambda _path: conn)
-    app = FastAPI()
-    app.include_router(
-        dag.create_tapdb_dag_router(
-            config_path="/explicit/config.yaml",
-            auth_dependency=lambda: {"sub": "branch-campaign-operator"},
-            service_name="local-service",
-            v1_proxy_policy=policy,
-        )
-    )
-    return TestClient(app)
-
-
-def test_branch_campaign_legacy_routes_fail_closed(monkeypatch):
-    client = _legacy_client(monkeypatch)
-    monkeypatch.setattr(dag, "find_object_by_euid", lambda *_args: (None, None))
-    assert client.get("/api/dag/object/missing").status_code == 404
-    assert (
-        client.get("/api/dag/data", params={"start_euid": "missing"}).status_code == 404
-    )
-    assert (
-        client.get(
-            "/api/dag/external", params={"source_euid": "x", "ref_index": 0}
-        ).status_code
-        == 404
-    )
-    assert (
-        client.get(
-            "/api/dag/external/object",
-            params={"source_euid": "x", "ref_index": 0, "euid": "remote"},
-        ).status_code
-        == 404
-    )
-
-
-def test_branch_campaign_legacy_proxy_translates_lookup_and_remote_failures(
-    monkeypatch,
-):
-    policy = V1ProxyPolicy(allowed_hosts=frozenset({"public.example"}))
-    client = _legacy_client(monkeypatch, policy=policy)
-    owned = SimpleNamespace(euid="persisted-object")
-    state = {"owned": False}
-    monkeypatch.setattr(
-        dag,
-        "find_object_by_euid",
-        lambda *_args: (owned, "instance") if state["owned"] else (None, None),
-    )
-    graph_url = "/api/dag/external?source_euid=persisted-object&ref_index=0"
-    object_url = "/api/dag/external/object?source_euid=persisted-object&ref_index=0&euid=remote-object"
-    assert client.get(graph_url).status_code == 404
-    assert client.get(object_url).status_code == 404
-
-    state["owned"] = True
-    monkeypatch.setattr(
-        dag,
-        "get_external_ref_by_index",
-        lambda *_args: (_ for _ in ()).throw(IndexError("missing ref")),
-    )
-    assert client.get(graph_url).status_code == 404
-    assert client.get(object_url).status_code == 404
-
-    ref = ExternalGraphRef(
-        label="Remote",
-        system="remote",
-        root_euid="remote-object",
-        tenant_id=None,
-        href=None,
-        graph_expandable=True,
-        reason=None,
-        base_url="https://public.example",
-        graph_data_path="/graph",
-        object_detail_path_template="/objects/{euid}",
-        auth_mode="none",
-    )
-    monkeypatch.setattr(dag, "get_external_ref_by_index", lambda *_args: ref)
-    monkeypatch.setattr(
-        dag, "fetch_remote_graph", lambda *_args, **_kwargs: {"elements": {}}
-    )
-    monkeypatch.setattr(
-        dag, "namespace_external_graph", lambda *_args, **_kwargs: {"meta": None}
-    )
-    assert client.get(graph_url).status_code == 502
-    monkeypatch.setattr(
-        dag,
-        "fetch_remote_object_detail",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("remote down")),
-    )
-    assert client.get(object_url).status_code == 502
 
 
 class _Session:

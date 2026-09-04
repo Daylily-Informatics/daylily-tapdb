@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}TapDB Overview{% endblock %}
+{% block content %}
+<section class="band">
+  <h1>Overview</h1>
+  <p>Canonical TapDB object, lineage, audit, recovery, and discovery console.</p>
+  <div class="summary-grid">
+    <a class="summary-card" href="{{ tapdb_gui_url(request, '/search?record_type=template') }}"><strong>{{ overview.counts.templates }}</strong><span>active templates</span></a>
+    <a class="summary-card" href="{{ tapdb_gui_url(request, '/search?record_type=instance') }}"><strong>{{ overview.counts.instances }}</strong><span>active instances</span></a>
+    <a class="summary-card" href="{{ tapdb_gui_url(request, '/search?record_type=lineage') }}"><strong>{{ overview.counts.lineages }}</strong><span>active lineage edges</span></a>
+  </div>
+</section>
+<section class="band">
+  <div class="split"><h2>Recent audit activity</h2><a href="{{ tapdb_gui_url(request, '/audit') }}">Open audit explorer</a></div>
+  {% if recent_audit.warning %}<p class="notice warning">{{ recent_audit.warning }}</p>{% endif %}
+  <table>
+    <thead><tr><th>Time</th><th>Object</th><th>Operation</th><th>Actor</th><th>Name</th></tr></thead>
+    <tbody>
+      {% for item in recent_audit["items"] %}
+      <tr>
+        <td>{{ item.changed_at }}</td>
+        <td><a href="{{ tapdb_gui_url(request, '/object/' ~ item.euid) }}">{{ item.euid }}</a></td>
+        <td>{{ item.operation_type }}</td>
+        <td>{{ item.changed_by or '-' }}</td>
+        <td>{{ item.name or '-' }}</td>
+      </tr>
+      {% endfor %}
+      {% if not recent_audit["items"] %}<tr><td colspan="5">No visible audit activity.</td></tr>{% endif %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

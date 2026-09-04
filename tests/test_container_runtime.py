@@ -13,8 +13,7 @@ import daylily_tapdb.admin_health as admin_health_mod
 import daylily_tapdb.cli.admin_server as admin_server_mod
 import daylily_tapdb.container_entry as container_entry_mod
 from daylily_tapdb.cli.db_config import get_db_config
-from daylily_tapdb.web.bridge import TapdbHostBridge
-from daylily_tapdb.web.factory import TapdbHostBridgeMount
+from daylily_tapdb.web.bridge import TapdbHostBridge, TapdbHostBridgeMount
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,8 +24,7 @@ def test_container_runtime_files_are_explicit() -> None:
     entrypoint = ROOT / "docker" / "entrypoint.sh"
 
     assert (
-        "uv sync --frozen --no-dev --extra admin --extra cli --extra aurora"
-        in dockerfile
+        "uv sync --frozen --no-dev --extra gui --extra cli --extra aurora" in dockerfile
     )
     assert "postgresql-client" in dockerfile
     assert 'CMD ["python", "-m", "daylily_tapdb.container_entry"]' in dockerfile

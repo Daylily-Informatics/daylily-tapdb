@@ -538,16 +538,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-admin = [
-    { name = "bcrypt" },
-    { name = "daylily-auth-cognito" },
-    { name = "fastapi" },
-    { name = "itsdangerous" },
-    { name = "jinja2" },
-    { name = "passlib", extra = ["bcrypt"] },
-    { name = "python-multipart" },
-    { name = "uvicorn" },
-]
 api = [
     { name = "fastapi" },
 ]
@@ -571,40 +561,44 @@ dev = [
     { name = "setuptools-scm" },
 ]
 gui = [
+    { name = "bcrypt" },
+    { name = "daylily-auth-cognito" },
     { name = "fastapi" },
+    { name = "itsdangerous" },
     { name = "jinja2" },
+    { name = "passlib", extra = ["bcrypt"] },
+    { name = "python-multipart" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.8.0" },
-    { name = "bcrypt", marker = "extra == 'admin'", specifier = "<4" },
+    { name = "bcrypt", marker = "extra == 'gui'", specifier = "<4" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0" },
     { name = "boto3", marker = "extra == 'aurora'", specifier = ">=1.34" },
     { name = "botocore", marker = "extra == 'aurora'" },
     { name = "cli-core-yo", specifier = "==2.1.1" },
     { name = "cli-core-yo", marker = "extra == 'dev'", specifier = "==2.1.1" },
-    { name = "daylily-auth-cognito", marker = "extra == 'admin'", specifier = "==2.1.5" },
+    { name = "daylily-auth-cognito", marker = "extra == 'gui'", specifier = "==2.1.5" },
     { name = "detect-secrets", marker = "extra == 'dev'", specifier = ">=1.4" },
-    { name = "fastapi", marker = "extra == 'admin'" },
     { name = "fastapi", marker = "extra == 'api'" },
     { name = "fastapi", marker = "extra == 'gui'" },
     { name = "httpx", marker = "extra == 'dev'" },
-    { name = "itsdangerous", marker = "extra == 'admin'" },
-    { name = "jinja2", marker = "extra == 'admin'" },
+    { name = "itsdangerous", marker = "extra == 'gui'" },
     { name = "jinja2", marker = "extra == 'gui'" },
     { name = "jsonschema", specifier = ">=4.0" },
     { name = "meridian-euid", specifier = "==0.4.8" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
-    { name = "passlib", extras = ["bcrypt"], marker = "extra == 'admin'" },
+    { name = "passlib", extras = ["bcrypt"], marker = "extra == 'gui'" },
     { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.45" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.8.0" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pydantic" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "python-multipart", marker = "extra == 'admin'" },
     { name = "python-multipart", marker = "extra == 'dev'" },
+    { name = "python-multipart", marker = "extra == 'gui'" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1" },
@@ -612,9 +606,9 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "typer" },
     { name = "uuid6", specifier = ">=2024.1.12" },
-    { name = "uvicorn", marker = "extra == 'admin'" },
+    { name = "uvicorn", marker = "extra == 'gui'" },
 ]
-provides-extras = ["dev", "cli", "aurora", "api", "gui", "admin"]
+provides-extras = ["dev", "cli", "aurora", "api", "gui"]
 
 [[package]]
 name = "detect-secrets"

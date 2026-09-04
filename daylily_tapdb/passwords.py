@@ -55,7 +55,7 @@ def hash_password(password: str) -> str:
         raise RuntimeError(
             "passlib is required for password hashing"
             " (install passlib[bcrypt] /"
-            " daylily-tapdb[admin])" + detail
+            " daylily-tapdb[gui])" + detail
         )
     return _PWD_CONTEXT.hash(password)
 
@@ -78,6 +78,6 @@ def verify_password(password: str, stored_hash: str) -> bool:
         raise RuntimeError(
             "passlib is required to verify bcrypt"
             " hashes (install passlib[bcrypt] /"
-            " daylily-tapdb[admin])" + detail
+            " daylily-tapdb[gui])" + detail
         )
     return bool(_PWD_CONTEXT.verify(password, stored_hash))

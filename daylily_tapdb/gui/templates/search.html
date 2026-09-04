@@ -10,6 +10,8 @@
       <option value="{{ kind }}" {% if query.record_type == kind %}selected{% endif %}>{{ kind }}</option>
       {% endfor %}
     </select>
+    <input name="name_like" value="{{ query.name_like }}" placeholder="name contains">
+    <input name="euid_like" value="{{ query.euid_like }}" placeholder="EUID contains">
     <input name="category" value="{{ query.category }}" placeholder="category">
     <input name="type" value="{{ query.type }}" placeholder="type">
     <input name="subtype" value="{{ query.subtype }}" placeholder="subtype">
@@ -36,5 +38,8 @@
       {% endif %}
     </tbody>
   </table>
+  {% if next_url %}
+  <p><a class="button" href="{{ next_url }}">Next page</a></p>
+  {% endif %}
 </section>
 {% endblock %}

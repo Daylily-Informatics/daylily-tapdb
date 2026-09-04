@@ -1,7 +1,8 @@
 """TAPDB backup and recovery lifecycle.
 
-The CLI (``tapdb backup``), the admin API (``/api/backups``), and the embedded
-GUI (``/admin/backups``) are all thin adapters over one shared service layer in
+The CLI (``tapdb backup``), the canonical GUI API
+(``/api/admin/backups``), and its HTML view (``/admin/backups``) are all thin
+adapters over one shared service layer in
 this package -- no surface builds its own ``pg_dump`` command or reimplements a
 verification check.
 

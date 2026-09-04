@@ -9,8 +9,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-import admin.auth as admin_auth
-import admin.main as admin_main
 import daylily_tapdb.advisory_locks as locks
 import daylily_tapdb.gui.router as gui_router
 from daylily_tapdb.gui import create_tapdb_gui_app
@@ -130,7 +128,23 @@ def _embedded_client(monkeypatch, *, role: str = "admin"):
     monkeypatch.setattr(
         gui_router, "get_db_config", lambda config_path: _configured_target()
     )
+    monkeypatch.setattr(
+        gui_router,
+        "get_admin_settings",
+        lambda **_kwargs: {
+            "target_name": "test",
+            "production_like": False,
+            "auth_mode": "host_session",
+            "session_secret": "test-session-secret",
+            "allowed_origins": [],
+        },
+    )
     monkeypatch.setattr(gui_router, "repository_pack_bytes", _bytes)
+    monkeypatch.setattr(
+        gui_router,
+        "mount_tapdb_dag_surfaces",
+        lambda *_args, **_kwargs: SimpleNamespace(mounted=True, diagnostic=""),
+    )
     bridge = TapdbHostBridge(
         auth_mode="host_session",
         login_url="/login",
@@ -177,44 +191,6 @@ def test_embedded_gui_download_is_admin_only(monkeypatch):
 
     assert response.status_code == 403
     assert captured == {}
-
-
-def test_legacy_admin_download_uses_same_serializer_and_admin_auth(monkeypatch):
-    async def _admin(_request):
-        return {
-            "uid": 1,
-            "username": "admin@example.com",
-            "email": "admin@example.com",
-            "role": "admin",
-            "require_password_change": False,
-        }
-
-    connection = _Connection(object())
-    captured = {}
-    content = b'{"format":"tapdb.repository-template-pack/v1","templates":[]}\n'
-
-    def _bytes(session, **kwargs):
-        captured.update(session=session, **kwargs)
-        return content
-
-    monkeypatch.setattr(admin_auth, "get_current_user", _admin)
-    monkeypatch.setattr(admin_main, "get_current_user", _admin)
-    monkeypatch.setattr(admin_main, "get_db", lambda: connection)
-    monkeypatch.setattr(admin_main, "get_db_config", _configured_target)
-    monkeypatch.setattr(admin_main, "repository_pack_bytes", _bytes)
-
-    response = TestClient(admin_main.app).get(
-        "/api/templates/repository/download?euid=persisted-template-id"
-    )
-
-    assert response.status_code == 200
-    assert response.content == content
-    assert response.headers["content-disposition"] == (
-        'attachment; filename="tapdb-repository-template-pack.json"'
-    )
-    assert connection.app_username == "admin@example.com"
-    assert captured["template_euid"] == "persisted-template-id"
-    assert captured["session"] is connection.session
 
 
 class _FalseResult:

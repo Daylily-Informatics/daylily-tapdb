@@ -9,6 +9,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from daylily_tapdb.external_references import _is_xrf_coordinates
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
@@ -215,6 +216,14 @@ def _mutation_receipt(
     }
 
 
+def _reject_external_reference_mutation(obj: Any, record_type: str) -> None:
+    if record_type == "instance" and _is_xrf_coordinates(obj):
+        raise PermissionError(
+            "core external references are writable only through "
+            "daylily_tapdb.external_references.ExternalReferenceService"
+        )
+
+
 def update_object(
     session: Any,
     selector: ObjectSelector,
@@ -226,6 +235,7 @@ def update_object(
     obj, record_type = resolve_object(session, selector)
     if record_type == "template":
         raise PermissionError("templates are read-only through objects")
+    _reject_external_reference_mutation(obj, record_type)
     if getattr(obj, "is_deleted", False):
         raise ValueError("cannot update a soft-deleted object")
     if not isinstance(changes, Mapping) or not changes:
@@ -317,6 +327,7 @@ def soft_delete_object(
     obj, record_type = resolve_object(session, selector)
     if record_type == "template":
         raise PermissionError("templates are read-only through objects")
+    _reject_external_reference_mutation(obj, record_type)
     if getattr(obj, "is_deleted", False):
         raise ValueError("object is already soft-deleted")
     if not dry_run:

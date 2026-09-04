@@ -118,6 +118,30 @@ def editor_data(
     _print_payload(payload)
 
 
+@validation_app.command("external-references")
+def external_references(
+    sample_limit: int = typer.Option(
+        25,
+        "--sample-limit",
+        min=1,
+        max=100,
+        help="Maximum EUID-only samples per violation category",
+    ),
+) -> None:
+    """Audit canonical XRF state and legacy pseudo-edges without any writes."""
+
+    from daylily_tapdb.external_reference_audit import audit_external_references
+
+    config_path = str(get_config_path())
+    with get_db(config_path) as conn:
+        conn.app_username = "tapdb-cli"
+        with conn.session_scope(commit=False) as session:
+            payload = audit_external_references(session, sample_limit=sample_limit)
+    _print_payload(payload)
+    if not payload["ok"]:
+        raise typer.Exit(1)
+
+
 @repair_app.command("create")
 def create(
     euid: str = typer.Argument(..., help="Subject TapDB object EUID"),

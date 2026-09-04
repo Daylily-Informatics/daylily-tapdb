@@ -9,15 +9,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from sqlalchemy.engine import URL
-from starlette.requests import Request
 
 import daylily_tapdb.cli.admin_server as admin_server_mod
-import daylily_tapdb.web.factory as web_factory_mod
 import daylily_tapdb.web.runtime as runtime_mod
 from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
-from daylily_tapdb.web.bridge import TapdbHostBridge
 
 
 def _write_config(path: Path) -> Path:
@@ -123,17 +120,17 @@ def test_admin_server_context_file_helpers_round_trip(tmp_path: Path) -> None:
 def test_admin_server_load_admin_app_sets_explicit_context(monkeypatch, tmp_path: Path):
     cfg_path = _write_config(tmp_path / "tapdb-config.yaml")
     fake_app = FastAPI()
-    fake_admin = SimpleNamespace(app=fake_app)
+    calls = []
 
     monkeypatch.setattr(
-        admin_server_mod.importlib, "import_module", lambda name: fake_admin
+        "daylily_tapdb.gui.create_tapdb_gui_app",
+        lambda *, config_path: calls.append(config_path) or fake_app,
     )
-    monkeypatch.setattr(admin_server_mod.importlib, "reload", lambda module: module)
 
     app = admin_server_mod.load_admin_app(config_path=str(cfg_path))
 
     assert app is fake_app
-    assert app.state.tapdb_admin_module is fake_admin
+    assert calls == [str(cfg_path)]
 
 
 def test_runtime_db_connection_session_scope_sets_search_path_and_audit_username():
@@ -315,6 +312,7 @@ def test_runtime_engine_cache_key_includes_schema(monkeypatch):
 
 def test_runtime_create_engine_uses_admin_pool_settings(monkeypatch):
     captured = {}
+    metrics = []
 
     monkeypatch.setattr(
         runtime_mod,
@@ -331,6 +329,10 @@ def test_runtime_create_engine_uses_admin_pool_settings(monkeypatch):
         "create_engine",
         lambda url, **kwargs: captured.update({"url": url, **kwargs}) or "engine",
     )
+    monkeypatch.setattr(
+        "admin.db_metrics.maybe_install_engine_metrics",
+        lambda engine, *, env_name: metrics.append((engine, env_name)),
+    )
 
     engine = runtime_mod._create_engine(
         URL.create("postgresql+psycopg2", host="localhost", database="tapdb"),
@@ -345,6 +347,7 @@ def test_runtime_create_engine_uses_admin_pool_settings(monkeypatch):
     assert captured["pool_recycle"] == 10
     assert captured["pool_pre_ping"] is True
     assert captured["echo"] is True
+    assert metrics == [("engine", "target")]
 
 
 def test_runtime_aurora_password_provider_paths(monkeypatch):
@@ -496,67 +499,3 @@ def test_runtime_clear_cache_logs_dispose_errors(caplog):
     runtime_mod._clear_runtime_cache_for_tests()
 
     assert "Error disposing DAG runtime engine" in caplog.text
-
-
-@pytest.mark.anyio
-async def test_require_tapdb_api_user_rejects_anonymous(monkeypatch):
-    async def _no_user(request):
-        return None
-
-    monkeypatch.setattr("admin.auth.get_current_user", _no_user)
-    request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
-
-    with pytest.raises(HTTPException) as exc_info:
-        await web_factory_mod.require_tapdb_api_user(request)
-
-    assert exc_info.value.status_code == 401
-
-
-def test_web_factory_builds_app_from_explicit_config(monkeypatch, tmp_path: Path):
-    cfg_path = _write_config(tmp_path / "tapdb-config.yaml")
-    fake_app = FastAPI()
-    fake_admin = SimpleNamespace(TEMPLATES_DIR=tmp_path)
-    fake_app.state.tapdb_admin_module = fake_admin
-    fake_admin.templates = SimpleNamespace(loader=None, globals={})
-
-    monkeypatch.setattr(
-        "daylily_tapdb.cli.admin_server.load_admin_app",
-        lambda config_path: fake_app,
-    )
-    monkeypatch.setattr(
-        web_factory_mod,
-        "create_tapdb_dag_router",
-        lambda **kwargs: FastAPI().router,
-    )
-
-    app = web_factory_mod.create_tapdb_web_app(config_path=str(cfg_path))
-
-    assert app is fake_app
-    assert app.state.tapdb_host_bridge is None
-    assert app.state.tapdb_dag_router_attached is True
-
-
-def test_web_factory_wraps_host_bridge(monkeypatch, tmp_path: Path):
-    cfg_path = _write_config(tmp_path / "tapdb-config.yaml")
-    fake_app = FastAPI()
-    fake_admin = SimpleNamespace(TEMPLATES_DIR=tmp_path)
-    fake_app.state.tapdb_admin_module = fake_admin
-    fake_admin.templates = SimpleNamespace(loader=None, globals={})
-    bridge = TapdbHostBridge(service_name="atlas", auth_mode="host_session")
-
-    monkeypatch.setattr(
-        "daylily_tapdb.cli.admin_server.load_admin_app",
-        lambda config_path: fake_app,
-    )
-    monkeypatch.setattr(
-        web_factory_mod,
-        "create_tapdb_dag_router",
-        lambda **kwargs: FastAPI().router,
-    )
-
-    wrapped = web_factory_mod.create_tapdb_web_app(
-        config_path=str(cfg_path),
-        host_bridge=bridge,
-    )
-
-    assert isinstance(wrapped, web_factory_mod.TapdbHostBridgeMount)

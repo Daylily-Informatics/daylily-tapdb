@@ -81,7 +81,7 @@ That split is deliberate:
   [`docs/backup-and-recovery.md`](backup-and-recovery.md). The older
   `tapdb db data backup`/`restore` commands are deprecated in favour of this
   group.
-- `ui` manages the admin server process.
+- `ui` manages the canonical TapDB GUI server process.
 - `bootstrap` is the one-command orchestration path.
 - `users` manages actor-backed TAPDB auth users.
 - `cognito` is the TAPDB-side bridge to `daylily-auth-cognito`.
@@ -96,7 +96,7 @@ The basic local flow is:
 3. Start the local Postgres instance.
 4. Apply schema.
 5. Seed built-in templates and any client packs.
-6. Optionally start the admin UI.
+6. Optionally start the canonical TapDB GUI.
 
 The CLI surfaces for that flow are already present and exercised in tests:
 
@@ -217,8 +217,8 @@ JSON contract.
 
 It performs a bounded best-effort `psql` probe when available. The shared
 payload implementation lives in
-[`daylily_tapdb/runtime_info.py`](../daylily_tapdb/runtime_info.py); CLI, API,
-embedded GUI, and legacy admin surfaces render that same contract.
+[`daylily_tapdb/runtime_info.py`](../daylily_tapdb/runtime_info.py); CLI and the
+canonical GUI/API render that same contract.
 The canonical top-level keys are `format`, `package`, `python`, `meridian`,
 `git`, `config`, `database`, `scope`, `storage`, `ui`, and `dag`. Target,
 schema, and namespace values exist only in their corresponding nested sections;
@@ -226,7 +226,9 @@ there are no duplicate top-level compatibility aliases.
 
 ## UI Runtime
 
-The admin UI is managed separately from the database, but still inside the TAPDB namespace model.
+The canonical GUI is managed separately from the database, but still inside
+the TAPDB namespace model. The standalone process and host-mounted form both
+use `daylily_tapdb.gui`; there is no separate `admin.main` web application.
 
 Relevant commands:
 
@@ -238,7 +240,10 @@ tapdb --config <path> ui restart
 tapdb --config <path> ui logs
 ```
 
-The UI server supports foreground/background operation, explicit port and host overrides, and explicit TLS certificate overrides. The admin app itself is loaded through [`daylily_tapdb.cli.admin_server`](../daylily_tapdb/cli/admin_server.py).
+The GUI server supports foreground/background operation, explicit port and host
+overrides, and explicit TLS certificate overrides. The command adapter lives in
+[`daylily_tapdb.cli.admin_server`](../daylily_tapdb/cli/admin_server.py) and
+loads the same `create_tapdb_gui_app(...)` factory used for embedding.
 
 ## Aurora
 

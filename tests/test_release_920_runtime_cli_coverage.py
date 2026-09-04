@@ -201,7 +201,7 @@ def test_admin_context_reader_and_app_builder(
 
     marker = object()
     monkeypatch.setattr(
-        "daylily_tapdb.web.create_tapdb_web_app",
+        "daylily_tapdb.gui.create_tapdb_gui_app",
         lambda *, config_path: config_path == "/absolute/tapdb-config.yaml" and marker,
     )
     assert admin_server.build_app() is marker

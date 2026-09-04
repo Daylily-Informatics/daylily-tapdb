@@ -1,4 +1,4 @@
-"""Release-level contracts that must hold for the TapDB 9.2 release line."""
+"""Release-level contracts that must hold for TapDB 10.0."""
 
 from __future__ import annotations
 
@@ -17,9 +17,12 @@ ACTIVE_GUIDES = (
     "docs/architecture.md",
     "docs/consumer-discoverability-guide.md",
     "docs/dag_spec.md",
+    "docs/external-references-and-federation.md",
     "docs/integration-and-embedding.md",
+    "docs/repository-review.md",
     "docs/runtime-and-cli.md",
     "docs/tapdb_gui_inclusion.md",
+    "docs/template-authoring.md",
 )
 
 
@@ -91,7 +94,7 @@ def test_release_quality_configuration_is_strict() -> None:
     mypy = project["tool"]["mypy"]
     assert mypy["python_version"] == "3.12"
     assert mypy["follow_imports"] == "skip"
-    assert len(mypy["files"]) == 12
+    assert len(mypy["files"]) == 14
     assert project["project"]["urls"]["Repository"].endswith(
         "/Daylily-Informatics/daylily-tapdb.git"
     )
@@ -123,7 +126,7 @@ def test_consumer_guide_and_readme_are_public_safe() -> None:
     assert "meridian-euid==0.4.8" in readme
     for text in (readme, directive):
         normalized = " ".join(text.split())
-        assert "TapDB 9.2.2" in normalized
+        assert "TapDB 10.0.0" in normalized
         assert "PostgreSQL 16 and 17" in normalized
         assert "community PostgreSQL 16.13" in normalized
         assert "Aurora PostgreSQL has not been independently qualified" in normalized
@@ -160,9 +163,15 @@ def test_ci_runs_the_complete_release_matrix() -> None:
         "--cov-report=json:coverage.json",
         "verify_changed_coverage.py",
         "verify_wheel_assets.py",
-        "SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.2'",
-        "verify_wheel_assets.py --expected-version 9.2.2",
+        "SETUPTOOLS_SCM_PRETEND_VERSION: '10.0.0'",
+        "verify_wheel_assets.py --expected-version 10.0.0",
         "python -m build",
+        "python -m twine check dist/*",
+        '"${wheels[0]}[gui]"',
+        "from daylily_tapdb.external_references import ExternalReferenceService",
+        "from daylily_tapdb.federation import DagV2FederationClient",
+        "from daylily_tapdb.gui import create_tapdb_gui_app",
+        "validation external-references --help",
     ):
         assert required in workflow
     assert "--deselect" not in workflow
@@ -170,3 +179,4 @@ def test_ci_runs_the_complete_release_matrix() -> None:
     assert "postgresql-17 postgresql-client-17" not in workflow
     assert "SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.0'" not in workflow
     assert "SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.1'" not in workflow
+    assert "SETUPTOOLS_SCM_PRETEND_VERSION: '9.2.2'" not in workflow

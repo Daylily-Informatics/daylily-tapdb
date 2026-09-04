@@ -15,13 +15,14 @@ def test_pyproject_pins_published_cli_core_yo() -> None:
 
     dependencies = data["project"]["dependencies"]
     dev_dependencies = data["project"]["optional-dependencies"]["dev"]
-    admin_dependencies = data["project"]["optional-dependencies"]["admin"]
+    gui_dependencies = data["project"]["optional-dependencies"]["gui"]
 
     assert "cli-core-yo==2.1.1" in dependencies
     assert "pyyaml" in dependencies
     assert "cli-core-yo==2.1.1" in dev_dependencies
-    assert "daylily-auth-cognito==2.1.5" in admin_dependencies
-    assert all("daylily-cognito" not in dependency for dependency in admin_dependencies)
+    assert "daylily-auth-cognito==2.1.5" in gui_dependencies
+    assert all("daylily-cognito" not in dependency for dependency in gui_dependencies)
+    assert "admin" not in data["project"]["optional-dependencies"]
 
 
 def test_activate_uses_published_cli_core_yo_metadata_check() -> None:
@@ -33,7 +34,7 @@ def test_activate_uses_published_cli_core_yo_metadata_check() -> None:
     assert "_tapdb_distribution_is_published" in text
     assert "_tapdb_module_is_from_repo" not in text
     assert "--smoke" in text
-    assert 'python -m pip install -e ".[cli,admin,aurora,dev]"' in text
+    assert 'python -m pip install -e ".[cli,gui,aurora,dev]"' in text
     assert '_tapdb_cli_core_yo_version="2.1.1"' in text
     assert "cli-core-yo==${_tapdb_cli_core_yo_version}" in text
     assert "cli-core-yo is not installed as published" in text

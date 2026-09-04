@@ -1,4 +1,4 @@
-"""Admin API adapter for the backup lifecycle.
+"""Canonical GUI management-API adapter for the backup lifecycle.
 
 Two jobs only: parse requests, and map the service's typed errors onto HTTP
 status codes. All behaviour lives in ``daylily_tapdb.backup`` -- if this module
@@ -147,7 +147,7 @@ def list_payload(
     backup_class: Optional[str] = None,
     limit: Optional[int] = None,
 ) -> dict[str, Any]:
-    """GET /api/backups -- listing, receipts, and the status block."""
+    """GET /api/admin/backups -- listing, receipts, and the status block."""
     try:
         return views.inventory_context(
             cfg, settings, backup_class=validate_class(backup_class), limit=limit
@@ -157,7 +157,7 @@ def list_payload(
 
 
 def status_payload(cfg: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-    """GET /api/backups/status."""
+    """GET /api/admin/backups/status."""
     try:
         return views.status_context(cfg, settings)
     except Exception as exc:
@@ -165,7 +165,7 @@ def status_payload(cfg: dict[str, Any], settings: dict[str, Any]) -> dict[str, A
 
 
 def health_payload(cfg: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-    """GET /api/backups/health -- the alerting contract in HTTP form.
+    """GET /api/admin/backups/health -- the alerting contract in HTTP form.
 
     The same ``service.health_report`` the CLI runs, so the two surfaces cannot
     disagree about whether a target is recoverable. What differs is only how
@@ -223,7 +223,7 @@ def plan_payload(
     backup_class: Optional[str] = None,
     strict: bool = False,
 ) -> dict[str, Any]:
-    """GET /api/backups/plan -- read-only."""
+    """GET /api/admin/backups/plan -- read-only."""
     try:
         plan = service.plan_backup(
             cfg,
@@ -243,7 +243,7 @@ def create_payload(
     body: dict[str, Any],
     actor: Actor,
 ) -> dict[str, Any]:
-    """POST /api/backups -- create, returning 201 with the manifest."""
+    """POST /api/admin/backups -- create, returning 201 with the manifest."""
     try:
         result = service.create_backup(
             cfg,
@@ -267,7 +267,7 @@ def verify_payload(
     level: str = service.VERIFY_DEEP,
     actor: Actor,
 ) -> dict[str, Any]:
-    """POST /api/backups/{ref}/verify -- 422 when the artifact is corrupt."""
+    """POST /api/admin/backups/{ref}/verify -- 422 for a corrupt artifact."""
     backup_id = validate_ref(ref)
     if level not in (service.VERIFY_QUICK, service.VERIFY_DEEP):
         raise HTTPException(
@@ -302,7 +302,7 @@ def stage_payload(
     ref: str,
     body: dict[str, Any],
 ) -> dict[str, Any]:
-    """POST /api/backups/{ref}/restore/stage -- read-only."""
+    """POST /api/admin/backups/{ref}/restore/stage -- read-only."""
     backup_id = validate_ref(ref)
     options = restore_options_from(body or {})
     try:
@@ -321,7 +321,7 @@ def apply_payload(
     body: dict[str, Any],
     actor: Actor,
 ) -> dict[str, Any]:
-    """POST /api/backups/{ref}/restore/apply.
+    """POST /api/admin/backups/{ref}/restore/apply.
 
     Goes through ``views.apply_restore_from_review`` -- literally the same
     function the GUI form posts to, so the two surfaces cannot enforce
@@ -374,7 +374,7 @@ def rehearse_payload(
     body: dict[str, Any],
     actor: Actor,
 ) -> dict[str, Any]:
-    """POST /api/backups/{ref}/rehearse -- returns the evidence pointer."""
+    """POST /api/admin/backups/{ref}/rehearse -- return the evidence pointer."""
     backup_id = validate_ref(ref)
     try:
         evidence = verify.rehearse_restore(

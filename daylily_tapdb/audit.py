@@ -75,6 +75,7 @@ def query_audit_trail(
     since: Optional[datetime] = None,
     domain_code: Optional[str] = None,
     issuer_app_code: Optional[str] = None,
+    operation_type: Optional[str] = None,
     limit: int = 500,
     order: Literal["asc", "desc"] = "desc",
 ) -> list[AuditEntry]:
@@ -87,6 +88,7 @@ def query_audit_trail(
         since: Only return entries after this datetime.
         domain_code: Filter by domain code.
         issuer_app_code: Filter by issuer app code.
+        operation_type: Exact INSERT, UPDATE, or DELETE operation filter.
         limit: Maximum number of rows to return (default 500).
         order: Sort order by changed_at ('asc' or 'desc').
 
@@ -111,6 +113,12 @@ def query_audit_trail(
     if issuer_app_code is not None:
         clauses.append("al.issuer_app_code = :issuer_app_code")
         params["issuer_app_code"] = issuer_app_code
+    if operation_type is not None:
+        normalized_operation = str(operation_type).strip().upper()
+        if normalized_operation not in {"INSERT", "UPDATE", "DELETE"}:
+            raise ValueError("operation_type must be one of INSERT, UPDATE, or DELETE")
+        clauses.append("UPPER(al.operation_type) = :operation_type")
+        params["operation_type"] = normalized_operation
 
     sql = _AUDIT_TRAIL_SQL
     if clauses:

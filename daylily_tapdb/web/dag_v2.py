@@ -20,7 +20,10 @@ from daylily_tapdb.services.graph_payloads import (
     build_object_detail_v2_payload,
 )
 from daylily_tapdb.services.object_lookup import find_object_by_euid
-from daylily_tapdb.services.object_search import search_objects
+from daylily_tapdb.services.object_search import (
+    search_external_reference_sources,
+    search_objects,
+)
 
 from . import runtime as dag_runtime
 
@@ -150,6 +153,8 @@ def _manifest_for(
     )
     features = {
         "typed_external_references": True,
+        "typed_external_identifiers": True,
+        "external_reference_search": True,
         "typed_graph_presentation": True,
         "snapshot_metadata": True,
         "outbound_fetch": False,
@@ -365,12 +370,21 @@ def _build_router(
         subtype: str = "",
         tenant_id: str = "",
         relationship_type: str = "",
-        limit: int = Query(25, ge=1),
+        external_service_id: str = "",
+        external_object_euid: str = "",
+        external_namespace: str = "",
+        external_kind: str = "",
+        external_value: str = "",
+        external_relationship_type: str = "",
+        limit: int | None = Query(None, ge=1),
         cursor: str = "",
         authenticated: Any = Depends(auth_dependency),
     ) -> dict[str, Any]:
         actor = _actor_from_auth(authenticated)
-        if limit > manifest.limits.max_search_page_size:
+        effective_limit = (
+            min(25, manifest.limits.max_search_page_size) if limit is None else limit
+        )
+        if effective_limit > manifest.limits.max_search_page_size:
             raise HTTPException(
                 status_code=422, detail="search_page_exceeds_service_limit"
             )
@@ -378,24 +392,65 @@ def _build_router(
             conn.app_username = actor
             with conn.session_scope() as session:
                 try:
-                    legacy_payload = dict(
-                        search_objects(
+                    external_values = (
+                        external_service_id,
+                        external_object_euid,
+                        external_namespace,
+                        external_kind,
+                        external_value,
+                        external_relationship_type,
+                    )
+                    if any(value != "" for value in external_values):
+                        if record_type != "instance":
+                            raise ValueError(
+                                "external-reference filters require record_type=instance"
+                            )
+                        if any(
+                            value != ""
+                            for value in (
+                                q,
+                                euid,
+                                category,
+                                type,
+                                subtype,
+                                tenant_id,
+                                relationship_type,
+                            )
+                        ):
+                            raise ValueError(
+                                "external-reference filters cannot mix with generic filters"
+                            )
+                        search_payload = search_external_reference_sources(
                             session,
                             service_name=manifest.service_id,
-                            q=q,
-                            euid=euid,
-                            record_type=record_type,
-                            category=category,
-                            type_name=type,
-                            subtype=subtype,
-                            tenant_id=tenant_id,
-                            relationship_type=relationship_type,
-                            limit=limit,
+                            external_service_id=external_service_id,
+                            external_object_euid=external_object_euid,
+                            external_namespace=external_namespace,
+                            external_kind=external_kind,
+                            external_value=external_value,
+                            external_relationship_type=external_relationship_type,
+                            limit=effective_limit,
                             cursor=cursor,
                         )
-                    )
+                    else:
+                        search_payload = dict(
+                            search_objects(
+                                session,
+                                service_name=manifest.service_id,
+                                q=q,
+                                euid=euid,
+                                record_type=record_type,
+                                category=category,
+                                type_name=type,
+                                subtype=subtype,
+                                tenant_id=tenant_id,
+                                relationship_type=relationship_type,
+                                limit=effective_limit,
+                                cursor=cursor,
+                            )
+                        )
                     payload = _canonical_v2_search_payload(
-                        legacy_payload, service_id=manifest.service_id
+                        search_payload, service_id=manifest.service_id
                     )
                 except ValueError as exc:
                     raise HTTPException(status_code=422, detail=str(exc)) from exc

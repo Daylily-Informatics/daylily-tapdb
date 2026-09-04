@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en" data-lsmc-service="tapdb" data-theme="original">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}TapDB{% endblock %}</title>
+  <link rel="stylesheet" href="{{ tapdb_gui_url(request, '/static/tapdb-gui.css') }}">
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="band auth-card">
+      <h1>TapDB</h1>
+      <p>Templated Abstract Polymorphic Database</p>
+      {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+      {% if success %}<p class="notice success">{{ success }}</p>{% endif %}
+      {% block auth_content %}{% endblock %}
+    </section>
+  </main>
+</body>
+</html>

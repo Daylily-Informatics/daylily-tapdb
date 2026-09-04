@@ -134,14 +134,16 @@ def _template(euid="persisted-template"):
     )
 
 
-def _request(*, body=b"", content_type="", root_path="/tapdb", host_user=None):
+def _request(
+    *, body=b"", content_type="", root_path="/tapdb", path="/", host_user=None
+):
     headers = []
     if content_type:
         headers.append((b"content-type", content_type.encode()))
     scope = {
         "type": "http",
         "method": "POST",
-        "path": "/",
+        "path": path,
         "root_path": root_path,
         "headers": headers,
         "state": {},
@@ -196,7 +198,10 @@ def test_branch_campaign_gui_user_fallback_and_admin_guards(monkeypatch):
     monkeypatch.setattr(auth, "get_current_user", _missing)
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(router.require_tapdb_gui_user(_request()))
-    assert exc_info.value.status_code == 401
+    assert exc_info.value.status_code == 302
+    with pytest.raises(HTTPException) as api_exc:
+        asyncio.run(router.require_tapdb_gui_user(_request(path="/api/search")))
+    assert api_exc.value.status_code == 401
 
     async def _found(_request):
         return {"username": "operator", "role": "admin"}
@@ -212,7 +217,7 @@ def test_branch_campaign_gui_user_fallback_and_admin_guards(monkeypatch):
     assert admin_error.value.status_code == 403
 
 
-def test_branch_campaign_relationship_and_external_link_projection(monkeypatch):
+def test_branch_campaign_relationship_projection_and_legacy_writer_removal(monkeypatch):
     parent = _instance(1, "persisted-parent")
     child = _instance(2, "persisted-child", category="external_identifier")
     lineage = SimpleNamespace(
@@ -238,17 +243,9 @@ def test_branch_campaign_relationship_and_external_link_projection(monkeypatch):
         == "persisted-parent"
     )
 
-    parent.parent_of_lineages.rows.insert(
-        0, SimpleNamespace(child_instance=None, is_deleted=False)
-    )
-    monkeypatch.setattr(
-        router,
-        "external_ref_payloads",
-        lambda _obj: [{"system": "remote", "root_euid": "remote-object"}],
-    )
-    projected = router._lineage_external_refs(parent, "instance")
-    assert projected[0]["lineage_euid"] == "persisted-lineage"
-    assert router._lineage_external_refs(parent, "template") == []
+    assert not hasattr(router, "external_ref_payloads")
+    assert not hasattr(router, "_lineage_external_refs")
+    assert not hasattr(router, "_create_external_link")
 
 
 def test_branch_campaign_object_and_json_input_guards(monkeypatch):
@@ -364,27 +361,7 @@ def test_branch_campaign_create_helpers_reject_missing_objects(monkeypatch):
     with pytest.raises(HTTPException) as missing_instance:
         router._resolve_instance(session, "missing", label="Object")
     assert missing_instance.value.status_code == 404
-    with pytest.raises(HTTPException, match="Missing required external link"):
-        router._create_external_link(
-            session,
-            cfg={"domain_code": "A"},
-            source_euid="missing",
-            system="",
-            foreign_uid="",
-            relationship_type="",
-        )
-
-    source = _instance()
-    session.rows[generic_instance] = [source]
-    with pytest.raises(HTTPException, match="No reference"):
-        router._create_external_link(
-            session,
-            cfg={"domain_code": "A"},
-            source_euid=source.euid,
-            system="remote",
-            foreign_uid="remote-object",
-            relationship_type="references",
-        )
+    assert not hasattr(router, "_create_external_link")
     with pytest.raises(HTTPException, match="Template not found"):
         router._create_instance_from_template(
             session,
@@ -523,6 +500,22 @@ def _client(monkeypatch, session):
     )
     monkeypatch.setattr(
         router,
+        "get_admin_settings",
+        lambda **_kwargs: {
+            "target_name": "test",
+            "production_like": False,
+            "auth_mode": "host_session",
+            "session_secret": "test-session-secret",
+            "allowed_origins": [],
+        },
+    )
+    monkeypatch.setattr(
+        router,
+        "mount_tapdb_dag_surfaces",
+        lambda *_args, **_kwargs: SimpleNamespace(mounted=True, diagnostic=""),
+    )
+    monkeypatch.setattr(
+        router,
         "search_objects",
         lambda *_a, **kwargs: {"items": [], "page": {"limit": kwargs["limit"]}},
     )
@@ -641,11 +634,35 @@ def test_branch_campaign_gui_template_validation_routes_reject_bad_json(monkeypa
     assert wrong_shape.status_code == 400
 
 
-def test_branch_campaign_gui_app_requires_config_and_wraps_host_session():
+def test_branch_campaign_gui_app_requires_config_and_wraps_host_session(monkeypatch):
     with pytest.raises(ValueError, match="config_path is required"):
         router.create_tapdb_gui_router(config_path="")
     bridge = TapdbHostBridge(
         auth_mode="host_session", resolve_user=lambda _request: None
+    )
+    monkeypatch.setattr(
+        router,
+        "get_admin_settings",
+        lambda **_kwargs: {
+            "target_name": "test",
+            "production_like": False,
+            "auth_mode": "host_session",
+            "session_secret": "test-session-secret",
+            "allowed_origins": [],
+        },
+    )
+    monkeypatch.setattr(
+        router,
+        "get_db_config",
+        lambda **_kwargs: {
+            "client_id": "client",
+            "database_name": "testdb",
+        },
+    )
+    monkeypatch.setattr(
+        router,
+        "mount_tapdb_dag_surfaces",
+        lambda *_args, **_kwargs: SimpleNamespace(mounted=True, diagnostic=""),
     )
     app = router.create_tapdb_gui_app(config_path="/config.yaml", host_bridge=bridge)
     assert app.__class__.__name__ == "TapdbHostBridgeMount"
