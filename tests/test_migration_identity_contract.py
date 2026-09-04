@@ -86,12 +86,23 @@ def test_declared_backfills_have_explicit_preservation_allow_markers():
     rls = (
         migrations / "20260902_020000_force_rls_and_audit_attribution.sql"
     ).read_text(encoding="utf-8")
+    runtime_ddl_guard = (
+        migrations / "20260903_031820_runtime_ddl_guard.sql"
+    ).read_text(encoding="utf-8")
 
     assert "tapdb-allow-column: generic_template.validator_ref" in validator
     assert "tapdb-transformation: generic_template.validator_ref" in validator
     assert "tapdb-allow-column: audit_log.changed_by" in rls
     assert "tapdb-transformation: audit_log.changed_by" in rls
     assert "\\ir" not in rls
+    assert "REVOKE CREATE ON SCHEMA %I FROM PUBLIC" in runtime_ddl_guard
+    assert "REVOKE CREATE ON SCHEMA %I FROM %I" in runtime_ddl_guard
+    assert "pg_catalog.has_schema_privilege" in runtime_ddl_guard
+    assert "ON DATABASE" not in runtime_ddl_guard
+    assert "tapdb-allow-column:" not in runtime_ddl_guard
+    assert "tapdb-allow-new-rows:" not in runtime_ddl_guard
+    assert "tapdb-allow-sequence:" not in runtime_ddl_guard
+    assert "tapdb-transformation:" not in runtime_ddl_guard
 
     assets = {item["filename"]: item for item in _migration_assets(migrations)}
     assert assets["20260612_154200_add_template_validator_ref.sql"][
@@ -103,6 +114,11 @@ def test_declared_backfills_have_explicit_preservation_allow_markers():
     assert assets["20260902_010100_legacy_outbox_message_conversion.sql"][
         "allowed_transformations"
     ] == ["outbox_event.message_uid:null_to_legacy_mapping_v1"]
+    guard_asset = assets["20260903_031820_runtime_ddl_guard.sql"]
+    assert guard_asset["allowed_columns"] == []
+    assert guard_asset["allowed_new_rows"] == []
+    assert guard_asset["allowed_sequences"] == []
+    assert guard_asset["allowed_transformations"] == []
 
 
 @pytest.mark.parametrize(

@@ -135,9 +135,16 @@ Missing or malformed context fails closed. Do not catch and continue, install
 checkout-level ambient state, or attribute a write to `unknown`.
 
 Protected tables use enabled and forced RLS with both `USING` and `WITH CHECK`
-policies. Runtime roles must be `NOSUPERUSER NOBYPASSRLS`. Schema/bootstrap and
-migration code must opt into `connection_role="operator"`; never use that role
-to bypass application runtime checks.
+policies. Runtime roles must be `NOSUPERUSER NOBYPASSRLS` and must not have
+`CREATE` on the managed TapDB schema. Schema apply and migration revoke that
+privilege from `PUBLIC` and the configured runtime role without changing its
+DML grants. Runtime code must never create or alter schema objects—even behind
+`IF NOT EXISTS`. Provision consumer-owned objects explicitly with a migration
+role.
+
+Schema/bootstrap and migration code must opt into
+`connection_role="operator"`; never expose that credential to an application
+process or use it to bypass runtime checks.
 
 `schema/rls.sql` is canonical for fresh apply, migration, packaged schema
 inventory, backup drift verification, and ad hoc integration schemas. Do not
@@ -187,7 +194,7 @@ See `docs/consumer-discoverability-guide.md` for the tested adoption flow.
 
 ## Testing and release floor
 
-TapDB 9.2.1 supports PostgreSQL 16 and 17. Release qualification runs the same
+TapDB 9.2.2 supports PostgreSQL 16 and 17. Release qualification runs the same
 complete suite against community PostgreSQL 16.13 and the PostgreSQL 17 minor
 reported by CI without deselecting integration tests. Aurora PostgreSQL has not
 been independently qualified by this release. The matrix enables local

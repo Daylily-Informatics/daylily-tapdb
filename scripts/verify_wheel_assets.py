@@ -55,6 +55,7 @@ def main() -> None:
         "schema/migrations/20260902_010000_natural_identity_and_owner_uniqueness.sql",
         "schema/migrations/20260902_010100_legacy_outbox_message_conversion.sql",
         "schema/migrations/20260902_020000_force_rls_and_audit_attribution.sql",
+        "schema/migrations/20260903_031820_runtime_ddl_guard.sql",
     )
     missing = [
         item for item in required if not any(name.endswith(item) for name in names)

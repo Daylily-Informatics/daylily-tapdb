@@ -1614,6 +1614,7 @@ def test_released_9_1_0_schema_migrates_populated_rows_without_identity_change(
             "20260902_010000_natural_identity_and_owner_uniqueness.sql",
             "20260902_010100_legacy_outbox_message_conversion.sql",
             "20260902_020000_force_rls_and_audit_attribution.sql",
+            "20260903_031820_runtime_ddl_guard.sql",
         ]
         assert (
             result.receipt["sequence_pre_state"]
@@ -2028,6 +2029,94 @@ def test_prefix_registry_reapply_is_byte_stable_and_mismatch_fails_closed(pg_ins
                     "updated": original.updated_dt,
                 },
             )
+
+
+def test_runtime_schema_create_guard_migrates_921_without_identity_changes(
+    pg_instance,
+):
+    engine = create_engine(
+        pg_instance["operator_dsn"],
+        connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
+    )
+    filename = "20260903_031820_runtime_ddl_guard.sql"
+    migrations_dir = Path(__file__).resolve().parents[1] / "schema" / "migrations"
+    target = _migration_target(pg_instance)
+    try:
+        with engine.begin() as connection:
+            _set_operator_context(
+                connection,
+                pg_instance["schema_name"],
+                "migration:runtime-schema-create-fixture",
+            )
+            connection.exec_driver_sql(
+                f'GRANT CREATE ON SCHEMA "{pg_instance["schema_name"]}" '
+                f'TO "{pg_instance["user"]}"'
+            )
+            connection.execute(
+                text("DELETE FROM _tapdb_migrations WHERE filename = :filename"),
+                {"filename": filename},
+            )
+
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            preflight = build_migration_preflight(
+                connection,
+                migrations_dir=migrations_dir,
+                target=target,
+            )
+            assert [item["filename"] for item in preflight["pending_migrations"]] == [
+                filename
+            ]
+            result = apply_migration_preflight(
+                connection,
+                migrations_dir=migrations_dir,
+                preflight=preflight,
+                target=target,
+            )
+            transaction.commit()
+
+        assert (
+            result.receipt["sequence_post_state"]
+            == result.receipt["sequence_pre_state"]
+        )
+        for table_name, before in preflight["tables"].items():
+            assert (
+                result.receipt["postflight"]["tables"][table_name]["immutable_sha256"]
+                == before["immutable_sha256"]
+            )
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT pg_catalog.has_schema_privilege("
+                        ":role, :schema, 'CREATE')"
+                    ),
+                    {
+                        "role": pg_instance["user"],
+                        "schema": pg_instance["schema_name"],
+                    },
+                ).scalar_one()
+                is False
+            )
+    finally:
+        with engine.begin() as connection:
+            _set_operator_context(
+                connection,
+                pg_instance["schema_name"],
+                "migration:runtime-schema-create-cleanup",
+            )
+            connection.exec_driver_sql(
+                f'REVOKE CREATE ON SCHEMA "{pg_instance["schema_name"]}" '
+                f'FROM "{pg_instance["user"]}"'
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO _tapdb_migrations (filename) VALUES (:filename) "
+                    "ON CONFLICT (filename) DO NOTHING"
+                ),
+                {"filename": filename},
+            )
+        engine.dispose()
 
 
 def test_runner_executes_canonical_rls_include_with_declared_attribution(pg_instance):

@@ -287,6 +287,11 @@ authorization header. DAG v2 never invokes it.
 - Do not advertise eligibility before the atomic mount succeeds.
 - Do not add v1 fallback, compatibility discovery, or service-side routing.
 - Do not use a PostgreSQL `SUPERUSER` or `BYPASSRLS` role for runtime access.
+- Do not execute schema DDL during application startup, readiness, reads, or
+  writes, including `CREATE TABLE IF NOT EXISTS`.
+- Do not give an application the TapDB operator credential. Provision any
+  consumer-owned table explicitly, preferably in a separate schema, and give
+  runtime only the required DML.
 
 ## Troubleshooting
 
@@ -303,7 +308,8 @@ authorization header. DAG v2 never invokes it.
 | `invalid_local_graph_contract` | Replace untyped metadata with a persisted typed reference plus lineage, or repair invalid graph/presentation data. |
 | Cursor is rejected | Restart bounded discovery from the first page; never decode, alter, or convert the opaque cursor to an offset. |
 | Response is truncated | Continue from a service-defined discovery cursor where applicable, or request a smaller bounded graph; never infer omitted nodes. |
-| Runtime role rejected | Use a dedicated `NOSUPERUSER NOBYPASSRLS` role. Use the explicit operator connection role only for schema/bootstrap work. |
+| Runtime role rejected | Use a dedicated `NOSUPERUSER NOBYPASSRLS` role without `CREATE` on the managed TapDB schema. Use the explicit operator connection role only for schema/bootstrap work. |
+| Missing consumer state table | Fail readiness with a provisioning error. Run the consumer's explicit migration separately; never auto-create it from a read or startup path. |
 
 ## Adopter checklist
 
@@ -326,6 +332,8 @@ service ID before any manifest or typed reference is wired. TapDB supplies no
 - Persist external references through the reserved template and lineage.
 - Run runtime database access under a forced-RLS-safe role with complete
   transaction context and actor attribution.
+- Prove the runtime role cannot create a table in the managed TapDB schema and
+  keep the operator credential out of the service process.
 
 ## Related guides
 

@@ -214,9 +214,31 @@ def test_db_schema_apply_uses_explicit_target(
     schema_sql = str(psql_calls[0]["sql"])
     assert str(_explicit_target) in schema_sql
     assert 'GRANT CONNECT ON DATABASE "tapdb_shared" TO "tapdb"' in schema_sql
+    scope_binding_position = schema_sql.index(
+        "INSERT INTO tapdb_runtime_principal_scope"
+    )
+    hardening_position = schema_sql.index(
+        'REVOKE CREATE ON SCHEMA "tapdb_testdb" FROM PUBLIC'
+    )
+    assert scope_binding_position < hardening_position
+    assert 'REVOKE CREATE ON SCHEMA "tapdb_testdb" FROM "tapdb"' in schema_sql
+    assert "pg_catalog.has_schema_privilege" in schema_sql
+    assert "REVOKE CREATE ON DATABASE" not in schema_sql
     assert "set_config('session.current_config_identity', 'tapdb_testdb'" not in (
         schema_sql
     )
+
+
+@pytest.mark.parametrize(
+    ("schema_name", "runtime_user"),
+    [("", "tapdb"), ("tapdb_testdb", "")],
+)
+def test_runtime_schema_create_guard_requires_exact_scope(
+    schema_name: str,
+    runtime_user: str,
+) -> None:
+    with pytest.raises(ValueError, match="requires schema and role"):
+        db_mod._runtime_schema_create_guard_sql(schema_name, runtime_user)
 
 
 def test_db_status_uses_explicit_target(monkeypatch: pytest.MonkeyPatch) -> None:

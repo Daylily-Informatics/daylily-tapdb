@@ -180,6 +180,61 @@ class TestConnectionModule:
                 session.execute(text("SELECT 1"))
 
 
+class TestRuntimeSchemaCreateGuard:
+    def test_runtime_dml_works_but_managed_schema_create_fails(self, pg_instance):
+        """Schema apply preserves DML but blocks raw runtime table creation."""
+        import psycopg2
+
+        from daylily_tapdb.connection import TAPDBConnection
+
+        applied = runner.invoke(app, ["db", "schema", "apply"])
+        assert applied.exit_code == 0, applied.output
+
+        runtime = TAPDBConnection(
+            **_conn_kwargs(
+                db_url=pg_instance["dsn"],
+                schema_name=pg_instance["schema_name"],
+                config_identity=str(pg_instance["config_path"]),
+                allow_global_rows=True,
+            )
+        )
+        with runtime as connection:
+            with connection.session_scope(commit=True) as session:
+                result = session.execute(
+                    text("UPDATE generic_instance SET name = name WHERE FALSE")
+                )
+                assert result.rowcount == 0
+
+        raw = psycopg2.connect(pg_instance["dsn"])
+        try:
+            with raw.cursor() as cursor:
+                with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+                    cursor.execute(
+                        f'CREATE TABLE IF NOT EXISTS "{pg_instance["schema_name"]}".'
+                        "runtime_ddl_guard_probe (value integer)"
+                    )
+            raw.rollback()
+        finally:
+            raw.close()
+
+        operator = create_engine(pg_instance["operator_dsn"])
+        try:
+            with operator.connect() as connection:
+                assert (
+                    connection.execute(
+                        text("SELECT to_regclass(:qualified_name)"),
+                        {
+                            "qualified_name": (
+                                f"{pg_instance['schema_name']}.runtime_ddl_guard_probe"
+                            )
+                        },
+                    ).scalar_one()
+                    is None
+                )
+        finally:
+            operator.dispose()
+
+
 # ────────────────────────────────────────────────────────────────────
 # Schema migration
 # ────────────────────────────────────────────────────────────────────
