@@ -73,7 +73,7 @@ runtime/readiness/inventory, metrics, backups, and DAG-v2 visualization.
 | `AUDIT-001` | Validation | Add read-only JSON `tapdb validation external-references` audit with redacted samples and nonzero violation exit | SUCCESS | feature_implementation | Gate 1 | primary agent | Canonical/malformed/legacy/mixed/redaction/no-mutation/exit-code tests pass; installed-wheel CLI help smoke passes; module coverage is 94.04% | No bounded way existed to inventory incompatible application-owned shapes before migration | Audit is read-only, emits bounded EUID-only samples, redacts identifier values, and fails nonzero on violations |
 | `TEST-001` | Acceptance | Pass PostgreSQL 16.13/17, migration, RLS, concurrency, browser, security, coverage, build, wheel, and docs gates | SUCCESS | contract_test | Gate 5 | primary agent | Review-remediated local suite: 2,163 passed with 95.32% branch coverage; remediated PR run `33858301129`: 2,177 passed with zero skips and 95.37% on both PostgreSQL 16.13 and 17.11; all 31 changed modules >=90%; quality, security, docs, build, assets, and installed-wheel smoke passed | Automated review found three bounded contract defects after the first green run | Exact remediated code head passed every dual-PostgreSQL and global gate without deselection |
 | `DOC-001` | Documentation | Overhaul README and active docs; add comprehensive API/federation and tagged-consumer migration guidance | SUCCESS | feature_implementation | Gate 5 | primary agent | README and active architecture/DAG/runtime/GUI/consumer docs were rewritten; new comprehensive external-reference/federation guide and tagged Atlas/Bloom/Ursa/Dewey/Kahlo migration mapping are tested; executable README examples pass | Active docs described multiple generations of graph and admin behavior | Docs now present one canonical GUI, DAG v2, exact discoverability, federation, operator audit, and application ownership boundaries |
-| `REL-001` | Release | Green PR/main CI, merge, exact artifacts, annotated `10.0.0`, GitHub Release, PyPI, hashes, and clean synchronized main | IN_PROGRESS | feature_implementation | Gate 5 | primary agent | Candidate `10.0.0` wheel/sdist build, exact Meridian pin check, `twine check`, and clean external-venv smoke pass; CI now enforces these artifact gates |  | PR, dual-PostgreSQL CI, merge, fresh main CI, immutable tag, GitHub Release, PyPI publication, and final hashes remain |
+| `REL-001` | Release | Green PR/main CI, merge, exact artifacts, annotated `10.0.0`, GitHub Release, PyPI, hashes, and clean synchronized main | SUCCESS | feature_implementation | Gate 5 | primary agent | PR #104 merged to `main` as `eadef9e8426ee968fb850328c7a6e2f90353fe29`; fresh main run `33864847727` passed both database lanes and every global/artifact gate; annotated tag `10.0.0`, latest GitHub Release, PyPI wheel/sdist, matching SHA-256 digests, and a no-cache Python 3.12 published-wheel smoke are verified |  | The immutable release is complete; PyPI is the canonical artifact source, remote `main` contains the tagged commit, and no consumer service or deployed database was changed |
 
 ## Execution receipts
 
@@ -144,18 +144,50 @@ and terminal note are recorded in the table.
   5m37s. The [artifact job](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33856027045/job/100971335833)
   passed build, `twine check`, packaged-asset validation, and isolated installed
   wheel API/GUI/CLI smoke.
+- 2026-09-04 merge and fresh-main receipt: PR
+  [#104](https://github.com/Daylily-Informatics/daylily-tapdb/pull/104) was merged
+  by `iamh2o` at `2026-09-04T10:46:53Z` as merge commit
+  `eadef9e8426ee968fb850328c7a6e2f90353fe29`. Fresh post-merge
+  [main run `33864847727`](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33864847727)
+  passed. Its [PostgreSQL 16.13
+  job](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33864847727/job/100997416056)
+  reported `PostgreSQL 16.13 (Debian 16.13-1.pgdg13+1)` and passed 2,177 tests
+  with zero skips and 95% rounded branch coverage. Its [PostgreSQL 17
+  job](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33864847727/job/100997416011)
+  reported `PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2)` and passed the same
+  2,177 tests with zero skips and 95% rounded branch coverage. Ruff, format,
+  mypy, Bandit, and verified-secret scanning passed. The [artifact
+  job](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33864847727/job/100999154747)
+  passed the source/wheel build, `twine check`, packaged schema and migration
+  inspection, and installed-wheel API/GUI/CLI smoke.
+- 2026-09-04 immutable-release receipt: annotated bare-semver tag `10.0.0`
+  has tag object `fade52ec6a9d78f782b49823a020d77b77c7b564` and peels exactly to
+  `eadef9e8426ee968fb850328c7a6e2f90353fe29`. The latest, non-prerelease
+  [GitHub Release](https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/10.0.0)
+  was published at `2026-09-04T11:00:00Z` with extensive breaking-change,
+  migration, compatibility, test, and artifact notes and no duplicate binary
+  assets.
+- 2026-09-04 PyPI receipt: `twup` published the tag-built wheel and sdist once
+  to [daylily-tapdb 10.0.0](https://pypi.org/project/daylily-tapdb/10.0.0/).
+  Local and PyPI SHA-256 digests match: wheel
+  `10ebb9a5559be3df403f17331147b8bb353cd11cb5b70dc334e7e3e8982a9b06`;
+  sdist `d8cd441b59d945b108319fd5aaf4ada41970611959676db1e572bbe6e295db79`.
+  A fresh Python 3.12 `--no-cache-dir` install from the public PyPI index
+  verified `daylily-tapdb==10.0.0`, exact `meridian-euid==0.4.8`, canonical
+  external-reference and federation imports, the canonical GUI factory, and
+  CLI help including `validation external-references`.
 
 ## Final report
 
-All rows terminal: no
-Objective complete: no
+All rows terminal: yes
+Objective complete: yes
 
 Status counts:
 
-- SUCCESS: 10
+- SUCCESS: 11
 - DUPLICATE: 0
 - NO_LONGER_NEEDED: 0
 - FAIL: 0
 - BLOCKED: 0
-- IN_PROGRESS: 1
+- IN_PROGRESS: 0
 - OPEN: 0
