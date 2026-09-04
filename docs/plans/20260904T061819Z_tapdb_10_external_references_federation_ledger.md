@@ -71,7 +71,7 @@ runtime/readiness/inventory, metrics, backups, and DAG-v2 visualization.
 | `FED-001` | Federation | Add reusable exact-service federated search, owner resolution, and bounded global graph composition | SUCCESS | feature_implementation | Gate 1 | primary agent | Fake-transport tests cover parallel search, exact owner lookup, bridging, cycles, collision safety, reserved-field rejection, bounds, deadline/failure receipts, and opaque non-expansion; module coverage is 95.93% | Kahlo had to infer ownership and merge graphs independently | Core client composes admitted exact DAG-v2 targets without owning credentials, discovery, retries, aliases, or UI |
 | `CUT-001` | Breaking cut | Remove DAG v1, proxy/network helpers, legacy payloads, metadata pseudo-edges, and GUI writer; converge standalone and embedded web operation on feature-complete `daylily_tapdb.gui`; add negative and parity contracts | SUCCESS | removable_compatibility_debt | Gate 3 | primary agent | `admin.main`, its templates/static app, DAG-v1 modules, proxy routes, legacy factory, legacy payload code, and duplicate GUI writer are absent; explicit route/behavior parity tests, 19 GUI parity tests, embedded tests, and real Chromium tests pass; GUI router coverage is 93.30% | Two web stacks duplicated features and allowed divergent graph/reference writes | `daylily_tapdb.gui` is the sole complete stack; only deliberately retired DAG-v1/proxy and duplicate writer behavior is excluded |
 | `AUDIT-001` | Validation | Add read-only JSON `tapdb validation external-references` audit with redacted samples and nonzero violation exit | SUCCESS | feature_implementation | Gate 1 | primary agent | Canonical/malformed/legacy/mixed/redaction/no-mutation/exit-code tests pass; installed-wheel CLI help smoke passes; module coverage is 94.04% | No bounded way existed to inventory incompatible application-owned shapes before migration | Audit is read-only, emits bounded EUID-only samples, redacts identifier values, and fails nonzero on violations |
-| `TEST-001` | Acceptance | Pass PostgreSQL 16.13/17, migration, RLS, concurrency, browser, security, coverage, build, wheel, and docs gates | IN_PROGRESS | contract_test | Gate 5 | primary agent | Review-remediated local complete suite: 2,163 passed, 14 environment/platform skips, 95.32% branch coverage; all 31 changed modules >=90%; all three docs examples pass when explicitly enabled; prior PR run `33856027045` passed against PostgreSQL 16.13 and 17.11 | Automated review found three bounded contract defects after the first green run | Fresh dual-PostgreSQL PR CI and artifact receipts are required for the remediated head |
+| `TEST-001` | Acceptance | Pass PostgreSQL 16.13/17, migration, RLS, concurrency, browser, security, coverage, build, wheel, and docs gates | SUCCESS | contract_test | Gate 5 | primary agent | Review-remediated local suite: 2,163 passed with 95.32% branch coverage; remediated PR run `33858301129`: 2,177 passed with zero skips and 95.37% on both PostgreSQL 16.13 and 17.11; all 31 changed modules >=90%; quality, security, docs, build, assets, and installed-wheel smoke passed | Automated review found three bounded contract defects after the first green run | Exact remediated code head passed every dual-PostgreSQL and global gate without deselection |
 | `DOC-001` | Documentation | Overhaul README and active docs; add comprehensive API/federation and tagged-consumer migration guidance | SUCCESS | feature_implementation | Gate 5 | primary agent | README and active architecture/DAG/runtime/GUI/consumer docs were rewritten; new comprehensive external-reference/federation guide and tagged Atlas/Bloom/Ursa/Dewey/Kahlo migration mapping are tested; executable README examples pass | Active docs described multiple generations of graph and admin behavior | Docs now present one canonical GUI, DAG v2, exact discoverability, federation, operator audit, and application ownership boundaries |
 | `REL-001` | Release | Green PR/main CI, merge, exact artifacts, annotated `10.0.0`, GitHub Release, PyPI, hashes, and clean synchronized main | IN_PROGRESS | feature_implementation | Gate 5 | primary agent | Candidate `10.0.0` wheel/sdist build, exact Meridian pin check, `twine check`, and clean external-venv smoke pass; CI now enforces these artifact gates |  | PR, dual-PostgreSQL CI, merge, fresh main CI, immutable tag, GitHub Release, PyPI publication, and final hashes remain |
 
@@ -119,6 +119,18 @@ and terminal note are recorded in the table.
   accepted `max_edges`; and federation rejects noncanonical/reserved opaque
   projection fields before node construction. Five focused regressions,
   including real PostgreSQL and migration-from-`9.2.2` proofs, passed.
+- 2026-09-04 remediated PR qualification receipt: [run
+  `33858301129`](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33858301129)
+  passed on exact code head `ebc6a506c6025eb1634551a7a9da3af6162f990b`.
+  The [PostgreSQL 16.13 job](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33858301129/job/100976771351)
+  reported `PostgreSQL 16.13 (Debian 16.13-1.pgdg13+1)` and passed all 2,177
+  tests with zero skips, 95.37% branch coverage, and all 31 changed modules at
+  90% or higher in 7m01s. The [PostgreSQL 17 job](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33858301129/job/100976771259)
+  reported `PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2)` and passed the same
+  2,177 tests and coverage gates in 6m42s. The [artifact
+  job](https://github.com/Daylily-Informatics/daylily-tapdb/actions/runs/33858301129/job/100978634595)
+  passed the `10.0.0` build, `twine check`, packaged-asset inspection, and
+  isolated installed-wheel external-reference/federation/GUI/CLI smoke.
 - 2026-09-04 quality/artifact receipt: Ruff check and format, mypy (14 strict
   source files), Bandit, verified detect-secrets, `uv lock --check`, and `git
   diff --check` passed. Candidate wheel/sdist build, wheel asset and exact
@@ -140,10 +152,10 @@ Objective complete: no
 
 Status counts:
 
-- SUCCESS: 9
+- SUCCESS: 10
 - DUPLICATE: 0
 - NO_LONGER_NEEDED: 0
 - FAIL: 0
 - BLOCKED: 0
-- IN_PROGRESS: 2
+- IN_PROGRESS: 1
 - OPEN: 0
