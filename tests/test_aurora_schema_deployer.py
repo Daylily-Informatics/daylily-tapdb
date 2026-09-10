@@ -61,6 +61,36 @@ def mock_secret_password():
 
 
 class TestBuildPsqlEnv:
+    def test_explicit_signing_port_preserves_transport(
+        self, aurora_kwargs, mock_iam_token, mock_ca_bundle
+    ):
+        aurora_kwargs["port"] = 55434
+        cmd, env = AuroraSchemaDeployer._build_psql_env(
+            **aurora_kwargs,
+            server_port=5432,
+            profile="qualification-profile",
+            hostaddr="127.0.0.1",
+        )
+        mock_iam_token.assert_called_once_with(
+            region=aurora_kwargs["region"],
+            host=aurora_kwargs["host"],
+            port=5432,
+            user=aurora_kwargs["user"],
+            profile="qualification-profile",
+        )
+        assert cmd[cmd.index("-p") + 1] == "55434"
+        assert env["PGHOSTADDR"] == "127.0.0.1"
+
+    @pytest.mark.parametrize("server_port", [0, 65536, True, "5432", 5432.0])
+    def test_invalid_signing_port_refused_before_auth(
+        self, aurora_kwargs, mock_iam_token, mock_ca_bundle, server_port
+    ):
+        with pytest.raises(ValueError, match="server_port must be an integer"):
+            AuroraSchemaDeployer._build_psql_env(
+                **aurora_kwargs, server_port=server_port
+            )
+        mock_iam_token.assert_not_called()
+
     def test_iam_auth(self, aurora_kwargs, mock_iam_token, mock_ca_bundle):
         cmd, env = AuroraSchemaDeployer._build_psql_env(
             **aurora_kwargs,
@@ -171,6 +201,24 @@ class TestRunPsql:
 
 
 class TestDeploySchema:
+    def test_deploy_forwards_signing_port(
+        self, aurora_kwargs, mock_iam_token, mock_ca_bundle, tmp_path
+    ):
+        aurora_kwargs["port"] = 55434
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            ok, _ = AuroraSchemaDeployer.deploy_schema(
+                **aurora_kwargs,
+                schema_file=tmp_path / "schema.sql",
+                server_port=5432,
+                profile="qualification-profile",
+            )
+        assert ok
+        assert mock_iam_token.call_args.kwargs["port"] == 5432
+        assert mock_iam_token.call_args.kwargs["profile"] == "qualification-profile"
+        cmd = mock_run.call_args.args[0]
+        assert cmd[cmd.index("-p") + 1] == "55434"
+
     def test_deploy_success(
         self, aurora_kwargs, mock_iam_token, mock_ca_bundle, tmp_path
     ):

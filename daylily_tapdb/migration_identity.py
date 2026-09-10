@@ -14,25 +14,17 @@ from pathlib import Path
 from typing import Any, Mapping, cast
 from uuid import UUID
 
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import SQLAlchemyError
 
 from daylily_tapdb.advisory_locks import derive_advisory_lock_key
 from daylily_tapdb.security_context import assert_operator_role
 
 RECEIPT_VERSION = "tapdb-migration-receipt/v1"
 _TRACKING_TABLE = "_tapdb_migrations"
-_TABLES = (
-    "generic_template",
-    "generic_instance",
-    "generic_instance_lineage",
-    "audit_log",
-    "outbox_event",
-    "outbox_event_attempt",
-    "inbox_message",
-    "tapdb_identity_prefix_config",
-    "tapdb_legacy_outbox_mapping",
-)
+
+
 _IMMUTABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "generic_template": (
         "uid",
@@ -153,6 +145,14 @@ _ALLOW_NEW_ROWS_RE = re.compile(
 )
 _ALLOW_SEQUENCE_RE = re.compile(
     r"^\s*--\s*tapdb-allow-sequence:\s*([a-z0-9_]+)\s*$", re.M
+)
+_ALLOW_SCHEMA_RE = re.compile(r"^\s*--\s*tapdb-allow-schema:\s*([a-z0-9_]+)\s*$", re.M)
+_ALLOW_NEW_TABLE_RE = re.compile(
+    r"^\s*--\s*tapdb-allow-new-table:\s*([a-z0-9_]+)\s*$", re.M
+)
+_PREFIX_ANNOTATION_RE = re.compile(
+    r"^\s*--\s*tapdb-add-prefix-binding:\s*([a-z0-9_]+):([0-9A-HJ-KMNP-TV-Z]{1,4})\s*$",
+    re.M,
 )
 _TRANSFORMATION_RE = re.compile(r"^\s*--\s*tapdb-transformation:\s*(\S.+?)\s*$", re.M)
 _INCLUDE_RE = re.compile(r"^\s*--\s*tapdb-include:\s*(\S+)\s*$", re.M)
@@ -335,6 +335,14 @@ def _migration_assets(migrations_dir: Path) -> list[dict[str, Any]]:
                 "allowed_columns": allowed_columns,
                 "allowed_new_rows": sorted(set(_ALLOW_NEW_ROWS_RE.findall(source))),
                 "allowed_sequences": sorted(set(_ALLOW_SEQUENCE_RE.findall(source))),
+                "allowed_schema_tables": sorted(set(_ALLOW_SCHEMA_RE.findall(source))),
+                "allowed_new_tables": sorted(set(_ALLOW_NEW_TABLE_RE.findall(source))),
+                "allowed_prefix_annotations": [
+                    {"name": name, "annotation": f"tapdb-prefix-binding/v1:{prefix}"}
+                    for name, prefix in sorted(
+                        set(_PREFIX_ANNOTATION_RE.findall(source))
+                    )
+                ],
                 "allowed_transformations": allowed_transformations,
             }
         )
@@ -387,261 +395,69 @@ def _apply_operator_context(connection: Connection, target: Mapping[str, Any]) -
         assert_operator_role(connection)
     except RuntimeError as exc:
         raise MigrationPreflightError(str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise MigrationPreflightError(
+            "migration inspection requires a verified operator connection"
+        ) from exc
 
 
-def _table_snapshot(
-    connection: Connection, schema_name: str, table_name: str
-) -> dict[str, Any]:
-    inspector = inspect(connection)
-    columns = [
-        str(item["name"])
-        for item in inspector.get_columns(table_name, schema=schema_name)
-    ]
-    pk_columns = [
-        str(item)
-        for item in (
-            inspector.get_pk_constraint(table_name, schema=schema_name).get(
-                "constrained_columns"
-            )
-            or []
-        )
-    ]
-    if not pk_columns:
-        raise MigrationPreflightError(f"{table_name} has no primary key")
-    selected = ", ".join(_quote_identifier(column) for column in columns)
-    ordering = ", ".join(_quote_identifier(column) for column in pk_columns)
-    qualified = f"{_quote_identifier(schema_name)}.{_quote_identifier(table_name)}"
-    rows = (
-        connection.execute(
-            text(f"SELECT {selected} FROM {qualified} ORDER BY {ordering}")
-        )
-        .mappings()
-        .all()
-    )
-    immutable_columns = [
-        column for column in _IMMUTABLE_COLUMNS.get(table_name, ()) if column in columns
-    ]
-    evidence_rows: list[dict[str, Any]] = []
-    for row in rows:
-        key = [_jsonable(row[column]) for column in pk_columns]
-        immutable = [_jsonable(row[column]) for column in immutable_columns]
-        identity = {column: _jsonable(row[column]) for column in immutable_columns}
-        column_sha256 = {column: _sha256(_jsonable(row[column])) for column in columns}
-        evidence_rows.append(
-            {
-                "key": key,
-                "immutable": immutable,
-                "identity": identity,
-                "column_sha256": column_sha256,
-            }
-        )
-    active = None
-    deleted = None
-    if "is_deleted" in columns:
-        active = sum(not bool(row["is_deleted"]) for row in rows)
-        deleted = sum(bool(row["is_deleted"]) for row in rows)
-    foreign_keys = []
-    for fk in inspector.get_foreign_keys(table_name, schema=schema_name):
-        constrained = [str(item) for item in fk.get("constrained_columns") or []]
-        for row in rows:
-            foreign_keys.append(
+def _migration_tables(identity: Mapping[str, Any]) -> dict[str, Any]:
+    """Adapt shared evidence for the existing exact transformation validators."""
+    tables: dict[str, Any] = {}
+    for name, table in identity["tables"].items():
+        rows = []
+        for key, row in table["rows"].items():
+            values = row.get("identity", {})
+            rows.append(
                 {
-                    "columns": constrained,
-                    "values": [_jsonable(row[column]) for column in constrained],
-                    "target_table": fk.get("referred_table"),
-                    "target_columns": fk.get("referred_columns") or [],
+                    "key": [values[column] for column in table["primary_key"]]
+                    if table["primary_key"]
+                    and all(column in values for column in table["primary_key"])
+                    else [key],
+                    "inventory_key": key,
+                    "identity": values,
+                    "column_sha256": row["columns"],
+                    "count": row["count"],
                 }
             )
-    immutable_tuples = [row["immutable"] for row in evidence_rows]
-    return {
-        "columns": columns,
-        "primary_key": pk_columns,
-        "row_count": len(rows),
-        "active_count": active,
-        "soft_deleted_count": deleted,
-        "immutable_columns": immutable_columns,
-        "immutable_tuples": immutable_tuples,
-        "immutable_sha256": _sha256(immutable_tuples),
-        "full_rows_sha256": _sha256([row["column_sha256"] for row in evidence_rows]),
-        "rows": evidence_rows,
-        "foreign_keys": foreign_keys,
-        "foreign_keys_sha256": _sha256(foreign_keys),
-    }
-
-
-def _sequence_snapshot(
-    connection: Connection, schema_name: str
-) -> list[dict[str, Any]]:
-    rows = (
-        connection.execute(
-            text(
-                "SELECT cls.relname AS sequence_name, seq.seqstart AS start_value, "
-                "seq.seqmin AS minimum_value, seq.seqmax AS maximum_value, "
-                "seq.seqincrement AS increment, seq.seqcycle AS cycle, "
-                "seq.seqcache AS cache_size "
-                "FROM pg_class cls "
-                "JOIN pg_namespace ns ON ns.oid = cls.relnamespace "
-                "JOIN pg_sequence seq ON seq.seqrelid = cls.oid "
-                "WHERE ns.nspname = :schema AND cls.relkind = 'S' "
-                "ORDER BY cls.relname"
+        tables[name] = {
+            "columns": [item["name"] for item in table["columns"]],
+            "primary_key": table["primary_key"],
+            "row_count": table["row_count"],
+            "rows": rows,
+            "immutable_columns": table["immutable_columns"],
+            "active_count": sum(
+                row["count"]
+                for row in rows
+                if row["column_sha256"].get("is_deleted") == _sha256(False)
             ),
-            {"schema": schema_name},
-        )
-        .mappings()
-        .all()
-    )
-    evidence = []
-    for row in rows:
-        sequence_name = str(row["sequence_name"])
-        qualified = (
-            f"{_quote_identifier(schema_name)}.{_quote_identifier(sequence_name)}"
-        )
-        state = (
-            connection.execute(text(f"SELECT last_value, is_called FROM {qualified}"))
-            .mappings()
-            .one()
-        )
-        owner = (
-            connection.execute(
-                text(
-                    "SELECT tbl.relname AS table_name, att.attname AS column_name "
-                    "FROM pg_class seq JOIN pg_namespace ns ON ns.oid = seq.relnamespace "
-                    "JOIN pg_depend dep ON dep.objid = seq.oid AND dep.deptype IN ('a','i') "
-                    "JOIN pg_class tbl ON tbl.oid = dep.refobjid "
-                    "JOIN pg_attribute att ON att.attrelid = tbl.oid AND att.attnum = dep.refobjsubid "
-                    "WHERE ns.nspname = :schema AND seq.relname = :sequence"
-                ),
-                {"schema": schema_name, "sequence": sequence_name},
-            )
-            .mappings()
-            .first()
-        )
-        # PostgreSQL identity-column dependency metadata differs from serial
-        # columns across supported server versions. Resolve the conventional
-        # generated ``<table>_uid_seq`` name when the catalog join does not
-        # expose an owner row.
-        if owner is None and sequence_name.endswith("_uid_seq"):
-            candidate_table = sequence_name[: -len("_uid_seq")]
-            candidate_exists = connection.execute(
-                text("SELECT to_regclass(:table_name) IS NOT NULL"),
-                {"table_name": f"{schema_name}.{candidate_table}"},
-            ).scalar_one()
-            if candidate_exists:
-                owner = {"table_name": candidate_table, "column_name": "uid"}
-        evidence.append(
-            {
-                "name": sequence_name,
-                "owner_table": owner["table_name"] if owner else None,
-                "owner_column": owner["column_name"] if owner else None,
-                "last_value": int(state["last_value"]),
-                "is_called": bool(state["is_called"]),
-                "start_value": int(row["start_value"]),
-                "minimum_value": int(row["minimum_value"]),
-                "maximum_value": int(row["maximum_value"]),
-                "increment": int(row["increment"]),
-                "cycle": bool(row["cycle"]),
-                "cache_size": int(row["cache_size"]),
-            }
-        )
-    return evidence
+            "soft_deleted_count": sum(
+                row["count"]
+                for row in rows
+                if row["column_sha256"].get("is_deleted") == _sha256(True)
+            ),
+        }
+    return tables
 
 
 def _validate_scope_and_sequences(
     snapshot: dict[str, Any], *, validate_generators: bool = True
 ) -> None:
-    for table_name in (
-        "generic_template",
-        "generic_instance",
-        "generic_instance_lineage",
-        "audit_log",
-        "outbox_event",
-        "outbox_event_attempt",
-        "inbox_message",
-        "tapdb_identity_prefix_config",
-    ):
-        table = snapshot["tables"].get(table_name)
-        if not table:
-            continue
+    from daylily_tapdb.sequences import verify_sequence_floors
+
+    for table_name, table in snapshot["tables"].items():
         for row in table["rows"]:
-            values = row["identity"]
             for column in ("domain_code", "issuer_app_code"):
-                if column in values and not str(values[column] or "").strip():
+                if (
+                    column in row["identity"]
+                    and not str(row["identity"][column] or "").strip()
+                ):
                     raise MigrationPreflightError(
                         f"{table_name} row {row['key']} has missing {column}"
                     )
-
-    if not validate_generators:
-        return
-
-    sequences = {item["name"]: item for item in snapshot["sequences"]}
-    assigned_prefixes: set[str] = set()
-    for identity_table in (
-        "generic_template",
-        "generic_instance",
-        "generic_instance_lineage",
-        "audit_log",
-    ):
-        for row in snapshot["tables"].get(identity_table, {}).get("rows", []):
-            prefix = str(row["identity"].get("euid_prefix") or "").lower()
-            if prefix:
-                assigned_prefixes.add(prefix)
-    missing_generators = sorted(
-        f"{prefix}_instance_seq"
-        for prefix in assigned_prefixes
-        if f"{prefix}_instance_seq" not in sequences
-    )
-    if missing_generators:
-        raise MigrationPreflightError(
-            "missing identity sequence(s): " + ", ".join(missing_generators)
-        )
-
-    for sequence in sequences.values():
-        table_name = sequence["owner_table"]
-        column_name = sequence["owner_column"]
-        table = snapshot["tables"].get(str(table_name))
-        assigned: list[int] = []
-        if table and column_name in table["columns"]:
-            assigned = [
-                int(row["identity"][column_name])
-                for row in table["rows"]
-                if row["identity"].get(column_name) is not None
-            ]
-        elif str(sequence["name"]).endswith("_instance_seq"):
-            prefix = str(sequence["name"])[: -len("_instance_seq")].upper()
-            for identity_table in (
-                "generic_template",
-                "generic_instance",
-                "generic_instance_lineage",
-                "audit_log",
-            ):
-                for row in snapshot["tables"].get(identity_table, {}).get("rows", []):
-                    identity = row["identity"]
-                    if (
-                        str(identity.get("euid_prefix") or "").upper() == prefix
-                        and identity.get("euid_seq") is not None
-                    ):
-                        assigned.append(int(identity["euid_seq"]))
-        if not assigned:
-            continue
-        if int(sequence["increment"]) <= 0:
-            raise MigrationPreflightError(
-                f"identity sequence {sequence['name']} must have a positive increment"
-            )
-        if bool(sequence["cycle"]):
-            raise MigrationPreflightError(
-                f"identity sequence {sequence['name']} must not cycle"
-            )
-        if int(sequence["cache_size"]) != 1:
-            raise MigrationPreflightError(
-                f"identity sequence {sequence['name']} has ambiguous cached state"
-            )
-        next_value = sequence["last_value"] + (
-            sequence["increment"] if sequence["is_called"] else 0
-        )
-        if next_value <= max(int(value) for value in assigned):
-            raise MigrationPreflightError(
-                f"sequence {sequence['name']} is behind assigned identity values"
-            )
+    if validate_generators:
+        if not verify_sequence_floors(snapshot["sequence_inventory"], floors=[])["ok"]:
+            raise MigrationPreflightError("generators are behind assigned identities")
 
 
 def build_migration_preflight(
@@ -650,6 +466,10 @@ def build_migration_preflight(
     migrations_dir: Path,
     target: Mapping[str, Any],
     _validate_generators: bool = True,
+    source_contract: Mapping[str, Any] | None = None,
+    receipts_dir: Path | None = None,
+    recovery_family: Mapping[str, Any] | None = None,
+    _reviewed_recovery: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Capture deterministic, sanitized preflight evidence without mutation."""
     schema_name = str(target.get("schema_name") or "").strip()
@@ -675,12 +495,86 @@ def build_migration_preflight(
         for item in assets
         if item["filename"] not in applied_names
     ]
-    table_names = set(inspect(connection).get_table_names(schema=schema_name))
-    tables = {
-        name: _table_snapshot(connection, schema_name, name)
-        for name in _TABLES
-        if name in table_names
-    }
+    from daylily_tapdb.identity_inventory import capture_identity_inventory
+    from daylily_tapdb.sequences import capture_sequence_inventory
+
+    identity_inventory = capture_identity_inventory(
+        connection, schema_name=schema_name, target=target
+    )
+    sequence_inventory = capture_sequence_inventory(
+        connection, schema_name=schema_name, target=target
+    )
+    from daylily_tapdb.backup.recovery import (
+        inventory_floors,
+        recovery_family_state,
+        require_family_member,
+        require_retained_definitions,
+        retained_recovery_state,
+        validate_recovery_family,
+    )
+    from daylily_tapdb.sequences import build_sequence_advance_plan
+
+    if (
+        source_contract is not None
+        and source_contract.get("recovery_family") != recovery_family
+    ):
+        raise MigrationPreflightError(
+            "migration must explicitly retain its source recovery family"
+        )
+    if recovery_family is not None:
+        if receipts_dir is None and _reviewed_recovery is None:
+            raise MigrationPreflightError(
+                "family migration requires explicit receipts_dir"
+            )
+        recovery_family = validate_recovery_family(
+            recovery_family, required_directory=receipts_dir
+        )
+        require_family_member(recovery_family, sequence_inventory)
+    if _reviewed_recovery is not None:
+        allocator_recovery = dict(_reviewed_recovery)
+    else:
+        retained = (
+            retained_recovery_state(receipts_dir, target=sequence_inventory["target"])
+            if receipts_dir is not None
+            else {"floors": [], "inventories": [], "pending": {}}
+        )
+        if recovery_family is not None:
+            family_state = recovery_family_state(recovery_family)
+            # Acquiring our own writer fence appends non-allocator events.
+            # Validate the complete chains, but bind relevant floors, physical
+            # members and inventory definitions rather than that changing head.
+            family_state.pop("journal_heads")
+            retained["floors"] += family_state["floors"]
+            retained["inventories"] += family_state["inventories"]
+            retained["family_state"] = family_state
+        require_retained_definitions(sequence_inventory, retained["inventories"])
+        allocator_recovery = {
+            "receipts_dir": str(receipts_dir) if receipts_dir is not None else None,
+            "state_sha256": _sha256(retained),
+            "state": retained,
+            "plan": build_sequence_advance_plan(
+                sequence_inventory,
+                floors=list(retained["floors"])
+                + inventory_floors(sequence_inventory, source="migration-preflight"),
+                recovery_family=recovery_family,
+            ),
+        }
+    if source_contract is not None:
+        from daylily_tapdb.backup.source_contract import (
+            capture_source_contract,
+            verify_source_contract,
+        )
+
+        actual = capture_source_contract(
+            connection,
+            schema_name=schema_name,
+            target=target,
+            source_version=str(source_contract["source_version"]),
+            recovery_family=recovery_family,
+        )
+        verify_source_contract(source_contract, actual)
+    tables = _migration_tables(identity_inventory)
+
     prefixes = tables.get("tapdb_identity_prefix_config", {}).get("rows", [])
     template_prefix_mapping = [
         {
@@ -696,20 +590,7 @@ def build_migration_preflight(
     ]
     snapshot: dict[str, Any] = {
         "receipt_version": RECEIPT_VERSION,
-        "target": {
-            key: str(target[key])
-            for key in (
-                "engine_type",
-                "host",
-                "port",
-                "database",
-                "schema_name",
-                "config_identity",
-                "domain_code",
-                "owner_repo_name",
-            )
-            if target.get(key) is not None
-        },
+        "target": identity_inventory["target"],
         "pending_migrations": pending,
         "applied_migrations": [
             {
@@ -726,7 +607,12 @@ def build_migration_preflight(
             for row in tracking
         ],
         "tables": tables,
-        "sequences": _sequence_snapshot(connection, schema_name),
+        "sequences": sequence_inventory["sequences"],
+        "identity_inventory": identity_inventory,
+        "sequence_inventory": sequence_inventory,
+        "source_contract": dict(source_contract) if source_contract else None,
+        "recovery_family": dict(recovery_family) if recovery_family else None,
+        "allocator_recovery": allocator_recovery,
         "prefix_configuration": [row["identity"] for row in prefixes],
         "template_instance_prefix_mapping": template_prefix_mapping,
     }
@@ -745,6 +631,11 @@ def _receipt_comparable(receipt: Mapping[str, Any]) -> dict[str, Any]:
             "applied_migrations",
             "tables",
             "sequences",
+            "identity_inventory",
+            "sequence_inventory",
+            "source_contract",
+            "recovery_family",
+            "allocator_recovery",
             "prefix_configuration",
             "template_instance_prefix_mapping",
         )
@@ -803,6 +694,7 @@ def _verify_preservation(
     postflight: Mapping[str, Any],
     *,
     allow_declared_sequence_advances: bool = True,
+    recovery_sequence_advances: Mapping[str, int] | None = None,
 ) -> None:
     allowed_columns = sorted(
         {
@@ -834,6 +726,8 @@ def _verify_preservation(
         for value in item.get("allowed_new_rows", [])
     }
     for table_name, before in preflight["tables"].items():
+        if table_name == _TRACKING_TABLE:
+            continue  # Tracking additions are verified by shared inventory below.
         after = postflight["tables"].get(table_name)
         if after is None:
             raise MigrationReceiptMismatchError(
@@ -951,26 +845,241 @@ def _verify_preservation(
         new_state = after_sequences[name]
         if old_state == new_state:
             continue
-        if not allow_declared_sequence_advances or name not in allowed_sequences:
-            raise MigrationReceiptMismatchError(
-                f"undeclared identity sequence state change: {name}"
-            )
-        stable_fields = set(old_state) - {"last_value", "is_called"}
-        if any(old_state[field] != new_state[field] for field in stable_fields):
+        from daylily_tapdb.sequences import sequence_definition, sequence_next_value
+
+        if sequence_definition(old_state) != sequence_definition(new_state):
             raise MigrationReceiptMismatchError(
                 f"identity sequence definition changed: {name}"
             )
-        increment = int(old_state["increment"])
-        old_next = int(old_state["last_value"]) + (
-            increment if old_state["is_called"] else 0
-        )
-        new_next = int(new_state["last_value"]) + (
-            increment if new_state["is_called"] else 0
-        )
-        if new_next <= old_next or (new_next - old_next) % increment:
+        if any(
+            old_state.get(key) != new_state.get(key)
+            for key in ("owner", "dependencies")
+        ):
+            raise MigrationReceiptMismatchError(
+                f"identity sequence ownership or mapping changed: {name}"
+            )
+        if old_state.get("mapping") != new_state.get("mapping"):
+            _verify_added_prefix_annotation(
+                preflight, old_state, new_state, postflight=postflight
+            )
+        # Assigned high-water may increase when exact migration contracts add
+        # rows without touching sequence state; it is not itself an issuance.
+        if all(old_state[key] == new_state[key] for key in ("last_value", "is_called")):
+            continue
+        reviewed_next = (recovery_sequence_advances or {}).get(name)
+        if not allow_declared_sequence_advances or (
+            name not in allowed_sequences and reviewed_next is None
+        ):
+            raise MigrationReceiptMismatchError(
+                f"undeclared identity sequence state change: {name}"
+            )
+        if sequence_next_value(new_state) <= sequence_next_value(old_state):
             raise MigrationReceiptMismatchError(
                 f"invalid identity sequence advance: {name}"
             )
+        if (
+            name not in allowed_sequences
+            and sequence_next_value(new_state) != reviewed_next
+        ):
+            raise MigrationReceiptMismatchError(
+                f"sequence advance differs from reviewed recovery plan: {name}"
+            )
+
+    if "identity_inventory" in preflight:
+        _verify_physical_preservation(
+            preflight, postflight, contracts_by_column, allowed_new_rows
+        )
+
+
+def _verify_added_prefix_annotation(
+    preflight: Mapping[str, Any],
+    old: Mapping[str, Any],
+    new: Mapping[str, Any],
+    *,
+    postflight: Mapping[str, Any] | None = None,
+) -> None:
+    """Retain the exact prefix; only proven additive evidence may change.
+
+    A declared new row can establish stored-row evidence for an already mapped
+    prefix. A new catalog annotation additionally requires its exact SQL marker.
+    Neither permits a new prefix, changed ownership, nor lost old evidence.
+    """
+    before = old["mapping"]
+    after = new["mapping"]
+    annotation = f"tapdb-prefix-binding/v1:{before.get('prefix')}"
+    declaration = {"name": old["name"], "annotation": annotation}
+    permitted = [
+        item
+        for migration in preflight["pending_migrations"]
+        for item in migration.get("allowed_prefix_annotations", [])
+    ]
+    addition = {"source": "catalog_annotation", "annotation": annotation}
+    old_evidence = before.get("evidence", [])
+    new_evidence = after.get("evidence", [])
+    additions = [item for item in new_evidence if item not in old_evidence]
+    valid_additions = []
+    for item in additions:
+        if item == addition and declaration in permitted:
+            valid_additions.append(item)
+            continue
+        if (
+            postflight is None
+            or set(item) != {"source", "table"}
+            or item["source"] != "stored_rows"
+        ):
+            continue
+        table_name = item["table"]
+        allowed_rows = {
+            name
+            for migration in preflight["pending_migrations"]
+            for name in migration.get("allowed_new_rows", [])
+        }
+        if table_name not in allowed_rows:
+            continue
+        old_rows = (
+            preflight["identity_inventory"]["tables"]
+            .get(table_name, {})
+            .get("rows", {})
+        )
+        new_rows = (
+            postflight["identity_inventory"]["tables"]
+            .get(table_name, {})
+            .get("rows", {})
+        )
+        if not any(
+            row.get("identity", {}).get("euid_prefix") == before.get("prefix")
+            for row in old_rows.values()
+        ) and any(
+            key not in old_rows
+            and row.get("identity", {}).get("euid_prefix") == before.get("prefix")
+            for key, row in new_rows.items()
+        ):
+            valid_additions.append(item)
+    if (
+        before.get("kind") != "prefix"
+        or {key: value for key, value in before.items() if key != "evidence"}
+        != {key: value for key, value in after.items() if key != "evidence"}
+        or not additions
+        or additions != valid_additions
+        or any(new_evidence.count(item) != 1 for item in additions)
+        or [item for item in new_evidence if item not in additions] != old_evidence
+    ):
+        raise MigrationReceiptMismatchError(
+            f"identity sequence ownership or mapping changed: {old['name']}"
+        )
+
+
+def _verify_physical_preservation(
+    preflight: Mapping[str, Any],
+    postflight: Mapping[str, Any],
+    contracts: Mapping[str, _TransformationContract],
+    allowed_new_rows: set[str],
+) -> None:
+    from daylily_tapdb.identity_inventory import verify_identity_inventory
+
+    before = preflight["identity_inventory"]
+    after = postflight["identity_inventory"]
+    schema_tables = {
+        name
+        for migration in preflight["pending_migrations"]
+        for name in migration.get("allowed_schema_tables", [])
+    }
+    new_tables = {
+        name
+        for migration in preflight["pending_migrations"]
+        for name in migration.get("allowed_new_tables", [])
+    }
+    declarations = {}
+    for name, table in before["tables"].items():
+        new_table = after["tables"].get(name, {})
+        old_columns = {column["name"] for column in table["columns"]}
+        new_columns = {column["name"] for column in new_table.get("columns", [])}
+        changes = {}
+        for qualified, contract in contracts.items():
+            owner, column = qualified.split(".", 1)
+            if owner != name or column not in old_columns:
+                continue
+            transition: dict[str, Any] = {
+                "kind": "exact_value_hashes",
+                "changes": {
+                    key: {
+                        "before": row["columns"][column],
+                        "after": new_table["rows"][key]["columns"][column],
+                    }
+                    for key, row in table["rows"].items()
+                    if key in new_table.get("rows", {})
+                    and row["columns"][column]
+                    != new_table["rows"][key]["columns"][column]
+                },
+            }
+            if (
+                transition["changes"]
+                and contract.kind == "null-to-legacy-outbox-mapping"
+            ):
+                # The legacy conversion validator above proves the exact
+                # outbox-to-message mapping. Shared inventory independently
+                # verifies the nullable FK, newly added target/mapping rows,
+                # original source key, and their complete recorded hashes.
+                mapped_changes = {}
+                for key, change in transition["changes"].items():
+                    old_row = table["rows"][key]
+                    new_row = new_table["rows"][key]
+                    message_uid = new_row["identity"]["message_uid"]
+                    target_matches = [
+                        (row_key, row)
+                        for row_key, row in after["tables"]["generic_instance"][
+                            "rows"
+                        ].items()
+                        if row["identity"].get("uid") == message_uid
+                    ]
+                    mapping_matches = [
+                        (row_key, row)
+                        for row_key, row in after["tables"][
+                            "tapdb_legacy_outbox_mapping"
+                        ]["rows"].items()
+                        if row["identity"].get("old_outbox_id")
+                        == old_row["identity"]["id"]
+                        and row["identity"].get("message_uid") == message_uid
+                    ]
+                    if len(target_matches) != 1 or len(mapping_matches) != 1:
+                        raise MigrationReceiptMismatchError(
+                            "legacy NULL reference lacks its exact target/mapping row"
+                        )
+                    mapped_changes[key] = {
+                        **change,
+                        "target_row_key": target_matches[0][0],
+                        "mapping_row_key": mapping_matches[0][0],
+                        "mapping_row_sha256": mapping_matches[0][1]["sha256"],
+                    }
+                transition = {
+                    "kind": "null_reference_from_mapping/v1",
+                    "target_table": "generic_instance",
+                    "target_column": "uid",
+                    "mapping_table": "tapdb_legacy_outbox_mapping",
+                    "mapping_source_column": "old_outbox_id",
+                    "mapping_target_column": "message_uid",
+                    "changes": mapped_changes,
+                }
+            if transition["changes"]:
+                changes[column] = transition
+        declarations[name] = {
+            "added_rows": name in allowed_new_rows or name == _TRACKING_TABLE,
+            "added_columns": sorted(new_columns - old_columns)
+            if name in schema_tables
+            else [],
+            "changed_columns": changes,
+            "schema_changes": name in schema_tables,
+        }
+    conversion = {
+        "schema_version": "tapdb-identity-conversion/v1",
+        "tables": declarations,
+        "added_tables": sorted(new_tables),
+    }
+    result = verify_identity_inventory(before, after, conversion_manifest=conversion)
+    if not result["ok"]:
+        raise MigrationReceiptMismatchError(
+            "physical identity preservation failed: " + "; ".join(result["violations"])
+        )
 
 
 def _advance_permitted_identity_sequences(
@@ -979,73 +1088,61 @@ def _advance_permitted_identity_sequences(
     preflight: Mapping[str, Any],
     interim: Mapping[str, Any],
     schema_name: str,
-) -> None:
-    """Advance allowlisted generators only after all transactional checks pass.
+    writer_fence: Mapping[str, Any],
+    receipts_dir: Path,
+    retained_floors: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Use the one shared allocator, retaining reservations before final commit."""
+    from daylily_tapdb.backup.recovery import inventory_floors
+    from daylily_tapdb.sequences import (
+        apply_sequence_advance_plan,
+        build_sequence_advance_plan,
+        sequence_next_value,
+    )
 
-    Legacy conversion supplies explicit identities so failed SQL cannot consume
-    values through nontransactional nextval()/setval(). The final advancement
-    uses transactional ALTER SEQUENCE RESTART and is deliberately the last
-    mutating step before the result snapshot and commit.
-    """
-    allowed_sequences = {
-        value
+    floors = list(retained_floors) + inventory_floors(
+        preflight["sequence_inventory"], source="migration-preflight"
+    )
+    plan = build_sequence_advance_plan(
+        interim["sequence_inventory"],
+        floors=floors,
+        recovery_family=preflight.get("recovery_family"),
+    )
+    allowed = {
+        name
         for item in preflight["pending_migrations"]
-        for value in item["allowed_sequences"]
+        for name in item["allowed_sequences"]
     }
-    for sequence in interim["sequences"]:
-        name = str(sequence["name"])
-        if name not in allowed_sequences:
-            continue
-        assigned: list[int] = []
-        owner_table = sequence["owner_table"]
-        owner_column = sequence["owner_column"]
-        table = interim["tables"].get(str(owner_table))
-        if table and owner_column in table["columns"]:
-            assigned = [
-                int(row["identity"][owner_column])
-                for row in table["rows"]
-                if row["identity"].get(owner_column) is not None
-            ]
-        elif name.endswith("_instance_seq"):
-            prefix = name[: -len("_instance_seq")].upper()
-            for identity_table in (
-                "generic_template",
-                "generic_instance",
-                "generic_instance_lineage",
-                "audit_log",
-            ):
-                for row in interim["tables"].get(identity_table, {}).get("rows", []):
-                    identity = row["identity"]
-                    if (
-                        str(identity.get("euid_prefix") or "").upper() == prefix
-                        and identity.get("euid_seq") is not None
-                    ):
-                        assigned.append(int(identity["euid_seq"]))
-        if not assigned:
-            continue
-        increment = int(sequence["increment"])
-        if increment <= 0:
-            raise MigrationReceiptMismatchError(
-                f"unsupported non-positive sequence increment: {name}"
-            )
-        current_next = int(sequence["last_value"]) + (
-            increment if sequence["is_called"] else 0
+    current = {item["name"]: item for item in interim["sequences"]}
+    changed = {
+        item["name"]
+        for item in plan["advances"]
+        if item["next_value"] > sequence_next_value(current[item["name"]])
+    }
+    reviewed_plan = preflight["allocator_recovery"]["plan"]
+    original = {item["name"]: item for item in preflight["sequences"]}
+    reviewed = {
+        item["name"]: item["next_value"]
+        for item in reviewed_plan["advances"]
+        if item["next_value"] > sequence_next_value(original[item["name"]])
+    }
+    undeclared = changed - allowed - set(reviewed)
+    if undeclared:
+        raise MigrationReceiptMismatchError(
+            "undeclared sequence advance: " + ", ".join(sorted(undeclared))
         )
-        assigned_max = max(assigned)
-        if current_next <= assigned_max:
-            if (assigned_max - current_next) % increment:
-                raise MigrationReceiptMismatchError(
-                    f"identity allocations are not aligned to sequence {name}"
-                )
-            restart_value = assigned_max + increment
-            if restart_value > int(sequence["maximum_value"]):
-                raise MigrationReceiptMismatchError(
-                    f"identity sequence {name} cannot advance without wrapping"
-                )
-            qualified = f"{_quote_identifier(schema_name)}.{_quote_identifier(name)}"
-            connection.exec_driver_sql(
-                f"ALTER SEQUENCE {qualified} RESTART WITH {restart_value}"
+    for item in plan["advances"]:
+        if (
+            item["name"] in reviewed
+            and item["name"] not in allowed
+            and item["next_value"] != reviewed[item["name"]]
+        ):
+            raise MigrationReceiptMismatchError(
+                "allocator state differs from reviewed recovery plan"
             )
+    return apply_sequence_advance_plan(
+        connection, plan, writer_fence=writer_fence, receipts_dir=receipts_dir
+    )
 
 
 def apply_migration_preflight(
@@ -1054,6 +1151,8 @@ def apply_migration_preflight(
     migrations_dir: Path,
     preflight: Mapping[str, Any],
     target: Mapping[str, Any],
+    writer_fence: Mapping[str, Any] | None = None,
+    receipts_dir: Path | None = None,
 ) -> MigrationResult:
     """Apply exactly the receipt-bound migration set in the current transaction."""
     if not connection.in_transaction():
@@ -1063,13 +1162,22 @@ def apply_migration_preflight(
         "tapdb.schema.migrate", target.get("database"), schema_name
     )
     connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
-    existing_tables = [
-        name
-        for name in (*_TABLES, _TRACKING_TABLE)
-        if connection.execute(
-            text("SELECT to_regclass(:name) IS NOT NULL"), {"name": name}
-        ).scalar_one()
-    ]
+    from daylily_tapdb.backup.receipts import SURFACE_CLI, Actor
+    from daylily_tapdb.backup.recovery import begin_recovery, observe_recovery
+    from daylily_tapdb.identity_inventory import catalog_tables
+    from daylily_tapdb.sequences import validate_writer_fence
+
+    if writer_fence is None or receipts_dir is None:
+        raise MigrationPreflightError(
+            "migration apply requires a verified writer_fence and external receipts_dir"
+        )
+    if preflight.get("allocator_recovery", {}).get("receipts_dir") != str(receipts_dir):
+        raise MigrationReceiptMismatchError(
+            "preflight must bind the exact external receipts_dir"
+        )
+    validate_writer_fence(connection, preflight["sequence_inventory"], writer_fence)
+    existing_tables = [item["name"] for item in catalog_tables(connection, schema_name)]
+
     if existing_tables:
         qualified = ", ".join(
             f"{_quote_identifier(schema_name)}.{_quote_identifier(name)}"
@@ -1078,63 +1186,246 @@ def apply_migration_preflight(
         connection.exec_driver_sql(f"LOCK TABLE {qualified} IN ACCESS EXCLUSIVE MODE")
 
     current = build_migration_preflight(
-        connection, migrations_dir=migrations_dir, target=target
+        connection,
+        migrations_dir=migrations_dir,
+        target=target,
+        source_contract=preflight.get("source_contract"),
+        receipts_dir=receipts_dir,
+        recovery_family=preflight.get("recovery_family"),
     )
     if _receipt_comparable(current) != _receipt_comparable(preflight):
         raise MigrationReceiptMismatchError(
             "live target no longer matches the preflight receipt"
         )
 
-    asset_by_name = {
-        item["filename"]: item for item in _migration_assets(migrations_dir)
-    }
-    for item in preflight["pending_migrations"]:
-        filename = str(item["filename"])
-        asset = asset_by_name.get(filename)
-        if asset is None or asset["sha256"] != item["sha256"]:
-            raise MigrationReceiptMismatchError(f"migration asset changed: {filename}")
-        source = str(asset["expanded_source"])
-        # SQLAlchemy's psycopg execution path supplies an empty parameter
-        # mapping; escape DBAPI percent markers in migration literals first.
-        migration_sql = _strip_transaction_control(source).replace("%", "%%")
-        connection.exec_driver_sql(migration_sql)
-        connection.execute(
-            text("INSERT INTO _tapdb_migrations (filename) VALUES (:filename)"),
-            {"filename": filename},
-        )
+    recovery_intent = begin_recovery(
+        receipts_dir,
+        target=preflight["target"],
+        inventories=[current["sequence_inventory"]],
+        evidence={
+            "purpose": "fenced_migration",
+            "preflight_sha256": preflight["evidence_sha256"],
+        },
+        actor=Actor(surface=SURFACE_CLI, username="migration:tapdb"),
+        recovery_family=preflight.get("recovery_family"),
+    )
+    observe_recovery(
+        connection,
+        receipts_dir,
+        recovery_intent,
+        actor=Actor(surface=SURFACE_CLI, username="migration:tapdb"),
+        inventory=current["sequence_inventory"],
+    )
 
-    interim = build_migration_preflight(
-        connection,
-        migrations_dir=migrations_dir,
-        target=target,
-        _validate_generators=False,
+    sequence_result: dict[str, Any] | None = None
+    try:
+        asset_by_name = {
+            item["filename"]: item for item in _migration_assets(migrations_dir)
+        }
+        for item in preflight["pending_migrations"]:
+            filename = str(item["filename"])
+            asset = asset_by_name.get(filename)
+            if asset is None or asset["sha256"] != item["sha256"]:
+                raise MigrationReceiptMismatchError(
+                    f"migration asset changed: {filename}"
+                )
+            source = str(asset["expanded_source"])
+            # SQLAlchemy's psycopg execution path supplies an empty parameter
+            # mapping; escape DBAPI percent markers in migration literals first.
+            migration_sql = _strip_transaction_control(source).replace("%", "%%")
+            connection.exec_driver_sql(migration_sql)
+            connection.execute(
+                text("INSERT INTO _tapdb_migrations (filename) VALUES (:filename)"),
+                {"filename": filename},
+            )
+
+        interim = build_migration_preflight(
+            connection,
+            migrations_dir=migrations_dir,
+            target=target,
+            _validate_generators=False,
+            _reviewed_recovery=preflight["allocator_recovery"],
+            recovery_family=preflight.get("recovery_family"),
+        )
+        _verify_preservation(preflight, interim, allow_declared_sequence_advances=False)
+        sequence_result = _advance_permitted_identity_sequences(
+            connection,
+            preflight=preflight,
+            interim=interim,
+            schema_name=schema_name,
+            writer_fence=writer_fence,
+            receipts_dir=receipts_dir,
+            retained_floors=recovery_intent["floors"],
+        )
+        postflight = build_migration_preflight(
+            connection,
+            migrations_dir=migrations_dir,
+            target=target,
+            _reviewed_recovery=preflight["allocator_recovery"],
+            recovery_family=preflight.get("recovery_family"),
+        )
+        from daylily_tapdb.sequences import sequence_next_value
+
+        original_states = {item["name"]: item for item in preflight["sequences"]}
+        reviewed_advances = {
+            item["name"]: item["next_value"]
+            for item in preflight["allocator_recovery"]["plan"]["advances"]
+            if item["next_value"] > sequence_next_value(original_states[item["name"]])
+        }
+        _verify_preservation(
+            preflight, postflight, recovery_sequence_advances=reviewed_advances
+        )
+        result = {
+            "receipt_version": RECEIPT_VERSION,
+            "status": "applied" if preflight["pending_migrations"] else "no-op",
+            "preflight_evidence_sha256": preflight["evidence_sha256"],
+            "postflight_evidence_sha256": postflight["evidence_sha256"],
+            "target": preflight["target"],
+            "applied_migrations": [
+                item["filename"] for item in preflight["pending_migrations"]
+            ],
+            "sequence_pre_state": preflight["sequences"],
+            "sequence_post_state": postflight["sequences"],
+            "postflight": postflight,
+            "recovery_intent": recovery_intent,
+            "sequence_result": sequence_result,
+            "commit_status": "pending_caller_commit",
+            "allocator_changes": [
+                {
+                    "name": item["name"],
+                    "from_next": sequence_next_value(original_states[item["name"]]),
+                    "to_next": sequence_next_value(item),
+                }
+                for item in postflight["sequences"]
+                if sequence_next_value(item)
+                != sequence_next_value(original_states[item["name"]])
+            ],
+        }
+        result["result_sha256"] = _sha256(result)
+        return MigrationResult(result)
+    except BaseException as exc:
+        # The transaction owner must rollback before observing nontransactional
+        # allocations. The durable intent and exception reference survive that.
+        setattr(exc, "recovery_intent", recovery_intent)
+        setattr(exc, "sequence_result", sequence_result)
+        raise
+
+
+def finalize_migration_recovery(
+    connection: Connection,
+    result: MigrationResult,
+    *,
+    receipts_dir: Path,
+    writer_fence: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Observe a separately committed migration and terminalize its intent.
+
+    Call in a new read transaction after the owner committed the apply
+    transaction. An ambiguous commit stays pending until this proof succeeds.
+    """
+    from daylily_tapdb.backup.receipts import SURFACE_CLI, Actor
+    from daylily_tapdb.backup.recovery import finish_recovery
+    from daylily_tapdb.identity_inventory import (
+        capture_identity_inventory,
+        verify_identity_inventory,
     )
-    _verify_preservation(preflight, interim, allow_declared_sequence_advances=False)
-    _advance_permitted_identity_sequences(
-        connection,
-        preflight=preflight,
-        interim=interim,
-        schema_name=schema_name,
+    from daylily_tapdb.sequences import (
+        capture_sequence_inventory,
+        record_sequence_advance_outcome,
+        validate_writer_fence,
     )
-    postflight = build_migration_preflight(
-        connection, migrations_dir=migrations_dir, target=target
-    )
-    _verify_preservation(preflight, postflight)
-    result = {
-        "receipt_version": RECEIPT_VERSION,
-        "status": "applied" if preflight["pending_migrations"] else "no-op",
-        "preflight_evidence_sha256": preflight["evidence_sha256"],
-        "postflight_evidence_sha256": postflight["evidence_sha256"],
-        "target": preflight["target"],
-        "applied_migrations": [
-            item["filename"] for item in preflight["pending_migrations"]
+
+    payload = result.receipt
+    target = dict(
+        payload["target"],
+        sequence_mappings=payload["postflight"]["sequence_inventory"][
+            "sequence_mappings"
         ],
-        "sequence_pre_state": preflight["sequences"],
-        "sequence_post_state": postflight["sequences"],
-        "postflight": postflight,
+    )
+    observed = capture_sequence_inventory(
+        connection, schema_name=target["schema_name"], target=target
+    )
+    validate_writer_fence(connection, observed, writer_fence)
+    identity = capture_identity_inventory(
+        connection, schema_name=target["schema_name"], target=target
+    )
+    verified = verify_identity_inventory(
+        payload["postflight"]["identity_inventory"], identity
+    )
+    if not verified["ok"] or observed != payload["postflight"]["sequence_inventory"]:
+        raise MigrationReceiptMismatchError(
+            "post-commit migration evidence differs from apply outcome"
+        )
+    allocator_result = record_sequence_advance_outcome(
+        payload["sequence_result"],
+        receipts_dir=receipts_dir,
+        outcome="committed",
+        actor="migration:tapdb",
+    )
+    receipt = finish_recovery(
+        receipts_dir,
+        payload["recovery_intent"],
+        phase="committed",
+        actor=Actor(surface=SURFACE_CLI, username="migration:tapdb"),
+        inventory=observed,
+        reservations=payload["sequence_result"].get("floors", []),
+    )
+    return {
+        "status": "committed",
+        "receipt_id": receipt.receipt_id,
+        "receipt_sha256": receipt.checksum(),
+        "allocator_result": allocator_result,
     }
-    result["result_sha256"] = _sha256(result)
-    return MigrationResult(result)
+
+
+def finalize_migration_abort(
+    connection: Connection,
+    *,
+    recovery_intent: Mapping[str, Any],
+    receipts_dir: Path,
+    writer_fence: Mapping[str, Any],
+    sequence_result: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Retain actual consumed values after the caller has rolled back SQL."""
+    from daylily_tapdb.backup.receipts import SURFACE_CLI, Actor
+    from daylily_tapdb.backup.recovery import (
+        finish_recovery,
+        require_retained_definitions,
+    )
+    from daylily_tapdb.sequences import (
+        capture_sequence_inventory,
+        record_sequence_advance_outcome,
+        validate_writer_fence,
+    )
+
+    target = dict(
+        recovery_intent["target"],
+        sequence_mappings=recovery_intent["inventories"][-1]["sequence_mappings"],
+    )
+    observed = capture_sequence_inventory(
+        connection, schema_name=target["schema_name"], target=target
+    )
+    validate_writer_fence(connection, observed, writer_fence)
+    require_retained_definitions(observed, recovery_intent["inventories"])
+    if sequence_result is not None:
+        record_sequence_advance_outcome(
+            sequence_result,
+            receipts_dir=receipts_dir,
+            outcome="rolled_back",
+            actor="migration:tapdb",
+        )
+    receipt = finish_recovery(
+        receipts_dir,
+        recovery_intent,
+        phase="aborted",
+        actor=Actor(surface=SURFACE_CLI, username="migration:tapdb"),
+        inventory=observed,
+    )
+    return {
+        "status": "aborted",
+        "receipt_id": receipt.receipt_id,
+        "receipt_sha256": receipt.checksum(),
+    }
 
 
 def write_json_receipt(path: Path, receipt: Mapping[str, Any]) -> None:

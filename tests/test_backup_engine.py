@@ -520,6 +520,9 @@ def test_aurora_env_delegates_to_the_shared_deployer(monkeypatch):
             "region": "us-west-2",
             "iam_auth": "true",
             "hostaddr": "10.1.2.3",
+            "aws_profile": "qualification-profile",
+            "sslrootcert": "/explicit/aurora-ca.pem",
+            "server_port": 5439,
         }
     )
 
@@ -529,8 +532,60 @@ def test_aurora_env_delegates_to_the_shared_deployer(monkeypatch):
     assert captured["iam_auth"] is True
     assert captured["hostaddr"] == "10.1.2.3"
     assert captured["region"] == "us-west-2"
+    assert captured["profile"] == "qualification-profile"
+    assert captured["sslrootcert"] == "/explicit/aurora-ca.pem"
+    assert captured["server_port"] == 5439
+    assert captured["port"] == int(LOCAL_CFG["port"])
     # client_env supplies credentials only; targeting stays in argv.
     assert "database" not in captured
+
+
+def test_backup_python_connection_propagates_normalized_aurora_profile(
+    monkeypatch, tmp_path
+):
+    import yaml
+
+    import daylily_tapdb.connection as connection_module
+    from daylily_tapdb.backup.service import open_session
+    from daylily_tapdb.cli.context import clear_cli_context
+    from daylily_tapdb.cli.db_config import get_db_config
+    from tests.test_backup_config import _init_config
+
+    captured = {}
+    monkeypatch.setattr(
+        connection_module, "TAPDBConnection", lambda **kwargs: captured.update(kwargs)
+    )
+    clear_cli_context()
+    config_path = _init_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["target"].update(
+        {
+            "engine_type": ENGINE_AURORA,
+            "region": "us-west-2",
+            "cluster_identifier": "qualification-cluster",
+            "iam_auth": True,
+            "ssl": "verify-full",
+            "aws_profile": "qualification-profile",
+            "sslrootcert": "/explicit/aurora-ca.pem",
+            "operator": {
+                "user": "qualification_operator",
+                "password": "",
+                "iam_auth": True,
+            },
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    try:
+        cfg = get_db_config(
+            config_path=config_path, client_id="alpha", database_name="beta"
+        )
+        assert "profile" not in cfg
+        open_session(cfg, app_username="test", connection_role="operator")
+    finally:
+        clear_cli_context()
+    assert captured["aws_profile"] == cfg["aws_profile"]
+    assert captured["sslrootcert"] == cfg["sslrootcert"]
+    assert captured["db_user"] == cfg["operator_user"]
 
 
 # --------------------------------------------------------------------------
@@ -684,6 +739,7 @@ def test_snapshot_pinning_uses_the_client_resolved_address_not_the_servers(
             artifact=tmp_path / "a.dump",
             snapshot="00000008-00000B84-1",
             transaction_context=_backup_context(),
+            operator_visibility_verified=True,
             # What the *server* reports -- must NOT be used to connect.
             backend={"address": "172.31.80.180", "port": 5432},
         )
@@ -725,6 +781,7 @@ def test_a_local_snapshot_dump_is_not_pinned(tmp_path, monkeypatch):
             artifact=tmp_path / "a.dump",
             snapshot="00000003-0000000A-1",
             transaction_context=_backup_context(),
+            operator_visibility_verified=True,
             backend={"address": "::1", "port": 5432},
         )
 
@@ -800,6 +857,7 @@ def test_snapshot_pinning_does_not_clobber_a_configured_hostaddr(tmp_path, monke
             artifact=tmp_path / "a.dump",
             snapshot="00000003-0000000A-1",
             transaction_context=_backup_context(),
+            operator_visibility_verified=True,
             backend={"address": "10.0.1.7", "port": 5432},
         )
 

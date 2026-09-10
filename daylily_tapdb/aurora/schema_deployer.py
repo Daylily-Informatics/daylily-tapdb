@@ -8,7 +8,6 @@ with IAM authentication or Secrets Manager password, enforcing
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -36,6 +35,9 @@ class AuroraSchemaDeployer:
         secret_arn: Optional[str] = None,
         password: Optional[str] = None,
         hostaddr: Optional[str] = None,
+        profile: Optional[str] = None,
+        sslrootcert: Optional[str] = None,
+        server_port: Optional[int] = None,
     ) -> dict[str, str]:
         """Build the environment any libpq client needs to reach Aurora.
 
@@ -52,18 +54,26 @@ class AuroraSchemaDeployer:
         snapshot-consistent dumps: ``pg_dump --snapshot`` is only valid if it
         reaches the same backend as the session that exported the snapshot, and
         an Aurora cluster's reader and writer endpoints are different hosts.
+        ``server_port`` is an explicit remote port for IAM token signing only;
+        the caller's ``port`` continues to select the transport endpoint.
         """
+        if server_port is not None and (
+            type(server_port) is not int or not 1 <= server_port <= 65535
+        ):
+            raise ValueError("server_port must be an integer in 1..65535")
         if iam_auth:
             credential = AuroraConnectionBuilder.get_iam_auth_token(
                 region=region,
                 host=host,
-                port=port,
+                port=port if server_port is None else server_port,
                 user=user,
+                profile=profile,
             )
         elif secret_arn:
             credential = AuroraConnectionBuilder.get_secret_password(
                 secret_arn=secret_arn,
                 region=region,
+                profile=profile,
             )
         elif password:
             credential = password
@@ -73,9 +83,18 @@ class AuroraSchemaDeployer:
                 "or an explicit password."
             )
 
-        ca_path = AuroraConnectionBuilder.ensure_ca_bundle()
+        if sslrootcert is not None:
+            ca_path = Path(sslrootcert)
+            if not ca_path.is_absolute() or not ca_path.is_file():
+                raise ValueError(
+                    "Explicit Aurora sslrootcert must be an existing absolute file"
+                )
+        else:
+            ca_path = AuroraConnectionBuilder.ensure_ca_bundle()
 
-        env_vars = os.environ.copy()
+        from daylily_tapdb.backup.engine import sanitized_libpq_environment
+
+        env_vars = sanitized_libpq_environment()
         env_vars["PGPASSWORD"] = credential
         env_vars["PGSSLMODE"] = "verify-full"
         env_vars["PGSSLROOTCERT"] = str(ca_path)
@@ -97,6 +116,9 @@ class AuroraSchemaDeployer:
         secret_arn: Optional[str] = None,
         password: Optional[str] = None,
         hostaddr: Optional[str] = None,
+        profile: Optional[str] = None,
+        sslrootcert: Optional[str] = None,
+        server_port: Optional[int] = None,
     ) -> tuple[list[str], dict[str, str]]:
         """Build psql command and environment variables for Aurora.
 
@@ -115,6 +137,9 @@ class AuroraSchemaDeployer:
             secret_arn=secret_arn,
             password=password,
             hostaddr=hostaddr,
+            profile=profile,
+            sslrootcert=sslrootcert,
+            server_port=server_port,
         )
 
         cmd = [
@@ -150,8 +175,12 @@ class AuroraSchemaDeployer:
         secret_arn: Optional[str] = None,
         password: Optional[str] = None,
         hostaddr: Optional[str] = None,
+        profile: Optional[str] = None,
+        sslrootcert: Optional[str] = None,
         sql: Optional[str] = None,
         file: Optional[Path] = None,
+        setup_sql: Optional[str] = None,
+        server_port: Optional[int] = None,
     ) -> tuple[bool, str]:
         """Run a psql command against Aurora with SSL + auth.
 
@@ -169,8 +198,13 @@ class AuroraSchemaDeployer:
                 secret_arn=secret_arn,
                 password=password,
                 hostaddr=hostaddr,
+                profile=profile,
+                sslrootcert=sslrootcert,
+                server_port=server_port,
             )
 
+            if setup_sql:
+                cmd.extend(["-c", setup_sql])
             if file:
                 cmd.extend(["-f", str(file)])
             elif sql:
@@ -204,6 +238,9 @@ class AuroraSchemaDeployer:
         secret_arn: Optional[str] = None,
         password: Optional[str] = None,
         hostaddr: Optional[str] = None,
+        profile: Optional[str] = None,
+        sslrootcert: Optional[str] = None,
+        server_port: Optional[int] = None,
     ) -> tuple[bool, str]:
         """Deploy the TAPDB schema to an Aurora PostgreSQL cluster.
 
@@ -232,6 +269,9 @@ class AuroraSchemaDeployer:
             secret_arn=secret_arn,
             password=password,
             hostaddr=hostaddr,
+            profile=profile,
+            sslrootcert=sslrootcert,
+            server_port=server_port,
             file=schema_file,
         )
 

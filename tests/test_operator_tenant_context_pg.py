@@ -102,6 +102,7 @@ def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(pg_instanc
     instance_uids: dict[uuid.UUID | None, int] = {}
     operator = create_engine(
         pg_instance["operator_dsn"],
+        isolation_level="REPEATABLE READ",
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
     with operator.begin() as connection:

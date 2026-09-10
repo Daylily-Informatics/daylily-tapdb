@@ -98,6 +98,12 @@ from daylily_tapdb.backup.receipts import (
     verify_receipt_chain,
     write_receipt,
 )
+from daylily_tapdb.backup.recovery import (
+    begin_recovery,
+    finish_recovery,
+    reconcile_recovery,
+    retained_recovery_state,
+)
 from daylily_tapdb.backup.service import (
     BackupListing,
     BackupPlan,
@@ -114,6 +120,11 @@ from daylily_tapdb.backup.service import (
 from daylily_tapdb.backup.snapshots import (
     build_snapshot_receipt,
     provider_snapshots_enabled,
+)
+from daylily_tapdb.backup.source_contract import (
+    capture_source_contract,
+    validate_source_contract,
+    verify_source_contract,
 )
 from daylily_tapdb.backup.storage import (
     LocalStorageBackend,
@@ -199,6 +210,7 @@ __all__ = [
     "assert_no_secrets",
     "assert_restore_target_is_new_enough",
     "backup_prefix",
+    "begin_recovery",
     "build_pg_dump_command",
     "build_pg_restore_command",
     "build_pg_restore_list_command",
@@ -211,6 +223,7 @@ __all__ = [
     "canonical_json",
     "capture_row_counts",
     "capture_sequences",
+    "capture_source_contract",
     "check_euid_uniqueness",
     "check_lineage_integrity",
     "check_rowcounts",
@@ -227,6 +240,7 @@ __all__ = [
     "export_templates",
     "find_credential_uris",
     "find_secret_paths",
+    "finish_recovery",
     "inventory_context",
     "last_receipt",
     "list_backups",
@@ -238,10 +252,12 @@ __all__ = [
     "provider_snapshots_enabled",
     "read_receipts",
     "receipts_dir",
+    "reconcile_recovery",
     "rehearsal_key",
     "rehearse_restore",
     "restore_backup",
     "restore_review_context",
+    "retained_recovery_state",
     "run_post_restore_checks",
     "schema_asset_checksums",
     "sha256_file",
@@ -252,9 +268,11 @@ __all__ = [
     "status_context",
     "summarize_inventory",
     "target_label",
+    "validate_source_contract",
     "validate_template_pack",
     "verify_backup",
     "verify_manifest_signature",
     "verify_receipt_chain",
+    "verify_source_contract",
     "write_receipt",
 ]

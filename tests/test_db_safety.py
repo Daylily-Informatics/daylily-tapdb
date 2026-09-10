@@ -375,21 +375,38 @@ def test_ensure_instance_prefix_sequence_rejects_invalid_prefix():
     m._normalize_instance_prefix("A1")
 
 
-def test_ensure_instance_prefix_sequence_quotes_sql(monkeypatch):
-    """Verify sequence names are double-quoted in SQL."""
+def test_ensure_instance_prefix_sequence_delegates_and_grants(monkeypatch):
+    """The CLI must not implement a parallel floor scan or allocator."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
     import daylily_tapdb.cli.db as m
 
-    captured = {}
+    events = []
+    cfg = {"schema_name": "explicit_scope"}
+    connection = SimpleNamespace(execute=lambda statement: events.append("context"))
 
-    def fake_run_psql(env, *, sql=None, file=None, **_kwargs):
-        captured["sql"] = sql
-        return True, ""
+    @contextmanager
+    def operator(config, **kwargs):
+        assert config == cfg
+        assert kwargs == {"isolation_level": "REPEATABLE READ"}
+        yield connection
 
-    monkeypatch.setattr(m, "_run_psql", fake_run_psql)
+    monkeypatch.setattr(m, "_get_db_config", lambda env: cfg)
+    monkeypatch.setattr(m, "_set_operator_context_sql", lambda *a: "SELECT 1")
+    monkeypatch.setattr(m, "operator_connection", operator)
+    monkeypatch.setattr(
+        "daylily_tapdb.sequences.ensure_instance_prefix_sequence",
+        lambda conn, prefix: events.append((conn is connection, prefix)),
+    )
+    monkeypatch.setattr(
+        "daylily_tapdb.runtime_principal.grant_proven_runtime_sequences",
+        lambda conn, config: events.append(
+            ("grant", conn is connection, config == cfg)
+        ),
+    )
     m._ensure_instance_prefix_sequence(m.Environment.target, "AGX")
-
-    sql = captured["sql"]
-    assert '"agx_instance_seq"' in sql
+    assert events == ["context", (True, "AGX"), ("grant", True, True)]
 
 
 def test_prepare_seed_templates_accepts_core_operational_templates(tmp_path: Path):

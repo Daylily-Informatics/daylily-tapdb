@@ -13,6 +13,87 @@ CREATE SEQUENCE IF NOT EXISTS xx_instance_seq;   -- XX (action)
 CREATE SEQUENCE IF NOT EXISTS ay_instance_seq;   -- AY (assay)
 CREATE SEQUENCE IF NOT EXISTS msg_instance_seq;  -- MSG (system messages)
 
+-- Exact packaged mappings, not prefix inference from relation names. Keep this
+-- block identical to the optional-sequence prefix binding migration.
+DO $tapdb_prefix_binding$
+DECLARE
+    target_schema name := pg_catalog.current_schema();
+    target_schema_oid oid;
+    target_owner oid;
+    binding record;
+    generator record;
+    expected_comment text;
+BEGIN
+    SELECT n.oid, n.nspowner INTO target_schema_oid, target_owner
+      FROM pg_catalog.pg_namespace n WHERE n.nspname = target_schema;
+    IF target_schema_oid IS NULL THEN
+        RAISE EXCEPTION 'TapDB sequence prefix binding requires an explicit existing schema';
+    END IF;
+
+    FOR binding IN
+        SELECT * FROM (VALUES
+            ('wx_instance_seq', 'WX'),
+            ('wsx_instance_seq', 'WSX'),
+            ('xx_instance_seq', 'XX'),
+            ('ay_instance_seq', 'AY'),
+            ('msg_instance_seq', 'MSG')
+        ) AS bindings(sequence_name, prefix)
+    LOOP
+        SELECT c.oid, c.relkind, c.relowner, c.relpersistence,
+               s.seqtypid, s.seqstart, s.seqincrement, s.seqmin, s.seqmax,
+               s.seqcache, s.seqcycle,
+               pg_catalog.obj_description(c.oid, 'pg_class') AS catalog_comment
+          INTO generator
+          FROM pg_catalog.pg_class c
+          LEFT JOIN pg_catalog.pg_sequence s ON s.seqrelid = c.oid
+         WHERE c.relnamespace = target_schema_oid
+           AND c.relname = binding.sequence_name;
+        IF NOT FOUND THEN
+            -- Optional historical generators remain absent; never claim or
+            -- create an allocator merely because this package knows its name.
+            CONTINUE;
+        END IF;
+        IF generator.relkind <> 'S' THEN
+            RAISE EXCEPTION 'Unsafe TapDB prefix binding %.%: expected a sequence, found relation kind %',
+                target_schema, binding.sequence_name, generator.relkind;
+        END IF;
+        IF generator.relowner <> target_owner THEN
+            RAISE EXCEPTION 'Unsafe TapDB prefix binding %.%: sequence owner must equal schema owner',
+                target_schema, binding.sequence_name;
+        END IF;
+        IF generator.relpersistence <> 'p'
+           OR generator.seqtypid IS DISTINCT FROM 'pg_catalog.int8'::pg_catalog.regtype
+           OR generator.seqstart IS DISTINCT FROM 1::bigint
+           OR generator.seqincrement IS DISTINCT FROM 1::bigint
+           OR generator.seqmin IS DISTINCT FROM 1::bigint
+           OR generator.seqmax IS DISTINCT FROM 9223372036854775807::bigint
+           OR generator.seqcache IS DISTINCT FROM 1::bigint
+           OR generator.seqcycle IS DISTINCT FROM false THEN
+            RAISE EXCEPTION 'Unsafe TapDB prefix binding %.%: requires a permanent bigint sequence with START 1 INCREMENT 1 MINVALUE 1 MAXVALUE 9223372036854775807 CACHE 1 NO CYCLE',
+                target_schema, binding.sequence_name;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM pg_catalog.pg_depend d
+             WHERE d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass
+               AND d.objid = generator.oid
+               AND d.deptype IN ('a', 'i', 'e')
+        ) THEN
+            RAISE EXCEPTION 'Unsafe TapDB prefix binding %.%: optional generator must be standalone, not column-owned or extension-owned',
+                target_schema, binding.sequence_name;
+        END IF;
+
+        expected_comment := 'tapdb-prefix-binding/v1:' || binding.prefix;
+        IF generator.catalog_comment IS NOT NULL
+           AND generator.catalog_comment <> expected_comment THEN
+            RAISE EXCEPTION 'Conflicting TapDB prefix binding comment on %.%: refusing to overwrite existing catalog metadata',
+                target_schema, binding.sequence_name;
+        END IF;
+        EXECUTE pg_catalog.format('COMMENT ON SEQUENCE %I.%I IS %L',
+            target_schema, binding.sequence_name, expected_comment);
+    END LOOP;
+END;
+$tapdb_prefix_binding$;
+
 --------------------------------------------------------------------------------
 -- SESSION CONTEXT HELPERS
 --------------------------------------------------------------------------------
@@ -743,6 +824,7 @@ BEGIN
 END;
 $$;
 
+-- tapdb-managed-allocator-functions:start
 -- Resolve configured EUID prefix for TapDB-owned identity tables.
 CREATE OR REPLACE FUNCTION tapdb_get_identity_prefix(entity_name TEXT)
 RETURNS TEXT LANGUAGE plpgsql STABLE STRICT AS $$
@@ -754,11 +836,11 @@ BEGIN
     dc := tapdb_current_domain_code();
     owner_repo_name := tapdb_current_owner_repo_name();
 
-    SELECT p.prefix INTO prefix
-    FROM tapdb_identity_prefix_config p
-    WHERE p.entity = entity_name
-      AND p.domain_code = dc
-      AND p.issuer_app_code = owner_repo_name;
+    EXECUTE pg_catalog.format(
+        'SELECT p.prefix FROM %I.tapdb_identity_prefix_config p '
+        'WHERE p.entity = $1 AND p.domain_code = $2 AND p.issuer_app_code = $3',
+        pg_catalog.current_schema()
+    ) INTO prefix USING entity_name, dc, owner_repo_name;
 
     IF prefix IS NULL THEN
         RAISE EXCEPTION
@@ -793,9 +875,11 @@ BEGIN
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('generic_template');
-        seq_name := lower(prefix) || '_instance_seq';
+        seq_name := pg_catalog.format(
+            '%I.%I', TG_TABLE_SCHEMA, pg_catalog.lower(prefix) || '_instance_seq'
+        );
         BEGIN
-            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+            seq_val := pg_catalog.nextval(seq_name::pg_catalog.regclass);
         EXCEPTION WHEN undefined_table OR undefined_object THEN
             RAISE EXCEPTION
                 'Missing EUID sequence % for prefix %. Create and initialize it before inserting rows.',
@@ -834,12 +918,12 @@ BEGIN
     NEW.issuer_app_code := tapdb_current_owner_repo_name();
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
-        SELECT t.instance_prefix INTO prefix
-          FROM generic_template t
-         WHERE t.uid = NEW.template_uid
-           AND t.domain_code = NEW.domain_code
-           AND t.issuer_app_code = NEW.issuer_app_code
-           AND t.is_deleted IS FALSE;
+        EXECUTE pg_catalog.format(
+            'SELECT t.instance_prefix FROM %I.generic_template t '
+            'WHERE t.uid = $1 AND t.domain_code = $2 AND t.issuer_app_code = $3 '
+            'AND t.is_deleted IS FALSE',
+            TG_TABLE_SCHEMA
+        ) INTO prefix USING NEW.template_uid, NEW.domain_code, NEW.issuer_app_code;
 
         IF prefix IS NULL THEN
             RAISE EXCEPTION
@@ -848,10 +932,12 @@ BEGIN
         END IF;
 
         prefix := tapdb_validate_meridian_prefix(prefix);
-        seq_name := lower(prefix) || '_instance_seq';
+        seq_name := pg_catalog.format(
+            '%I.%I', TG_TABLE_SCHEMA, pg_catalog.lower(prefix) || '_instance_seq'
+        );
 
         BEGIN
-            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+            seq_val := pg_catalog.nextval(seq_name::pg_catalog.regclass);
         EXCEPTION WHEN undefined_table OR undefined_object THEN
             RAISE EXCEPTION
                 'Missing EUID sequence % for instance_prefix %. Create and initialize it before inserting instances.',
@@ -892,9 +978,11 @@ BEGIN
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('generic_instance_lineage');
-        seq_name := lower(prefix) || '_instance_seq';
+        seq_name := pg_catalog.format(
+            '%I.%I', TG_TABLE_SCHEMA, pg_catalog.lower(prefix) || '_instance_seq'
+        );
         BEGIN
-            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+            seq_val := pg_catalog.nextval(seq_name::pg_catalog.regclass);
         EXCEPTION WHEN undefined_table OR undefined_object THEN
             RAISE EXCEPTION
                 'Missing EUID sequence % for prefix %. Create and initialize it before inserting rows.',
@@ -934,9 +1022,11 @@ BEGIN
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('audit_log');
-        seq_name := lower(prefix) || '_instance_seq';
+        seq_name := pg_catalog.format(
+            '%I.%I', TG_TABLE_SCHEMA, pg_catalog.lower(prefix) || '_instance_seq'
+        );
         BEGIN
-            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+            seq_val := pg_catalog.nextval(seq_name::pg_catalog.regclass);
         EXCEPTION WHEN undefined_table OR undefined_object THEN
             RAISE EXCEPTION
                 'Missing EUID sequence % for prefix %. Create and initialize it before inserting rows.',
@@ -961,6 +1051,33 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Keep control-table and helper resolution bound to the operator-owned schema.
+-- Explicit relation qualification above also prevents a missing persistent
+-- object from falling through to a temporary object with the same name.
+DO $tapdb_pin_allocator_search_path$
+DECLARE
+    scope_schema TEXT := pg_catalog.current_schema();
+    function_name TEXT;
+BEGIN
+    FOREACH function_name IN ARRAY ARRAY[
+        'tapdb_get_identity_prefix',
+        'set_generic_template_euid',
+        'set_generic_instance_euid',
+        'set_generic_instance_lineage_euid',
+        'set_audit_log_euid'
+    ] LOOP
+        EXECUTE pg_catalog.format(
+            'ALTER FUNCTION %I.%I(%s) SET search_path TO %I, pg_catalog, pg_temp',
+            scope_schema,
+            function_name,
+            CASE WHEN function_name = 'tapdb_get_identity_prefix' THEN 'pg_catalog.text' ELSE '' END,
+            scope_schema
+        );
+    END LOOP;
+END;
+$tapdb_pin_allocator_search_path$;
+-- tapdb-managed-allocator-functions:end
 
 -- Soft delete function (prevents actual deletion, sets is_deleted flag)
 CREATE OR REPLACE FUNCTION soft_delete_row()

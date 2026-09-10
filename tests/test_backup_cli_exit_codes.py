@@ -26,6 +26,7 @@ The contract:
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,9 @@ from typer.testing import CliRunner
 from daylily_tapdb.cli import app
 from daylily_tapdb.cli.backup import EXIT_ERROR, EXIT_FINDINGS, EXIT_OK
 from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
+from daylily_tapdb.cli.db_config import get_db_config
+from daylily_tapdb.runtime_principal import operator_connection
+from tests.test_identity_inventory_helpers import verified_source_sequence_mappings
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 runner = CliRunner()
@@ -88,7 +92,37 @@ def prepared(pg_instance):
     assert seeded.exit_code == 0, seeded.output
 
     home = pg_instance["base"]
-    created = _cli(config, "backup", "create", home=home)
+    cfg = get_db_config()
+    with operator_connection(
+        cfg, isolation_level="REPEATABLE READ", read_only=True
+    ) as connection:
+        mappings = verified_source_sequence_mappings(
+            connection,
+            schema_name=cfg["schema_name"],
+            source_schema_path=REPO_ROOT / "schema" / "tapdb_schema.sql",
+        )
+    mapping_path = (home / "source-sequence-mappings.json").resolve()
+    mapping_path.write_text(json.dumps(mappings), encoding="utf-8")
+    source_path = (home / "source-contract.json").resolve()
+    from daylily_tapdb import __version__
+
+    captured = _cli(
+        config,
+        "db",
+        "identity",
+        "inventory",
+        "--source-version",
+        __version__,
+        "--sequence-mappings",
+        str(mapping_path),
+        "--receipt",
+        str(source_path),
+        home=home,
+    )
+    assert captured.returncode == EXIT_OK, captured.stdout + captured.stderr
+    created = _cli(
+        config, "backup", "create", "--source-contract", str(source_path), home=home
+    )
     assert created.returncode == EXIT_OK, created.stdout + created.stderr
 
     listed = _cli(config, "backup", "list", home=home)
@@ -101,7 +135,12 @@ def prepared(pg_instance):
     assert backup_id, f"could not find a backup id in:\n{listed.stdout}"
 
     clear_cli_context()
-    return {"config": config, "home": home, "backup_id": backup_id}
+    return {
+        "config": config,
+        "home": home,
+        "backup_id": backup_id,
+        "source_contract": str(source_path),
+    }
 
 
 def test_the_harness_reaches_the_cli_at_all(prepared):
@@ -114,7 +153,10 @@ def test_the_harness_reaches_the_cli_at_all(prepared):
 
 
 def test_success_exits_zero(prepared):
-    for args in (["backup", "plan"], ["backup", "list"]):
+    for args in (
+        ["backup", "plan", "--source-contract", prepared["source_contract"]],
+        ["backup", "list"],
+    ):
         result = _cli(prepared["config"], *args, home=prepared["home"])
         assert result.returncode == EXIT_OK, (
             f"tapdb {' '.join(args)} -> {result.returncode}\n"

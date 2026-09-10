@@ -114,20 +114,97 @@ def apply_transaction_context(
         session.execute(text("SELECT tapdb_assert_runtime_role()"))
 
 
-def assert_operator_role(connection: Any) -> None:
-    """Require a separately authenticated role that can see FORCE-RLS rows."""
+def operator_role_assertion_sql(
+    *,
+    schema_name: str | None = None,
+    operator_user: str | None = None,
+    allow_database_owner: bool = False,
+    allow_create_database: bool = False,
+) -> str:
+    """Assert authenticated operator authority, including constrained Aurora owners.
+
+    Database ownership is sufficient only for a lifecycle operation that has
+    explicitly selected ``allow_database_owner``. It does not establish complete
+    visibility through existing FORCE-RLS tables. Data operations require the
+    exact schema owner and the canonical unrestricted owner policy on every RLS
+    table. Membership in ``rds_superuser`` is deliberately not special-cased.
+    """
+
+    def literal(value: str) -> str:
+        return "'" + _exact(value, "operator target").replace("'", "''") + "'"
+
+    schema = literal(schema_name) if schema_name is not None else "current_schema()"
+    login = (
+        f"session_user = {literal(operator_user)} AND "
+        if operator_user is not None
+        else ""
+    )
+    database_owner = (
+        "OR EXISTS (SELECT 1 FROM pg_catalog.pg_database d "
+        "WHERE d.datname = current_database() AND d.datdba = r.oid)"
+        if allow_database_owner
+        else ""
+    )
+    create_database = "OR r.rolcreatedb" if allow_create_database else ""
+    return f"""DO $tapdb_operator$ BEGIN
+      IF NOT ({login}session_user = current_user AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname = session_user
+        AND (r.rolsuper OR r.rolbypassrls {database_owner} {create_database} OR EXISTS (
+          SELECT 1 FROM pg_catalog.pg_namespace n
+          WHERE n.nspname = {schema} AND n.nspowner = r.oid
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_catalog.pg_class unreadable
+            WHERE unreadable.relnamespace = n.oid
+              AND unreadable.relkind IN ('r', 'p', 'v', 'm', 'f')
+              AND NOT pg_catalog.has_table_privilege(r.oid, unreadable.oid, 'SELECT')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_catalog.pg_class c
+            WHERE c.relnamespace = n.oid AND c.relrowsecurity
+            AND (c.relforcerowsecurity OR c.relowner <> r.oid)
+            AND (NOT EXISTS (
+              SELECT 1 FROM pg_catalog.pg_policy p
+              WHERE p.polrelid = c.oid AND p.polname = 'tapdb_operator_access'
+              AND p.polcmd = '*' AND p.polpermissive AND p.polroles = ARRAY[r.oid]
+              AND pg_catalog.pg_get_expr(p.polqual, p.polrelid) = 'true'
+              AND pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid) = 'true'
+            ) OR EXISTS (
+              SELECT 1 FROM pg_catalog.pg_policy restriction
+              CROSS JOIN LATERAL unnest(restriction.polroles) policy_role(oid)
+              WHERE restriction.polrelid = c.oid AND NOT restriction.polpermissive
+              AND CASE WHEN policy_role.oid = 0 THEN true ELSE
+                pg_catalog.pg_has_role(r.oid, policy_role.oid, 'USAGE') END
+            ))
+          )
+        ))
+      )) THEN
+        RAISE EXCEPTION 'TapDB operator requires an exact authenticated owner with complete FORCE-RLS policies, or SUPERUSER or BYPASSRLS';
+      END IF;
+    END $tapdb_operator$"""
+
+
+def assert_operator_role(
+    connection: Any, *, schema_name: str | None = None, operator_user: str | None = None
+) -> None:
+    """Require a separately authenticated role with complete FORCE-RLS access."""
 
     row = connection.execute(
         text(
             "SELECT rolname, rolsuper, rolbypassrls "
-            "FROM pg_roles WHERE rolname = current_user"
+            "FROM pg_catalog.pg_roles WHERE rolname = current_user"
         )
     ).one_or_none()
-    if row is None or not (bool(row[1]) or bool(row[2])):
+    if row is None:
         raise RuntimeError(
-            "TapDB operator connection must authenticate as a distinct "
-            "SUPERUSER or BYPASSRLS role"
+            "TapDB operator connection has no authenticated PostgreSQL role"
         )
+    connection.execute(
+        text(
+            operator_role_assertion_sql(
+                schema_name=schema_name, operator_user=operator_user
+            )
+        )
+    )
 
 
 __all__ = [
@@ -135,5 +212,6 @@ __all__ = [
     "apply_transaction_context",
     "assert_operator_role",
     "is_postgresql_session",
+    "operator_role_assertion_sql",
     "transaction_context_pgoptions",
 ]

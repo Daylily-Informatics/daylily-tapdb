@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="docs/runtime-and-cli.md">Operate</a> ·
+  <a href="docs/service-readiness.md">Prepare a service</a> ·
   <a href="docs/integration-and-embedding.md">Embed</a> ·
   <a href="docs/consumer-discoverability-guide.md">Discover</a> ·
   <a href="docs/external-references-and-federation.md">Federate</a> ·
@@ -32,10 +33,15 @@ but never becomes the relationship authority.
 
 ## Install
 
-TapDB 10.0.0 requires Python 3.12 or newer and supports PostgreSQL 16 and 17.
-Release qualification runs against community PostgreSQL 16.13 and the
-PostgreSQL 17 minor reported by CI. Aurora PostgreSQL has not been independently
-qualified by this release.
+TapDB 10.0.0 is the latest verified public release. This checkout is preparing
+TapDB 10.1.0 as an unreleased candidate; its independent PostgreSQL/Aurora
+qualification, reviewed merge, immutable tag, publication, and fresh-install
+verification are not complete. Do not pin 10.1.0 until the release handoff
+contains those receipts.
+
+The 10.1.0 candidate requires Python 3.12 or newer. Its release gates target
+exact community PostgreSQL 16.13 and 17.11 plus isolated Aurora PostgreSQL
+16.13 acceptance.
 
 ```bash
 python -m pip install "daylily-tapdb[cli,gui]"
@@ -318,13 +324,15 @@ bandit -c pyproject.toml -r daylily_tapdb admin
 python -m build
 ```
 
-Release CI runs the same complete suite independently against community
-PostgreSQL 16.13 and PostgreSQL 17, including local-doc examples and branch
-coverage. The shared release gates also run Ruff, mypy, Bandit, detect-secrets,
-wheel build, and installed-wheel smoke checks. CI does not hide integration
-tests with deselects. The mypy file list in `pyproject.toml` covers every new
-10.0 implementation module; older dynamically mapped ORM and Typer modules are
-not yet globally strict-clean.
+The 10.1.0 candidate release CI is configured to run the same complete suite
+independently against exact community PostgreSQL 16.13 and 17.11, including
+local-doc examples and branch coverage. The shared release gates also run Ruff,
+mypy, Bandit, detect-secrets, wheel build, schema/migration asset verification,
+and installed-wheel smoke checks. CI does not hide integration tests with
+deselects. These configured gates are not a success claim until one frozen,
+reviewed candidate passes them. The mypy file list in `pyproject.toml` covers
+the new 10.1 implementation modules; older dynamically mapped ORM and Typer
+modules are not yet globally strict-clean.
 
 ## Documentation
 
@@ -333,6 +341,8 @@ not yet globally strict-clean.
   domain, owner, and runtime scope
 - [`docs/template-authoring.md`](docs/template-authoring.md): consumer template packs
 - [`docs/runtime-and-cli.md`](docs/runtime-and-cli.md): explicit-target operation
+- [`docs/service-readiness.md`](docs/service-readiness.md): inventory, principal,
+  recovery, migration, final-floor, and service-acceptance prerequisites
 - [`docs/integration-and-embedding.md`](docs/integration-and-embedding.md): GUI and API embedding
 - [`docs/consumer-discoverability-guide.md`](docs/consumer-discoverability-guide.md): DAG v2 federation contract
 - [`docs/external-references-and-federation.md`](docs/external-references-and-federation.md): canonical XRF lifecycle, federated search/graph composition, and tagged-consumer migration map

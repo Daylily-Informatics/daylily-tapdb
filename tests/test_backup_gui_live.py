@@ -13,6 +13,7 @@ enough to prove the contexts and templates agree.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from pathlib import Path
@@ -31,6 +32,27 @@ from daylily_tapdb.gui import create_tapdb_gui_app
 from daylily_tapdb.web.bridge import TapdbHostBridge
 
 runner = CliRunner()
+
+
+def _stage_rehearsal(client, created):
+    evidence = {
+        "mode": "isolated",
+        "target_database": "gui_rehearsal_" + created.backup_id[-6:],
+        "recovery_source": {"purpose": "isolated_rehearsal"},
+    }
+    staged = client.post(
+        f"/api/admin/backups/{created.backup_id}/restore/stage", json=evidence
+    )
+    assert staged.status_code == 200, staged.text
+    review = staged.json()
+    assert review["ok"], review
+    form = {
+        **evidence,
+        "recovery_source": json.dumps(evidence["recovery_source"]),
+        "plan_fingerprint": review["plan_fingerprint"],
+    }
+    return review, form
+
 
 pytestmark = pytest.mark.skipif(
     not shutil.which("pg_dump") or not shutil.which("pg_restore"),
@@ -176,7 +198,10 @@ def test_backups_page_renders_against_real_inventory(live):
 def test_restore_review_renders_against_real_plan(live):
     """The real plan context satisfies every field restore_review.html reads."""
     client, created, cfg, _settings = live
-    response = client.get(f"/admin/backups/{created.backup_id}/restore")
+    _review, form = _stage_rehearsal(client, created)
+    response = client.post(
+        f"/admin/backups/{created.backup_id}/restore/stage", data=form
+    )
     assert response.status_code == 200, response.text
     assert created.backup_id in response.text
     # The fingerprint the form will post back has to be on the page; without it
@@ -206,13 +231,12 @@ def test_apply_with_real_fingerprint_and_label_restores(live):
     """The full GUI path: review, then post that review back, and it applies."""
     client, created, cfg, settings = live
 
-    review = client.get(f"/api/admin/backups/{created.backup_id}/restore")
-    assert review.status_code == 200, review.text
-    payload = review.json()
+    payload, form = _stage_rehearsal(client, created)
 
     response = client.post(
         f"/admin/backups/{created.backup_id}/restore",
         data={
+            **form,
             "plan_fingerprint": payload["plan_fingerprint"],
             "confirm_target": payload["required_confirm_target"],
             "mode": payload["mode"],
@@ -241,11 +265,11 @@ def test_isolated_review_does_not_ask_for_a_label_it_will_not_check(live):
     """
     client, created, _cfg, _settings = live
 
-    review = client.get(f"/api/admin/backups/{created.backup_id}/restore").json()
+    review, form = _stage_rehearsal(client, created)
     assert review["mode"] == "isolated"
     assert review["confirmation_required"] is False
 
-    page = client.get(f"/admin/backups/{created.backup_id}/restore")
+    page = client.post(f"/admin/backups/{created.backup_id}/restore/stage", data=form)
     assert 'name="confirm_target"' not in page.text
     assert "no typed confirmation is" in page.text
 
@@ -253,7 +277,7 @@ def test_isolated_review_does_not_ask_for_a_label_it_will_not_check(live):
     # hidden while remaining mandatory underneath.
     applied = client.post(
         f"/admin/backups/{created.backup_id}/restore",
-        data={"plan_fingerprint": review["plan_fingerprint"], "mode": "isolated"},
+        data=form,
         follow_redirects=False,
     )
     assert applied.status_code == 303, applied.text[:2000]
@@ -274,8 +298,8 @@ def test_in_place_review_accepts_a_complete_operator_archive(live):
     page = client.get(
         f"/admin/backups/{created.backup_id}/restore", params={"mode": "in-place"}
     )
-    assert 'name="confirm_target"' in page.text
-    assert review["required_confirm_target"] in page.text
+    assert 'name="confirm_target"' not in page.text
+    assert "Stage explicit recovery evidence" in page.text
 
     response = client.post(
         f"/admin/backups/{created.backup_id}/restore",
@@ -288,8 +312,8 @@ def test_in_place_review_accepts_a_complete_operator_archive(live):
     )
     # The server, not only the browser, rejects an incorrect typed target.
     assert response.status_code == 200, response.status_code
-    assert 'name="plan_fingerprint"' in response.text
-    assert 'name="confirm_target"' in response.text
+    assert "Typed confirmation does not match" in response.text
+    assert 'id="apply-form"' not in response.text
     assert "confirmation does not match" in response.text
 
 
@@ -357,10 +381,10 @@ def test_applying_a_restore_shows_the_post_restore_checks(live):
     """
     client, created, _cfg, _settings = live
 
-    review = client.get(f"/api/admin/backups/{created.backup_id}/restore").json()
+    _review, form = _stage_rehearsal(client, created)
     applied = client.post(
         f"/admin/backups/{created.backup_id}/restore",
-        data={"plan_fingerprint": review["plan_fingerprint"], "mode": "isolated"},
+        data=form,
         follow_redirects=False,
     )
 
@@ -401,10 +425,10 @@ def test_the_checks_are_durable_not_just_rendered_once(live):
     """
     client, created, _cfg, _settings = live
 
-    review = client.get(f"/api/admin/backups/{created.backup_id}/restore").json()
+    _review, form = _stage_rehearsal(client, created)
     applied = client.post(
         f"/admin/backups/{created.backup_id}/restore",
-        data={"plan_fingerprint": review["plan_fingerprint"], "mode": "isolated"},
+        data=form,
         follow_redirects=False,
     )
     location = applied.headers["location"]
@@ -537,9 +561,33 @@ def test_the_gui_can_capture_a_drifted_schema(live):
         )
         assert "error=" in refused.headers["location"], refused.headers["location"]
 
-        allowed = client.post(
+        from daylily_tapdb.backup import introspect
+        from daylily_tapdb.backup.source_contract import capture_source_contract
+
+        with service.open_session(
+            cfg, app_username="pytest", connection_role="operator"
+        ) as manager:
+            with introspect.snapshot_transaction(manager) as (connection, _snapshot):
+                contract = capture_source_contract(
+                    connection,
+                    schema_name=schema,
+                    target=service.inventory_target(cfg),
+                    source_version="10.1.0",
+                )
+
+        still_refused = client.post(
             "/admin/backups/create",
             data={"backup_class": "full", "allow_drift": "1"},
+            follow_redirects=False,
+        )
+        assert "error=" in still_refused.headers["location"]
+        allowed = client.post(
+            "/admin/backups/create",
+            data={
+                "backup_class": "full",
+                "allow_drift": "1",
+                "source_contract": json.dumps(contract),
+            },
             follow_redirects=False,
         )
         assert "/admin/backups/receipts/" in allowed.headers["location"], (

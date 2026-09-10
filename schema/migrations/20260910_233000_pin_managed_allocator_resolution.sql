@@ -1,0 +1,9 @@
+-- Resolve managed allocators and control tables only in their owning schema.
+-- Existing function signatures/OIDs, row identities, allocator state and
+-- privileges remain unchanged. The base schema retains an identical inline
+-- copy, validated against this shared canonical asset for raw-SQL consumers.
+-- tapdb-allow-schema: generic_template
+-- tapdb-allow-schema: generic_instance
+-- tapdb-allow-schema: generic_instance_lineage
+-- tapdb-allow-schema: audit_log
+-- tapdb-include: ../allocator_functions.sql

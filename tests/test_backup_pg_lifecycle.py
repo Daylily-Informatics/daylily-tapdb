@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -42,6 +43,7 @@ from daylily_tapdb.backup.verify import MODE_IN_PLACE, RestoreOptions
 from daylily_tapdb.cli import app
 from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 from daylily_tapdb.cli.db_config import get_backup_settings, get_db_config
+from daylily_tapdb.runtime_principal import bind_runtime_principal, operator_connection
 
 runner = CliRunner()
 
@@ -93,6 +95,94 @@ def backup(env):
     return service.create_backup(cfg, settings)
 
 
+@pytest.fixture
+def recovery_backup(env):
+    """Explicit recovery family for the tests that really replace live rows."""
+    from daylily_tapdb.backup.recovery import build_recovery_family
+    from daylily_tapdb.sequences import capture_sequence_inventory
+
+    cfg, settings = env
+    directory = service.receipts_directory(settings)
+    directory.mkdir(parents=True)
+    with operator_connection(cfg, isolation_level="REPEATABLE READ") as connection:
+        inventory = capture_sequence_inventory(
+            connection,
+            schema_name=cfg["schema_name"],
+            target=service.inventory_target(cfg),
+        )
+    family = build_recovery_family(
+        family_id=str(uuid4()), origin_inventory=inventory, receipts_dirs=[directory]
+    )
+    result = service.create_backup(cfg, settings, recovery_family=family)
+    yield result
+    # Test teardown only: tests assert failure/quarantine before this reviewed
+    # binding resets the shared ephemeral fixture for its next independent case.
+    _bind_runtime(cfg, settings)
+
+
+def _bind_runtime(cfg, settings):
+    receipt = Path(settings["config_dir"]) / ("runtime-bind-" + uuid4().hex + ".json")
+    bind_runtime_principal(cfg, receipt_path=receipt)
+    bind_runtime_principal(cfg, apply=True, receipt_path=receipt)
+
+
+def _isolated_restore(cfg, settings, *, backup_id):
+    result = verify.restore_backup(
+        cfg,
+        settings,
+        backup_id=backup_id,
+        options=RestoreOptions(target_database="lifecycle_" + uuid4().hex[:16]),
+        recovery_source={"purpose": "isolated_rehearsal"},
+    )
+    _bind_runtime(dict(cfg, database=result.target_database), settings)
+    return result
+
+
+def _in_place_restore(cfg, settings, backup, *, keep_superseded=False):
+    """Establish an actual exclusive local gate, not a boolean attestation."""
+    from daylily_tapdb.backup.source_contract import capture_source_contract
+    from daylily_tapdb.sequences import validate_writer_fence
+
+    family = backup.manifest.source_contract["recovery_family"]
+    verify._admin_sql(
+        cfg,
+        f'REVOKE CONNECT ON DATABASE "{cfg["database"]}" FROM "{cfg["user"]}"',
+    )
+    with operator_connection(cfg, isolation_level="REPEATABLE READ") as connection:
+        source = capture_source_contract(
+            connection,
+            schema_name=cfg["schema_name"],
+            target=service.inventory_target(cfg),
+            source_version=backup.manifest.source_contract["source_version"],
+            recovery_family=family,
+        )
+        fence = {
+            "mode": "exclusive_database_connect",
+            "database_oid": source["sequence_inventory"]["physical_target"][
+                "database_oid"
+            ],
+            "operator_role": cfg["operator_user"],
+        }
+        validate_writer_fence(connection, source["sequence_inventory"], fence)
+    result = verify.restore_backup(
+        cfg,
+        settings,
+        backup_id=backup.backup_id,
+        options=RestoreOptions(mode=MODE_IN_PLACE, keep_superseded=keep_superseded),
+        confirm_target=service.target_label(cfg),
+        writer_fence=fence,
+        recovery_source={
+            "purpose": "fenced_source_recovery",
+            "source_contract": source,
+            "writer_fence": fence,
+            "source_receipts_dir": str(service.receipts_directory(settings)),
+            "recovery_family": family,
+        },
+    )
+    _bind_runtime(cfg, settings)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -129,15 +219,16 @@ def _state(cfg, *, database: str | None = None):
     """Row counts and sequence high-water marks for the configured schema."""
     probe = dict(cfg, database=database) if database else cfg
     schema = str(cfg["schema_name"])
-    with service.open_session(probe, app_username="pytest") as conn:
-        with conn.session_scope(commit=False) as session:
-            return (
-                introspect.capture_row_counts(session, schema),
-                {
-                    s.name: s.last_value
-                    for s in introspect.capture_sequences(session, schema)
-                },
-            )
+    with operator_connection(probe, isolation_level="REPEATABLE READ") as session:
+        return (
+            introspect.capture_row_counts(session, schema),
+            {
+                s.name: s.last_value
+                for s in introspect.capture_sequences(
+                    session, schema, target=service.inventory_target(probe)
+                )
+            },
+        )
 
 
 def _schemas(cfg):
@@ -301,7 +392,9 @@ def test_every_managed_table_is_captured(env):
 # ---------------------------------------------------------------------------
 
 
-def test_an_in_place_restore_leaves_a_neighbouring_schema_untouched(env, backup):
+def test_an_in_place_restore_leaves_a_neighbouring_schema_untouched(
+    env, recovery_backup
+):
     """An in-place restore replaces only its configured schema."""
     cfg, settings = env
     _exec(cfg, "CREATE SCHEMA IF NOT EXISTS neighbour", connection_role="operator")
@@ -324,13 +417,7 @@ def test_an_in_place_restore_leaves_a_neighbouring_schema_untouched(env, backup)
             connection_role="operator",
         )
 
-        verify.restore_backup(
-            cfg,
-            settings,
-            backup_id=backup.backup_id,
-            options=RestoreOptions(mode=MODE_IN_PLACE),
-            confirm_target=service.target_label(cfg),
-        )
+        _in_place_restore(cfg, settings, recovery_backup)
 
         after = _exec(
             cfg,
@@ -481,7 +568,7 @@ def test_an_instance_created_after_a_restore_never_reuses_an_euid(
         _new_instance(cfg, name=f"after-backup-{index}")
     assert _max_euid_seq(cfg) > high_water_at_backup
 
-    result = verify.restore_backup(cfg, settings, backup_id=backup.backup_id)
+    result = _isolated_restore(cfg, settings, backup_id=backup.backup_id)
     dropped_database.append(result.target_database)
 
     restored_max = _max_euid_seq(cfg, database=result.target_database)
@@ -498,11 +585,9 @@ def test_an_instance_created_after_a_restore_never_reuses_an_euid(
 
 
 def test_a_rewound_sequence_cannot_reuse_an_euid(env, backup, dropped_database):
-    """The adversarial case behind the advisory `sequences.prefix_projection`.
+    """The adversarial case behind the blocking `sequences.prefix_projection`.
 
-    That check only WARNs when a prefix sequence sits below its data, on the
-    grounds that reuse is impossible anyway. This proves the grounds rather
-    than asserting them: force the sequence all the way back to 1 -- worse
+    An operator deliberately corrupts the sequence back to 1 -- worse
     than any real restore could leave it -- and confirm the next insert is
     *rejected* rather than handed an identifier a consumer already holds.
 
@@ -511,7 +596,7 @@ def test_a_rewound_sequence_cannot_reuse_an_euid(env, backup, dropped_database):
     """
     cfg, settings = env
     schema = str(cfg["schema_name"])
-    result = verify.restore_backup(cfg, settings, backup_id=backup.backup_id)
+    result = _isolated_restore(cfg, settings, backup_id=backup.backup_id)
     dropped_database.append(result.target_database)
 
     highest = _max_euid_seq(cfg, database=result.target_database)
@@ -521,6 +606,7 @@ def test_a_rewound_sequence_cannot_reuse_an_euid(env, backup, dropped_database):
         cfg,
         f"SELECT setval('\"{schema}\".gvr_instance_seq', 1)",
         database=result.target_database,
+        connection_role="operator",
     )
 
     with pytest.raises(Exception) as excinfo:
@@ -535,7 +621,7 @@ def test_a_restored_database_still_enforces_euid_uniqueness(
     """The constraint itself must survive the restore, not just the data."""
     cfg, settings = env
     schema = str(cfg["schema_name"])
-    result = verify.restore_backup(cfg, settings, backup_id=backup.backup_id)
+    result = _isolated_restore(cfg, settings, backup_id=backup.backup_id)
     dropped_database.append(result.target_database)
 
     existing = _exec(
@@ -560,18 +646,14 @@ def test_a_restored_database_still_enforces_euid_uniqueness(
 # ---------------------------------------------------------------------------
 
 
-def test_a_completed_swap_leaves_exactly_one_schema_and_no_residue(env, backup):
+def test_a_completed_swap_leaves_exactly_one_schema_and_no_residue(
+    env, recovery_backup
+):
     """A successful in-place restore leaves no working schemas behind."""
     cfg, settings = env
     schema = str(cfg["schema_name"])
 
-    verify.restore_backup(
-        cfg,
-        settings,
-        backup_id=backup.backup_id,
-        options=RestoreOptions(mode=MODE_IN_PLACE),
-        confirm_target=service.target_label(cfg),
-    )
+    _in_place_restore(cfg, settings, recovery_backup)
 
     schemas = _schemas(cfg)
     assert schema in schemas
@@ -584,17 +666,11 @@ def test_a_completed_swap_leaves_exactly_one_schema_and_no_residue(env, backup):
     assert residue == [], f"staged-restore working schemas survived: {residue}"
 
 
-def test_keeping_the_superseded_schema_is_opt_in_and_visible(env, backup):
+def test_keeping_the_superseded_schema_is_opt_in_and_visible(env, recovery_backup):
     cfg, settings = env
     schema = str(cfg["schema_name"])
 
-    verify.restore_backup(
-        cfg,
-        settings,
-        backup_id=backup.backup_id,
-        options=RestoreOptions(mode=MODE_IN_PLACE, keep_superseded=True),
-        confirm_target=service.target_label(cfg),
-    )
+    _in_place_restore(cfg, settings, recovery_backup, keep_superseded=True)
 
     kept = [
         name
@@ -642,7 +718,7 @@ def test_the_full_lifecycle_round_trips_with_an_intact_audit_trail(
         f"rehearsal evidence missing at {evidence.evidence_key}"
     )
 
-    restored = verify.restore_backup(cfg, settings, backup_id=created.backup_id)
+    restored = _isolated_restore(cfg, settings, backup_id=created.backup_id)
     dropped_database.append(restored.target_database)
     assert restored.ok, [c.to_payload() for c in restored.checks if c.failed]
     assert not restored.quarantined
@@ -678,19 +754,13 @@ def test_a_rehearsal_is_not_recorded_as_a_restore(env, backup):
 
 
 def test_an_in_place_restore_never_reissues_an_euid_minted_after_the_backup(
-    env, backup
+    env, recovery_backup
 ):
     cfg, settings = env
 
     doomed_euid, doomed_seq = _new_instance(cfg, name="minted-after-the-backup")
 
-    verify.restore_backup(
-        cfg,
-        settings,
-        backup_id=backup.backup_id,
-        options=RestoreOptions(mode=MODE_IN_PLACE),
-        confirm_target=service.target_label(cfg),
-    )
+    _in_place_restore(cfg, settings, recovery_backup)
 
     assert not _canary_present(cfg, doomed_euid)
 
@@ -705,23 +775,27 @@ def test_an_in_place_restore_never_reissues_an_euid_minted_after_the_backup(
     )
 
 
-def test_the_in_place_restore_reports_which_sequences_it_advanced(env, backup):
+def test_the_in_place_restore_reports_which_sequences_it_advanced(env, recovery_backup):
     cfg, settings = env
     _new_instance(cfg, name="minted-after-the-backup")
 
-    result = verify.restore_backup(
-        cfg,
-        settings,
-        backup_id=backup.backup_id,
-        options=RestoreOptions(mode=MODE_IN_PLACE),
-        confirm_target=service.target_label(cfg),
-    )
+    result = _in_place_restore(cfg, settings, recovery_backup)
 
     advanced = result.sequences_advanced
     assert advanced, "a sequence had to move; nothing was reported"
-    assert "gvr_instance_seq" in advanced, sorted(advanced)
-    moved = advanced["gvr_instance_seq"]
-    assert moved["to_next"] > moved["from_next"], moved
+    assert advanced["phase"] == "committed"
+    assert advanced["verification"]["ok"]
+    from daylily_tapdb.sequences import sequence_next_value
+
+    moved = next(
+        s for s in advanced["inventory"]["sequences"] if s["name"] == "gvr_instance_seq"
+    )
+    source = next(
+        s
+        for s in recovery_backup.manifest.sequence_inventory["sequences"]
+        if s["name"] == moved["name"]
+    )
+    assert sequence_next_value(moved) > sequence_next_value(source)
 
 
 def test_json_paths_the_runbook_tells_operators_to_use_actually_exist(
@@ -841,18 +915,24 @@ def test_a_drifted_schema_refuses_to_be_backed_up(env, drifted):
     with pytest.raises(BackupError) as excinfo:
         service.create_backup(cfg, settings)
 
-    assert "drift" in str(excinfo.value).lower(), str(excinfo.value)
+    assert "schema differs" in str(excinfo.value).lower(), str(excinfo.value)
 
 
-def test_allow_drift_is_the_documented_way_through(env, drifted):
-    """The gate must be an override, not a dead end -- recovery depends on it.
+def test_drift_requires_a_measured_source_contract_not_a_bypass(env, drifted):
+    """An explicit physical source contract explains and preserves every table."""
+    from daylily_tapdb.backup.source_contract import capture_source_contract
 
-    The pre-restore safety backup uses `allow_drift=True` for exactly this
-    reason: it has to capture whatever is on the target right now.
-    """
     cfg, settings = env
-
-    result = service.create_backup(cfg, settings, allow_drift=True)
+    with pytest.raises(BackupError, match="cannot waive source validation"):
+        service.create_backup(cfg, settings, allow_drift=True)
+    with operator_connection(cfg, isolation_level="REPEATABLE READ") as connection:
+        source = capture_source_contract(
+            connection,
+            schema_name=cfg["schema_name"],
+            target=service.inventory_target(cfg),
+            source_version="0.0.0-fixture",
+        )
+    result = service.create_backup(cfg, settings, source_contract=source)
 
     assert result.backup_id
     assert "tapdb_hand_made" in result.manifest.row_counts
@@ -889,60 +969,30 @@ def test_a_clean_schema_does_not_trip_the_drift_gate(env):
 # ---------------------------------------------------------------------------
 
 
-def test_restoring_under_a_different_schema_name_actually_renames(
-    env, backup, dropped_database
-):
-    """`--target-schema` must produce the schema it names.
-
-    It was exposed on the CLI and the admin API with the help text "Rename the
-    restored schema to this" and did nothing: a custom-format archive recreates
-    the schema it was captured from, and no restore path renamed it. Preflight
-    passed clean, the restore landed under the *source* name, and post-restore
-    verification then ran against a schema that did not exist -- reporting
-    "a sequence would reissue already-used identifiers", the subsystem's
-    loudest alarm, for a target-schema typo.
-    """
+def test_schema_rename_without_an_explicit_conversion_is_refused(env, backup):
+    """Identity preservation must not silently rewrite physical catalog bindings."""
     cfg, settings = env
     source_schema = str(cfg["schema_name"])
     renamed = "tapdb_alt_target"
-
-    result = verify.restore_backup(
-        cfg,
-        settings,
-        backup_id=backup.backup_id,
-        options=RestoreOptions(target_schema=renamed),
-    )
-    dropped_database.append(result.target_database)
-
-    schemas = {
-        r[0]
-        for r in _exec(
+    database = "rename_refused_" + uuid4().hex[:16]
+    before = _state(cfg)
+    with pytest.raises(BackupVerificationError) as error:
+        verify.restore_backup(
             cfg,
-            "SELECT schema_name FROM information_schema.schemata",
-            commit=False,
-            database=result.target_database,
-            schema_name=renamed,
+            settings,
+            backup_id=backup.backup_id,
+            options=RestoreOptions(target_database=database, target_schema=renamed),
+            recovery_source={"purpose": "isolated_rehearsal"},
         )
-    }
-    assert renamed in schemas, f"requested schema absent; got {sorted(schemas)}"
-    assert source_schema not in schemas, "the source schema name survived the rename"
-
-    # And the restore is genuinely healthy under the new name -- not merely
-    # renamed, but verified there.
-    assert result.ok, [c.to_payload() for c in result.checks if c.failed]
-    assert not result.quarantined
-    rows = _exec(
-        cfg,
-        f'SELECT count(*) FROM "{renamed}".generic_instance',
-        commit=False,
-        database=result.target_database,
-        schema_name=renamed,
+    assert any(
+        c["id"] == "target.schema_identity" for c in error.value.detail["checks"]
     )
-    assert int(rows[0][0]) > 0, "renamed schema has no data"
+    assert not verify._database_exists(cfg, database)
+    assert source_schema in _schemas(cfg)
+    assert _state(cfg) == before
 
 
-def test_the_staged_plan_shows_the_rename_it_will_perform(env, backup):
-    """A mutation the operator confirms has to appear in the step list."""
+def test_the_staged_plan_explains_the_schema_conversion_refusal(env, backup):
     cfg, settings = env
 
     plan = verify.plan_restore(
@@ -953,7 +1003,8 @@ def test_the_staged_plan_shows_the_rename_it_will_perform(env, backup):
     )
 
     assert plan.source_schema == str(cfg["schema_name"])
-    assert any("RENAME TO tapdb_alt_target" in step for step in plan.steps), plan.steps
+    assert not plan.ok
+    assert any("refuse schema rename" in step for step in plan.steps), plan.steps
 
 
 def test_no_rename_step_when_the_schema_name_is_unchanged(env, backup):
@@ -971,7 +1022,7 @@ def test_no_rename_step_when_the_schema_name_is_unchanged(env, backup):
 
 
 def test_failing_post_restore_checks_roll_the_original_schema_back(
-    env, backup, monkeypatch
+    env, recovery_backup, monkeypatch
 ):
     cfg, settings = env
     before_counts, before_seqs = _state(cfg)
@@ -987,20 +1038,14 @@ def test_failing_post_restore_checks_roll_the_original_schema_back(
     monkeypatch.setattr(verify, "_post_restore_checks", _one_failure)
 
     with pytest.raises(BackupError):
-        verify.restore_backup(
-            cfg,
-            settings,
-            backup_id=backup.backup_id,
-            options=RestoreOptions(mode=MODE_IN_PLACE),
-            confirm_target=service.target_label(cfg),
-        )
+        _in_place_restore(cfg, settings, recovery_backup)
 
     assert _state(cfg) == (before_counts, before_seqs)
     assert _schemas(cfg) == before_schemas, "a staged schema survived the rollback"
 
 
 def test_a_rollback_that_cannot_restore_the_original_says_so_loudly(
-    env, backup, monkeypatch
+    env, recovery_backup, monkeypatch
 ):
     cfg, settings = env
     real_admin_sql = verify._admin_sql
@@ -1020,13 +1065,7 @@ def test_a_rollback_that_cannot_restore_the_original_says_so_loudly(
     monkeypatch.setattr(verify, "_admin_sql", _fail_the_rename)
 
     with pytest.raises(BackupError) as excinfo:
-        verify.restore_backup(
-            cfg,
-            settings,
-            backup_id=backup.backup_id,
-            options=RestoreOptions(mode=MODE_IN_PLACE),
-            confirm_target=service.target_label(cfg),
-        )
+        _in_place_restore(cfg, settings, recovery_backup)
 
     message = str(excinfo.value)
     assert "rollback could not restore" in message, message
@@ -1048,7 +1087,7 @@ def test_a_rollback_that_cannot_restore_the_original_says_so_loudly(
     )
     assert safety_manifest.provenance == {
         "created_by": manifest_mod.PROVENANCE_RESTORE,
-        "restored_backup_id": backup.backup_id,
+        "restored_backup_id": recovery_backup.backup_id,
     }
 
     monkeypatch.undo()

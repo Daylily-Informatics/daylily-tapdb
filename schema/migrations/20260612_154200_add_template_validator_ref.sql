@@ -1,4 +1,5 @@
 -- Add physical template validator reference.
+-- tapdb-allow-schema: generic_template
 -- Historical NULL/empty values are explicitly attributed below; all other
 -- template values and their provenance timestamps remain unchanged.
 -- tapdb-allow-column: generic_template.validator_ref

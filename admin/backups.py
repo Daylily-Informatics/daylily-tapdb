@@ -19,6 +19,7 @@ a client:
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import HTTPException
@@ -110,6 +111,50 @@ def api_actor(request: Any) -> Actor:
         surface=SURFACE_API,
         username=user.get("email") or user.get("username"),
     )
+
+
+def _evidence_objects(payload: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    """Accept inline evidence objects, never server-side file discovery."""
+    result: dict[str, Any] = {}
+    for key in keys:
+        value = payload.get(key)
+        if value is not None and not isinstance(value, dict):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_recovery_evidence",
+                    "message": f"{key} must be a JSON object",
+                },
+            )
+        result[key] = value
+    return result
+
+
+def recovery_evidence_from(payload: dict[str, Any]) -> dict[str, Any]:
+    evidence = _evidence_objects(
+        payload,
+        ("writer_fence", "recovery_source", "provider_contract", "quarantine_receipt"),
+    )
+    control_path = payload.get("control_config")
+    evidence["control_cfg"] = None
+    if control_path is not None:
+        if (
+            not isinstance(control_path, str)
+            or not Path(control_path).is_absolute()
+            or not Path(control_path).is_file()
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="control_config must name an existing absolute TapDB config file",
+            )
+        from daylily_tapdb.cli.db_config import get_db_config
+
+        evidence["control_cfg"] = get_db_config(config_path=Path(control_path))
+    return evidence
+
+
+def source_evidence_from(payload: dict[str, Any]) -> dict[str, Any]:
+    return _evidence_objects(payload, ("source_contract", "recovery_family"))
 
 
 def restore_options_from(payload: dict[str, Any]) -> verify.RestoreOptions:
@@ -253,6 +298,7 @@ def create_payload(
             note=body.get("note") or None,
             actor=actor,
             existing_snapshot=body.get("existing_snapshot") or None,
+            **source_evidence_from(body),
         )
     except Exception as exc:
         raise as_http(exc) from exc
@@ -307,7 +353,11 @@ def stage_payload(
     options = restore_options_from(body or {})
     try:
         return views.restore_review_context(
-            cfg, settings, backup_id=backup_id, options=options
+            cfg,
+            settings,
+            backup_id=backup_id,
+            options=options,
+            **recovery_evidence_from(body or {}),
         )
     except Exception as exc:
         raise as_http(exc) from exc
@@ -360,6 +410,7 @@ def apply_payload(
             confirm_target=payload.get("confirm_target"),
             options=options,
             actor=actor,
+            **recovery_evidence_from(payload),
         )
     except Exception as exc:
         raise as_http(exc) from exc

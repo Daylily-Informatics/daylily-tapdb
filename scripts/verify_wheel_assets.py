@@ -11,14 +11,17 @@ from pathlib import Path
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-version", default=None)
+    parser.add_argument("--dist-dir", type=Path, default=Path("dist"))
     return parser
 
 
 def main() -> None:
     args = _parser().parse_args()
-    wheels = sorted(Path("dist").glob("*.whl"))
+    wheels = sorted(args.dist_dir.glob("*.whl"))
     if len(wheels) != 1:
-        raise SystemExit(f"expected exactly one wheel in dist, found {len(wheels)}")
+        raise SystemExit(
+            f"expected exactly one wheel in {args.dist_dir}, found {len(wheels)}"
+        )
     with zipfile.ZipFile(wheels[0]) as wheel:
         names = set(wheel.namelist())
         metadata_names = [
@@ -51,6 +54,16 @@ def main() -> None:
         "daylily_tapdb/gui/static/js/tapdb-graph.js",
         "daylily_tapdb/gui/templates/graph.html",
         "daylily_tapdb/migration_identity.py",
+        "daylily_tapdb/identity_inventory.py",
+        "daylily_tapdb/sequences.py",
+        "daylily_tapdb/sequence_fence.py",
+        "daylily_tapdb/runtime_principal.py",
+        "daylily_tapdb/runtime_catalog_contract.py",
+        "daylily_tapdb/backup/source_contract.py",
+        "daylily_tapdb/backup/recovery.py",
+        "daylily_tapdb/cli/identity.py",
+        "daylily_tapdb/cli/sequences.py",
+        "daylily_tapdb/cli/runtime_principal.py",
         "daylily_tapdb/runtime_info.py",
         "daylily_tapdb/security_context.py",
         "daylily_tapdb/services/object_operations.py",
@@ -60,13 +73,18 @@ def main() -> None:
         "daylily_tapdb/core_config/system/external_reference.json",
         "docs/consumer-discoverability-guide.md",
         "docs/external-references-and-federation.md",
+        "docs/service-readiness.md",
         "schema/tapdb_schema.sql",
         "schema/rls.sql",
+        "schema/allocator_functions.sql",
         "schema/migrations/20260902_010000_natural_identity_and_owner_uniqueness.sql",
         "schema/migrations/20260902_010100_legacy_outbox_message_conversion.sql",
         "schema/migrations/20260902_020000_force_rls_and_audit_attribution.sql",
         "schema/migrations/20260903_031820_runtime_ddl_guard.sql",
         "schema/migrations/20260904_061819_tenant_scoped_natural_identity.sql",
+        "schema/migrations/20260910_203200_aurora_operator_principals.sql",
+        "schema/migrations/20260910_220000_sequence_prefix_bindings.sql",
+        "schema/migrations/20260910_233000_pin_managed_allocator_resolution.sql",
     )
     missing = [
         item for item in required if not any(name.endswith(item) for name in names)

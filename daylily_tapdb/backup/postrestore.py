@@ -27,12 +27,13 @@ Two kinds of check live here, and they age differently:
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from sqlalchemy import text
 
 from daylily_tapdb.backup import introspect
-from daylily_tapdb.backup.introspect import quote_ident, quote_literal
+from daylily_tapdb.backup.errors import BackupVerificationError
+from daylily_tapdb.backup.introspect import quote_ident
 from daylily_tapdb.backup.manifest import BackupManifest
 from daylily_tapdb.backup.service import (
     STATUS_FAIL,
@@ -187,7 +188,11 @@ def check_lineage_integrity(session: Any, schema: str) -> CheckResult:
 
 
 def check_audit_continuity(
-    session: Any, manifest: BackupManifest, schema: str
+    session: Any,
+    manifest: BackupManifest,
+    schema: str,
+    *,
+    target: Optional[dict[str, Any]] = None,
 ) -> CheckResult:
     """The audit trail must be complete and its identity sequence ahead of it.
 
@@ -214,7 +219,12 @@ def check_audit_continuity(
     if expected is not None and live_count != expected:
         problems["count"] = {"expected": expected, "live": live_count}
 
-    sequences = {seq.name: seq for seq in introspect.capture_sequences(session, schema)}
+    sequences = {
+        seq.name: seq
+        for seq in introspect.capture_sequences(
+            session, schema, target=target or manifest.sequence_inventory["target"]
+        )
+    }
     identity = sequences.get("audit_log_uid_seq")
     # Compare the value the sequence will *issue next*, not its last_value.
     # `setval(s, 100, false)` and `setval(s, 100, true)` share a last_value but
@@ -337,150 +347,71 @@ def check_euid_format(session: Any, schema: str) -> CheckResult:
 
 
 def check_sequence_high_water(
-    session: Any, manifest: BackupManifest, schema: str
+    session: Any,
+    manifest: BackupManifest,
+    schema: str,
+    *,
+    target: Optional[dict[str, Any]] = None,
 ) -> CheckResult:
-    """No sequence may be poised to reissue an identifier already handed out.
-
-    Sequence values are captured after the dump, so the recorded position is a
-    lower bound on what had been issued. A live sequence behind it would hand
-    out identifiers that already exist -- silently, and only detectably later
-    as a duplicate-key error or, worse, a wrong reference.
-
-    The comparison is on ``next_value``, not ``last_value``. Those differ:
-    ``setval(s, 5, false)`` and ``setval(s, 5, true)`` share a ``last_value``
-    but issue ``5`` and ``6`` respectively. Comparing ``last_value`` called a
-    sequence about to reissue ``5`` equal to one that had already issued it,
-    which is exactly how an in-place restore reissued a live EUID while this
-    check reported everything at or above its recorded value.
-
-    A recorded ``next_value`` of ``None`` means the manifest predates that
-    capture and genuinely cannot be compared; those are counted and reported
-    rather than silently passed, so an old backup does not read as verified.
-    """
-    live = {seq.name: seq for seq in introspect.capture_sequences(session, schema)}
-    regressed: dict[str, Any] = {}
-    uncomparable: list[str] = []
-    for recorded in manifest.sequences:
-        current = live.get(recorded.name)
-        if current is None:
-            regressed[recorded.name] = "missing from the restored schema"
-            continue
-        if recorded.next_value is None:
-            uncomparable.append(recorded.name)
-            continue
-        if (current.next_value or 0) < recorded.next_value:
-            regressed[recorded.name] = {
-                "recorded_next": recorded.next_value,
-                "live_next": current.next_value,
-                "recorded": {
-                    "last_value": recorded.last_value,
-                    "is_called": recorded.is_called,
-                },
-                "live": {
-                    "last_value": current.last_value,
-                    "is_called": current.is_called,
-                },
-            }
-    comparable = len(manifest.sequences) - len(uncomparable)
-    if regressed:
-        detail = "a sequence would reissue already-used identifiers"
-    elif uncomparable:
-        detail = (
-            f"{comparable} sequence(s) verified; {len(uncomparable)} not "
-            "comparable (manifest predates exact sequence capture)"
-        )
-    else:
-        detail = f"all {comparable} sequence(s) at or beyond their recorded position"
-
-    return CheckResult(
-        id="sequences.high_water",
-        status=(
-            STATUS_FAIL if regressed else (STATUS_WARN if uncomparable else STATUS_PASS)
-        ),
-        detail=detail,
-        data=(
-            regressed
-            if regressed
-            else ({"uncomparable": uncomparable} if uncomparable else {})
-        ),
+    """Verify strictly ahead of all captured issued and assigned floors."""
+    from daylily_tapdb.backup.recovery import (
+        inventory_floors,
+        require_retained_definitions,
+    )
+    from daylily_tapdb.sequences import (
+        capture_sequence_inventory,
+        verify_sequence_floors,
     )
 
+    try:
+        if not manifest.sequence_inventory or target is None:
+            raise ValueError(
+                "complete manifest sequence inventory and explicit target are required"
+            )
+        current = capture_sequence_inventory(session, schema_name=schema, target=target)
+        require_retained_definitions(current, [manifest.sequence_inventory])
+        result = verify_sequence_floors(
+            current,
+            floors=inventory_floors(manifest.sequence_inventory, source="backup"),
+        )
+        return CheckResult(
+            id="sequences.high_water",
+            status=STATUS_PASS if result["ok"] else STATUS_FAIL,
+            detail="every generator is strictly ahead of all recorded floors",
+            data=result,
+        )
+    except (ValueError, RuntimeError, BackupVerificationError) as exc:
+        return CheckResult(
+            id="sequences.high_water", status=STATUS_FAIL, detail=str(exc)
+        )
 
-def check_prefix_sequences_ahead(session: Any, schema: str) -> CheckResult:
-    """Report per-prefix sequences sitting below the highest EUID in the data.
 
-    **Advisory, not blocking, because it cannot cause EUID reuse.** Two
-    independent things prevent that, and it is worth being precise about which
-    applies when:
+def check_prefix_sequences_ahead(
+    session: Any, schema: str, *, target: Optional[dict[str, Any]] = None
+) -> CheckResult:
+    """Missing, unmapped or lagging generators are blocking failures."""
+    from daylily_tapdb.sequences import (
+        capture_sequence_inventory,
+        verify_sequence_floors,
+    )
 
-    * an insert through TAPDB calls ``sequences.ensure_instance_prefix_sequence``
-      first, which moves the sequence to ``GREATEST(max(euid_seq) + 1,
-      current)`` and never backwards -- so the write simply succeeds with a
-      fresh identifier;
-    * an insert that bypasses that path (raw SQL, another client) gets a
-      duplicate value from the lagging sequence and is rejected by the
-      ``euid`` unique constraint.
-
-    So the outcome is either a correct EUID or a loud failure, never a reused
-    identifier. Verified adversarially in
-    ``test_backup_pg_lifecycle.py::test_a_rewound_sequence_cannot_reuse_an_euid``.
-
-    This state also arises normally -- re-running ``db schema apply`` on a
-    populated database leaves prefix sequences un-called while rows remain.
-
-    Failing on it would block recovery for a condition TAPDB fixes itself,
-    which is the opposite of what a restore check is for. The binding
-    guarantee is ``sequences.high_water``: the restored sequence must not sit
-    below what the backup recorded.
-    """
-    tables = introspect.euid_bearing_tables(session, schema)
-    if not tables:
+    try:
+        if target is None:
+            raise ValueError(
+                "explicit target is required for complete generator verification"
+            )
+        current = capture_sequence_inventory(session, schema_name=schema, target=target)
+        result = verify_sequence_floors(current, floors=[])
         return CheckResult(
             id="sequences.prefix_projection",
-            status=STATUS_SKIP,
-            detail="no EUID-bearing tables",
+            status=STATUS_PASS if result["ok"] else STATUS_FAIL,
+            detail="all mapped generators are ahead of assigned identities",
+            data=result,
         )
-
-    union = " UNION ALL ".join(
-        f"SELECT euid_prefix, euid_seq FROM {quote_ident(schema)}."
-        f"{quote_ident(table)} WHERE euid_prefix IS NOT NULL"
-        for table in tables
-    )
-    highest = session.execute(
-        text(
-            f"SELECT lower(euid_prefix), max(euid_seq) FROM ({union}) AS e "
-            f"GROUP BY lower(euid_prefix)"
+    except (ValueError, RuntimeError, BackupVerificationError) as exc:
+        return CheckResult(
+            id="sequences.prefix_projection", status=STATUS_FAIL, detail=str(exc)
         )
-    ).all()
-
-    live = {seq.name: seq for seq in introspect.capture_sequences(session, schema)}
-    behind: dict[str, Any] = {}
-    checked = 0
-    for prefix, max_seq in highest:
-        sequence = live.get(f"{prefix}_instance_seq")
-        if sequence is None:
-            continue
-        checked += 1
-        # Next-value again: a sequence poised to reissue max(euid_seq) is
-        # behind its data even though last_value equals it.
-        if (sequence.next_value or 0) <= int(max_seq or 0):
-            behind[str(prefix)] = {
-                "sequence_last_value": sequence.last_value,
-                "sequence_next_value": sequence.next_value,
-                "max_euid_seq": int(max_seq or 0),
-            }
-
-    return CheckResult(
-        id="sequences.prefix_projection",
-        status=STATUS_PASS if not behind else STATUS_WARN,
-        detail=(
-            f"{checked} prefix sequence(s) ahead of their highest issued EUID"
-            if not behind
-            else f"{len(behind)} prefix sequence(s) behind their data; "
-            "reconciled automatically before the next EUID is issued"
-        ),
-        data=behind,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -647,27 +578,117 @@ def check_representative_objects(session: Any, manifest: BackupManifest) -> Chec
 # ---------------------------------------------------------------------------
 
 
+def _current_source_assets_match(manifest: BackupManifest) -> bool:
+    """Version labels never select current-runtime semantic verification."""
+    from pathlib import Path
+
+    from daylily_tapdb.backup.inventory import schema_asset_checksums
+    from daylily_tapdb.schema_inventory import find_schema_root, schema_asset_files
+
+    if manifest.schema_drift.get("has_drift") is not False:
+        return False
+    current = schema_asset_checksums(
+        schema_asset_files(find_schema_root(Path("tapdb_schema.sql")))
+    )
+    return (
+        bool(current)
+        and all(item["sha256"] for item in current)
+        and (manifest.migrations.get("asset_checksums") == current)
+    )
+
+
+def _current_representative_lookup(
+    session: Any, manifest: BackupManifest, schema: str
+) -> CheckResult:
+    """Use normal ORM lookups inside the retained, already fenced connection."""
+    from sqlalchemy.orm import Session
+
+    previous = session.execute(
+        text("SELECT current_setting('search_path')")
+    ).scalar_one()
+    session.execute(
+        text("SELECT set_config('search_path', :schema, true)"),
+        {"schema": quote_ident(schema) + ", pg_catalog"},
+    )
+    try:
+        with Session(bind=session, autoflush=False) as lookup:
+            return check_representative_objects(lookup, manifest)
+    finally:
+        session.execute(
+            text("SELECT set_config('search_path', :previous, true)"),
+            {"previous": previous},
+        )
+
+
 def run_all(
     session: Any,
     cfg: dict[str, Any],
     manifest: BackupManifest,
     *,
     schema: Optional[str] = None,
+    identity_inventory: Optional[dict[str, Any]] = None,
 ) -> list[CheckResult]:
-    """Run the full post-restore suite against one restored schema."""
-    target = schema or str(cfg["schema_name"])
-    return [
-        check_rowcounts(session, manifest, target),
-        check_template_references(session, target),
-        check_lineage_integrity(session, target),
-        check_audit_continuity(session, manifest, target),
-        check_euid_uniqueness(session, target),
-        check_euid_format(session, target),
-        check_sequence_high_water(session, manifest, target),
-        check_prefix_sequences_ahead(session, target),
-        check_schema_drift(session, cfg, target),
-        check_representative_objects(session, manifest),
+    """Verify the restored historical source, before migration or principal bind."""
+    from daylily_tapdb.backup.service import inventory_target
+    from daylily_tapdb.identity_inventory import (
+        capture_identity_inventory,
+        verify_identity_inventory,
+    )
+
+    target_schema = schema or str(cfg["schema_name"])
+    target = inventory_target(cfg)
+    checks = [
+        check_rowcounts(session, manifest, target_schema),
+        check_sequence_high_water(session, manifest, target_schema, target=target),
+        check_prefix_sequences_ahead(session, target_schema, target=target),
     ]
+    if identity_inventory is None:
+        checks.append(
+            CheckResult(
+                id="identity.preservation",
+                status=STATUS_FAIL,
+                detail="backup lacks the required exhaustive physical identity asset",
+            )
+        )
+        return checks
+    actual = capture_identity_inventory(
+        session, schema_name=target_schema, target=target
+    )
+    result = verify_identity_inventory(
+        identity_inventory,
+        actual,
+        conversion_manifest={
+            "schema_version": "tapdb-identity-conversion/v1",
+            "target": actual["target"],
+            "tables": {},
+            "added_tables": [],
+        },
+    )
+    checks.append(
+        CheckResult(
+            id="identity.preservation",
+            status=STATUS_PASS if result["ok"] else STATUS_FAIL,
+            detail="exhaustive original rows, identities and schema compared",
+            data=result,
+        )
+    )
+    if result["ok"] and _current_source_assets_match(manifest):
+        drift = check_schema_drift(session, cfg, target_schema)
+        checks.append(drift)
+        if drift.status == STATUS_PASS:
+            checks.extend(
+                [
+                    check_template_references(session, target_schema),
+                    check_lineage_integrity(session, target_schema),
+                    check_audit_continuity(
+                        session, manifest, target_schema, target=target
+                    ),
+                    check_euid_uniqueness(session, target_schema),
+                    check_euid_format(session, target_schema),
+                    _current_representative_lookup(session, manifest, target_schema),
+                ]
+            )
+    return checks
 
 
 def reconcile_sequences_to_floor(
@@ -675,65 +696,42 @@ def reconcile_sequences_to_floor(
     schema: str,
     *,
     floor: list[Any],
+    target: dict[str, Any],
+    writer_fence: dict[str, Any],
+    receipts_dir: Any,
+    recovery_family: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
-    """Advance sequences so none can reissue an identifier already handed out.
+    """Delegate every advance to the shared transactional allocator."""
+    from daylily_tapdb.sequences import (
+        apply_sequence_advance_plan,
+        build_sequence_advance_plan,
+        capture_sequence_inventory,
+    )
 
-    **Why an in-place restore needs this.** Restoring rewinds rows *and*
-    sequences to backup state. Any EUID issued between the backup and the
-    restore is then re-issuable: the rows that carried those identifiers are
-    gone, so ``max(euid_seq)`` drops back, and the sequence is restored from
-    the archive. Nothing in the archive knows those identifiers ever existed --
-    by construction, the backup predates them.
-
-    ``sequences.high_water`` cannot cover this. It compares against what *the
-    backup* recorded, and the backup is precisely the thing that is out of
-    date. Observed: a marker row minted ``Z-GVR-5R``, an in-place restore
-    rolled it back, and the next insert was issued ``Z-GVR-5R`` again -- a
-    consumer holding that EUID would silently resolve to a different object.
-
-    The pre-restore **safety backup** is the missing input. It is taken
-    immediately before anything is touched, so its sequence positions cover
-    everything ever issued on this target. Passing its sequences as ``floor``
-    closes the gap.
-
-    ``setval(seq, n, false)`` makes ``nextval()`` return exactly ``n``, which
-    is why the floor is applied directly rather than as ``n - 1`` with
-    ``is_called`` -- the latter breaks when ``n`` is the sequence minimum.
-
-    Returns what was moved, for the receipt. Sequences already at or beyond
-    their floor are left alone, so this is idempotent.
-    """
-    live = {seq.name: seq for seq in introspect.capture_sequences(session, schema)}
-    advanced: dict[str, Any] = {}
-
-    for recorded in floor:
-        required = recorded.next_value
-        if required is None:
-            # Manifest predates exact capture; nothing to enforce.
+    current = capture_sequence_inventory(session, schema_name=schema, target=target)
+    floors = []
+    for record in floor:
+        if isinstance(record, dict) and set(("name", "value", "source")).issubset(
+            record
+        ):
+            floors.append(record)
             continue
-        current = live.get(recorded.name)
-        if current is None:
-            continue
-        if (current.next_value or 0) >= required:
-            continue
-        session.execute(
-            text(
-                # The regclass argument is a string *literal*, so the
-                # qualified name is built with quote_ident and then escaped
-                # as a literal. Using quote_ident for the outer quoting broke
-                # on any sequence whose name contains a single quote -- in the
-                # function that enforces the no-EUID-reuse guarantee.
-                f"SELECT setval("
-                f"{quote_literal(f'{quote_ident(schema)}.{quote_ident(recorded.name)}')}"
-                f"::regclass, :value, false)"
-            ),
-            {"value": required},
-        )
-        advanced[recorded.name] = {
-            "from_next": current.next_value,
-            "to_next": required,
-        }
-    return advanced
+        if record.next_value is None:
+            raise ValueError(
+                f"generator {record.name} lacks complete retained metadata"
+            )
+        for field in ("allocated_floor", "assigned_floor"):
+            value = getattr(record, field)
+            if value is not None:
+                floors.append(
+                    {"name": record.name, "value": value, "source": f"retained:{field}"}
+                )
+    plan = build_sequence_advance_plan(
+        current, floors=floors, recovery_family=recovery_family
+    )
+    return apply_sequence_advance_plan(
+        session, plan, writer_fence=writer_fence, receipts_dir=receipts_dir
+    )
 
 
 __all__ = [

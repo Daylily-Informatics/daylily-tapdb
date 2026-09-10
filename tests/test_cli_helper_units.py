@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import DBAPIError
 
 import daylily_tapdb.cli.db as db_mod
 import daylily_tapdb.cli.pg as pg_mod
@@ -64,6 +67,11 @@ def _write_config(
         "  domain_code: Z\n"
         "  user: tapdb\n"
         "  password: ''\n"
+        "  operator:\n"
+        "    user: tapdb_operator\n"
+        "    password: test-only-unused\n"
+        "    iam_auth: false\n"
+        "    secret_arn: ''\n"
         "  database: tapdb_shared\n"
         "  schema_name: tapdb_testdb\n"
         "  region: us-west-2\n"
@@ -89,15 +97,29 @@ def _explicit_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     clear_cli_context()
 
 
+def _record_sync(monkeypatch, sql_calls, *, failure=None):
+    class Connection:
+        def execute(self, statement):
+            sql_calls.append(str(statement))
+            if failure is not None:
+                raise failure
+
+    @contextmanager
+    def connection(cfg, **kwargs):
+        assert kwargs == {"isolation_level": "REPEATABLE READ"}
+        yield Connection()
+
+    monkeypatch.setattr(db_mod, "operator_connection", connection)
+    monkeypatch.setattr(
+        "daylily_tapdb.runtime_principal.grant_proven_runtime_sequences", lambda *a: []
+    )
+
+
 def test_identity_prefix_sync_writes_expected_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sql_calls: list[str] = []
-    monkeypatch.setattr(
-        db_mod,
-        "_run_psql",
-        lambda env, sql, **kwargs: sql_calls.append(sql) or (True, ""),
-    )
+    _record_sync(monkeypatch, sql_calls)
 
     db_mod._sync_identity_prefix_config(db_mod.Environment.target)
 
@@ -123,11 +145,7 @@ def test_identity_prefix_sync_uses_configured_owner_repo(
     )
     set_cli_context(config_path=cfg_path)
     sql_calls: list[str] = []
-    monkeypatch.setattr(
-        db_mod,
-        "_run_psql",
-        lambda env, sql, **kwargs: sql_calls.append(sql) or (True, ""),
-    )
+    _record_sync(monkeypatch, sql_calls)
 
     db_mod._sync_identity_prefix_config(db_mod.Environment.target)
 
@@ -150,13 +168,24 @@ def test_identity_prefix_sync_requires_owner_registry_claim(
         db_mod._sync_identity_prefix_config(db_mod.Environment.target)
 
 
-def test_identity_prefix_sync_raises_on_psql_failure(
+@pytest.mark.parametrize("known_conflict", [False, True])
+def test_identity_prefix_sync_normalizes_driver_failure(
     monkeypatch: pytest.MonkeyPatch,
+    known_conflict,
 ) -> None:
-    monkeypatch.setattr(db_mod, "_run_psql", lambda *args, **kwargs: (False, "boom"))
+    conflict = "Existing TapDB identity prefix configuration conflicts with the required registry"
+    original = Exception("private driver details")
+    original.diag = SimpleNamespace(
+        message_primary=conflict if known_conflict else "private row data"
+    )
+    error = DBAPIError("statement", {}, original)
+    _record_sync(monkeypatch, [], failure=error)
 
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(RuntimeError) as raised:
         db_mod._sync_identity_prefix_config(db_mod.Environment.target)
+    assert "private" not in str(raised.value)
+    assert ("conflicts" in str(raised.value)) is known_conflict
+    assert raised.value.__cause__ is error
 
 
 def test_connection_string_adds_ssl_for_aurora(tmp_path: Path) -> None:
@@ -185,6 +214,35 @@ def test_tapdb_connection_for_env_uses_normalized_engine_flags(
     assert seen["iam_auth"] is False
     assert seen["schema_name"] == "tapdb_testdb"
     assert seen["echo_sql"] is False
+
+
+@pytest.mark.parametrize("connection_role", ["runtime", "operator"])
+def test_connection_keeps_explicit_iam_transport_and_signing_identity(
+    monkeypatch, connection_role
+):
+    cfg = db_mod._get_db_config(db_mod.Environment.target)
+    cfg.update(
+        engine_type="aurora",
+        host="database.example.invalid",
+        hostaddr="127.0.0.1",
+        port="55434",
+        server_port="5432",
+        aws_profile="qualification-profile",
+        sslrootcert="/explicit/qualification-ca.pem",
+    )
+    monkeypatch.setattr(db_mod, "_get_db_config", lambda _: cfg)
+    seen = {}
+    monkeypatch.setattr(db_mod, "TAPDBConnection", lambda **kw: seen.update(kw))
+    db_mod._tapdb_connection_for_env(
+        db_mod.Environment.target,
+        app_username="test:iam-forwarding",
+        connection_role=connection_role,
+    )
+    assert seen["db_hostname"] == "database.example.invalid:55434"
+    assert seen["db_hostaddr"] == "127.0.0.1"
+    assert seen["server_port"] == 5432
+    assert seen["aws_profile"] == "qualification-profile"
+    assert seen["sslrootcert"] == "/explicit/qualification-ca.pem"
 
 
 def test_user_open_connection_maps_explicit_target(

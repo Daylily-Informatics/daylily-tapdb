@@ -1,10 +1,12 @@
 """Tests for AuroraConnectionBuilder — all boto3 calls are mocked."""
 
 import hashlib
+import inspect
 import json
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -229,6 +231,160 @@ def test_build_connection_url_hostaddr_preserves_tls_host(_ca_bundle):
     assert "sslmode=verify-full" in url
 
 
+@pytest.mark.parametrize("iam_auth", [True, False])
+def test_build_connection_url_uses_explicit_profile_and_ca(
+    iam_auth, tmp_path, monkeypatch
+):
+    from daylily_tapdb.aurora import connection as mod
+
+    sdk = MagicMock()
+    sdk.session.Session.return_value.client.side_effect = _fake_boto3_client
+    monkeypatch.setattr(mod, "_ensure_boto3", lambda: sdk)
+    default_ca = MagicMock(side_effect=AssertionError("must use explicit CA"))
+    monkeypatch.setattr(mod.AuroraConnectionBuilder, "ensure_ca_bundle", default_ca)
+    ca_path = tmp_path / "reviewed CA.pem"
+    ca_path.write_text("--- FAKE EXPLICIT CA ---")
+
+    url = mod.AuroraConnectionBuilder.build_connection_url(
+        host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
+        hostaddr="127.0.0.1",
+        port=15432,
+        database="tapdb_dev",
+        user="tapdb_runtime",
+        region="us-east-1",
+        iam_auth=iam_auth,
+        secret_arn="arn:aws:secretsmanager:us-east-1:123456:secret:mydb",
+        profile="reviewed-profile",
+        sslrootcert=str(ca_path),
+    )
+
+    sdk.session.Session.assert_called_once_with(profile_name="reviewed-profile")
+    sdk.session.Session.return_value.client.assert_called_once_with(
+        "rds" if iam_auth else "secretsmanager", region_name="us-east-1"
+    )
+    sdk.client.assert_not_called()
+    default_ca.assert_not_called()
+    parsed = urlsplit(url)
+    assert parsed.hostname == "mydb.cluster-xyz.us-east-1.rds.amazonaws.com"
+    assert parsed.port == 15432
+    assert parse_qs(parsed.query) == {
+        "sslmode": ["verify-full"],
+        "sslrootcert": [str(ca_path)],
+        "hostaddr": ["127.0.0.1"],
+    }
+
+
+@pytest.mark.parametrize("invalid_ca", ["", " ", "relative", "missing", "directory"])
+def test_build_connection_url_invalid_explicit_ca_fails_without_network(
+    invalid_ca, tmp_path, monkeypatch
+):
+    from daylily_tapdb.aurora import connection as mod
+
+    sdk = MagicMock(side_effect=AssertionError("must validate before AWS"))
+    default_ca = MagicMock(side_effect=AssertionError("must not replace explicit CA"))
+    monkeypatch.setattr(mod, "_ensure_boto3", sdk)
+    monkeypatch.setattr(mod.AuroraConnectionBuilder, "ensure_ca_bundle", default_ca)
+    ca_paths = {
+        "": "",
+        " ": " ",
+        "relative": "relative.pem",
+        "missing": str(tmp_path / "missing.pem"),
+        "directory": str(tmp_path),
+    }
+
+    with pytest.raises(ValueError, match="sslrootcert.*existing absolute file"):
+        mod.AuroraConnectionBuilder.build_connection_url(
+            host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
+            database="tapdb_dev",
+            user="tapdb_runtime",
+            region="us-east-1",
+            iam_auth=True,
+            profile="reviewed-profile",
+            sslrootcert=ca_paths[invalid_ca],
+        )
+
+    sdk.assert_not_called()
+    default_ca.assert_not_called()
+
+
+@pytest.mark.parametrize("profile", ["", " ", " reviewed-profile "])
+def test_build_connection_url_invalid_explicit_profile_fails_without_network(
+    profile, monkeypatch
+):
+    from daylily_tapdb.aurora import connection as mod
+
+    sdk = MagicMock(side_effect=AssertionError("must not use ambient credentials"))
+    default_ca = MagicMock(side_effect=AssertionError("must validate before download"))
+    monkeypatch.setattr(mod, "_ensure_boto3", sdk)
+    monkeypatch.setattr(mod.AuroraConnectionBuilder, "ensure_ca_bundle", default_ca)
+
+    with pytest.raises(ValueError, match="profile.*nonempty exact"):
+        mod.AuroraConnectionBuilder.build_connection_url(
+            host="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
+            database="tapdb_dev",
+            user="tapdb_runtime",
+            region="us-east-1",
+            iam_auth=True,
+            profile=profile,
+        )
+
+    sdk.assert_not_called()
+    default_ca.assert_not_called()
+
+
+@pytest.mark.parametrize("server_port", [None, 5432])
+def test_iam_signing_port_is_explicit_and_separate_from_transport(
+    _ca_bundle, monkeypatch, server_port
+):
+    from daylily_tapdb.aurora import connection as mod
+
+    signer = MagicMock(return_value="unit-iam-token")
+    monkeypatch.setattr(mod.AuroraConnectionBuilder, "get_iam_auth_token", signer)
+    url = mod.AuroraConnectionBuilder.build_connection_url(
+        host="database.example.invalid",
+        port=55434,
+        database="tapdb_test",
+        user="runtime",
+        region="us-east-1",
+        iam_auth=True,
+        hostaddr="127.0.0.1",
+        profile="reviewed-profile",
+        sslrootcert=str(_ca_bundle),
+        server_port=server_port,
+    )
+    signer.assert_called_once_with(
+        "us-east-1",
+        "database.example.invalid",
+        55434 if server_port is None else 5432,
+        "runtime",
+        profile="reviewed-profile",
+    )
+    assert urlsplit(url).port == 55434
+    assert parse_qs(urlsplit(url).query)["hostaddr"] == ["127.0.0.1"]
+
+
+@pytest.mark.parametrize("server_port", [0, 65536, True, "5432", 5432.0])
+def test_invalid_signing_port_fails_before_network(server_port, monkeypatch):
+    from daylily_tapdb.aurora import connection as mod
+
+    sdk = MagicMock(side_effect=AssertionError("must validate before credentials"))
+    default_ca = MagicMock(side_effect=AssertionError("must validate before download"))
+    monkeypatch.setattr(mod, "_ensure_boto3", sdk)
+    monkeypatch.setattr(mod.AuroraConnectionBuilder, "ensure_ca_bundle", default_ca)
+    with pytest.raises(ValueError, match="server_port.*integer"):
+        mod.AuroraConnectionBuilder.build_connection_url(
+            host="database.example.invalid",
+            port=55434,
+            database="tapdb_test",
+            user="runtime",
+            region="us-east-1",
+            iam_auth=True,
+            server_port=server_port,
+        )
+    sdk.assert_not_called()
+    default_ca.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # TAPDBConnection with engine_type="aurora"
 # ---------------------------------------------------------------------------
@@ -291,6 +447,73 @@ def test_tapdb_connection_aurora_passes_hostaddr(_ca_bundle, monkeypatch):
     )
 
     assert "hostaddr=127.0.0.1" in conn._db_url
+
+
+@pytest.mark.parametrize("iam_auth", [True, False])
+def test_tapdb_connection_aurora_passes_profile_and_ca(iam_auth, tmp_path, monkeypatch):
+    from daylily_tapdb import connection as m
+    from daylily_tapdb.aurora import connection as mod
+
+    sdk = MagicMock()
+    client = _fake_boto3_client("rds" if iam_auth else "secretsmanager")
+    sdk.session.Session.return_value.client.return_value = client
+    monkeypatch.setattr(mod, "_ensure_boto3", lambda: sdk)
+    default_ca = MagicMock(side_effect=AssertionError("must use explicit CA"))
+    monkeypatch.setattr(mod.AuroraConnectionBuilder, "ensure_ca_bundle", default_ca)
+    monkeypatch.setattr(m, "create_engine", lambda url, **kw: MagicMock())
+    monkeypatch.setattr(m, "sessionmaker", lambda bind: lambda: None)
+    ca_path = tmp_path / "runtime CA.pem"
+    ca_path.write_text("--- FAKE EXPLICIT CA ---")
+
+    conn = m.TAPDBConnection(
+        engine_type="aurora",
+        db_hostname="mydb.cluster-xyz.us-east-1.rds.amazonaws.com:15432",
+        db_hostaddr="127.0.0.1",
+        db_user="tapdb_runtime",
+        db_name="tapdb_dev",
+        app_username="test-runtime",
+        region="us-east-1",
+        iam_auth=iam_auth,
+        secret_arn="arn:aws:secretsmanager:us-east-1:123456:secret:mydb",
+        domain_code="Z",
+        owner_repo_name="daylily-tapdb",
+        schema_name="tapdb_test",
+        config_identity="/abs/tapdb-config.yaml",
+        aws_profile="reviewed-profile",
+        sslrootcert=str(ca_path),
+        server_port=5432,
+    )
+
+    sdk.session.Session.assert_called_once_with(profile_name="reviewed-profile")
+    sdk.session.Session.return_value.client.assert_called_once_with(
+        "rds" if iam_auth else "secretsmanager", region_name="us-east-1"
+    )
+    sdk.client.assert_not_called()
+    default_ca.assert_not_called()
+    assert urlsplit(conn._db_url).port == 15432
+    if iam_auth:
+        client.generate_db_auth_token.assert_called_once_with(
+            DBHostname="mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
+            Port=5432,
+            DBUsername="tapdb_runtime",
+            Region="us-east-1",
+        )
+    assert parse_qs(urlsplit(conn._db_url).query) == {
+        "sslmode": ["verify-full"],
+        "sslrootcert": [str(ca_path)],
+        "hostaddr": ["127.0.0.1"],
+    }
+
+
+def test_tapdb_connection_appends_aurora_options_to_positional_contract():
+    from daylily_tapdb.connection import TAPDBConnection
+
+    assert list(inspect.signature(TAPDBConnection).parameters)[-4:] == [
+        "connection_role",
+        "aws_profile",
+        "sslrootcert",
+        "server_port",
+    ]
 
 
 def test_tapdb_connection_aurora_defaults_to_explicit_password_auth(

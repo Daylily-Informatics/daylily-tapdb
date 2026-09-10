@@ -3,6 +3,11 @@
 Operator runbook for the TapDB backup lifecycle: what is captured, how to
 recover, and how to prove a backup would actually work before you need it.
 
+> **Candidate status:** the expanded identity, allocator, recovery-family, and
+> principal-binding contract documented here is part of unreleased TapDB
+> 10.1.0 candidate work. Independent qualification and publication are pending.
+> See [Service Readiness](service-readiness.md) before using it for a consumer.
+
 Every operation is available from three adapters — the `tapdb backup` CLI, the
 canonical GUI's management API, and its HTML views — and all three call the
 same service code, so
@@ -34,12 +39,17 @@ using `pg_dump --schema <name> --format custom --no-owner --no-acl`.
 | **Roles, users, and grants** | `--no-owner --no-acl` deliberately keep cluster-scoped state out. A restored schema needs its roles to already exist on the target. |
 | **Anything cluster-level** | other databases, tablespaces, extensions installed outside the schema, `postgresql.conf`. |
 | **The TapDB config file** | it holds connection details and must be backed up by whatever manages your configuration. A backup archive is not a substitute. |
+| **Domain-code and prefix-ownership registries** | identity authority is file/service-backed and cannot be reconstructed from schema rows or sequence names. |
+| **TLS and IAM configuration** | client trust files, IAM policies/trust, and explicit profile selection live outside PostgreSQL. |
+| **Principal secrets and recovery access** | receipts exclude secret values; retain secret references and a separately managed recovery method. |
+| **Service runtime files** | image/process definitions, environment-file references, mounts, and application config are service-owned. |
+| **External receipt journals** | allocator intents, writer fences, recovery floors, family membership, and ambiguous outcomes intentionally survive outside the database. |
 | **Secrets of any kind** | manifests travel to shared storage, so credentials are rejected at config load and stripped from anything recorded. |
 
 > **The practical consequence.** Restoring a TapDB backup onto a fresh cluster
-> will not give you a working system on its own: you need the roles and the
-> config too. Restoring onto an existing, correctly-provisioned cluster is the
-> supported path, and it is what `rehearse` exercises.
+> will not give you a working system on its own: you need the complete external
+> artifact set and an explicit principal rebind. A successful restore reports
+> that binding is still required; it does not reactivate the application.
 
 ---
 
@@ -56,11 +66,14 @@ most common way a recovery goes badly.
 
 **Start with `full` into an isolated target.** A full capture never uses the
 runtime `NOBYPASSRLS` credential. It requires the separately configured
-`target.operator` identity, verifies that identity is a distinct PostgreSQL
-`SUPERUSER` or `BYPASSRLS` role, and fails hard when it is absent or invalid.
-The signed manifest records `mode: physical_schema`, `row_security: bypassed`,
-and `physical_schema_complete: true`; that claim means every tenant's rows in
-the configured schema were visible to both the inventory transaction and
+`target.operator` identity and fails hard when it is absent or invalid. Complete
+visibility may come from PostgreSQL `SUPERUSER`/`BYPASSRLS` or from the exact
+authenticated schema owner with readable objects and canonical unrestricted
+owner policies on every forced-RLS table. Aurora role labels are never treated
+as a blanket bypass. The signed manifest records `mode: physical_schema`,
+`row_security: verified_complete_operator`, and
+`physical_schema_complete: true`; that claim means every tenant's rows in the
+configured schema were visible to both the inventory transaction and
 `pg_dump`. The ordinary runtime role remains RLS-bound and is never promoted.
 
 A database `template-pack` uses that ordinary runtime role and therefore
@@ -342,17 +355,32 @@ Use `--keep` to leave the rehearsal database in place for inspection.
 ### 7.1 Isolated (the default, and non-destructive)
 
 ```bash
-tapdb backup restore-plan --backup-id <id>     # read-only preview
-tapdb backup restore --backup-id <id>          # restores into a separate database
+tapdb backup restore-plan --backup-id <id> \
+  --target-database <exact-new-database> \
+  --target-schema <exact-source-schema> \
+  --recovery-source /abs/path/to/recovery-source.json
+
+tapdb backup restore --backup-id <id> \
+  --target-database <exact-new-database> \
+  --target-schema <exact-source-schema> \
+  --plan-fingerprint <reviewed-fingerprint> \
+  --recovery-source /abs/path/to/recovery-source.json
 ```
 
-Creates a new database named from the backup, restores into it in a single
-transaction, and runs post-restore verification. **Live data is never touched.**
-No typed confirmation is required, because nothing destructive can happen.
+The operator names the new database explicitly; live apply refuses an inferred
+name. Stage the same writer-fence, control-config, provider-contract and
+quarantine evidence that apply will use when the recovery source requires it.
+The restore runs in a single transaction and then performs post-restore
+verification. **Live data is never touched.** No typed confirmation is required,
+because nothing destructive can happen.
 
 If the restore fails, the created database is dropped. If verification fails,
 it is *kept* and flagged `quarantined: true` so you can investigate — and the
 command exits `1`.
+
+`backup rehearse` is the only path that owns an automatically generated,
+UUID-qualified disposable database name. That helper behavior is not a target
+discovery rule for ordinary recovery.
 
 ### 7.2 In-place (destructive, and gated)
 
@@ -430,21 +458,25 @@ backup and the restore are rolled back with everything else, so `max(euid_seq)`
 drops and the archive's sequence positions come back with it. The archive
 cannot help here: it predates those identifiers by construction.
 
-Three mechanisms close that gap:
+The 10.1.0 candidate closes that gap through one shared allocator and durable
+evidence chain:
 
-1. **Sequence reconciliation against the safety backup.** The safety backup is
-   taken immediately before anything is touched, so its sequence positions
-   cover everything the target ever issued. After restoring the archive and
-   *before* verification, every sequence is advanced to at least that position.
-   The restore reports what it moved as `sequences_advanced`, and the receipt
-   records it — advancing past the archive is a deliberate divergence and is
-   auditable.
-2. **`sequences.high_water`**, which blocks if any sequence is behind what the
-   backup recorded. It compares the *next* value, not `last_value`: after
-   `setval(s, 5, false)` a sequence issues `5`, while after
-   `setval(s, 5, true)` it issues `6`. Same `last_value`, different identifier.
-3. **The `euid` unique constraint**, which rejects a collision outright if
-   anything upstream is wrong.
+1. Catalog-complete inventories retain every UID and prefix generator's full
+   definition, `last_value`, `is_called`, dependencies, stored assignments, and
+   verified mapping, including unused or reserved scopes.
+2. A sealed recovery family retains the origin and every explicit source or
+   replacement journal root. An old dump cannot erase later intents/floors.
+3. A real writer fence closes the database connection gate and proves allocator
+   session closure. Table locks alone do not discharge cached reservations.
+4. The smallest increment-aligned next value must be strictly above every
+   source, target, assigned, reserved, probe, aborted, migration, and recovery
+   floor. Unknown mappings, missing/cycling/exhausted generators, cache
+   ambiguity, and backward movement fail closed.
+5. Apply writes intent before mutation and separates commit/release receipts.
+   Lost acknowledgement remains ambiguous until authoritative or independently
+   validated observed-only reconciliation. A new plan cannot bypass it.
+6. Final identity and allocator verification, the `euid` unique constraint, and
+   explicit runtime-principal binding are separate gates.
 
 So the outcome is a fresh identifier, or a loud failure — never a silently
 reused one. References to objects created after the backup fail cleanly as
@@ -591,15 +623,14 @@ target:
     iam_auth: false
 ```
 
-The operator user must differ from `target.user` and must authenticate as a
-PostgreSQL `SUPERUSER` or `BYPASSRLS` role. Aurora targets select an explicit
+The operator user must differ from `target.user` and must pass the complete
+operator-visibility contract described in §2. Aurora targets select an explicit
 operator authentication path through `password`, `secret_arn`, or `iam_auth`.
 Missing operator configuration makes full plan/create/restore fail; TapDB never
 substitutes the runtime credential or ambient libpq target variables.
 
-**Keys are nested.** Unrecognised keys are silently ignored — so a flat
-`storage_uri:` does not fail, it just never takes effect and your backups go to
-the local config directory. Copy this shape exactly:
+**Keys are nested.** A misplaced key does not configure the intended field.
+Copy this shape exactly and verify the resolved config before any operation:
 
 ```yaml
 backup:
@@ -634,11 +665,11 @@ backup:
 | `backup.rehearsal.database_prefix` | `tapdb_rehearsal` | names the scratch database rehearsals create |
 | `backup.receipt_mirror` | `{}` | a second location for receipts, written after each receipt is published locally. Best-effort and **write-only**: verification always reads the local chain, so the mirror is evidence for a human or an auditor, not a recovery path the code falls back to. A mirror that falls behind is surfaced by `backup health`, not by a failed backup. |
 
-To confirm what the loader actually resolved:
+To confirm the sanitized target and storage identity that the public CLI
+resolved:
 
 ```bash
-python -c "from daylily_tapdb.cli.db_config import get_backup_settings; \
-import json; print(json.dumps(get_backup_settings(config_path='PATH'), indent=2))"
+tapdb --config /abs/path/to/tapdb-config.yaml --json info
 ```
 
 ---

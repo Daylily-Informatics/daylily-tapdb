@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import uuid
 
 import pytest
 from sqlalchemy import text
@@ -207,7 +208,7 @@ def test_manifest_declares_the_complete_operator_data_scope(env):
     assert scope == {
         "mode": "physical_schema",
         "tenant_id": None,
-        "row_security": "bypassed",
+        "row_security": "verified_complete_operator",
         "physical_schema_complete": True,
         "restore_mode": "isolated_or_in_place",
     }
@@ -265,7 +266,11 @@ def test_full_backup_and_isolated_restore_include_rows_from_multiple_tenants(env
             cfg,
             settings,
             backup_id=created.backup_id,
-            options=verify.RestoreOptions(mode=verify.MODE_ISOLATED),
+            options=verify.RestoreOptions(
+                mode=verify.MODE_ISOLATED,
+                target_database="tenant_restore_" + uuid.uuid4().hex[:12],
+            ),
+            recovery_source={"purpose": "isolated_rehearsal"},
         )
         restored_database = restored.target_database
         restored_cfg = {

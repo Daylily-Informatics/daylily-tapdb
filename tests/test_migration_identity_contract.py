@@ -51,6 +51,180 @@ def test_transaction_markers_are_removed_before_guarded_execution():
     assert _strip_transaction_control(source).strip() == "SELECT 1;"
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        None,
+        "missing_marker",
+        "wrong_prefix",
+        "lost_old_proof",
+        "duplicate",
+        "ownership_kind",
+        "unknown_proof",
+    ],
+)
+def test_prefix_annotation_is_exact_additive_evidence(mutation):
+    from copy import deepcopy
+
+    before = {
+        "name": "msg_instance_seq",
+        "mapping": {
+            "kind": "prefix",
+            "prefix": "MSG",
+            "evidence": [
+                {
+                    "source": "explicit_source_contract",
+                    "evidence": "verified SQL source",
+                }
+            ],
+        },
+    }
+    after = deepcopy(before)
+    annotation = {
+        "source": "catalog_annotation",
+        "annotation": "tapdb-prefix-binding/v1:MSG",
+    }
+    after["mapping"]["evidence"].insert(0, annotation)
+    preflight = {
+        "pending_migrations": [
+            {
+                "allowed_prefix_annotations": [
+                    {"name": "msg_instance_seq", "annotation": annotation["annotation"]}
+                ]
+            }
+        ]
+    }
+    if mutation == "missing_marker":
+        preflight["pending_migrations"] = []
+    elif mutation == "wrong_prefix":
+        after["mapping"]["prefix"] = "WX"
+    elif mutation == "lost_old_proof":
+        after["mapping"]["evidence"].pop()
+    elif mutation == "duplicate":
+        after["mapping"]["evidence"].append(annotation)
+    elif mutation == "ownership_kind":
+        after["mapping"]["kind"] = "unmapped"
+    elif mutation == "unknown_proof":
+        after["mapping"]["evidence"].append({"source": "invented"})
+    if mutation is None:
+        migration_identity._verify_added_prefix_annotation(preflight, before, after)
+    else:
+        with pytest.raises(MigrationReceiptMismatchError, match="mapping changed"):
+            migration_identity._verify_added_prefix_annotation(preflight, before, after)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [None, "undeclared_rows", "old_row_changed", "wrong_prefix", "unknown_table"],
+)
+def test_new_rows_may_add_only_true_stored_prefix_evidence(mutation):
+    from copy import deepcopy
+
+    before = {
+        "name": "msg_instance_seq",
+        "mapping": {
+            "kind": "prefix",
+            "prefix": "MSG",
+            "evidence": [
+                {
+                    "source": "explicit_source_contract",
+                    "evidence": "verified SQL source",
+                }
+            ],
+        },
+    }
+    after = deepcopy(before)
+    after["mapping"]["evidence"].insert(
+        0, {"source": "stored_rows", "table": "generic_instance"}
+    )
+    preflight = {
+        "pending_migrations": [{"allowed_new_rows": ["generic_instance"]}],
+        "identity_inventory": {"tables": {"generic_instance": {"rows": {}}}},
+    }
+    postflight = {
+        "identity_inventory": {
+            "tables": {
+                "generic_instance": {
+                    "rows": {"new-pk-hash": {"identity": {"euid_prefix": "MSG"}}}
+                }
+            }
+        }
+    }
+    if mutation == "undeclared_rows":
+        preflight["pending_migrations"] = []
+    elif mutation == "old_row_changed":
+        preflight["identity_inventory"]["tables"]["generic_instance"]["rows"] = {
+            "new-pk-hash": {"identity": {"euid_prefix": "WX"}}
+        }
+    elif mutation == "wrong_prefix":
+        postflight["identity_inventory"]["tables"]["generic_instance"]["rows"][
+            "new-pk-hash"
+        ]["identity"]["euid_prefix"] = "WX"
+    elif mutation == "unknown_table":
+        after["mapping"]["evidence"][0]["table"] = "unrelated_history"
+    if mutation is None:
+        migration_identity._verify_added_prefix_annotation(
+            preflight, before, after, postflight=postflight
+        )
+    else:
+        with pytest.raises(MigrationReceiptMismatchError, match="mapping changed"):
+            migration_identity._verify_added_prefix_annotation(
+                preflight, before, after, postflight=postflight
+            )
+
+
+def test_table_schema_authority_is_exact_and_bound_to_the_migration_hash(tmp_path):
+    migration = tmp_path / "20260910_235958_exact_schema.sql"
+    migration.write_text(
+        "-- tapdb-allow-schema: generic_instance\n"
+        "-- tapdb-allow-new-table: explicit_history_mapping\nSELECT 1;\n",
+        encoding="utf-8",
+    )
+    original = _migration_assets(tmp_path)[0]
+    assert original["allowed_schema_tables"] == ["generic_instance"]
+    assert original["allowed_new_tables"] == ["explicit_history_mapping"]
+    migration.write_text(
+        "-- tapdb-allow-schema: generic_template\n"
+        "-- tapdb-allow-new-table: explicit_history_mapping\nSELECT 1;\n",
+        encoding="utf-8",
+    )
+    assert _migration_assets(tmp_path)[0]["sha256"] != original["sha256"]
+
+
+@pytest.mark.parametrize(
+    "catalog_field", ["owner", "policies", "triggers", "dependencies"]
+)
+def test_canonical_table_declarations_do_not_waive_unknown_historical_catalog(
+    catalog_field,
+):
+    from copy import deepcopy
+
+    from daylily_tapdb.identity_inventory import seal_receipt
+    from tests.test_identity_inventory import snapshot
+
+    original = snapshot()
+    modified = deepcopy(original)
+    modified["tables"]["history"][catalog_field] = (
+        "different_owner" if catalog_field == "owner" else ["unapproved catalog change"]
+    )
+    modified = seal_receipt(modified)
+    preflight = {
+        "identity_inventory": original,
+        "pending_migrations": [
+            {
+                "allowed_schema_tables": ["generic_instance", "generic_template"],
+                "allowed_new_tables": [],
+            }
+        ],
+    }
+    with pytest.raises(
+        MigrationReceiptMismatchError, match="physical identity preservation"
+    ):
+        migration_identity._verify_physical_preservation(
+            preflight, {"identity_inventory": modified}, {}, set()
+        )
+
+
 def test_runner_expands_canonical_rls_and_binds_it_into_asset_fingerprint(
     tmp_path: Path,
 ):

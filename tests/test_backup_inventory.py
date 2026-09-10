@@ -124,10 +124,22 @@ def test_schema_asset_checksums_cover_schema_plus_every_migration():
     assert entries[0]["sha256"] == sha256_file(SCHEMA_ROOT / "tapdb_schema.sql")
     assert entries[1]["name"] == "rls.sql"
     assert entries[1]["sha256"] == sha256_file(SCHEMA_ROOT / "rls.sql")
+    assert entries[2]["name"] == "allocator_functions.sql"
+    assert entries[2]["sha256"] == sha256_file(SCHEMA_ROOT / "allocator_functions.sql")
     assert all(entry["sha256"] for entry in entries)
     # Every migration on disk is represented; nothing is hardcoded.
     migration_names = {p.name for p in (SCHEMA_ROOT / "migrations").glob("*.sql")}
     assert migration_names <= {entry["name"] for entry in entries}
+
+
+def test_allocator_asset_changes_the_recorded_source_digest(tmp_path):
+    asset = tmp_path / "allocator_functions.sql"
+    asset.write_text("SELECT 1;\n", encoding="utf-8")
+    before = schema_asset_checksums(schema_asset_files(tmp_path))
+    asset.write_text("SELECT 2;\n", encoding="utf-8")
+    after = schema_asset_checksums(schema_asset_files(tmp_path))
+    assert before[2]["name"] == after[2]["name"] == "allocator_functions.sql"
+    assert before[2]["sha256"] != after[2]["sha256"]
 
 
 def test_missing_assets_are_recorded_rather_than_fatal(tmp_path: Path):

@@ -1,4 +1,8 @@
 -- Convert legacy outbox payload rows to canonical message instances.
+-- tapdb-allow-schema: generic_instance
+-- tapdb-allow-schema: outbox_event
+-- tapdb-allow-schema: tapdb_legacy_outbox_mapping
+-- tapdb-allow-new-table: tapdb_legacy_outbox_mapping
 -- tapdb-transformation: outbox_event.message_uid:null_to_legacy_mapping_v1
 -- tapdb-allow-new-rows: generic_instance
 -- tapdb-allow-new-rows: tapdb_legacy_outbox_mapping

@@ -1,0 +1,1671 @@
+"""Frozen SQL from TapDB tag 9.0.9; no current-schema fallback.
+
+The exact upstream release commit and every original asset digest are retained.
+This fixture qualifies that release only; it does not assert Bloom used 9.0.9.
+"""
+
+RELEASE_COMMIT = "52d5f498dc4751b7e42d346bee2811a14080e5a5"
+SOURCE_ASSET_SHA256 = {
+    "tapdb_schema.sql": "64362e2882a7b424f6bf3c6b3d9c21d1e859ec98d4ee61ca2a728cecfd134584",
+    "rls.sql": "b3f69e1e294340ed37795ddbbf6461c1a5ffcbd9ad5dcd4c06ad1dcd8648cefc",
+    "migrations/20260303_120000_add_tenant_id.sql": "f9ff222e8732f66ce9e9e387e93ac852b6246d77ce3c08738e32b7cf010161cc",
+    "migrations/20260303_120010_add_outbox_event.sql": "a8b9729c22278e799fd9e55102a665117b2c177044145738680bdd2ddd600fe9",
+    "migrations/20260405_120000_add_domain_scoping.sql": "8e1dbae1a3cfc96d16cb1e56ec0b5edba99f5bce171cfbf83847ed17eeabeaa9",
+    "migrations/20260612_154200_add_template_validator_ref.sql": "558e0cd14b84939551b229fe7924550a27234c8f58f9cdb781f658d1eb2735fa",
+    "migrations/20260612_154210_instance_prefix_from_template.sql": "49950a3942c6a5e8eb3098d502032bf2ab55c925fe374fc522d07cd1ca3388ab",
+}
+
+SOURCE_ASSETS = {
+    "tapdb_schema.sql": r"""-- TAPDB Schema v0.1.0
+-- Templated Abstract Polymorphic Database
+-- PostgreSQL 13+ required
+
+--------------------------------------------------------------------------------
+-- SEQUENCES
+--------------------------------------------------------------------------------
+
+-- Optional library sequences
+CREATE SEQUENCE IF NOT EXISTS wx_instance_seq;   -- WX (workflow)
+CREATE SEQUENCE IF NOT EXISTS wsx_instance_seq;  -- WSX (workflow_step)
+CREATE SEQUENCE IF NOT EXISTS xx_instance_seq;   -- XX (action)
+CREATE SEQUENCE IF NOT EXISTS ay_instance_seq;   -- AY (assay)
+CREATE SEQUENCE IF NOT EXISTS msg_instance_seq;  -- MSG (system messages)
+
+--------------------------------------------------------------------------------
+-- SESSION CONTEXT HELPERS
+--------------------------------------------------------------------------------
+
+-- Validate domain code (1-4 uppercase Crockford Base32 chars, no I/L/O/U)
+CREATE OR REPLACE FUNCTION tapdb_validate_domain_code(code TEXT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    norm TEXT := upper(trim(code));
+BEGIN
+    IF norm !~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$' THEN
+        RAISE EXCEPTION
+            'Invalid domain code "%" (must be 1-4 Crockford Base32 chars)',
+            code;
+    END IF;
+    RETURN norm;
+END;
+$$;
+
+-- Validate owner repo name against Meridian registry issuer token rules.
+CREATE OR REPLACE FUNCTION tapdb_validate_owner_repo_name(code TEXT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    norm TEXT := lower(trim(code));
+BEGIN
+    IF norm !~ '^[a-z0-9]+([._-][a-z0-9]+)*$' THEN
+        RAISE EXCEPTION
+            'Invalid owner repo name "%" (must match Meridian issuer token rules)',
+            code;
+    END IF;
+    RETURN norm;
+END;
+$$;
+
+-- Resolve runtime domain code from Postgres session state.
+-- Missing session state is rejected. Explicit empty string is also rejected.
+CREATE OR REPLACE FUNCTION tapdb_current_domain_code()
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    raw_code TEXT;
+BEGIN
+    raw_code := current_setting('session.current_domain_code', true);
+    IF raw_code IS NULL THEN
+        RAISE EXCEPTION
+            'session.current_domain_code is required. '
+            'Set it to a valid 1-4 char Crockford Base32 domain code.';
+    END IF;
+
+    raw_code := trim(raw_code);
+    IF raw_code = '' THEN
+        RAISE EXCEPTION
+            'session.current_domain_code is set to empty string. '
+            'A valid 1-4 char Crockford Base32 domain code is required.';
+    END IF;
+
+    RETURN tapdb_validate_domain_code(raw_code);
+END;
+$$;
+
+-- Resolve runtime owner repo name from Postgres session state.
+-- Missing session state is rejected.
+CREATE OR REPLACE FUNCTION tapdb_current_owner_repo_name()
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    raw_code TEXT;
+BEGIN
+    raw_code := current_setting('session.current_owner_repo_name', true);
+    IF raw_code IS NULL THEN
+        RAISE EXCEPTION
+            'session.current_owner_repo_name is required. '
+            'Set it to the repo-name that owns this TapDB runtime.';
+    END IF;
+
+    raw_code := trim(raw_code);
+    IF raw_code = '' THEN
+        RAISE EXCEPTION
+            'session.current_owner_repo_name is set to empty string. '
+            'A valid repo-name is required.';
+    END IF;
+
+    RETURN tapdb_validate_owner_repo_name(raw_code);
+END;
+$$;
+
+--------------------------------------------------------------------------------
+-- TABLES
+--------------------------------------------------------------------------------
+
+-- Prefix configuration for TapDB-managed identity tables.
+-- Scoped by domain_code + owner repo name for shared-DB safety.
+CREATE TABLE IF NOT EXISTS tapdb_identity_prefix_config (
+    entity TEXT NOT NULL,
+    domain_code TEXT NOT NULL,
+    issuer_app_code TEXT NOT NULL,
+    prefix TEXT NOT NULL,
+    updated_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (entity, domain_code, issuer_app_code)
+);
+
+-- generic_template: Blueprint definitions
+CREATE TABLE IF NOT EXISTS generic_template (
+    -- Primary identification
+    uid BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    euid TEXT UNIQUE NOT NULL,  -- Meridian EUID set by trigger (set_generic_template_euid)
+    euid_prefix TEXT NOT NULL,
+    euid_seq BIGINT NOT NULL,
+    name TEXT NOT NULL,
+    -- Tenant scoping (nullable — some operations may not have a tenanted user)
+    tenant_id UUID,
+
+    -- Domain/app scoping (populated from session context on INSERT via trigger)
+    domain_code TEXT NOT NULL DEFAULT '',
+    issuer_app_code TEXT NOT NULL DEFAULT '',
+
+    -- Type hierarchy (category/type/subtype/version)
+    polymorphic_discriminator TEXT NOT NULL,
+    category TEXT NOT NULL,
+    type TEXT NOT NULL,
+    subtype TEXT NOT NULL,
+    version TEXT NOT NULL,
+
+    CONSTRAINT unique_template_code UNIQUE (domain_code, issuer_app_code, category, type, subtype, version),
+
+    -- Instance configuration
+    instance_prefix TEXT NOT NULL,
+    instance_polymorphic_identity TEXT,
+
+    -- Flexible data storage
+    json_addl JSONB NOT NULL DEFAULT '{}'::jsonb,
+    validator_ref TEXT NOT NULL DEFAULT 'UNIVERSAL_PASS@1',
+    json_addl_schema JSONB,
+
+    -- Status and lifecycle
+    bstatus TEXT NOT NULL,
+    is_singleton BOOLEAN NOT NULL DEFAULT TRUE,
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+
+    -- Timestamps
+    created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT unique_generic_template_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq)
+);
+
+-- generic_instance: Concrete objects created from templates
+CREATE TABLE IF NOT EXISTS generic_instance (
+    -- Primary identification
+    uid BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    euid TEXT UNIQUE NOT NULL,
+    euid_prefix TEXT NOT NULL,
+    euid_seq BIGINT NOT NULL,
+    name TEXT NOT NULL,
+    -- Tenant scoping (nullable — some operations may not have a tenanted user)
+    tenant_id UUID,
+
+    -- Domain/app scoping (populated from session context on INSERT via trigger)
+    domain_code TEXT NOT NULL DEFAULT '',
+    issuer_app_code TEXT NOT NULL DEFAULT '',
+
+    -- Machine/protocol identity (UUIDv7 for external APIs, webhook idempotency, etc.)
+    machine_uuid UUID UNIQUE,
+
+    -- Type hierarchy (copied from template: category/type/subtype/version)
+    polymorphic_discriminator TEXT NOT NULL,
+    category TEXT NOT NULL,
+    type TEXT NOT NULL,
+    subtype TEXT NOT NULL,
+    version TEXT NOT NULL,
+
+    -- Template reference
+    template_uid BIGINT NOT NULL REFERENCES generic_template(uid),
+
+    -- Flexible data storage
+    json_addl JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    -- Status and lifecycle
+    bstatus TEXT NOT NULL,
+    is_singleton BOOLEAN NOT NULL DEFAULT FALSE,
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+
+    -- Timestamps
+    created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT unique_generic_instance_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq)
+);
+
+-- generic_instance_lineage: Directed edges between instances
+CREATE TABLE IF NOT EXISTS generic_instance_lineage (
+    -- Primary identification
+    uid BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    euid TEXT UNIQUE NOT NULL,  -- Meridian EUID set by trigger (set_generic_instance_lineage_euid)
+    euid_prefix TEXT NOT NULL,
+    euid_seq BIGINT NOT NULL,
+    name TEXT NOT NULL,
+    -- Tenant scoping (nullable — some operations may not have a tenanted user)
+    tenant_id UUID,
+
+    -- Domain/app scoping (populated from session context on INSERT via trigger)
+    domain_code TEXT NOT NULL DEFAULT '',
+    issuer_app_code TEXT NOT NULL DEFAULT '',
+
+    -- Type hierarchy (category/type/subtype/version)
+    polymorphic_discriminator TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'lineage',
+    type TEXT NOT NULL DEFAULT 'lineage',
+    subtype TEXT NOT NULL DEFAULT 'generic',
+    version TEXT NOT NULL DEFAULT '1.0',
+
+    -- Relationship definition
+    parent_instance_uid BIGINT NOT NULL REFERENCES generic_instance(uid),
+    child_instance_uid BIGINT NOT NULL REFERENCES generic_instance(uid),
+    parent_type TEXT,
+    child_type TEXT,
+    relationship_type TEXT NOT NULL DEFAULT 'generic',
+
+    -- Flexible data storage
+    json_addl JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    -- Status and lifecycle
+    bstatus TEXT NOT NULL DEFAULT 'active',
+    is_singleton BOOLEAN NOT NULL DEFAULT FALSE,
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+
+    -- Timestamps
+    created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    modified_dt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT unique_generic_instance_lineage_prefix_seq UNIQUE (domain_code, euid_prefix, euid_seq)
+);
+
+-- audit_log: Change tracking
+CREATE TABLE IF NOT EXISTS audit_log (
+    uid BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    euid TEXT UNIQUE NOT NULL,
+    euid_prefix TEXT NOT NULL,
+    euid_seq BIGINT NOT NULL,
+    -- Tenant scoping copied from source row (nullable for legacy rows)
+    tenant_id UUID,
+    -- Domain/app scoping copied from source row
+    domain_code TEXT NOT NULL DEFAULT '',
+    issuer_app_code TEXT NOT NULL DEFAULT '',
+    rel_table_name TEXT NOT NULL,
+    column_name TEXT,
+    rel_table_uid_fk BIGINT NOT NULL,
+    rel_table_euid_fk TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    changed_by TEXT,
+    changed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    operation_type TEXT CHECK (operation_type IN ('INSERT', 'UPDATE', 'DELETE')),
+    json_addl JSONB,
+    category TEXT,
+    deleted_record_json JSONB,
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    is_singleton BOOLEAN NOT NULL DEFAULT FALSE,
+
+    CONSTRAINT unique_audit_log_prefix_seq UNIQUE (euid_prefix, euid_seq)
+);
+
+-- outbox_event: Execution/dispatch index for the transactional outbox.
+-- The canonical message object lives in generic_instance; this table holds
+-- only the operational delivery state (claim, retry, lease, status).
+CREATE TABLE IF NOT EXISTS outbox_event (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    message_uid BIGINT NOT NULL REFERENCES generic_instance(uid),
+    -- Scoping — denormalized from the message for direct filtering
+    tenant_id UUID,
+    domain_code TEXT NOT NULL DEFAULT tapdb_current_domain_code(),
+    issuer_app_code TEXT NOT NULL DEFAULT tapdb_current_owner_repo_name(),
+    destination TEXT NOT NULL,
+    dedupe_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN (
+            'pending', 'delivering', 'received', 'processed',
+            'failed', 'dead_letter', 'rejected', 'canceled'
+        )),
+    attempt_count INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_error TEXT,
+    created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- Claim / lease management
+    claimed_by TEXT,
+    claim_token UUID,
+    claimed_dt TIMESTAMP WITH TIME ZONE,
+    lease_expires_dt TIMESTAMP WITH TIME ZONE,
+
+    -- Last attempt details (materialized for quick admin queries)
+    last_attempt_dt TIMESTAMP WITH TIME ZONE,
+    last_http_status INT,
+    last_response_headers JSONB,
+    last_response_body_excerpt TEXT,
+
+    -- Receipt tracking
+    receipt_machine_uuid UUID,
+    receipt_status TEXT,
+    receipt_received_dt TIMESTAMP WITH TIME ZONE,
+    receipt_processed_dt TIMESTAMP WITH TIME ZONE,
+
+    -- Terminal state timestamps
+    dead_letter_dt TIMESTAMP WITH TIME ZONE,
+    rejected_dt TIMESTAMP WITH TIME ZONE,
+    canceled_dt TIMESTAMP WITH TIME ZONE,
+
+    CONSTRAINT unique_outbox_event_destination_dedupe_key UNIQUE (
+        domain_code,
+        issuer_app_code,
+        destination,
+        dedupe_key
+    )
+);
+
+-- outbox_event_attempt: Append-only delivery attempt history.
+-- One row per delivery attempt; immutable operational history.
+CREATE TABLE IF NOT EXISTS outbox_event_attempt (
+    uid BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    outbox_event_id BIGINT NOT NULL REFERENCES outbox_event(id),
+    tenant_id UUID,
+    domain_code TEXT NOT NULL DEFAULT tapdb_current_domain_code(),
+    issuer_app_code TEXT NOT NULL DEFAULT tapdb_current_owner_repo_name(),
+    attempt_no INT NOT NULL,
+    worker_id TEXT,
+    claim_token UUID,
+    attempt_started_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    attempt_finished_dt TIMESTAMP WITH TIME ZONE,
+    transport_status TEXT NOT NULL DEFAULT 'attempted'
+        CHECK (transport_status IN (
+            'attempted', 'transport_failed', 'receipt_valid',
+            'receipt_invalid', 'processed', 'rejected'
+        )),
+    http_status INT,
+    transport_error TEXT,
+    response_headers JSONB,
+    response_body_excerpt TEXT,
+    receipt_machine_uuid UUID,
+    receipt_status TEXT,
+    receipt_received_dt TIMESTAMP WITH TIME ZONE,
+    receipt_processed_dt TIMESTAMP WITH TIME ZONE,
+    retry_scheduled_dt TIMESTAMP WITH TIME ZONE,
+    json_addl JSONB
+);
+
+-- inbox_message: Receiver-side durable receipt substrate.
+-- Idempotent: same message_machine_uuid → same row, same receipt.
+CREATE TABLE IF NOT EXISTS inbox_message (
+    uid BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    message_machine_uuid UUID UNIQUE NOT NULL,
+    receipt_machine_uuid UUID UNIQUE NOT NULL,
+    tenant_id UUID,
+    domain_code TEXT NOT NULL DEFAULT tapdb_current_domain_code(),
+    issuer_app_code TEXT NOT NULL DEFAULT tapdb_current_owner_repo_name(),
+    source_domain_code TEXT NOT NULL DEFAULT '',
+    source_issuer_app_code TEXT NOT NULL DEFAULT '',
+    source_destination TEXT,
+    status TEXT NOT NULL DEFAULT 'received'
+        CHECK (status IN ('received', 'processing', 'processed', 'failed', 'rejected')),
+    received_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    processed_dt TIMESTAMP WITH TIME ZONE,
+    payload JSONB NOT NULL DEFAULT '{}',
+    error_code TEXT,
+    error_message TEXT,
+    json_addl JSONB
+);
+
+-- _tapdb_migrations: migration tracking for schema evolution (not used for fresh installs)
+CREATE TABLE IF NOT EXISTS _tapdb_migrations (
+    filename TEXT PRIMARY KEY,
+    applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+--------------------------------------------------------------------------------
+-- HARDENING (idempotent-ish ALTERs for existing installs)
+--------------------------------------------------------------------------------
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'unique_template_code'
+          AND conrelid = 'generic_template'::regclass
+    ) THEN
+        ALTER TABLE generic_template ADD CONSTRAINT unique_template_code
+            UNIQUE (domain_code, category, type, subtype, version);
+    END IF;
+END $$;
+
+ALTER TABLE generic_instance ALTER COLUMN euid SET NOT NULL;
+
+ALTER TABLE generic_template ALTER COLUMN json_addl SET DEFAULT '{}'::jsonb;
+ALTER TABLE generic_instance ALTER COLUMN json_addl SET DEFAULT '{}'::jsonb;
+
+ALTER TABLE generic_template ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE generic_instance ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE generic_instance ADD COLUMN IF NOT EXISTS machine_uuid UUID UNIQUE;
+ALTER TABLE generic_instance_lineage ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS tenant_id UUID;
+
+--------------------------------------------------------------------------------
+-- INDEXES
+--------------------------------------------------------------------------------
+
+-- generic_template indexes
+CREATE INDEX IF NOT EXISTS idx_generic_template_domain ON generic_template(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_generic_template_domain_code_lookup
+    ON generic_template(domain_code, category, type, subtype, version);
+CREATE INDEX IF NOT EXISTS idx_generic_template_polymorphic_discriminator ON generic_template(polymorphic_discriminator);
+CREATE INDEX IF NOT EXISTS idx_generic_template_type ON generic_template(type);
+CREATE INDEX IF NOT EXISTS idx_generic_template_is_deleted ON generic_template(is_deleted);
+
+-- generic_instance indexes
+CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_unique_singleton_key
+    ON generic_instance (category, type, subtype, version)
+    WHERE is_singleton = TRUE;
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain ON generic_instance(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_template
+    ON generic_instance(domain_code, issuer_app_code, template_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_type
+    ON generic_instance(domain_code, issuer_app_code, category, type, subtype, version);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_tenant
+    ON generic_instance(domain_code, tenant_id);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_polymorphic_discriminator ON generic_instance(polymorphic_discriminator);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_type ON generic_instance(type);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_euid ON generic_instance(euid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_is_deleted ON generic_instance(is_deleted);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_template_uid ON generic_instance(template_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_category ON generic_instance(category);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_subtype ON generic_instance(subtype);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_version ON generic_instance(version);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_mod_dt ON generic_instance(modified_dt);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_singleton ON generic_instance(is_singleton);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_json_addl_gin ON generic_instance USING GIN (json_addl);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_tenant_template_created_dt
+    ON generic_instance (tenant_id, category, type, subtype, version, created_dt DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_system_user_login_identifier
+    ON generic_instance (lower(COALESCE(json_addl->>'login_identifier', '')))
+    WHERE is_deleted = FALSE
+      AND polymorphic_discriminator = 'actor_instance'
+      AND category = 'generic'
+      AND type = 'actor'
+      AND subtype = 'system_user';
+
+-- generic_instance_lineage indexes
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lineage_unique_edge
+    ON generic_instance_lineage (parent_instance_uid, child_instance_uid, relationship_type)
+    WHERE is_deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_domain ON generic_instance_lineage(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_parent ON generic_instance_lineage(parent_instance_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_child ON generic_instance_lineage(child_instance_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_domain_parent
+    ON generic_instance_lineage(domain_code, issuer_app_code, parent_instance_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_domain_child
+    ON generic_instance_lineage(domain_code, issuer_app_code, child_instance_uid);
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_is_deleted ON generic_instance_lineage(is_deleted);
+
+-- audit_log indexes
+CREATE INDEX IF NOT EXISTS idx_audit_log_domain ON audit_log(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_audit_log_rel_table_name ON audit_log(rel_table_name);
+CREATE INDEX IF NOT EXISTS idx_audit_log_rel_table_uid_fk ON audit_log(rel_table_uid_fk);
+CREATE INDEX IF NOT EXISTS idx_audit_log_rel_table_euid_fk ON audit_log(rel_table_euid_fk);
+CREATE INDEX IF NOT EXISTS idx_audit_log_is_deleted ON audit_log(is_deleted);
+CREATE INDEX IF NOT EXISTS idx_audit_log_operation_type ON audit_log(operation_type);
+CREATE INDEX IF NOT EXISTS idx_audit_log_changed_at ON audit_log(changed_at);
+CREATE INDEX IF NOT EXISTS idx_audit_log_changed_by ON audit_log(changed_by);
+CREATE INDEX IF NOT EXISTS idx_audit_log_json_addl_gin ON audit_log USING GIN (json_addl);
+CREATE INDEX IF NOT EXISTS idx_audit_log_domain_entity
+    ON audit_log(domain_code, issuer_app_code, rel_table_name, rel_table_uid_fk);
+CREATE INDEX IF NOT EXISTS idx_audit_log_domain_timeline
+    ON audit_log(domain_code, issuer_app_code, changed_at DESC);
+
+-- generic_instance machine_uuid index
+CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_machine_uuid
+    ON generic_instance(machine_uuid) WHERE machine_uuid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain_machine_uuid
+    ON generic_instance(domain_code, issuer_app_code, machine_uuid)
+    WHERE machine_uuid IS NOT NULL;
+
+-- outbox_event indexes
+CREATE INDEX IF NOT EXISTS idx_outbox_event_status_next_attempt_at
+    ON outbox_event(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_message_uid
+    ON outbox_event(message_uid);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_domain
+    ON outbox_event(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_status_next
+    ON outbox_event(status, next_attempt_at)
+    WHERE status IN ('pending', 'failed');
+CREATE INDEX IF NOT EXISTS idx_outbox_event_lease
+    ON outbox_event(status, lease_expires_dt)
+    WHERE status = 'delivering';
+
+-- outbox_event_attempt indexes
+CREATE INDEX IF NOT EXISTS idx_outbox_attempt_event_id
+    ON outbox_event_attempt(outbox_event_id, attempt_no);
+
+-- outbox: scoped dispatch, destination, admin
+CREATE INDEX IF NOT EXISTS idx_outbox_event_domain_status_next
+    ON outbox_event(domain_code, issuer_app_code, status, next_attempt_at)
+    WHERE status IN ('pending', 'failed');
+CREATE INDEX IF NOT EXISTS idx_outbox_event_destination_status
+    ON outbox_event(destination, status);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_domain_destination_status_created
+    ON outbox_event(domain_code, issuer_app_code, destination, status, created_dt DESC);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_claim_token
+    ON outbox_event(claim_token)
+    WHERE claim_token IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_outbox_event_domain_status_created
+    ON outbox_event(domain_code, status, created_dt);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_receipt_machine_uuid
+    ON outbox_event(receipt_machine_uuid)
+    WHERE receipt_machine_uuid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_outbox_event_tenant_created_dt
+    ON outbox_event(tenant_id, created_dt DESC);
+
+-- outbox_event_attempt: time-ordered
+CREATE INDEX IF NOT EXISTS idx_outbox_attempt_event_time
+    ON outbox_event_attempt(outbox_event_id, attempt_started_dt DESC);
+
+-- inbox_message indexes
+CREATE INDEX IF NOT EXISTS idx_inbox_message_domain
+    ON inbox_message(domain_code, issuer_app_code);
+CREATE INDEX IF NOT EXISTS idx_inbox_message_status
+    ON inbox_message(status)
+    WHERE status IN ('received', 'processing');
+CREATE INDEX IF NOT EXISTS idx_inbox_message_domain_status
+    ON inbox_message(domain_code, issuer_app_code, status);
+CREATE INDEX IF NOT EXISTS idx_inbox_message_machine_uuid
+    ON inbox_message(message_machine_uuid);
+CREATE INDEX IF NOT EXISTS idx_inbox_message_domain_machine_uuid
+    ON inbox_message(domain_code, issuer_app_code, message_machine_uuid);
+
+--------------------------------------------------------------------------------
+-- FUNCTIONS
+--------------------------------------------------------------------------------
+
+-- Meridian EUID: Crockford Base32 encode (positive integer -> unpadded text)
+CREATE OR REPLACE FUNCTION crockford_base32_encode(val BIGINT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    alphabet TEXT := '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    result TEXT := '';
+    remainder BIGINT;
+BEGIN
+    IF val <= 0 THEN
+        RAISE EXCEPTION 'EUID body must be a positive integer, got %', val;
+    END IF;
+    WHILE val > 0 LOOP
+        remainder := val % 32;
+        result := substr(alphabet, (remainder + 1)::integer, 1) || result;
+        val := val / 32;
+    END LOOP;
+    RETURN result;
+END;
+$$;
+
+-- Meridian EUID: Crockford Base32 decode (unpadded text -> integer)
+CREATE OR REPLACE FUNCTION crockford_base32_decode(val TEXT)
+RETURNS BIGINT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    alphabet TEXT := '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    idx INT;
+    out_val BIGINT := 0;
+    ch CHAR;
+BEGIN
+    IF val IS NULL OR val = '' THEN
+        RAISE EXCEPTION 'EUID body must be non-empty';
+    END IF;
+
+    FOR idx IN 1..length(val) LOOP
+        ch := substr(val, idx, 1);
+        IF position(ch IN alphabet) = 0 THEN
+            RAISE EXCEPTION 'Invalid character "%" in EUID body', ch;
+        END IF;
+        out_val := out_val * 32 + (position(ch IN alphabet) - 1);
+    END LOOP;
+
+    IF out_val <= 0 THEN
+        RAISE EXCEPTION 'Decoded EUID body must be a positive integer, got %', out_val;
+    END IF;
+
+    RETURN out_val;
+END;
+$$;
+
+-- Validate Meridian prefix (1-4 Crockford Base32 chars, no I/L/O/U)
+CREATE OR REPLACE FUNCTION tapdb_validate_meridian_prefix(prefix TEXT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    norm TEXT := upper(trim(prefix));
+BEGIN
+    IF norm !~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$' THEN
+        RAISE EXCEPTION
+            'Invalid Meridian prefix "%" (must match ^[0-9A-HJ-KMNP-TV-Z]{1,4}$)',
+            prefix;
+    END IF;
+    RETURN norm;
+END;
+$$;
+
+-- Extract domain code from canonical EUID string (e.g. Z-AGX-1AB -> Z).
+CREATE OR REPLACE FUNCTION meridian_euid_domain_code(euid TEXT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    code TEXT;
+BEGIN
+    IF position('-' IN euid) = 0 THEN
+        RAISE EXCEPTION 'Invalid EUID format (missing domain code): %', euid;
+    END IF;
+    code := split_part(euid, '-', 1);
+    RETURN tapdb_validate_domain_code(code);
+END;
+$$;
+
+-- Extract prefix token from canonical EUID string (e.g. Z-AGX-1AB -> AGX).
+CREATE OR REPLACE FUNCTION meridian_euid_prefix(euid TEXT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    prefix TEXT;
+BEGIN
+    IF length(euid) - length(replace(euid, '-', '')) <> 2 THEN
+        RAISE EXCEPTION 'Invalid EUID format (missing prefix): %', euid;
+    END IF;
+    prefix := split_part(euid, '-', 2);
+    RETURN tapdb_validate_meridian_prefix(prefix);
+END;
+$$;
+
+-- Extract numeric sequence from EUID body (no checksum)
+CREATE OR REPLACE FUNCTION meridian_euid_seq_from_euid(euid TEXT)
+RETURNS BIGINT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    body_plus_check TEXT;
+    body TEXT;
+BEGIN
+    IF length(euid) - length(replace(euid, '-', '')) <> 2 THEN
+        RAISE EXCEPTION 'Invalid EUID format: %', euid;
+    END IF;
+    body_plus_check := split_part(euid, '-', 3);
+    IF length(body_plus_check) < 2 THEN
+        RAISE EXCEPTION 'Invalid EUID body/checksum segment: %', euid;
+    END IF;
+
+    body := substr(body_plus_check, 1, length(body_plus_check) - 1);
+    RETURN crockford_base32_decode(body);
+END;
+$$;
+
+-- Meridian EUID: Luhn-style MOD 32 check character (SPEC.md §7.5)
+CREATE OR REPLACE FUNCTION meridian_luhn_mod32_check(payload TEXT)
+RETURNS CHAR LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    alphabet TEXT := '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    i INT; ch CHAR; v INT; factor INT; p INT;
+    total INT := 0; payload_len INT; check_value INT;
+BEGIN
+    payload_len := length(payload);
+    FOR i IN REVERSE payload_len..1 LOOP
+        ch := substr(payload, i, 1);
+        v := position(ch IN alphabet) - 1;
+        IF v < 0 THEN
+            RAISE EXCEPTION 'Invalid character "%" in EUID payload', ch;
+        END IF;
+        factor := CASE WHEN (payload_len - i) % 2 = 0 THEN 2 ELSE 1 END;
+        p := v * factor;
+        total := total + (p / 32) + (p % 32);
+    END LOOP;
+    check_value := (32 - (total % 32)) % 32;
+    RETURN substr(alphabet, check_value + 1, 1);
+END;
+$$;
+
+-- Meridian EUID: Generate canonical DOMAIN-PREFIX-BODYCHECK string.
+CREATE OR REPLACE FUNCTION meridian_generate_euid(prefix TEXT, seq_val BIGINT, domain_code TEXT)
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+    normalized_prefix TEXT;
+    normalized_dc TEXT;
+    body TEXT;
+    payload TEXT;
+    check_char CHAR;
+BEGIN
+    normalized_prefix := tapdb_validate_meridian_prefix(prefix);
+    IF domain_code IS NULL OR trim(domain_code) = '' THEN
+        RAISE EXCEPTION 'domain_code is required for Meridian v0.4.1 EUID generation';
+    END IF;
+    normalized_dc := tapdb_validate_domain_code(domain_code);
+
+    body := crockford_base32_encode(seq_val);
+    payload := normalized_dc || normalized_prefix || body;
+    check_char := meridian_luhn_mod32_check(payload);
+    RETURN normalized_dc || '-' || normalized_prefix || '-' || body || check_char;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION meridian_generate_euid(prefix TEXT, seq_val BIGINT)
+RETURNS TEXT LANGUAGE plpgsql STABLE STRICT AS $$
+BEGIN
+    RETURN meridian_generate_euid(prefix, seq_val, tapdb_current_domain_code());
+END;
+$$;
+
+-- Resolve configured EUID prefix for TapDB-owned identity tables.
+CREATE OR REPLACE FUNCTION tapdb_get_identity_prefix(entity_name TEXT)
+RETURNS TEXT LANGUAGE plpgsql STABLE STRICT AS $$
+DECLARE
+    prefix TEXT;
+    dc TEXT;
+    owner_repo_name TEXT;
+BEGIN
+    dc := tapdb_current_domain_code();
+    owner_repo_name := tapdb_current_owner_repo_name();
+
+    SELECT p.prefix INTO prefix
+    FROM tapdb_identity_prefix_config p
+    WHERE p.entity = entity_name
+      AND p.domain_code = dc
+      AND p.issuer_app_code = owner_repo_name;
+
+    IF prefix IS NULL THEN
+        RAISE EXCEPTION
+            'Missing EUID prefix configuration for entity "%" (domain=%, owner_repo=%) in tapdb_identity_prefix_config',
+            entity_name, dc, owner_repo_name;
+    END IF;
+
+    prefix := tapdb_validate_meridian_prefix(prefix);
+    IF prefix IN ('GX', 'TGX') THEN
+        RAISE EXCEPTION
+            'Identity entity "%" is configured with unresolved/reserved prefix "%"',
+            entity_name,
+            prefix;
+    END IF;
+
+    RETURN prefix;
+END;
+$$;
+
+-- EUID auto-generation for generic_template (Meridian-conformant)
+CREATE OR REPLACE FUNCTION set_generic_template_euid()
+RETURNS TRIGGER AS $$
+DECLARE
+    prefix TEXT;
+    dc TEXT;
+    seq_val BIGINT;
+    seq_name TEXT;
+BEGIN
+    -- Populate domain_code and issuer_app_code from session context
+    NEW.domain_code := tapdb_current_domain_code();
+    NEW.issuer_app_code := tapdb_current_owner_repo_name();
+
+    IF NEW.euid IS NULL OR NEW.euid = '' THEN
+        prefix := tapdb_get_identity_prefix('generic_template');
+        seq_name := lower(prefix) || '_instance_seq';
+        BEGIN
+            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+        EXCEPTION WHEN undefined_table OR undefined_object THEN
+            RAISE EXCEPTION
+                'Missing EUID sequence % for prefix %. Create and initialize it before inserting rows.',
+                seq_name, prefix;
+        END;
+        NEW.euid_prefix := prefix;
+        NEW.euid_seq := seq_val;
+        NEW.euid := meridian_generate_euid(prefix, seq_val);
+    ELSE
+        prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
+        seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
+        dc := meridian_euid_domain_code(NEW.euid);
+        prefix := tapdb_validate_meridian_prefix(prefix);
+        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+            RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
+        END IF;
+        NEW.euid_prefix := prefix;
+        NEW.euid_seq := seq_val;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- EUID auto-generation for generic_instance (Meridian-conformant)
+CREATE OR REPLACE FUNCTION set_generic_instance_euid()
+RETURNS TRIGGER AS $$
+DECLARE
+    prefix TEXT;
+    dc TEXT;
+    seq_val BIGINT;
+    seq_name TEXT;
+BEGIN
+    -- Populate domain_code and issuer_app_code from session context
+    NEW.domain_code := tapdb_current_domain_code();
+    NEW.issuer_app_code := tapdb_current_owner_repo_name();
+
+    IF NEW.euid IS NULL OR NEW.euid = '' THEN
+        SELECT t.instance_prefix INTO prefix
+          FROM generic_template t
+         WHERE t.uid = NEW.template_uid
+           AND t.domain_code = NEW.domain_code
+           AND t.issuer_app_code = NEW.issuer_app_code
+           AND t.is_deleted IS FALSE;
+
+        IF prefix IS NULL THEN
+            RAISE EXCEPTION
+                'Missing template instance_prefix for generic_instance template_uid % (domain=%, owner_repo=%)',
+                NEW.template_uid, NEW.domain_code, NEW.issuer_app_code;
+        END IF;
+
+        prefix := tapdb_validate_meridian_prefix(prefix);
+        seq_name := lower(prefix) || '_instance_seq';
+
+        BEGIN
+            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+        EXCEPTION WHEN undefined_table OR undefined_object THEN
+            RAISE EXCEPTION
+                'Missing EUID sequence % for instance_prefix %. Create and initialize it before inserting instances.',
+                seq_name, prefix;
+        END;
+
+        NEW.euid_prefix := prefix;
+        NEW.euid_seq := seq_val;
+        NEW.euid := meridian_generate_euid(prefix, seq_val);
+    ELSE
+        prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
+        seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
+        dc := meridian_euid_domain_code(NEW.euid);
+        prefix := tapdb_validate_meridian_prefix(prefix);
+        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+            RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
+        END IF;
+        NEW.euid_prefix := prefix;
+        NEW.euid_seq := seq_val;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- EUID auto-generation for generic_instance_lineage (Meridian-conformant)
+CREATE OR REPLACE FUNCTION set_generic_instance_lineage_euid()
+RETURNS TRIGGER AS $$
+DECLARE
+    prefix TEXT;
+    dc TEXT;
+    seq_val BIGINT;
+    seq_name TEXT;
+BEGIN
+    -- Populate domain_code and issuer_app_code from session context
+    NEW.domain_code := tapdb_current_domain_code();
+    NEW.issuer_app_code := tapdb_current_owner_repo_name();
+
+    IF NEW.euid IS NULL OR NEW.euid = '' THEN
+        prefix := tapdb_get_identity_prefix('generic_instance_lineage');
+        seq_name := lower(prefix) || '_instance_seq';
+        BEGIN
+            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+        EXCEPTION WHEN undefined_table OR undefined_object THEN
+            RAISE EXCEPTION
+                'Missing EUID sequence % for prefix %. Create and initialize it before inserting rows.',
+                seq_name, prefix;
+        END;
+        NEW.euid_prefix := prefix;
+        NEW.euid_seq := seq_val;
+        NEW.euid := meridian_generate_euid(prefix, seq_val);
+    ELSE
+        prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
+        seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
+        dc := meridian_euid_domain_code(NEW.euid);
+        prefix := tapdb_validate_meridian_prefix(prefix);
+        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+            RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
+        END IF;
+        NEW.euid_prefix := prefix;
+        NEW.euid_seq := seq_val;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- EUID auto-generation for audit_log (config-driven prefix)
+CREATE OR REPLACE FUNCTION set_audit_log_euid()
+RETURNS TRIGGER AS $$
+DECLARE
+    prefix TEXT;
+    dc TEXT;
+    seq_val BIGINT;
+    seq_name TEXT;
+BEGIN
+    -- Populate domain_code and issuer_app_code from session context
+    NEW.domain_code := tapdb_current_domain_code();
+    NEW.issuer_app_code := tapdb_current_owner_repo_name();
+
+    IF NEW.euid IS NULL OR NEW.euid = '' THEN
+        prefix := tapdb_get_identity_prefix('audit_log');
+        seq_name := lower(prefix) || '_instance_seq';
+        BEGIN
+            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+        EXCEPTION WHEN undefined_table OR undefined_object THEN
+            RAISE EXCEPTION
+                'Missing EUID sequence % for prefix %. Create and initialize it before inserting rows.',
+                seq_name, prefix;
+        END;
+
+        NEW.euid_prefix := prefix;
+        NEW.euid_seq := seq_val;
+        NEW.euid := meridian_generate_euid(prefix, seq_val);
+    ELSE
+        prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
+        seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
+        dc := meridian_euid_domain_code(NEW.euid);
+        prefix := tapdb_validate_meridian_prefix(prefix);
+        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+            RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
+        END IF;
+        NEW.euid_prefix := prefix;
+        NEW.euid_seq := seq_val;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Soft delete function (prevents actual deletion, sets is_deleted flag)
+CREATE OR REPLACE FUNCTION soft_delete_row()
+RETURNS TRIGGER AS $$
+DECLARE
+    app_username TEXT;
+BEGIN
+    -- Get current user for audit
+    BEGIN
+        app_username := current_setting('session.current_username', true);
+    EXCEPTION WHEN OTHERS THEN
+        app_username := current_user;
+    END;
+
+    -- Soft delete only the row in the triggering table (dynamic SQL)
+    EXECUTE format('UPDATE %I SET is_deleted = TRUE WHERE uid = $1', TG_TABLE_NAME)
+    USING OLD.uid;
+
+    -- Record deletion in audit log with full record snapshot
+    INSERT INTO audit_log (
+        rel_table_name, rel_table_uid_fk, rel_table_euid_fk,
+        tenant_id, domain_code, issuer_app_code,
+        changed_by, operation_type, old_value
+    ) VALUES (
+        TG_TABLE_NAME, OLD.uid, OLD.euid,
+        OLD.tenant_id, OLD.domain_code, OLD.issuer_app_code,
+        app_username, 'DELETE', row_to_json(OLD)::TEXT
+    );
+
+    RETURN NULL;  -- Prevent actual deletion
+END;
+$$ LANGUAGE plpgsql;
+
+-- Record UPDATE operations in audit log
+CREATE OR REPLACE FUNCTION record_update()
+RETURNS TRIGGER AS $$
+DECLARE
+    r RECORD;
+    column_name TEXT;
+    old_value TEXT;
+    new_value TEXT;
+    app_username TEXT;
+BEGIN
+    BEGIN
+        app_username := current_setting('session.current_username', true);
+    EXCEPTION WHEN OTHERS THEN
+        app_username := current_user;
+    END;
+
+    FOR r IN SELECT * FROM json_each_text(row_to_json(NEW)) LOOP
+        column_name := r.key;
+        new_value := r.value;
+        EXECUTE format('SELECT ($1).%I', column_name) USING OLD INTO old_value;
+
+        IF old_value IS DISTINCT FROM new_value THEN
+            INSERT INTO audit_log (rel_table_name, column_name, old_value, new_value,
+                                   changed_by, rel_table_uid_fk, rel_table_euid_fk,
+                                   tenant_id, domain_code, issuer_app_code,
+                                   operation_type)
+            VALUES (TG_TABLE_NAME, column_name, old_value, new_value,
+                    app_username, NEW.uid, NEW.euid,
+                    NEW.tenant_id, NEW.domain_code, NEW.issuer_app_code,
+                    TG_OP);
+        END IF;
+    END LOOP;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Record INSERT operations in audit log
+CREATE OR REPLACE FUNCTION record_insert()
+RETURNS TRIGGER AS $$
+DECLARE
+    app_username TEXT;
+BEGIN
+    BEGIN
+        app_username := current_setting('session.current_username', true);
+    EXCEPTION WHEN OTHERS THEN
+        app_username := current_user;
+    END;
+
+    INSERT INTO audit_log (rel_table_name, rel_table_uid_fk, rel_table_euid_fk,
+                           tenant_id, domain_code, issuer_app_code,
+                           changed_by, operation_type)
+    VALUES (TG_TABLE_NAME, NEW.uid, NEW.euid,
+            NEW.tenant_id, NEW.domain_code, NEW.issuer_app_code,
+            app_username, 'INSERT');
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Auto-update modified_dt timestamp
+CREATE OR REPLACE FUNCTION update_modified_dt()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.modified_dt = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+--------------------------------------------------------------------------------
+-- TRIGGERS
+--------------------------------------------------------------------------------
+
+-- EUID trigger for generic_template (Meridian-conformant)
+DROP TRIGGER IF EXISTS trigger_set_generic_template_euid ON generic_template;
+CREATE TRIGGER trigger_set_generic_template_euid
+    BEFORE INSERT ON generic_template
+    FOR EACH ROW EXECUTE FUNCTION set_generic_template_euid();
+
+-- EUID trigger for generic_instance (Meridian-conformant)
+DROP TRIGGER IF EXISTS trigger_set_generic_instance_euid ON generic_instance;
+CREATE TRIGGER trigger_set_generic_instance_euid
+    BEFORE INSERT ON generic_instance
+    FOR EACH ROW EXECUTE FUNCTION set_generic_instance_euid();
+
+-- EUID trigger for generic_instance_lineage (Meridian-conformant)
+DROP TRIGGER IF EXISTS trigger_set_generic_instance_lineage_euid ON generic_instance_lineage;
+CREATE TRIGGER trigger_set_generic_instance_lineage_euid
+    BEFORE INSERT ON generic_instance_lineage
+    FOR EACH ROW EXECUTE FUNCTION set_generic_instance_lineage_euid();
+
+-- EUID trigger for audit_log (config-driven)
+DROP TRIGGER IF EXISTS trigger_set_audit_log_euid ON audit_log;
+CREATE TRIGGER trigger_set_audit_log_euid
+    BEFORE INSERT ON audit_log
+    FOR EACH ROW EXECUTE FUNCTION set_audit_log_euid();
+
+-- Soft delete triggers (BEFORE DELETE)
+DROP TRIGGER IF EXISTS soft_delete_generic_template ON generic_template;
+CREATE TRIGGER soft_delete_generic_template
+    BEFORE DELETE ON generic_template
+    FOR EACH ROW EXECUTE FUNCTION soft_delete_row();
+
+DROP TRIGGER IF EXISTS soft_delete_generic_instance ON generic_instance;
+CREATE TRIGGER soft_delete_generic_instance
+    BEFORE DELETE ON generic_instance
+    FOR EACH ROW EXECUTE FUNCTION soft_delete_row();
+
+DROP TRIGGER IF EXISTS soft_delete_generic_instance_lineage ON generic_instance_lineage;
+CREATE TRIGGER soft_delete_generic_instance_lineage
+    BEFORE DELETE ON generic_instance_lineage
+    FOR EACH ROW EXECUTE FUNCTION soft_delete_row();
+
+-- Audit triggers (AFTER INSERT)
+DROP TRIGGER IF EXISTS audit_insert_generic_template ON generic_template;
+CREATE TRIGGER audit_insert_generic_template
+    AFTER INSERT ON generic_template
+    FOR EACH ROW EXECUTE FUNCTION record_insert();
+
+DROP TRIGGER IF EXISTS audit_insert_generic_instance ON generic_instance;
+CREATE TRIGGER audit_insert_generic_instance
+    AFTER INSERT ON generic_instance
+    FOR EACH ROW EXECUTE FUNCTION record_insert();
+
+DROP TRIGGER IF EXISTS audit_insert_generic_instance_lineage ON generic_instance_lineage;
+CREATE TRIGGER audit_insert_generic_instance_lineage
+    AFTER INSERT ON generic_instance_lineage
+    FOR EACH ROW EXECUTE FUNCTION record_insert();
+
+-- Audit triggers (AFTER UPDATE)
+DROP TRIGGER IF EXISTS audit_update_generic_template ON generic_template;
+CREATE TRIGGER audit_update_generic_template
+    AFTER UPDATE ON generic_template
+    FOR EACH ROW EXECUTE FUNCTION record_update();
+
+DROP TRIGGER IF EXISTS audit_update_generic_instance ON generic_instance;
+CREATE TRIGGER audit_update_generic_instance
+    AFTER UPDATE ON generic_instance
+    FOR EACH ROW EXECUTE FUNCTION record_update();
+
+DROP TRIGGER IF EXISTS audit_update_generic_instance_lineage ON generic_instance_lineage;
+CREATE TRIGGER audit_update_generic_instance_lineage
+    AFTER UPDATE ON generic_instance_lineage
+    FOR EACH ROW EXECUTE FUNCTION record_update();
+
+-- Modified timestamp triggers (BEFORE UPDATE)
+DROP TRIGGER IF EXISTS update_modified_dt_generic_template ON generic_template;
+CREATE TRIGGER update_modified_dt_generic_template
+    BEFORE UPDATE ON generic_template
+    FOR EACH ROW EXECUTE FUNCTION update_modified_dt();
+
+DROP TRIGGER IF EXISTS update_modified_dt_generic_instance ON generic_instance;
+CREATE TRIGGER update_modified_dt_generic_instance
+    BEFORE UPDATE ON generic_instance
+    FOR EACH ROW EXECUTE FUNCTION update_modified_dt();
+
+DROP TRIGGER IF EXISTS update_modified_dt_generic_instance_lineage ON generic_instance_lineage;
+CREATE TRIGGER update_modified_dt_generic_instance_lineage
+    BEFORE UPDATE ON generic_instance_lineage
+    FOR EACH ROW EXECUTE FUNCTION update_modified_dt();
+
+--------------------------------------------------------------------------------
+-- END OF SCHEMA
+--------------------------------------------------------------------------------
+""",
+    "rls.sql": r"""-- Row Level Security (RLS) for TapDB — compound domain + tenant isolation.
+--
+-- This file is intentionally NOT applied by default.
+-- Apply manually once the application sets session variables per request/txn.
+--
+-- Required session variables (set by TAPDBConnection per-session):
+--   session.current_domain_code        — Crockford 1-4 char domain code
+--   session.current_owner_repo_name    — repo ownership token
+--   session.current_tenant_id      — UUID (optional for templates)
+--
+-- Example (per-transaction):
+--   SET LOCAL session.current_domain_code = 'Z';
+--   SET LOCAL session.current_owner_repo_name = 'lsmc-atlas';
+--   SET LOCAL session.current_tenant_id   = '00000000-0000-0000-0000-000000000000';
+
+-- ---------------------------------------------------------------------------
+-- Helper: check domain + owner match
+-- ---------------------------------------------------------------------------
+-- Rows match if their domain_code + issuer_app_code match the session.
+
+-- ---------------------------------------------------------------------------
+-- generic_template (templates may be global, so tenant_id is nullable)
+-- ---------------------------------------------------------------------------
+ALTER TABLE generic_template ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS generic_template_tenant_isolation ON generic_template;
+CREATE POLICY generic_template_domain_isolation
+    ON generic_template
+    USING (
+        domain_code = tapdb_current_domain_code()
+        AND issuer_app_code = tapdb_current_owner_repo_name()
+        AND (tenant_id IS NULL OR tenant_id = current_setting('session.current_tenant_id', true)::uuid)
+    );
+
+-- ---------------------------------------------------------------------------
+-- generic_instance
+-- ---------------------------------------------------------------------------
+ALTER TABLE generic_instance ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS generic_instance_tenant_isolation ON generic_instance;
+CREATE POLICY generic_instance_domain_isolation
+    ON generic_instance
+    USING (
+        domain_code = tapdb_current_domain_code()
+        AND issuer_app_code = tapdb_current_owner_repo_name()
+        AND (tenant_id IS NULL OR tenant_id = current_setting('session.current_tenant_id', true)::uuid)
+    );
+
+-- ---------------------------------------------------------------------------
+-- generic_instance_lineage
+-- ---------------------------------------------------------------------------
+ALTER TABLE generic_instance_lineage ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS generic_instance_lineage_tenant_isolation ON generic_instance_lineage;
+CREATE POLICY generic_instance_lineage_domain_isolation
+    ON generic_instance_lineage
+    USING (
+        domain_code = tapdb_current_domain_code()
+        AND issuer_app_code = tapdb_current_owner_repo_name()
+        AND (tenant_id IS NULL OR tenant_id = current_setting('session.current_tenant_id', true)::uuid)
+    );
+
+-- ---------------------------------------------------------------------------
+-- audit_log
+-- ---------------------------------------------------------------------------
+ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS audit_log_tenant_isolation ON audit_log;
+CREATE POLICY audit_log_domain_isolation
+    ON audit_log
+    USING (
+        domain_code = tapdb_current_domain_code()
+        AND issuer_app_code = tapdb_current_owner_repo_name()
+        AND (tenant_id IS NULL OR tenant_id = current_setting('session.current_tenant_id', true)::uuid)
+    );
+
+-- ---------------------------------------------------------------------------
+-- outbox_event
+-- ---------------------------------------------------------------------------
+ALTER TABLE outbox_event ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS outbox_event_tenant_isolation ON outbox_event;
+CREATE POLICY outbox_event_domain_isolation
+    ON outbox_event
+    USING (
+        domain_code = tapdb_current_domain_code()
+        AND issuer_app_code = tapdb_current_owner_repo_name()
+        AND (tenant_id IS NULL OR tenant_id = current_setting('session.current_tenant_id', true)::uuid)
+    );
+
+-- ---------------------------------------------------------------------------
+-- outbox_event_attempt (scoped via outbox_event FK, but add domain for safety)
+-- ---------------------------------------------------------------------------
+ALTER TABLE outbox_event_attempt ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS outbox_event_attempt_domain_isolation ON outbox_event_attempt;
+CREATE POLICY outbox_event_attempt_domain_isolation
+    ON outbox_event_attempt
+    USING (
+        EXISTS (
+            SELECT 1 FROM outbox_event e
+            WHERE e.id = outbox_event_attempt.outbox_event_id
+              AND e.domain_code = tapdb_current_domain_code()
+              AND e.issuer_app_code = tapdb_current_owner_repo_name()
+        )
+    );
+
+-- ---------------------------------------------------------------------------
+-- inbox_message
+-- ---------------------------------------------------------------------------
+ALTER TABLE inbox_message ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS inbox_message_domain_isolation ON inbox_message;
+CREATE POLICY inbox_message_domain_isolation
+    ON inbox_message
+    USING (
+        domain_code = tapdb_current_domain_code()
+        AND issuer_app_code = tapdb_current_owner_repo_name()
+        AND (tenant_id IS NULL OR tenant_id = current_setting('session.current_tenant_id', true)::uuid)
+    );
+
+-- ---------------------------------------------------------------------------
+-- tapdb_identity_prefix_config
+-- ---------------------------------------------------------------------------
+ALTER TABLE tapdb_identity_prefix_config ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tapdb_identity_prefix_config_domain_isolation ON tapdb_identity_prefix_config;
+CREATE POLICY tapdb_identity_prefix_config_domain_isolation
+    ON tapdb_identity_prefix_config
+    USING (
+        domain_code = tapdb_current_domain_code()
+        AND issuer_app_code = tapdb_current_owner_repo_name()
+    );
+""",
+    "migrations/20260303_120000_add_tenant_id.sql": r"""-- 20260303_120000_add_tenant_id.sql
+--
+-- Add nullable tenant_id UUID columns to TapDB core tables and audit_log.
+-- Update audit trigger functions to persist tenant_id into audit_log rows.
+
+ALTER TABLE generic_template ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE generic_instance ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE generic_instance_lineage ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS tenant_id UUID;
+
+CREATE INDEX IF NOT EXISTS idx_generic_instance_tenant_template_created_dt
+    ON generic_instance (tenant_id, category, type, subtype, version, created_dt DESC);
+
+-- Soft delete function (prevents actual deletion, sets is_deleted flag)
+CREATE OR REPLACE FUNCTION soft_delete_row()
+RETURNS TRIGGER AS $$
+DECLARE
+    app_username TEXT;
+BEGIN
+    -- Get current user for audit
+    BEGIN
+        app_username := current_setting('session.current_username', true);
+    EXCEPTION WHEN OTHERS THEN
+        app_username := current_user;
+    END;
+
+    -- Soft delete only the row in the triggering table (dynamic SQL)
+    EXECUTE format('UPDATE %I SET is_deleted = TRUE WHERE uid = $1', TG_TABLE_NAME)
+    USING OLD.uid;
+
+    -- Record deletion in audit log with full record snapshot
+    INSERT INTO audit_log (
+        rel_table_name, rel_table_uid_fk, rel_table_euid_fk,
+        tenant_id, changed_by, operation_type, old_value
+    ) VALUES (
+        TG_TABLE_NAME, OLD.uid, OLD.euid,
+        OLD.tenant_id, app_username, 'DELETE', row_to_json(OLD)::TEXT
+    );
+
+    RETURN NULL;  -- Prevent actual deletion
+END;
+$$ LANGUAGE plpgsql;
+
+-- Record UPDATE operations in audit log
+CREATE OR REPLACE FUNCTION record_update()
+RETURNS TRIGGER AS $$
+DECLARE
+    r RECORD;
+    column_name TEXT;
+    old_value TEXT;
+    new_value TEXT;
+    app_username TEXT;
+BEGIN
+    BEGIN
+        app_username := current_setting('session.current_username', true);
+    EXCEPTION WHEN OTHERS THEN
+        app_username := current_user;
+    END;
+
+    FOR r IN SELECT * FROM json_each_text(row_to_json(NEW)) LOOP
+        column_name := r.key;
+        new_value := r.value;
+        EXECUTE format('SELECT ($1).%I', column_name) USING OLD INTO old_value;
+
+        IF old_value IS DISTINCT FROM new_value THEN
+            INSERT INTO audit_log (rel_table_name, column_name, old_value, new_value,
+                                   changed_by, rel_table_uid_fk, rel_table_euid_fk,
+                                   tenant_id, operation_type)
+            VALUES (TG_TABLE_NAME, column_name, old_value, new_value,
+                    app_username, NEW.uid, NEW.euid,
+                    NEW.tenant_id, TG_OP);
+        END IF;
+    END LOOP;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Record INSERT operations in audit log
+CREATE OR REPLACE FUNCTION record_insert()
+RETURNS TRIGGER AS $$
+DECLARE
+    app_username TEXT;
+BEGIN
+    BEGIN
+        app_username := current_setting('session.current_username', true);
+    EXCEPTION WHEN OTHERS THEN
+        app_username := current_user;
+    END;
+
+    INSERT INTO audit_log (rel_table_name, rel_table_uid_fk, rel_table_euid_fk,
+                           tenant_id, changed_by, operation_type)
+    VALUES (TG_TABLE_NAME, NEW.uid, NEW.euid, NEW.tenant_id, app_username, 'INSERT');
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Recreate triggers to ensure they reference updated functions.
+
+-- Soft delete triggers (BEFORE DELETE)
+DROP TRIGGER IF EXISTS soft_delete_generic_template ON generic_template;
+CREATE TRIGGER soft_delete_generic_template
+    BEFORE DELETE ON generic_template
+    FOR EACH ROW EXECUTE FUNCTION soft_delete_row();
+
+DROP TRIGGER IF EXISTS soft_delete_generic_instance ON generic_instance;
+CREATE TRIGGER soft_delete_generic_instance
+    BEFORE DELETE ON generic_instance
+    FOR EACH ROW EXECUTE FUNCTION soft_delete_row();
+
+DROP TRIGGER IF EXISTS soft_delete_generic_instance_lineage ON generic_instance_lineage;
+CREATE TRIGGER soft_delete_generic_instance_lineage
+    BEFORE DELETE ON generic_instance_lineage
+    FOR EACH ROW EXECUTE FUNCTION soft_delete_row();
+
+-- Audit triggers (AFTER INSERT)
+DROP TRIGGER IF EXISTS audit_insert_generic_template ON generic_template;
+CREATE TRIGGER audit_insert_generic_template
+    AFTER INSERT ON generic_template
+    FOR EACH ROW EXECUTE FUNCTION record_insert();
+
+DROP TRIGGER IF EXISTS audit_insert_generic_instance ON generic_instance;
+CREATE TRIGGER audit_insert_generic_instance
+    AFTER INSERT ON generic_instance
+    FOR EACH ROW EXECUTE FUNCTION record_insert();
+
+DROP TRIGGER IF EXISTS audit_insert_generic_instance_lineage ON generic_instance_lineage;
+CREATE TRIGGER audit_insert_generic_instance_lineage
+    AFTER INSERT ON generic_instance_lineage
+    FOR EACH ROW EXECUTE FUNCTION record_insert();
+
+-- Audit triggers (AFTER UPDATE)
+DROP TRIGGER IF EXISTS audit_update_generic_template ON generic_template;
+CREATE TRIGGER audit_update_generic_template
+    AFTER UPDATE ON generic_template
+    FOR EACH ROW EXECUTE FUNCTION record_update();
+
+DROP TRIGGER IF EXISTS audit_update_generic_instance ON generic_instance;
+CREATE TRIGGER audit_update_generic_instance
+    AFTER UPDATE ON generic_instance
+    FOR EACH ROW EXECUTE FUNCTION record_update();
+
+DROP TRIGGER IF EXISTS audit_update_generic_instance_lineage ON generic_instance_lineage;
+CREATE TRIGGER audit_update_generic_instance_lineage
+    AFTER UPDATE ON generic_instance_lineage
+    FOR EACH ROW EXECUTE FUNCTION record_update();
+
+""",
+    "migrations/20260303_120010_add_outbox_event.sql": r"""-- 20260303_120010_add_outbox_event.sql
+--
+-- Add a minimal Postgres transactional outbox for durable cross-service events.
+
+CREATE TABLE IF NOT EXISTS outbox_event (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    event_id UUID NOT NULL,
+    tenant_id UUID,
+    event_type TEXT NOT NULL,
+    aggregate_euid TEXT,
+    payload JSONB NOT NULL,
+    destination TEXT NOT NULL,
+    dedupe_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'delivering', 'delivered', 'failed')),
+    attempt_count INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_error TEXT,
+    created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    delivered_dt TIMESTAMP WITH TIME ZONE,
+
+    CONSTRAINT unique_outbox_event_destination_dedupe_key UNIQUE (destination, dedupe_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_outbox_event_status_next_attempt_at
+    ON outbox_event(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_event_tenant_created_dt
+    ON outbox_event(tenant_id, created_dt DESC);
+
+""",
+    "migrations/20260405_120000_add_domain_scoping.sql": r"""-- Migration: Add domain_code + issuer_app_code columns and update SQL functions
+-- Applies to existing databases; new databases get these via base schema.
+--
+-- Safe to re-run: all statements are idempotent (IF NOT EXISTS / OR REPLACE).
+
+BEGIN;
+
+-- ============================================================
+-- 1. Add columns (idempotent via DO blocks)
+-- ============================================================
+
+DO $$ BEGIN
+    ALTER TABLE generic_template ADD COLUMN domain_code TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE generic_template ADD COLUMN issuer_app_code TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE generic_instance ADD COLUMN domain_code TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE generic_instance ADD COLUMN issuer_app_code TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE generic_instance_lineage ADD COLUMN domain_code TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE generic_instance_lineage ADD COLUMN issuer_app_code TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE audit_log ADD COLUMN domain_code TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE audit_log ADD COLUMN issuer_app_code TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE outbox_event ADD COLUMN tenant_id UUID;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE outbox_event ADD COLUMN domain_code TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE outbox_event ADD COLUMN issuer_app_code TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+-- ============================================================
+-- 2. Update unique constraint on generic_template
+-- ============================================================
+
+-- Drop old constraint (if it exists) and create new one including domain_code, issuer_app_code
+ALTER TABLE generic_template DROP CONSTRAINT IF EXISTS unique_template_code;
+ALTER TABLE generic_template ADD CONSTRAINT unique_template_code
+    UNIQUE (domain_code, issuer_app_code, category, type, subtype, version);
+
+-- ============================================================
+-- 3. Indexes for domain filtering
+-- ============================================================
+
+CREATE INDEX IF NOT EXISTS idx_generic_template_domain
+    ON generic_template (domain_code, issuer_app_code);
+
+CREATE INDEX IF NOT EXISTS idx_generic_instance_domain
+    ON generic_instance (domain_code, issuer_app_code);
+
+CREATE INDEX IF NOT EXISTS idx_generic_instance_lineage_domain
+    ON generic_instance_lineage (domain_code, issuer_app_code);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_domain
+    ON audit_log (domain_code, issuer_app_code);
+
+CREATE INDEX IF NOT EXISTS idx_outbox_event_domain
+    ON outbox_event (domain_code, issuer_app_code);
+
+COMMIT;
+""",
+    "migrations/20260612_154200_add_template_validator_ref.sql": r"""-- Add physical template validator reference.
+-- This is DDL-only schema evolution; it is not evidence migration.
+
+BEGIN;
+
+ALTER TABLE generic_template
+    ADD COLUMN IF NOT EXISTS validator_ref TEXT NOT NULL DEFAULT 'UNIVERSAL_PASS@1';
+
+DO $$
+DECLARE
+    scope_domain TEXT;
+    scope_owner TEXT;
+BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM generic_template
+         WHERE validator_ref IS NULL
+            OR btrim(validator_ref) = ''
+    ) THEN
+        SELECT domain_code, issuer_app_code
+          INTO scope_domain, scope_owner
+          FROM generic_template
+         WHERE COALESCE(domain_code, '') <> ''
+           AND COALESCE(issuer_app_code, '') <> ''
+         GROUP BY domain_code, issuer_app_code
+         ORDER BY count(*) DESC, domain_code, issuer_app_code
+         LIMIT 1;
+
+        IF scope_domain IS NULL OR scope_owner IS NULL THEN
+            RAISE EXCEPTION
+                'Cannot backfill generic_template.validator_ref because existing template rows do not carry domain/issuer scope.';
+        END IF;
+
+        PERFORM set_config('session.current_domain_code', scope_domain, true);
+        PERFORM set_config('session.current_owner_repo_name', scope_owner, true);
+
+        UPDATE generic_template
+           SET validator_ref = 'UNIVERSAL_PASS@1'
+         WHERE validator_ref IS NULL
+            OR btrim(validator_ref) = '';
+    END IF;
+END $$;
+
+ALTER TABLE generic_template
+    ALTER COLUMN validator_ref SET DEFAULT 'UNIVERSAL_PASS@1';
+
+ALTER TABLE generic_template
+    ALTER COLUMN validator_ref SET NOT NULL;
+
+ALTER TABLE generic_template DROP CONSTRAINT IF EXISTS unique_template_code;
+ALTER TABLE generic_template ADD CONSTRAINT unique_template_code
+    UNIQUE (domain_code, issuer_app_code, category, type, subtype, version);
+
+COMMIT;
+""",
+    "migrations/20260612_154210_instance_prefix_from_template.sql": r"""-- Derive instance EUID prefixes from the referenced template, not taxonomy.
+-- This is DDL-only function evolution; it is not evidence migration.
+
+BEGIN;
+
+CREATE OR REPLACE FUNCTION set_generic_instance_euid()
+RETURNS TRIGGER AS $$
+DECLARE
+    prefix TEXT;
+    dc TEXT;
+    seq_val BIGINT;
+    seq_name TEXT;
+BEGIN
+    -- Populate domain_code and issuer_app_code from session context
+    NEW.domain_code := tapdb_current_domain_code();
+    NEW.issuer_app_code := tapdb_current_owner_repo_name();
+
+    IF NEW.euid IS NULL OR NEW.euid = '' THEN
+        SELECT t.instance_prefix INTO prefix
+          FROM generic_template t
+         WHERE t.uid = NEW.template_uid
+           AND t.domain_code = NEW.domain_code
+           AND t.issuer_app_code = NEW.issuer_app_code
+           AND t.is_deleted IS FALSE;
+
+        IF prefix IS NULL THEN
+            RAISE EXCEPTION
+                'Missing template instance_prefix for generic_instance template_uid % (domain=%, owner_repo=%)',
+                NEW.template_uid, NEW.domain_code, NEW.issuer_app_code;
+        END IF;
+
+        prefix := tapdb_validate_meridian_prefix(prefix);
+        seq_name := lower(prefix) || '_instance_seq';
+
+        BEGIN
+            EXECUTE format('SELECT nextval(%L)', seq_name) INTO seq_val;
+        EXCEPTION WHEN undefined_table OR undefined_object THEN
+            RAISE EXCEPTION
+                'Missing EUID sequence % for instance_prefix %. Create and initialize it before inserting instances.',
+                seq_name, prefix;
+        END;
+
+        NEW.euid_prefix := prefix;
+        NEW.euid_seq := seq_val;
+        NEW.euid := meridian_generate_euid(prefix, seq_val);
+    ELSE
+        prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
+        seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
+        dc := meridian_euid_domain_code(NEW.euid);
+        prefix := tapdb_validate_meridian_prefix(prefix);
+        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+            RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
+        END IF;
+        NEW.euid_prefix := prefix;
+        NEW.euid_seq := seq_val;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMIT;
+""",
+}

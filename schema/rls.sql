@@ -24,11 +24,57 @@ ALTER TABLE tapdb_runtime_principal_scope ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tapdb_runtime_principal_scope FORCE ROW LEVEL SECURITY;
 REVOKE ALL ON tapdb_runtime_principal_scope FROM PUBLIC;
 
+-- Aurora administrators are not PostgreSQL superusers. Complete operator
+-- access is an explicit policy for the exact schema owner, including the
+-- scope table read by SECURITY DEFINER resolvers. FORCE RLS remains enabled.
+-- Install this before resolvers or historical audit repair can read rows.
+DO $tapdb_operator_policies$
+DECLARE
+    managed_schema NAME := current_schema();
+    operator_role NAME;
+    relation RECORD;
+BEGIN
+    SELECT pg_catalog.pg_get_userbyid(nspowner) INTO STRICT operator_role
+      FROM pg_catalog.pg_namespace WHERE nspname = managed_schema;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles
+         WHERE rolname = session_user AND (rolsuper OR rolbypassrls)
+    ) AND (session_user <> operator_role OR current_user <> session_user) THEN
+        RAISE EXCEPTION 'Canonical RLS installation requires the exact schema owner';
+    END IF;
+    FOR relation IN
+        SELECT c.relname, c.relowner FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = managed_schema AND c.relkind IN ('r', 'p')
+          AND c.relname IN (
+              'generic_template', 'generic_instance', 'generic_instance_lineage',
+              'audit_log', 'outbox_event', 'outbox_event_attempt', 'inbox_message',
+              'tapdb_identity_prefix_config', 'tapdb_legacy_outbox_mapping',
+              'tapdb_runtime_principal_scope'
+          )
+    LOOP
+        IF relation.relowner <> (SELECT oid FROM pg_catalog.pg_roles
+                                 WHERE rolname = operator_role) THEN
+            RAISE EXCEPTION 'Managed table % has a different operator owner', relation.relname;
+        END IF;
+        EXECUTE format('DROP POLICY IF EXISTS tapdb_operator_access ON %I.%I',
+                       managed_schema, relation.relname);
+        EXECUTE format(
+            'CREATE POLICY tapdb_operator_access ON %I.%I TO %I USING (true) WITH CHECK (true)',
+            managed_schema, relation.relname, operator_role
+        );
+    END LOOP;
+END;
+$tapdb_operator_policies$;
+
 CREATE OR REPLACE FUNCTION tapdb_session_role_is_operator()
 RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path FROM CURRENT AS $$
     SELECT COALESCE(
-        (SELECT rolsuper OR rolbypassrls
+        (SELECT rolsuper OR rolbypassrls OR oid = (
+             SELECT nspowner FROM pg_catalog.pg_namespace
+              WHERE nspname = current_schema()
+         )
            FROM pg_catalog.pg_roles
           WHERE rolname = session_user),
         FALSE
@@ -163,14 +209,15 @@ DECLARE
     bound_tenant_id UUID;
     bound_allow_global_rows BOOLEAN;
 BEGIN
-    SELECT rolsuper, rolbypassrls
+    SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication, rolbypassrls
       INTO role_is_superuser, role_bypasses_rls
       FROM pg_roles
      WHERE rolname = session_user;
     SELECT EXISTS (
         SELECT 1
           FROM pg_roles candidate
-         WHERE (candidate.rolsuper OR candidate.rolbypassrls)
+         WHERE candidate.rolname <> 'rds_iam'
+           AND candidate.rolname <> session_user
            AND pg_has_role(session_user, candidate.oid, 'MEMBER')
     ) INTO role_can_assume_operator;
     IF role_is_superuser IS NULL THEN
@@ -179,6 +226,18 @@ BEGIN
     IF role_is_superuser OR role_bypasses_rls OR role_can_assume_operator THEN
         RAISE EXCEPTION
             'TapDB runtime role % must not be SUPERUSER or BYPASSRLS', current_user;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM pg_catalog.pg_auth_members membership
+        JOIN pg_catalog.pg_roles member ON member.oid = membership.member
+        WHERE member.rolname = session_user AND membership.admin_option
+    ) OR EXISTS (
+        SELECT 1 FROM pg_catalog.pg_db_role_setting settings
+        JOIN pg_catalog.pg_roles role ON role.oid = settings.setrole
+        WHERE role.rolname = session_user AND cardinality(settings.setconfig) > 0
+    ) OR pg_catalog.has_database_privilege(session_user, current_database(), 'CREATE')
+      OR pg_catalog.has_schema_privilege(session_user, current_schema(), 'CREATE') THEN
+        RAISE EXCEPTION 'TapDB runtime role has forbidden membership, settings, or CREATE authority';
     END IF;
 
     SELECT config_identity, schema_name, domain_code, issuer_app_code,
@@ -209,6 +268,17 @@ BEGIN
     END IF;
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION tapdb_reject_runtime_scope_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'TapDB runtime principal scope binding is immutable';
+END;
+$$;
+DROP TRIGGER IF EXISTS tapdb_runtime_scope_immutable ON tapdb_runtime_principal_scope;
+CREATE TRIGGER tapdb_runtime_scope_immutable
+    BEFORE UPDATE OR DELETE ON tapdb_runtime_principal_scope
+    FOR EACH ROW EXECUTE FUNCTION tapdb_reject_runtime_scope_mutation();
 
 -- `pg_temp` is implicitly searched first when it is omitted from search_path.
 -- Bake the operator-owned target schema first and put pg_temp last so a runtime
@@ -644,6 +714,11 @@ BEGIN
         'record_insert',
         'tapdb_validate_lineage_endpoint_scope',
         'tapdb_reject_legacy_outbox_mapping_mutation'
+        , 'tapdb_reject_runtime_scope_mutation',
+        'set_generic_template_euid',
+        'set_generic_instance_euid',
+        'set_generic_instance_lineage_euid',
+        'set_audit_log_euid'
     ] LOOP
         EXECUTE format(
             'ALTER FUNCTION %I.%I() SET search_path TO %I, pg_catalog, pg_temp',
@@ -652,5 +727,10 @@ BEGIN
             scope_schema
         );
     END LOOP;
+    EXECUTE pg_catalog.format(
+        'ALTER FUNCTION %I.tapdb_get_identity_prefix(pg_catalog.text) SET search_path TO %I, pg_catalog, pg_temp',
+        scope_schema,
+        scope_schema
+    );
 END;
 $tapdb_pin_trigger_search_path$;

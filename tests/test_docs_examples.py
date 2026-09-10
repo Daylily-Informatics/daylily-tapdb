@@ -7,6 +7,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -115,7 +116,7 @@ def test_readme_bootstrap_local_script_runs(
 def test_readme_python_api_example_runs(docs_local_runtime: dict[str, object]) -> None:
     env = dict(docs_local_runtime["env"])
     result = subprocess.run(
-        ["python", str(EXAMPLES_DIR / "20_python_api.py")],
+        [sys.executable, str(EXAMPLES_DIR / "20_python_api.py")],
         cwd=REPO_ROOT,
         env=env,
         text=True,

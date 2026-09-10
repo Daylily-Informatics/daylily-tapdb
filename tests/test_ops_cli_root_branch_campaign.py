@@ -545,8 +545,16 @@ def test_config_update_all_fields_and_validation_errors(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     update = _command("config", "update")
+    ca_bundle = config_path.parent / "qualification-ca.pem"
+    ca_bundle.write_text("test fixture CA", encoding="utf-8")
     kwargs = {
         "engine_type": "aurora",
+        "region": "us-west-2",
+        "aws_profile": "qualification",
+        "cluster_identifier": "qualification-cluster",
+        "iam_auth": False,
+        "sslrootcert": ca_bundle,
+        "ssl": "verify-full",
         "host": "db.example",
         "hostaddr": "127.0.0.1",
         "port": 5432,

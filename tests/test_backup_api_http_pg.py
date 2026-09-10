@@ -324,13 +324,18 @@ def test_post_apply_with_a_stale_fingerprint_is_409(client, backup):
 
 def test_an_isolated_apply_succeeds_over_http(client, backup, env):
     cfg, _settings = env
+    evidence = {
+        "target_database": "api_http_rehearsal",
+        "recovery_source": {"purpose": "isolated_rehearsal"},
+    }
     staged = client.post(
-        f"/api/admin/backups/{backup.backup_id}/restore/stage", json={}
+        f"/api/admin/backups/{backup.backup_id}/restore/stage", json=evidence
     ).json()
 
     response = client.post(
         f"/api/admin/backups/{backup.backup_id}/restore/apply",
         json={
+            **evidence,
             "plan_fingerprint": staged["plan_fingerprint"],
             "confirm_target": staged["required_confirm_target"],
         },

@@ -1,4 +1,9 @@
 -- Migration: Add domain_code + issuer_app_code columns and update SQL functions
+-- tapdb-allow-schema: generic_template
+-- tapdb-allow-schema: generic_instance
+-- tapdb-allow-schema: generic_instance_lineage
+-- tapdb-allow-schema: audit_log
+-- tapdb-allow-schema: outbox_event
 -- Applies to existing databases; new databases get these via base schema.
 --
 -- Safe to re-run: all statements are idempotent (IF NOT EXISTS / OR REPLACE).

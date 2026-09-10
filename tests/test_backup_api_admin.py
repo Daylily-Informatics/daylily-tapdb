@@ -454,13 +454,20 @@ def test_a_refused_apply_mutates_nothing(env, backup):
 
 def test_an_isolated_apply_succeeds_end_to_end(env, backup):
     cfg, settings = env
-    staged = backups_api.stage_payload(cfg, settings, ref=backup.backup_id, body={})
+    evidence = {
+        "target_database": "api_admin_rehearsal",
+        "recovery_source": {"purpose": "isolated_rehearsal"},
+    }
+    staged = backups_api.stage_payload(
+        cfg, settings, ref=backup.backup_id, body=evidence
+    )
 
     payload = backups_api.apply_payload(
         cfg,
         settings,
         ref=backup.backup_id,
         body={
+            **evidence,
             "plan_fingerprint": staged["plan_fingerprint"],
             "confirm_target": service.target_label(cfg),
         },

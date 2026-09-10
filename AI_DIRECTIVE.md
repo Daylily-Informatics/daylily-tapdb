@@ -210,17 +210,28 @@ See `docs/consumer-discoverability-guide.md` for the tested adoption flow.
 
 ## Testing and release floor
 
-TapDB 10.0.0 supports PostgreSQL 16 and 17. Release qualification runs the same
-complete suite against community PostgreSQL 16.13 and the PostgreSQL 17 minor
-reported by CI without deselecting integration tests. Aurora PostgreSQL has not
-been independently qualified by this release. The matrix enables local
-documentation examples and requires no unexpected skips. Shared CI gates also
-run Ruff check and format, mypy, Bandit, detect-secrets, branch coverage for
-`daylily_tapdb` and `admin`, wheel build, schema-asset inspection, and
-installed-wheel smoke checks.
+TapDB 10.0.0 is the latest verified public release. TapDB 10.1.0 is an
+unreleased candidate until independent PostgreSQL/Aurora qualification, a
+reviewed green merge, immutable annotated tag, publication, and fresh public
+installation all have exact receipts.
+
+The 10.1.0 release matrix runs the same complete suite against exact community
+PostgreSQL 16.13 and 17.11 without deselecting integration tests, plus isolated
+Aurora PostgreSQL 16.13 acceptance. It enables local documentation examples and
+requires no unexpected skips. Shared CI gates also run Ruff check and format,
+mypy, Bandit, detect-secrets, branch coverage for `daylily_tapdb` and `admin`,
+wheel build, schema/migration-asset inspection, and installed-wheel smoke
+checks. Configuration of a gate, an author test, or an earlier candidate run is
+not evidence that the frozen release candidate passed it.
 
 Do not weaken RLS, auth, exact identity, no-fallback, or evidence checks to make
 a test pass. Fix the fixture to supply the same explicit contract as runtime.
+
+Service adoption follows `docs/service-readiness.md`: exact source inventory,
+principal preparation, backup/restore, migration, service-owned conversion,
+final identity/allocator verification and runtime binding, then service-owned
+acceptance. Database dumps do not include TapDB configs, identity registries,
+TLS/IAM/principal-secret state, runtime files, or external receipt journals.
 
 ## Public-safety rule
 

@@ -18,8 +18,9 @@ That split matters for automation: ``1`` means "we looked and found a problem",
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Any, NoReturn, Optional
+from typing import Annotated, Any, NoReturn, Optional
 
 import typer
 from cli_core_yo import ccyo_out
@@ -38,6 +39,28 @@ backup_app = typer.Typer(help="Backup and recovery lifecycle")
 EXIT_OK = 0
 EXIT_FINDINGS = 1
 EXIT_ERROR = 2
+
+
+def _read_evidence(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    if not path.is_absolute():
+        raise ValueError("Evidence paths must be absolute")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Evidence must be a JSON object")
+    # Each owning service validates its receipt format, hash and target.
+    return payload
+
+
+def _read_control_config(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    if not path.is_absolute() or not path.is_file():
+        raise ValueError("Control config must be an existing absolute file")
+    from daylily_tapdb.cli.db_config import get_db_config
+
+    return get_db_config(config_path=path)
 
 
 # ---------------------------------------------------------------------------
@@ -174,13 +197,30 @@ def backup_plan(
     strict: bool = typer.Option(
         False, "--strict", help="Treat schema drift as a blocking finding"
     ),
+    source_contract: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-contract", help="Absolute reviewed historical source contract"
+        ),
+    ] = None,
+    recovery_family: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--recovery-family", help="Absolute sealed recovery-family descriptor"
+        ),
+    ] = None,
 ) -> None:
     """Report what a backup would capture. Never writes anything."""
     resolved_class = _validate_class(backup_class)
     cfg, settings = _resolve()
     try:
         plan = service.plan_backup(
-            cfg, settings, backup_class=resolved_class, strict_drift=strict
+            cfg,
+            settings,
+            backup_class=resolved_class,
+            strict_drift=strict,
+            source_contract=_read_evidence(source_contract),
+            recovery_family=_read_evidence(recovery_family),
         )
     except Exception as exc:
         _handle(exc)
@@ -378,6 +418,32 @@ def backup_restore_plan(
         "--allow-unclaimable-prefixes",
         help="Proceed despite EUID prefixes this target cannot claim",
     ),
+    writer_fence: Annotated[
+        Optional[Path],
+        typer.Option("--writer-fence", help="Absolute target writer-fence evidence"),
+    ] = None,
+    recovery_source: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--recovery-source",
+            help="Absolute explicit recovery-purpose and source evidence",
+        ),
+    ] = None,
+    control_config: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--control-config",
+            help="Explicit existing absolute operator control config",
+        ),
+    ] = None,
+    provider_contract: Annotated[
+        Optional[Path],
+        typer.Option("--provider-contract", help="Absolute Aurora provider contract"),
+    ] = None,
+    quarantine_receipt: Annotated[
+        Optional[Path],
+        typer.Option("--quarantine-receipt", help="Absolute source quarantine receipt"),
+    ] = None,
 ) -> None:
     """Stage a restore and print exactly what it would do. Never mutates."""
     cfg, settings = _resolve()
@@ -391,7 +457,17 @@ def backup_restore_plan(
         keep_superseded=False,
     )
     try:
-        plan = verify.plan_restore(cfg, settings, backup_id=backup_id, options=options)
+        plan = verify.plan_restore(
+            cfg,
+            settings,
+            backup_id=backup_id,
+            options=options,
+            writer_fence=_read_evidence(writer_fence),
+            recovery_source=_read_evidence(recovery_source),
+            control_cfg=_read_control_config(control_config),
+            provider_contract=_read_evidence(provider_contract),
+            quarantine_receipt=_read_evidence(quarantine_receipt),
+        )
     except Exception as exc:
         _handle(exc)
         return
@@ -434,6 +510,18 @@ def backup_create(
         "--existing-snapshot",
         help="Record an existing provider snapshot instead of creating one",
     ),
+    source_contract: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-contract", help="Absolute reviewed historical source contract"
+        ),
+    ] = None,
+    recovery_family: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--recovery-family", help="Absolute sealed recovery-family descriptor"
+        ),
+    ] = None,
 ) -> None:
     """Capture a backup. The database is only ever read."""
     resolved_class = _validate_class(backup_class)
@@ -457,6 +545,8 @@ def backup_create(
             note=note,
             actor=_actor(),
             existing_snapshot=existing_snapshot,
+            source_contract=_read_evidence(source_contract),
+            recovery_family=_read_evidence(recovery_family),
         )
     except Exception as exc:
         _log("BACKUP_CREATE_FAILED", str(exc)[:200])
@@ -548,6 +638,35 @@ def backup_restore(
         "--keep-superseded",
         help="Keep the replaced schema after an in-place restore",
     ),
+    writer_fence: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--writer-fence",
+            help="Absolute receipt proving the existing target is writer-fenced",
+        ),
+    ] = None,
+    recovery_source: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--recovery-source",
+            help="Absolute final fenced source evidence or explicit isolated-rehearsal purpose",
+        ),
+    ] = None,
+    control_config: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--control-config",
+            help="Explicit existing absolute operator control config",
+        ),
+    ] = None,
+    provider_contract: Annotated[
+        Optional[Path],
+        typer.Option("--provider-contract", help="Absolute Aurora provider contract"),
+    ] = None,
+    quarantine_receipt: Annotated[
+        Optional[Path],
+        typer.Option("--quarantine-receipt", help="Absolute source quarantine receipt"),
+    ] = None,
 ) -> None:
     """Restore a backup.
 
@@ -581,6 +700,11 @@ def backup_restore(
             plan_fingerprint=plan_fingerprint,
             dry_run=dry_run,
             actor=_actor(),
+            writer_fence=_read_evidence(writer_fence),
+            recovery_source=_read_evidence(recovery_source),
+            control_cfg=_read_control_config(control_config),
+            provider_contract=_read_evidence(provider_contract),
+            quarantine_receipt=_read_evidence(quarantine_receipt),
         )
     except Exception as exc:
         _log("BACKUP_RESTORE_FAILED", f"{backup_id}: {str(exc)[:180]}")

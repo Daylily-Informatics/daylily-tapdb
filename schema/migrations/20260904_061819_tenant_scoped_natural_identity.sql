@@ -1,4 +1,5 @@
 -- Add tenant-scoped natural identities without rewriting existing rows.
+-- tapdb-allow-schema: generic_instance
 -- Existing identity rows remain global because their tenant_id stays NULL.
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_generic_instance_natural_identity_global

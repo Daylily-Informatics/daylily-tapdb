@@ -377,6 +377,12 @@ def test_postgresql_tenant_identity_separates_tenants_and_serializes_same_tenant
                     pg_instance["schema_name"],
                     "pytest:natural-identity-principal-cleanup",
                 )
+                # Explicit administrator teardown of only this test's rows in
+                # the ephemeral local cluster; the production API never lifts
+                # the immutable-scope trigger to change a runtime binding.
+                connection.exec_driver_sql(
+                    "ALTER TABLE tapdb_runtime_principal_scope DISABLE TRIGGER tapdb_runtime_scope_immutable"
+                )
                 connection.execute(
                     text(
                         "DELETE FROM tapdb_runtime_principal_scope "
@@ -386,6 +392,9 @@ def test_postgresql_tenant_identity_separates_tenants_and_serializes_same_tenant
                         "role_a": roles[0],
                         "role_b": roles[1],
                     },
+                )
+                connection.exec_driver_sql(
+                    "ALTER TABLE tapdb_runtime_principal_scope ENABLE TRIGGER tapdb_runtime_scope_immutable"
                 )
                 # This session-scoped PostgreSQL fixture is shared with tests
                 # that reconstruct older releases. Physically remove only the
@@ -796,8 +805,240 @@ def test_postgresql_advisory_xact_lock_rollback_leaves_no_session_lock(pg_instan
             assert replay.acquired is True
 
 
+def _migration_test_engine(url, **kwargs):
+    """Migration evidence uses one repeatable-read session, without stale caches."""
+    from sqlalchemy.pool import NullPool
+
+    return create_engine(
+        url, isolation_level="REPEATABLE READ", poolclass=NullPool, **kwargs
+    )
+
+
+def _assert_only_catalog_prefix_evidence_added(receipt):
+    """Every numeric state, owner, dependency and old mapping remains exact."""
+    from copy import deepcopy
+
+    before = receipt["sequence_pre_state"]
+    after = deepcopy(receipt["sequence_post_state"])
+    assert [item["name"] for item in before] == [item["name"] for item in after]
+    for old, new in zip(before, after, strict=True):
+        if old["mapping"] == new["mapping"]:
+            continue
+        addition = {
+            "source": "catalog_annotation",
+            "annotation": f"tapdb-prefix-binding/v1:{old['mapping']['prefix']}",
+        }
+        assert addition not in old["mapping"]["evidence"]
+        assert new["mapping"]["evidence"].count(addition) == 1
+        new["mapping"]["evidence"].remove(addition)
+    assert before == after
+
+
+def _mapped_migration_target(connection, target, *, source_schema_path=None):
+    from tests.test_identity_inventory_helpers import verified_source_sequence_mappings
+
+    return dict(
+        target,
+        sequence_mappings=verified_source_sequence_mappings(
+            connection,
+            schema_name=target["schema_name"],
+            source_schema_path=source_schema_path
+            or Path(__file__).resolve().parents[1] / "schema" / "tapdb_schema.sql",
+        ),
+    )
+
+
+def _build_test_migration_preflight(
+    connection, *, target, source_schema_path=None, **kwargs
+):
+    """Explicit fixture-source declarations precede every public preflight."""
+    return build_migration_preflight(
+        connection,
+        target=_mapped_migration_target(
+            connection, target, source_schema_path=source_schema_path
+        ),
+        **kwargs,
+    )
+
+
+def _assert_immutable_table_unchanged(before, after):
+    """Compare every immutable cell and duplicate count, not an obsolete digest."""
+    old_rows = {row["inventory_key"]: row for row in before["rows"]}
+    new_rows = {row["inventory_key"]: row for row in after["rows"]}
+    assert set(new_rows) == set(old_rows)
+    assert before["immutable_columns"] == after["immutable_columns"]
+    for key, row in old_rows.items():
+        assert new_rows[key]["count"] == row["count"]
+        for column in before["immutable_columns"]:
+            assert (
+                new_rows[key]["column_sha256"][column] == row["column_sha256"][column]
+            )
+
+
+def _apply_test_migration(engine, *, target, migrations_dir, preflight, receipts_dir):
+    """Run real acquire/apply/commit/finalize/release against an owned test DB.
+
+    On a SQL failure, retain the actual rollback snapshot on the exception
+    before a separately journaled allocator reconciliation reopens this shared
+    fixture. Assertions inspect that snapshot, not post-reconciliation state.
+    """
+    from daylily_tapdb.backup.recovery import retained_recovery_state
+    from daylily_tapdb.sequences import (
+        acquire_database_writer_fence,
+        apply_sequence_advance_plan,
+        build_sequence_advance_plan,
+        record_sequence_advance_outcome,
+        release_database_writer_fence,
+    )
+
+    engine.dispose()
+    target = dict(
+        target,
+        sequence_mappings=preflight["sequence_inventory"]["sequence_mappings"],
+    )
+    evidence_target = dict(
+        preflight["target"],
+        sequence_mappings=preflight["sequence_inventory"]["sequence_mappings"],
+    )
+    # Explicitly the independently created initdb control database used by
+    # this fixture; this is never a runtime configuration default.
+    control_engine = _migration_test_engine(engine.url.set(database="postgres"))
+    try:
+        with control_engine.connect() as control, engine.connect() as connection:
+            fence = acquire_database_writer_fence(
+                connection,
+                control_connection=control,
+                inventory=preflight["sequence_inventory"],
+                receipts_dir=receipts_dir,
+            )
+            try:
+                with connection.begin():
+                    result = apply_migration_preflight(
+                        connection,
+                        migrations_dir=migrations_dir,
+                        preflight=preflight,
+                        target=target,
+                        writer_fence=fence["fence"],
+                        receipts_dir=receipts_dir,
+                    )
+            except Exception as exc:
+                if getattr(exc, "recovery_intent", None) is not None:
+                    with connection.begin():
+                        migration_identity.finalize_migration_abort(
+                            connection,
+                            recovery_intent=exc.recovery_intent,
+                            sequence_result=exc.sequence_result,
+                            receipts_dir=receipts_dir,
+                            writer_fence=fence["fence"],
+                        )
+                with connection.begin():
+                    rollback_snapshot = build_migration_preflight(
+                        connection,
+                        migrations_dir=migrations_dir,
+                        target=evidence_target,
+                        receipts_dir=receipts_dir,
+                    )
+                exc.rollback_snapshot = rollback_snapshot
+                retained = retained_recovery_state(
+                    receipts_dir, target=preflight["target"]
+                )
+                plan = build_sequence_advance_plan(
+                    rollback_snapshot["sequence_inventory"], floors=retained["floors"]
+                )
+                with connection.begin():
+                    advance = apply_sequence_advance_plan(
+                        connection,
+                        plan,
+                        writer_fence=fence["fence"],
+                        receipts_dir=receipts_dir,
+                    )
+                committed = record_sequence_advance_outcome(
+                    advance,
+                    receipts_dir=receipts_dir,
+                    outcome="committed",
+                    actor="pytest:rollback-reconciliation",
+                )
+                release_database_writer_fence(
+                    connection,
+                    fence,
+                    result=committed,
+                    receipts_dir=receipts_dir,
+                    control_connection=control,
+                )
+                raise
+            with connection.begin():
+                completion = migration_identity.finalize_migration_recovery(
+                    connection,
+                    result,
+                    receipts_dir=receipts_dir,
+                    writer_fence=fence["fence"],
+                )
+            release_database_writer_fence(
+                connection,
+                fence,
+                result=completion["allocator_result"],
+                receipts_dir=receipts_dir,
+                control_connection=control,
+            )
+            return result
+    finally:
+        control_engine.dispose()
+
+
+def _migration_cli_evidence(pg_instance, tmp_path):
+    """Explicit source mapping and separate control config for real CLI fences."""
+    import yaml
+    from sqlalchemy.pool import NullPool
+
+    from tests.test_identity_inventory_helpers import verified_source_sequence_mappings
+
+    probe = create_engine(
+        pg_instance["operator_dsn"],
+        isolation_level="REPEATABLE READ",
+        poolclass=NullPool,
+    )
+    try:
+        with probe.begin() as connection:
+            mappings = verified_source_sequence_mappings(
+                connection,
+                schema_name=pg_instance["schema_name"],
+                source_schema_path=Path(__file__).resolve().parents[1]
+                / "schema"
+                / "tapdb_schema.sql",
+            )
+    finally:
+        probe.dispose()
+    mapping_path = (tmp_path / "source-sequence-mappings.json").resolve()
+    mapping_path.write_text(json.dumps(mappings), encoding="utf-8")
+    control = yaml.safe_load(
+        Path(pg_instance["config_path"]).read_text(encoding="utf-8")
+    )
+    # postgres is the exact, independently connected control DB created by
+    # this test's initdb fixture, not a production configuration default.
+    control["target"]["database"] = "postgres"
+    control_path = (tmp_path / "control.yaml").resolve()
+    control_path.write_text(yaml.safe_dump(control), encoding="utf-8")
+    control_path.chmod(0o600)
+    reviewed = [
+        "--sequence-mappings",
+        str(mapping_path),
+        "--receipts-dir",
+        str((tmp_path / "recovery-receipts").resolve()),
+    ]
+    apply = reviewed + [
+        "--establish-writer-fence",
+        "--control-config",
+        str(control_path),
+    ]
+    return reviewed, apply
+
+
 def test_cli_migration_preflight_apply_and_second_run_noop(pg_instance, tmp_path):
-    engine = create_engine(
+    import traceback
+
+    from daylily_tapdb.cli import framework_app as app
+
+    engine = _migration_test_engine(
         pg_instance["operator_dsn"],
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
@@ -861,9 +1102,19 @@ def test_cli_migration_preflight_apply_and_second_run_noop(pg_instance, tmp_path
 
     preflight_path = (tmp_path / "preflight.json").resolve()
     result_path = (tmp_path / "result.json").resolve()
+    reviewed_options, apply_options = _migration_cli_evidence(pg_instance, tmp_path)
+    engine.dispose()
     dry = runner.invoke(
         app,
-        ["db", "schema", "migrate", "--dry-run", "--receipt", str(preflight_path)],
+        [
+            "db",
+            "schema",
+            "migrate",
+            "--dry-run",
+            "--receipt",
+            str(preflight_path),
+            *reviewed_options,
+        ],
     )
     assert dry.exit_code == 0, dry.output
     preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
@@ -881,10 +1132,16 @@ def test_cli_migration_preflight_apply_and_second_run_noop(pg_instance, tmp_path
             str(preflight_path),
             "--receipt",
             str(result_path),
+            *apply_options,
         ],
     )
-    assert applied.exit_code == 0, applied.output
-    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert applied.exit_code == 0, applied.output + "".join(
+        traceback.format_exception(applied.exception)
+    )
+    envelope = json.loads(result_path.read_text(encoding="utf-8"))
+    assert envelope["recovery_completion"]["status"] == "committed"
+    assert envelope["principal_binding_required"] is True
+    result = envelope["migration_result"]
     assert result["status"] == "applied"
     assert result["sequence_pre_state"] == result["sequence_post_state"]
 
@@ -919,10 +1176,19 @@ def test_cli_migration_preflight_apply_and_second_run_noop(pg_instance, tmp_path
 
     noop_preflight = (tmp_path / "noop-preflight.json").resolve()
     noop_result = (tmp_path / "noop-result.json").resolve()
+    engine.dispose()
     assert (
         runner.invoke(
             app,
-            ["db", "schema", "migrate", "--dry-run", "--receipt", str(noop_preflight)],
+            [
+                "db",
+                "schema",
+                "migrate",
+                "--dry-run",
+                "--receipt",
+                str(noop_preflight),
+                *reviewed_options,
+            ],
         ).exit_code
         == 0
     )
@@ -937,46 +1203,59 @@ def test_cli_migration_preflight_apply_and_second_run_noop(pg_instance, tmp_path
             str(noop_preflight),
             "--receipt",
             str(noop_result),
+            *apply_options,
         ],
     )
     assert replay.exit_code == 0, replay.output
-    assert json.loads(noop_result.read_text(encoding="utf-8"))["status"] == "no-op"
+    assert (
+        json.loads(noop_result.read_text(encoding="utf-8"))["migration_result"][
+            "status"
+        ]
+        == "no-op"
+    )
 
 
-def test_migration_receipt_cannot_replay_under_different_config_identity(pg_instance):
+def test_migration_receipt_cannot_replay_under_different_config_identity(
+    pg_instance, tmp_path
+):
     migrations_dir = Path(__file__).resolve().parents[1] / "schema" / "migrations"
+    receipts = tmp_path / "recovery-receipts"
     target = _migration_target(pg_instance)
     changed_target = {
         **target,
-        "config_identity": "pytest://different-config-identity",
+        "config_identity": str((tmp_path / "different-config.yaml").resolve()),
     }
-    engine = create_engine(pg_instance["operator_dsn"])
+    engine = _migration_test_engine(pg_instance["operator_dsn"])
     with engine.connect() as connection:
         transaction = connection.begin()
-        preflight = build_migration_preflight(
+        preflight = _build_test_migration_preflight(
             connection,
             migrations_dir=migrations_dir,
             target=target,
+            receipts_dir=receipts,
         )
         assert preflight["target"]["config_identity"] == target["config_identity"]
-        with pytest.raises(
-            migration_identity.MigrationReceiptMismatchError,
-            match="live target no longer matches",
-        ):
-            apply_migration_preflight(
-                connection,
-                migrations_dir=migrations_dir,
-                preflight=preflight,
-                target=changed_target,
-            )
         transaction.rollback()
+    with pytest.raises(
+        migration_identity.MigrationReceiptMismatchError,
+        match="live target no longer matches",
+    ):
+        _apply_test_migration(
+            engine,
+            migrations_dir=migrations_dir,
+            preflight=preflight,
+            target=changed_target,
+            receipts_dir=receipts,
+        )
     engine.dispose()
 
 
 def test_legacy_outbox_conversion_preserves_event_identity_and_mapping(
     pg_instance, tmp_path
 ):
-    engine = create_engine(
+    from daylily_tapdb.cli import framework_app as app
+
+    engine = _migration_test_engine(
         pg_instance["operator_dsn"],
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
@@ -1071,9 +1350,19 @@ def test_legacy_outbox_conversion_preserves_event_identity_and_mapping(
 
     preflight_path = (tmp_path / "legacy-preflight.json").resolve()
     result_path = (tmp_path / "legacy-result.json").resolve()
+    reviewed_options, apply_options = _migration_cli_evidence(pg_instance, tmp_path)
+    engine.dispose()
     dry = runner.invoke(
         app,
-        ["db", "schema", "migrate", "--dry-run", "--receipt", str(preflight_path)],
+        [
+            "db",
+            "schema",
+            "migrate",
+            "--dry-run",
+            "--receipt",
+            str(preflight_path),
+            *reviewed_options,
+        ],
     )
     assert dry.exit_code == 0, dry.output
     applied = runner.invoke(
@@ -1087,10 +1376,11 @@ def test_legacy_outbox_conversion_preserves_event_identity_and_mapping(
             str(preflight_path),
             "--receipt",
             str(result_path),
+            *apply_options,
         ],
     )
     assert applied.exit_code == 0, applied.output
-    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result = json.loads(result_path.read_text(encoding="utf-8"))["migration_result"]
     sequence_pre = {row["name"]: row for row in result["sequence_pre_state"]}
     sequence_post = {row["name"]: row for row in result["sequence_post_state"]}
     assert {
@@ -1178,12 +1468,14 @@ def test_legacy_outbox_conversion_preserves_event_identity_and_mapping(
 
 def test_legacy_outbox_conversion_uses_exact_client_owner_core_template(
     pg_instance,
+    tmp_path,
 ):
+    receipts = tmp_path / "recovery-receipts"
     owner = f"client-{uuid.uuid4().hex[:10]}"
     event_id = uuid.uuid4()
     migrations_dir = Path(__file__).resolve().parents[1] / "schema" / "migrations"
     target = _migration_target(pg_instance)
-    engine = create_engine(pg_instance["operator_dsn"])
+    engine = _migration_test_engine(pg_instance["operator_dsn"])
     with engine.begin() as connection:
         _set_operator_context(
             connection,
@@ -1229,37 +1521,25 @@ def test_legacy_outbox_conversion_uses_exact_client_owner_core_template(
 
     with engine.connect() as connection:
         transaction = connection.begin()
-        missing_template_preflight = build_migration_preflight(
+        missing_template_preflight = _build_test_migration_preflight(
             connection,
             migrations_dir=migrations_dir,
             target=target,
+            receipts_dir=receipts,
         )
         transaction.rollback()
 
-    with engine.connect() as connection:
-        transaction = connection.begin()
-        try:
-            with pytest.raises(
-                Exception,
-                match="requires exactly one active .* owner .* found 0",
-            ):
-                apply_migration_preflight(
-                    connection,
-                    migrations_dir=migrations_dir,
-                    preflight=missing_template_preflight,
-                    target=target,
-                )
-        finally:
-            transaction.rollback()
-
-    with engine.connect() as connection:
-        transaction = connection.begin()
-        after_failed_conversion = build_migration_preflight(
-            connection,
+    with pytest.raises(
+        Exception, match="requires exactly one active .* owner .* found 0"
+    ) as failed:
+        _apply_test_migration(
+            engine,
             migrations_dir=migrations_dir,
+            preflight=missing_template_preflight,
             target=target,
+            receipts_dir=receipts,
         )
-        transaction.rollback()
+    after_failed_conversion = failed.value.rollback_snapshot
 
     assert after_failed_conversion["tables"] == missing_template_preflight["tables"]
     assert (
@@ -1276,18 +1556,20 @@ def test_legacy_outbox_conversion_uses_exact_client_owner_core_template(
 
     with engine.connect() as connection:
         transaction = connection.begin()
-        preflight = build_migration_preflight(
+        preflight = _build_test_migration_preflight(
             connection,
             migrations_dir=migrations_dir,
             target=target,
+            receipts_dir=receipts,
         )
-        result = apply_migration_preflight(
-            connection,
-            migrations_dir=migrations_dir,
-            preflight=preflight,
-            target=target,
-        )
-        transaction.commit()
+        transaction.rollback()
+    result = _apply_test_migration(
+        engine,
+        migrations_dir=migrations_dir,
+        preflight=preflight,
+        target=target,
+        receipts_dir=receipts,
+    )
 
     with engine.begin() as connection:
         _set_operator_context(
@@ -1321,7 +1603,7 @@ def test_legacy_outbox_conversion_uses_exact_client_owner_core_template(
 
 
 def test_preflight_refuses_euid_generator_behind_assigned_identity(pg_instance):
-    engine = create_engine(
+    engine = _migration_test_engine(
         pg_instance["operator_dsn"],
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
@@ -1345,8 +1627,11 @@ def test_preflight_refuses_euid_generator_behind_assigned_identity(pg_instance):
             {"value": int(assigned_max)},
         )
         try:
-            with pytest.raises(Exception, match="behind assigned identity values"):
-                build_migration_preflight(
+            with pytest.raises(
+                migration_identity.MigrationPreflightError,
+                match="generators are behind assigned identities",
+            ):
+                _build_test_migration_preflight(
                     connection, migrations_dir=migrations_dir, target=target
                 )
         finally:
@@ -1366,7 +1651,7 @@ def test_restored_backup_migrates_to_identical_identity_and_sequence_evidence(
     schema_name = pg_instance["schema_name"]
     migrations_dir = Path(__file__).resolve().parents[1] / "schema" / "migrations"
     source_target = _migration_target(pg_instance)
-    source_engine = create_engine(
+    source_engine = _migration_test_engine(
         pg_instance["operator_dsn"],
         connect_args={"options": "-c TimeZone=America/Los_Angeles"},
     )
@@ -1493,25 +1778,30 @@ def test_restored_backup_migrates_to_identical_identity_and_sequence_evidence(
     for engine, target in (
         (source_engine, source_target),
         (
-            create_engine(
+            _migration_test_engine(
                 restored_url,
                 connect_args={"options": "-c TimeZone=Asia/Tokyo"},
             ),
             restored_target,
         ),
     ):
+        receipts = tmp_path / target["database"] / "recovery-receipts"
         with engine.connect() as connection:
             transaction = connection.begin()
-            preflight = build_migration_preflight(
-                connection, migrations_dir=migrations_dir, target=target
-            )
-            result = apply_migration_preflight(
+            preflight = _build_test_migration_preflight(
                 connection,
                 migrations_dir=migrations_dir,
-                preflight=preflight,
                 target=target,
+                receipts_dir=receipts,
             )
-            transaction.commit()
+            transaction.rollback()
+        result = _apply_test_migration(
+            engine,
+            migrations_dir=migrations_dir,
+            preflight=preflight,
+            target=target,
+            receipts_dir=receipts,
+        )
         if target is source_target:
             source_result = result.receipt["postflight"]
         else:
@@ -1519,7 +1809,16 @@ def test_restored_backup_migrates_to_identical_identity_and_sequence_evidence(
 
     assert source_result is not None
     assert restored_result is not None
-    assert restored_result["tables"] == source_result["tables"]
+    assert {
+        name: table
+        for name, table in restored_result["tables"].items()
+        if name != "_tapdb_migrations"
+    } == {
+        name: table
+        for name, table in source_result["tables"].items()
+        if name != "_tapdb_migrations"
+    }
+    assert restored_result["applied_migrations"] == source_result["applied_migrations"]
     assert restored_result["sequences"] == source_result["sequences"]
     mapping_rows = source_result["tables"]["tapdb_legacy_outbox_mapping"]["rows"]
     deterministic_mapping = next(
@@ -1535,6 +1834,7 @@ def test_restored_backup_migrates_to_identical_identity_and_sequence_evidence(
 
 def test_released_9_1_0_schema_migrates_populated_rows_without_identity_change(
     pg_instance,
+    tmp_path,
 ):
     repository = Path(__file__).resolve().parents[1]
     release_commit = subprocess.run(
@@ -1554,6 +1854,9 @@ def test_released_9_1_0_schema_migrates_populated_rows_without_identity_change(
     ).stdout
     assert "identity_key" not in released_schema
     assert "CREATE TABLE IF NOT EXISTS _tapdb_migrations" in released_schema
+    source_path = tmp_path / "released-9.1.0-schema.sql"
+    source_path.write_text(released_schema, encoding="utf-8")
+    receipts = tmp_path / "recovery-receipts"
 
     historical_schema = f"tapdb_historical_{uuid.uuid4().hex[:12]}"
     migrations_dir = repository / "schema" / "migrations"
@@ -1561,7 +1864,7 @@ def test_released_9_1_0_schema_migrates_populated_rows_without_identity_change(
         **_migration_target(pg_instance),
         "schema_name": historical_schema,
     }
-    engine = create_engine(pg_instance["operator_dsn"])
+    engine = _migration_test_engine(pg_instance["operator_dsn"])
     try:
         with engine.begin() as connection:
             connection.exec_driver_sql(f'CREATE SCHEMA "{historical_schema}"')
@@ -1670,16 +1973,21 @@ def test_released_9_1_0_schema_migrates_populated_rows_without_identity_change(
 
         with engine.connect() as connection:
             transaction = connection.begin()
-            preflight = build_migration_preflight(
-                connection, migrations_dir=migrations_dir, target=target
-            )
-            result = apply_migration_preflight(
+            preflight = _build_test_migration_preflight(
                 connection,
                 migrations_dir=migrations_dir,
-                preflight=preflight,
                 target=target,
+                receipts_dir=receipts,
+                source_schema_path=source_path,
             )
-            transaction.commit()
+            transaction.rollback()
+        result = _apply_test_migration(
+            engine,
+            migrations_dir=migrations_dir,
+            preflight=preflight,
+            target=target,
+            receipts_dir=receipts,
+        )
 
         postflight = result.receipt["postflight"]
         assert result.receipt["applied_migrations"] == [
@@ -1688,11 +1996,10 @@ def test_released_9_1_0_schema_migrates_populated_rows_without_identity_change(
             "20260902_020000_force_rls_and_audit_attribution.sql",
             "20260903_031820_runtime_ddl_guard.sql",
             "20260904_061819_tenant_scoped_natural_identity.sql",
+            "20260910_203200_aurora_operator_principals.sql",
+            "20260910_220000_sequence_prefix_bindings.sql",
         ]
-        assert (
-            result.receipt["sequence_pre_state"]
-            == result.receipt["sequence_post_state"]
-        )
+        _assert_only_catalog_prefix_evidence_added(result.receipt)
         for table_name in (
             "generic_template",
             "generic_instance",
@@ -1718,7 +2025,10 @@ def test_released_9_1_0_schema_migrates_populated_rows_without_identity_change(
         instances = postflight["tables"]["generic_instance"]
         assert instances["active_count"] == 1
         assert instances["soft_deleted_count"] == 1
-        assert all(row["identity"]["identity_key"] is None for row in instances["rows"])
+        assert all(
+            row["column_sha256"]["identity_key"] == migration_identity._sha256(None)
+            for row in instances["rows"]
+        )
     finally:
         with engine.begin() as connection:
             connection.exec_driver_sql(
@@ -1729,6 +2039,7 @@ def test_released_9_1_0_schema_migrates_populated_rows_without_identity_change(
 
 def test_released_9_2_2_migrates_to_tenant_identity_without_mutating_rows(
     pg_instance,
+    tmp_path,
 ):
     repository = Path(__file__).resolve().parents[1]
     release_commit = subprocess.run(
@@ -1748,12 +2059,15 @@ def test_released_9_2_2_migrates_to_tenant_identity_without_mutating_rows(
     ).stdout
     assert "idx_generic_instance_natural_identity_tenant" not in released_schema
     assert "ck_generic_instance_identity_key_global" in released_schema
+    source_path = tmp_path / "released-9.2.2-schema.sql"
+    source_path.write_text(released_schema, encoding="utf-8")
+    receipts = tmp_path / "recovery-receipts"
 
     historical_schema = f"tapdb_historical_{uuid.uuid4().hex[:12]}"
     filename = "20260904_061819_tenant_scoped_natural_identity.sql"
     migrations_dir = repository / "schema" / "migrations"
     target = {**_migration_target(pg_instance), "schema_name": historical_schema}
-    engine = create_engine(pg_instance["operator_dsn"])
+    engine = _migration_test_engine(pg_instance["operator_dsn"])
     template_uid = 0
     try:
         with engine.begin() as connection:
@@ -1823,29 +2137,35 @@ def test_released_9_2_2_migrates_to_tenant_identity_without_mutating_rows(
 
         with engine.connect() as connection:
             transaction = connection.begin()
-            preflight = build_migration_preflight(
-                connection, migrations_dir=migrations_dir, target=target
+            preflight = _build_test_migration_preflight(
+                connection,
+                migrations_dir=migrations_dir,
+                target=target,
+                receipts_dir=receipts,
+                source_schema_path=source_path,
             )
             assert [item["filename"] for item in preflight["pending_migrations"]] == [
-                filename
+                filename,
+                "20260910_203200_aurora_operator_principals.sql",
+                "20260910_220000_sequence_prefix_bindings.sql",
             ]
             pending = preflight["pending_migrations"][0]
             assert pending["allowed_columns"] == []
             assert pending["allowed_new_rows"] == []
             assert pending["allowed_sequences"] == []
-            result = apply_migration_preflight(
-                connection,
-                migrations_dir=migrations_dir,
-                preflight=preflight,
-                target=target,
-            )
-            transaction.commit()
-
-        assert (
-            result.receipt["sequence_pre_state"]
-            == result.receipt["sequence_post_state"]
+            transaction.rollback()
+        result = _apply_test_migration(
+            engine,
+            migrations_dir=migrations_dir,
+            preflight=preflight,
+            target=target,
+            receipts_dir=receipts,
         )
-        assert result.receipt["postflight"]["tables"] == preflight["tables"]
+
+        _assert_only_catalog_prefix_evidence_added(result.receipt)
+        for name, table in preflight["tables"].items():
+            if name != "_tapdb_migrations":
+                assert result.receipt["postflight"]["tables"][name] == table
 
         with engine.begin() as connection:
             _set_operator_context(
@@ -1915,8 +2235,12 @@ def test_released_9_2_2_migrates_to_tenant_identity_without_mutating_rows(
 
         with engine.connect() as connection:
             transaction = connection.begin()
-            replay = build_migration_preflight(
-                connection, migrations_dir=migrations_dir, target=target
+            replay = _build_test_migration_preflight(
+                connection,
+                migrations_dir=migrations_dir,
+                target=target,
+                receipts_dir=receipts,
+                source_schema_path=source_path,
             )
             transaction.rollback()
         assert replay["pending_migrations"] == []
@@ -1929,6 +2253,7 @@ def test_released_9_2_2_migrates_to_tenant_identity_without_mutating_rows(
 
 
 def test_failed_guarded_migration_rolls_back_rows_and_sequences(pg_instance, tmp_path):
+    receipts = tmp_path / "recovery-receipts"
     migrations = tmp_path / "migrations"
     migrations.mkdir()
     legacy_migration = (
@@ -1948,7 +2273,7 @@ def test_failed_guarded_migration_rolls_back_rows_and_sequences(pg_instance, tmp
         encoding="utf-8",
     )
     target = _migration_target(pg_instance)
-    engine = create_engine(
+    engine = _migration_test_engine(
         pg_instance["operator_dsn"],
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
@@ -1982,28 +2307,23 @@ def test_failed_guarded_migration_rolls_back_rows_and_sequences(pg_instance, tmp
         )
     with engine.connect() as connection:
         transaction = connection.begin()
-        preflight = build_migration_preflight(
-            connection, migrations_dir=migrations, target=target
+        preflight = _build_test_migration_preflight(
+            connection,
+            migrations_dir=migrations,
+            target=target,
+            receipts_dir=receipts,
         )
         transaction.rollback()
 
-    with engine.connect() as connection:
-        transaction = connection.begin()
-        with pytest.raises(Exception, match="division by zero"):
-            apply_migration_preflight(
-                connection,
-                migrations_dir=migrations,
-                preflight=preflight,
-                target=target,
-            )
-        transaction.rollback()
-
-    with engine.connect() as connection:
-        transaction = connection.begin()
-        after = build_migration_preflight(
-            connection, migrations_dir=migrations, target=target
+    with pytest.raises(Exception, match="division by zero") as failed:
+        _apply_test_migration(
+            engine,
+            migrations_dir=migrations,
+            preflight=preflight,
+            target=target,
+            receipts_dir=receipts,
         )
-        transaction.rollback()
+    after = failed.value.rollback_snapshot
 
     assert after["tables"] == preflight["tables"]
     assert after["sequences"] == preflight["sequences"]
@@ -2012,6 +2332,7 @@ def test_failed_guarded_migration_rolls_back_rows_and_sequences(pg_instance, tmp
 def test_failure_after_transactional_sequence_restart_rolls_back_exactly(
     pg_instance, tmp_path, monkeypatch
 ):
+    receipts = tmp_path / "recovery-receipts"
     migrations = tmp_path / "post-advance-migrations"
     migrations.mkdir()
     legacy_migration = (
@@ -2024,7 +2345,7 @@ def test_failure_after_transactional_sequence_restart_rolls_back_exactly(
         legacy_migration.read_text(encoding="utf-8"), encoding="utf-8"
     )
     target = _migration_target(pg_instance)
-    engine = create_engine(
+    engine = _migration_test_engine(
         pg_instance["operator_dsn"],
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
@@ -2065,8 +2386,11 @@ def test_failure_after_transactional_sequence_restart_rolls_back_exactly(
 
     with engine.connect() as connection:
         transaction = connection.begin()
-        preflight = build_migration_preflight(
-            connection, migrations_dir=migrations, target=target
+        preflight = _build_test_migration_preflight(
+            connection,
+            migrations_dir=migrations,
+            target=target,
+            receipts_dir=receipts,
         )
         transaction.rollback()
 
@@ -2095,26 +2419,18 @@ def test_failure_after_transactional_sequence_restart_rolls_back_exactly(
         "_advance_permitted_identity_sequences",
         advance_then_fail,
     )
-    with engine.connect() as connection:
-        transaction = connection.begin()
-        with pytest.raises(
-            RuntimeError, match="injected failure after sequence restart"
-        ):
-            apply_migration_preflight(
-                connection,
-                migrations_dir=migrations,
-                preflight=preflight,
-                target=target,
-            )
-        transaction.rollback()
-    assert observed["advanced"] is True
-
-    with engine.connect() as connection:
-        transaction = connection.begin()
-        after = build_migration_preflight(
-            connection, migrations_dir=migrations, target=target
+    with pytest.raises(
+        RuntimeError, match="injected failure after sequence restart"
+    ) as failed:
+        _apply_test_migration(
+            engine,
+            migrations_dir=migrations,
+            preflight=preflight,
+            target=target,
+            receipts_dir=receipts,
         )
-        transaction.rollback()
+    assert observed["advanced"] is True
+    after = failed.value.rollback_snapshot
 
     assert after["tables"] == preflight["tables"]
     assert after["sequences"] == preflight["sequences"]
@@ -2137,7 +2453,7 @@ def test_seed_sequence_alignment_is_exact_noop_and_required_restart_rolls_back(
                 properties={"source": "migration-test"},
             )
 
-    engine = create_engine(
+    engine = _migration_test_engine(
         pg_instance["operator_dsn"],
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
@@ -2179,8 +2495,8 @@ def test_seed_sequence_alignment_is_exact_noop_and_required_restart_rolls_back(
             ).one()
             assert tuple(after) == tuple(before) == (assigned_max, True)
 
-        # A behind generator requires a forward restart. Injecting rollback after
-        # that restart must restore the exact committed pre-state.
+        # Ordinary seeding must not repair a behind generator with only table
+        # locks. Repair belongs to the explicitly fenced receipt-bound API.
         with engine.begin() as connection:
             connection.execute(
                 text("SELECT setval('msg_instance_seq', :value, false)"),
@@ -2193,11 +2509,10 @@ def test_seed_sequence_alignment_is_exact_noop_and_required_restart_rolls_back(
                 connection, pg_instance["schema_name"], "migration:sequence-rollback"
             )
             with Session(bind=connection) as session:
-                ensure_instance_prefix_sequence(session, "MSG")
-            advanced = connection.execute(
-                text("SELECT last_value, is_called FROM msg_instance_seq")
-            ).one()
-            assert tuple(advanced) == (assigned_max + 1, False)
+                from daylily_tapdb.sequences import SequenceProtectionError
+
+                with pytest.raises(SequenceProtectionError, match="receipt"):
+                    ensure_instance_prefix_sequence(session, "MSG")
             transaction.rollback()
         with engine.begin() as connection:
             restored = connection.execute(
@@ -2213,7 +2528,7 @@ def test_seed_sequence_alignment_is_exact_noop_and_required_restart_rolls_back(
 
 
 def test_prefix_registry_reapply_is_byte_stable_and_mismatch_fails_closed(pg_instance):
-    engine = create_engine(
+    engine = _migration_test_engine(
         pg_instance["operator_dsn"],
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
@@ -2308,8 +2623,10 @@ def test_prefix_registry_reapply_is_byte_stable_and_mismatch_fails_closed(pg_ins
 
 def test_runtime_schema_create_guard_migrates_921_without_identity_changes(
     pg_instance,
+    tmp_path,
 ):
-    engine = create_engine(
+    receipts = tmp_path / "recovery-receipts"
+    engine = _migration_test_engine(
         pg_instance["operator_dsn"],
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
@@ -2334,30 +2651,33 @@ def test_runtime_schema_create_guard_migrates_921_without_identity_changes(
 
         with engine.connect() as connection:
             transaction = connection.begin()
-            preflight = build_migration_preflight(
+            preflight = _build_test_migration_preflight(
                 connection,
                 migrations_dir=migrations_dir,
                 target=target,
+                receipts_dir=receipts,
             )
             assert [item["filename"] for item in preflight["pending_migrations"]] == [
                 filename
             ]
-            result = apply_migration_preflight(
-                connection,
-                migrations_dir=migrations_dir,
-                preflight=preflight,
-                target=target,
-            )
-            transaction.commit()
+            transaction.rollback()
+        result = _apply_test_migration(
+            engine,
+            migrations_dir=migrations_dir,
+            preflight=preflight,
+            target=target,
+            receipts_dir=receipts,
+        )
 
         assert (
             result.receipt["sequence_post_state"]
             == result.receipt["sequence_pre_state"]
         )
         for table_name, before in preflight["tables"].items():
-            assert (
-                result.receipt["postflight"]["tables"][table_name]["immutable_sha256"]
-                == before["immutable_sha256"]
+            if table_name == "_tapdb_migrations":
+                continue  # New tracking rows are separately receipt-bound.
+            _assert_immutable_table_unchanged(
+                before, result.receipt["postflight"]["tables"][table_name]
             )
         with engine.connect() as connection:
             assert (
@@ -2394,8 +2714,11 @@ def test_runtime_schema_create_guard_migrates_921_without_identity_changes(
         engine.dispose()
 
 
-def test_runner_executes_canonical_rls_include_with_declared_attribution(pg_instance):
-    engine = create_engine(
+def test_runner_executes_canonical_rls_include_with_declared_attribution(
+    pg_instance, tmp_path
+):
+    receipts = tmp_path / "recovery-receipts"
+    engine = _migration_test_engine(
         pg_instance["operator_dsn"],
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
@@ -2432,8 +2755,11 @@ def test_runner_executes_canonical_rls_include_with_declared_attribution(pg_inst
 
     with engine.connect() as connection:
         transaction = connection.begin()
-        preflight = build_migration_preflight(
-            connection, migrations_dir=migrations_dir, target=target
+        preflight = _build_test_migration_preflight(
+            connection,
+            migrations_dir=migrations_dir,
+            target=target,
+            receipts_dir=receipts,
         )
         transaction.rollback()
     assert [item["filename"] for item in preflight["pending_migrations"]] == [filename]
@@ -2441,21 +2767,20 @@ def test_runner_executes_canonical_rls_include_with_declared_attribution(pg_inst
         "audit_log.changed_by"
     ]
 
-    with engine.connect() as connection:
-        transaction = connection.begin()
-        result = apply_migration_preflight(
-            connection,
-            migrations_dir=migrations_dir,
-            preflight=preflight,
-            target=target,
-        )
-        transaction.commit()
+    result = _apply_test_migration(
+        engine,
+        migrations_dir=migrations_dir,
+        preflight=preflight,
+        target=target,
+        receipts_dir=receipts,
+    )
 
     assert result.receipt["sequence_post_state"] == result.receipt["sequence_pre_state"]
     for table_name, before in preflight["tables"].items():
-        assert (
-            result.receipt["postflight"]["tables"][table_name]["immutable_sha256"]
-            == before["immutable_sha256"]
+        if table_name == "_tapdb_migrations":
+            continue  # New tracking rows are separately receipt-bound.
+        _assert_immutable_table_unchanged(
+            before, result.receipt["postflight"]["tables"][table_name]
         )
     with engine.begin() as connection:
         _set_operator_context(
@@ -2473,6 +2798,7 @@ def test_runner_executes_canonical_rls_include_with_declared_attribution(pg_inst
 def test_declared_validator_backfill_preserves_all_other_values_and_sequences(
     pg_instance, tmp_path
 ):
+    receipts = tmp_path / "recovery-receipts"
     migrations = tmp_path / "validator-schema" / "migrations"
     migrations.mkdir(parents=True)
     source = (
@@ -2486,7 +2812,7 @@ def test_declared_validator_backfill_preserves_all_other_values_and_sequences(
         source.read_text(encoding="utf-8"), encoding="utf-8"
     )
     target = _migration_target(pg_instance)
-    engine = create_engine(
+    engine = _migration_test_engine(
         pg_instance["operator_dsn"],
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
@@ -2522,25 +2848,27 @@ def test_declared_validator_backfill_preserves_all_other_values_and_sequences(
 
     with engine.connect() as connection:
         transaction = connection.begin()
-        preflight = build_migration_preflight(
-            connection, migrations_dir=migrations, target=target
-        )
-        transaction.rollback()
-    with engine.connect() as connection:
-        transaction = connection.begin()
-        result = apply_migration_preflight(
+        preflight = _build_test_migration_preflight(
             connection,
             migrations_dir=migrations,
-            preflight=preflight,
             target=target,
+            receipts_dir=receipts,
         )
-        transaction.commit()
+        transaction.rollback()
+    result = _apply_test_migration(
+        engine,
+        migrations_dir=migrations,
+        preflight=preflight,
+        target=target,
+        receipts_dir=receipts,
+    )
 
     assert result.receipt["sequence_post_state"] == result.receipt["sequence_pre_state"]
     for table_name, before in preflight["tables"].items():
-        assert (
-            result.receipt["postflight"]["tables"][table_name]["immutable_sha256"]
-            == before["immutable_sha256"]
+        if table_name == "_tapdb_migrations":
+            continue  # New tracking rows are separately receipt-bound.
+        _assert_immutable_table_unchanged(
+            before, result.receipt["postflight"]["tables"][table_name]
         )
     with engine.begin() as connection:
         _set_operator_context(

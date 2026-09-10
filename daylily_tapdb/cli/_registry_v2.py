@@ -9,6 +9,13 @@ from typing import Any
 from cli_core_yo.spec import CommandPolicy
 
 JSON_COMMANDS: set[tuple[str | None, str]] = {
+    ("db/identity", "inventory"),
+    ("db/identity", "verify"),
+    ("db/sequences", "advance"),
+    ("db/sequences", "reconcile"),
+    ("db/sequences", "verify"),
+    ("db/runtime-principal", "bootstrap"),
+    ("db/runtime-principal", "bind"),
     ("validation", "assess"),
     ("validation", "revalidate"),
     ("validation", "editor-data"),
@@ -38,6 +45,10 @@ JSON_COMMANDS: set[tuple[str | None, str]] = {
 }
 
 MUTATING_COMMANDS = {
+    ("db/sequences", "advance"),
+    ("db/sequences", "reconcile"),
+    ("db/runtime-principal", "bootstrap"),
+    ("db/runtime-principal", "bind"),
     ("bootstrap", "local"),
     ("bootstrap", "aurora"),
     ("ui", "start"),
@@ -116,6 +127,10 @@ INTERACTIVE_COMMANDS = {
 #: commands (plan, restore-plan, verify, list) have nothing to simulate and
 #: must never appear here.
 DRY_RUN_COMMANDS = {
+    ("db/sequences", "advance"),
+    ("db/sequences", "reconcile"),
+    ("db/runtime-principal", "bootstrap"),
+    ("db/runtime-principal", "bind"),
     ("backup", "create"),
     ("backup", "restore"),
     ("backup", "rehearse"),

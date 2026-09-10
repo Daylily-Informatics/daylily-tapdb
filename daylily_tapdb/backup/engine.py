@@ -331,6 +331,9 @@ def client_env(cfg: Mapping[str, Any]) -> dict[str, str]:
             secret_arn=cfg.get("secret_arn") or None,
             password=cfg.get("password") or None,
             hostaddr=cfg.get("hostaddr") or None,
+            profile=cfg.get("aws_profile") or None,
+            sslrootcert=cfg.get("sslrootcert") or None,
+            server_port=cfg.get("server_port"),
         )
         env_vars = sanitized_libpq_environment()
         for key in ("PGPASSWORD", "PGSSLMODE", "PGSSLROOTCERT"):
@@ -345,9 +348,9 @@ def client_env(cfg: Mapping[str, Any]) -> dict[str, str]:
     password = cfg.get("password")
     if password:
         env_vars["PGPASSWORD"] = str(password)
-    hostaddr = cfg.get("hostaddr")
-    if hostaddr:
-        env_vars["PGHOSTADDR"] = str(hostaddr).strip()
+    local_hostaddr = cfg.get("hostaddr")
+    if local_hostaddr:
+        env_vars["PGHOSTADDR"] = str(local_hostaddr).strip()
     return env_vars
 
 
@@ -358,6 +361,7 @@ def build_pg_dump_command(
     output_path: Path,
     snapshot: Optional[str] = None,
     database: Optional[str] = None,
+    enable_row_security: bool = False,
 ) -> list[str]:
     """Build the schema-scoped custom-format dump command.
 
@@ -379,6 +383,8 @@ def build_pg_dump_command(
     ]
     if snapshot:
         cmd.extend(["--snapshot", snapshot])
+    if enable_row_security:
+        cmd.append("--enable-row-security")
     return cmd
 
 

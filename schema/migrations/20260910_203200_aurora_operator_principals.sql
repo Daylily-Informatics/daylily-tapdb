@@ -1,0 +1,15 @@
+-- Exact schema-owner policies support Aurora administrators without treating
+-- tapdb-allow-schema: generic_template
+-- tapdb-allow-schema: generic_instance
+-- tapdb-allow-schema: generic_instance_lineage
+-- tapdb-allow-schema: audit_log
+-- tapdb-allow-schema: outbox_event
+-- tapdb-allow-schema: outbox_event_attempt
+-- tapdb-allow-schema: inbox_message
+-- tapdb-allow-schema: tapdb_identity_prefix_config
+-- tapdb-allow-schema: tapdb_legacy_outbox_mapping
+-- tapdb-allow-schema: tapdb_runtime_principal_scope
+-- tapdb-allow-new-table: tapdb_runtime_principal_scope
+-- rds_superuser membership as PostgreSQL SUPERUSER or disabling FORCE RLS.
+-- Runtime principal binding stays immutable; no identity/sequence changes.
+-- tapdb-include: ../rls.sql
