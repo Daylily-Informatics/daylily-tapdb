@@ -232,26 +232,14 @@ def provider_evidence(
         version = connection.execute(
             text("SELECT current_setting('server_version_num')::int")
         ).scalar_one()
-        functions = (
-            connection.execute(
-                text(
-                    "SELECT n.nspname,p.proowner::bigint AS owner FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
-                    "WHERE p.proname='aurora_version' AND p.pronargs=0"
-                )
-            )
-            .mappings()
-            .all()
-        )
-        if (
-            version != 160013
-            or len(functions) != 1
-            or functions[0]["owner"] != provider["oid"]
-        ):
+        if version != 160013:
             _fail(
                 "The live server does not corroborate the pinned Aurora provider identity"
             )
+        # Aurora exposes this provider builtin without a pg_proc row. Resolve
+        # it directly in pg_catalog, never through an application search path.
         aurora_version = connection.execute(
-            text(f"SELECT {quote_identifier(functions[0]['nspname'])}.aurora_version()")
+            text("SELECT pg_catalog.aurora_version()")
         ).scalar_one()
         if not isinstance(aurora_version, str) or not aurora_version.strip():
             _fail("Aurora version identity is unavailable")

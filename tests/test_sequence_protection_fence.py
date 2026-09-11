@@ -80,7 +80,6 @@ def provider(monkeypatch):
     )
     values = {
         "version": 160013,
-        "functions": [{"nspname": "pg_catalog", "owner": 10}],
         "aurora_version": "16.13.provider-build",
     }
     calls = []
@@ -90,9 +89,7 @@ def provider(monkeypatch):
         calls.append(query)
         if "server_version_num" in query:
             return Result(values["version"])
-        if "FROM pg_proc" in query:
-            return Result(values["functions"])
-        if "aurora_version()" in query:
+        if query == "SELECT pg_catalog.aurora_version()":
             return Result(values["aurora_version"])
         raise AssertionError(query)
 
@@ -265,8 +262,6 @@ def test_provider_as_membership_grantor_is_not_a_membership_path(provider):
     "field,value",
     [
         ("version", 160012),
-        ("functions", []),
-        ("functions", [{"nspname": "public", "owner": 20}]),
         ("aurora_version", ""),
         ("clusters", []),
     ],

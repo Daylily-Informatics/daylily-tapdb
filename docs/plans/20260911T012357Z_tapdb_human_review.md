@@ -1,14 +1,16 @@
 # TapDB 10.1.0 human review packet
 
-Reviewer: user / `iamh2o` (volunteered; review not yet performed).
+Reviewer: user / `iamh2o` (volunteered; responded "proceed" to this candidate's
+review prompt, authorizing continuation; no detailed findings or independent
+test evidence supplied).
 Runtime/test candidate under review: **`17d0ca0bc2758e10a1a0469d7ff5480831d4d287`**,
 including the requested runtime `TEMP` restriction and the approved numeric
 coverage exceptions. Subsequent review-packet/ledger-only commits do not change
 this implementation. Earlier commits are retained only as historical context.
 Scope: PostgreSQL/Aurora 16.13. PG17 deferred under
 [issue 107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107).
-This packet records review scope only; the human reviewer has not returned a
-verdict.
+The recorded user disposition is "proceed". It is not a GitHub approval or a
+claim that the outstanding full-suite/Aurora qualification passed.
 
 ## 1. Immediate decision: review allocator and `TEMP` confinement
 
