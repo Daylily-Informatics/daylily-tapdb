@@ -39,6 +39,14 @@ proof that PostgreSQL 17 is unsupported.
 Further tests are limited to demonstrated defects and distinct operational
 requirements, not duplicate assertions or coverage-only bookkeeping.
 
+A subsequent single real-16.13 regression passes for recovery when the terminal
+receipt is lost but the maintenance session remains available. It proves the
+public reconciliation path does not change database identities and the next
+allocation does not reuse them. Combining that case with the unchanged-source
+partial baseline yields diagnostic recovery coverage of 86.72%; backup service
+remains 89.57%. Both remain below the existing 90% changed-module gate. This is
+not a replacement for a complete frozen-candidate run or independent acceptance.
+
 E verified fresh core and GUI installs from this exact candidate under
 `runtime/qualification/e-package-20260911T001928Z`. Candidate-only SHA-256:
 wheel `9d5fa818524a061a93b1a61dbbf856681754d15bc78f745bb53c501c0d9ebe53`;

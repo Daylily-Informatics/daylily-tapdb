@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
-from daylily_tapdb.backup import service, verify
+from daylily_tapdb.backup import reconcile_recovery, service, verify
 from daylily_tapdb.backup.errors import BackupVerificationError
 from daylily_tapdb.backup.receipts import Actor
 from daylily_tapdb.backup.recovery import (
@@ -223,3 +223,136 @@ def test_historical_backup_rejects_stale_source_contract(historical_source):
     engine.dispose()
     with pytest.raises(BackupVerificationError, match="reviewed contract"):
         service.create_backup(cfg, settings, source_contract=contract)
+
+
+def test_retained_fence_reconciles_missing_outcome_without_reusing_identity(
+    historical_source, tmp_path
+):
+    """A lost final receipt does not require losing the retained safe session."""
+    cfg, _settings, engine = historical_source
+    target = service.inventory_target(cfg)
+    actor = Actor(surface="cli", username=cfg["operator_user"])
+    directory = tmp_path / "retained-session-receipts"
+    schema = cfg["schema_name"]
+    engine.dispose()
+    with (
+        operator_session(
+            dict(cfg, database="postgres"), isolation_level="SERIALIZABLE"
+        ) as control,
+        operator_session(cfg, isolation_level="SERIALIZABLE") as connection,
+    ):
+        with connection.begin():
+            original = capture_sequence_inventory(
+                connection, schema_name=schema, target=target
+            )
+        gate = acquire_database_writer_fence(
+            connection,
+            control_connection=control,
+            inventory=original,
+            receipts_dir=directory,
+        )
+        with connection.begin():
+            intent = begin_recovery(
+                directory,
+                target=target,
+                inventories=[original],
+                evidence={"purpose": "fenced_migration"},
+                actor=actor,
+            )
+            issued = connection.execute(
+                text(
+                    f'INSERT INTO "{schema}".historical_record(payload) '
+                    "VALUES ('committed-without-final-receipt') RETURNING uid"
+                )
+            ).scalar_one()
+        # The SQL commit succeeded, but no terminal recovery receipt was
+        # published. Reconciliation must observe, not invent, the outcome.
+        with connection.begin():
+            committed_identity = capture_identity_inventory(
+                connection, schema_name=schema, target=target
+            )
+            committed_sequences = capture_sequence_inventory(
+                connection, schema_name=schema, target=target
+            )
+        with pytest.raises(BackupVerificationError, match="reconciliation"):
+            begin_recovery(
+                directory,
+                target=target,
+                inventories=[original],
+                evidence={"purpose": "fenced_migration"},
+                actor=actor,
+            )
+        with connection.begin():
+            reconciled = reconcile_recovery(
+                connection,
+                directory=directory,
+                operation_id=intent["operation_id"],
+                writer_fence=gate["fence"],
+                actor=actor,
+            )
+            assert reconciled.detail["phase"] == "reconciled"
+            assert reconciled.detail["inventories"] == [committed_sequences]
+            assert (
+                capture_sequence_inventory(
+                    connection, schema_name=schema, target=target
+                )
+                == committed_sequences
+            )
+            assert (
+                capture_identity_inventory(
+                    connection, schema_name=schema, target=target
+                )
+                == committed_identity
+            )
+        assert retained_recovery_state(directory, target=target)["pending"] == {}
+
+        # Reviewing the older source again cannot discard the freshly observed
+        # allocation. The next operation retains it without resetting anything.
+        subsequent = begin_recovery(
+            directory,
+            target=target,
+            inventories=[original],
+            evidence={"purpose": "fenced_migration"},
+            actor=actor,
+        )
+        assert max(floor["value"] for floor in subsequent["floors"]) == issued
+        plan = build_sequence_advance_plan(
+            committed_sequences, floors=subsequent["floors"]
+        )
+        assert all(item["next_value"] > issued for item in plan["advances"])
+        finish_recovery(
+            directory,
+            subsequent,
+            phase="aborted",
+            actor=actor,
+            inventory=committed_sequences,
+        )
+        with connection.begin():
+            applied = apply_sequence_advance_plan(
+                connection,
+                plan,
+                writer_fence=gate["fence"],
+                receipts_dir=directory,
+            )
+        committed = record_sequence_advance_outcome(
+            applied,
+            receipts_dir=directory,
+            outcome="committed",
+            actor=cfg["operator_user"],
+        )
+        release_database_writer_fence(
+            connection,
+            gate,
+            result=committed,
+            receipts_dir=directory,
+            control_connection=control,
+        )
+
+    with engine.begin() as connection:
+        next_issued = connection.execute(
+            text(
+                f'INSERT INTO "{schema}".historical_record(payload) '
+                "VALUES ('after-reconciliation') RETURNING uid"
+            )
+        ).scalar_one()
+    assert next_issued > issued
