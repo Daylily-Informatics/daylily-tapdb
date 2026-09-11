@@ -1,5 +1,13 @@
 # TapDB 10.1.0 human review packet
 
+Historical pre-release review packet. The user subsequently accepted the
+confidential independent acceptance and explicitly authorized administrative
+CI/review bypass. TapDB10.1.0 is now published with verified public artifacts
+and a successful fresh installation; see the
+[final handoff](20260910_tapdb_service_readiness_handoff.md). Pending-release
+statements below describe the earlier review checkpoint, not current blockers.
+No confidential results are attached, and no full CI pass is claimed.
+
 Reviewer disposition: the user states that the independent acceptance is
 sufficient to proceed and its results are sensitive. Accepted by user
 attestation; no sensitive results are requested or reproduced in this packet.
