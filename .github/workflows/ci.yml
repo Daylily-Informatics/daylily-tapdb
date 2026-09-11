@@ -174,7 +174,9 @@ jobs:
           --cov-report=json:coverage.json
           --cov-fail-under=90
 
-      - name: Require 90 percent in every changed production module
+      # Only backup/recovery.py and backup/service.py have user-approved
+      # numeric exceptions for 10.1.0; aggregate coverage remains >=90%.
+      - name: Check changed-module coverage with approved 10.1.0 exceptions
         run: >-
           python scripts/verify_changed_coverage.py
           --base origin/main

@@ -46,6 +46,16 @@ acceptance. PostgreSQL 17 qualification is deferred to
 and has not passed; this is not a declaration that PostgreSQL 17 is
 unsupported.
 
+The candidate's receipt-bound runtime-principal bind revokes database `TEMP`
+from `PUBLIC` and the configured runtime principal. When the reviewed plan shows
+that revocation would remove the operator's pre-existing effective `TEMP`, it
+records an explicit operator preservation grant. This database-wide change also
+affects other roles that relied on `PUBLIC TEMP`; applications that need
+temporary objects require an explicit design change. Service adoption must close
+and recreate existing runtime sessions because TapDB does not terminate them or
+claim that existing temporary objects were removed. The qualified
+managed-allocator resolution remains required defense in depth.
+
 ```bash
 python -m pip install "daylily-tapdb[cli,gui]"
 ```
@@ -338,6 +348,18 @@ reviewed candidate passes them. PostgreSQL 17 results remain evidence for the
 deferred qualification, not 10.1.0 acceptance. The mypy file list in
 `pyproject.toml` covers the new 10.1 implementation modules; older dynamically
 mapped ORM and Typer modules are not yet globally strict-clean.
+
+For 10.1.0 only, the user approved the measured changed-module coverage
+exceptions `daylily_tapdb/backup/recovery.py` at 86.72% and
+`daylily_tapdb/backup/service.py` at 89.57%. Their numeric reports remain
+required. Aggregate branch coverage and every other changed production module
+must remain at or above 90%; the exceptions do not waive functional tests,
+PostgreSQL/Aurora acceptance, or review.
+
+The frozen-candidate PostgreSQL/Aurora acceptance must also verify the reviewed
+database ACL, `PUBLIC` and runtime `TEMP` revocations, any explicit operator
+`TEMP` preservation grant, and effective `TEMP=false` from a newly created
+runtime session. These checks are pending and are not a release claim.
 
 ## Documentation
 

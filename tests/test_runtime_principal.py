@@ -439,14 +439,30 @@ class CatalogConnection(Connection):
         ]
         self.scope = None
         self.leaked_permissions = False
-        self.database_access = {"acl": None, "runtime_connect": True}
+        self.database_access = {
+            "acl": None,
+            "runtime_connect": True,
+            "runtime_temp": True,
+            "operator_temp": True,
+            "operator_temp_after_revokes": True,
+        }
         self.connect_grant_effective = True
+        self.temp_revoke_effective = True
+        self.operator_temp_grant_effective = True
 
     def execute(self, statement, params=None):
         sql = str(statement)
         self.commands.append((sql, params))
         if sql.startswith("GRANT CONNECT") and self.connect_grant_effective:
             self.database_access["runtime_connect"] = True
+        if sql.startswith("GRANT TEMPORARY") and self.operator_temp_grant_effective:
+            self.database_access["operator_temp_after_revokes"] = True
+        if sql.startswith("REVOKE TEMPORARY"):
+            if self.temp_revoke_effective:
+                self.database_access["runtime_temp"] = False
+            self.database_access["operator_temp"] = self.database_access[
+                "operator_temp_after_revokes"
+            ]
         for marker, rows in (
             ("database_access", [self.database_access]),
             ("schema", [self.schema] if self.schema else []),
@@ -521,7 +537,14 @@ def test_binding_plan_and_apply_exact_grants(cfg, catalog, monkeypatch, tmp_path
 
 
 @pytest.mark.parametrize(
-    "field,value", [("acl", "changed"), ("runtime_connect", False)]
+    "field,value",
+    [
+        ("acl", "changed"),
+        ("runtime_connect", False),
+        ("runtime_temp", False),
+        ("operator_temp", False),
+        ("operator_temp_after_revokes", False),
+    ],
 )
 def test_binding_database_privilege_evidence_must_not_change(
     cfg, catalog, monkeypatch, tmp_path, field, value
@@ -546,6 +569,25 @@ def test_binding_requires_connect_grant_to_be_effective(
     with pytest.raises(rp.RuntimePrincipalError, match="CONNECT.*not established"):
         rp.bind_runtime_principal(cfg, apply=True, receipt_path=receipt)
     assert not receipt.with_name("database-denied.result.json").exists()
+
+
+@pytest.mark.parametrize("failure", ["runtime_temp", "operator_temp"])
+def test_binding_rejects_ineffective_temp_changes(
+    cfg, catalog, monkeypatch, tmp_path, failure
+):
+    install_connection(monkeypatch, catalog)
+    if failure == "runtime_temp":
+        catalog.temp_revoke_effective = False
+        error = "retains effective TEMP"
+    else:
+        catalog.database_access["operator_temp_after_revokes"] = False
+        catalog.operator_temp_grant_effective = False
+        error = "operator TEMP privilege was not preserved"
+    receipt = tmp_path / "temp-change.json"
+    rp.bind_runtime_principal(cfg, receipt_path=receipt)
+    with pytest.raises(rp.RuntimePrincipalError, match=error):
+        rp.bind_runtime_principal(cfg, apply=True, receipt_path=receipt)
+    assert not receipt.with_name("temp-change.result.json").exists()
 
 
 @pytest.mark.parametrize(

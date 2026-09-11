@@ -133,11 +133,144 @@ def test_allocator_migration_restores_pins_without_changing_catalog_or_floors(
         assert after == before
 
 
+@pytest.mark.parametrize(
+    "principal_database", ["principal_runtime", "Principal_Runtime"], indirect=True
+)
+def test_real_bind_denies_public_and_direct_temp_without_claiming_session_closure(
+    principal_database, tmp_path
+):
+    cfg = principal_database
+    rp.bootstrap_runtime_principal(cfg, apply=True)
+    _install_schema(cfg)
+    with rp.operator_connection(cfg) as connection:
+        connection.execute(
+            text(f'GRANT TEMPORARY ON DATABASE "{cfg["database"]}" TO "{cfg["user"]}"')
+        )
+    engine = _runtime_engine(cfg)
+    try:
+        with engine.connect() as old_session:
+            old_pid = old_session.execute(text("SELECT pg_backend_pid()")).scalar_one()
+            old_session.commit()
+            receipt = tmp_path / "temp-denial.json"
+            plan = rp.bind_runtime_principal(cfg, receipt_path=receipt)
+            assert plan["database_access"]["runtime_temp"] is True
+            assert [entry["grantee"] for entry in plan["database_revokes"]] == [
+                "PUBLIC",
+                cfg["user"],
+            ]
+            assert plan["operator_database_grants"] == []
+            result = rp.bind_runtime_principal(cfg, apply=True, receipt_path=receipt)
+            assert result["runtime_temp_denied"] is True
+            assert result["database_access"]["runtime_temp"] is False
+            assert result["database_access"]["operator_temp"] is True
+            assert result["runtime_session_requirement"]["verified"] is False
+            assert result["runtime_session_requirement"]["performed_by_bind"] is False
+            # Binding does not terminate an existing application connection.
+            assert (
+                old_session.execute(text("SELECT pg_backend_pid()")).scalar_one()
+                == old_pid
+            )
+        # A fresh physical connection must not create either temporary form.
+        engine.dispose()
+        for statement in (
+            "CREATE TEMPORARY TABLE runtime_scratch (value integer)",
+            "CREATE TEMPORARY SEQUENCE runtime_scratch_allocator",
+        ):
+            with pytest.raises(Exception, match="permission denied.*temporary"):
+                with engine.begin() as connection:
+                    connection.execute(text(statement))
+            engine.dispose()
+        with rp.operator_connection(cfg) as connection:
+            connection.execute(
+                text("CREATE TEMPORARY TABLE operator_scratch (value integer)")
+            )
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("initial_operator_temp", [True, False])
+def test_real_bind_preserves_operator_temp_without_expanding_authority(
+    principal_database, tmp_path, initial_operator_temp
+):
+    cfg = principal_database
+    rp.bootstrap_runtime_principal(cfg, apply=True)
+    _install_schema(cfg)
+    with rp.operator_connection(cfg) as connection:
+        connection.execute(
+            text(
+                f'REVOKE TEMPORARY ON DATABASE "{cfg["database"]}" FROM "{cfg["operator_user"]}"'
+            )
+        )
+        if not initial_operator_temp:
+            connection.execute(
+                text(f'REVOKE TEMPORARY ON DATABASE "{cfg["database"]}" FROM PUBLIC')
+            )
+    receipt = tmp_path / "operator-temp.json"
+    plan = rp.bind_runtime_principal(cfg, receipt_path=receipt)
+    assert plan["database_access"]["operator_temp"] is initial_operator_temp
+    assert plan["database_access"]["operator_temp_after_revokes"] is False
+    assert plan["operator_database_grants"] == (
+        [
+            {
+                "database": cfg["database"],
+                "grantee": cfg["operator_user"],
+                "privileges": ["TEMPORARY"],
+            }
+        ]
+        if initial_operator_temp
+        else []
+    )
+    result = rp.bind_runtime_principal(cfg, apply=True, receipt_path=receipt)
+    assert result["database_access"]["operator_temp"] is initial_operator_temp
+    assert result["database_access"]["runtime_temp"] is False
+
+
+def test_real_temp_dependent_grant_refuses_cascade_and_rolls_back(
+    principal_database, pg_instance, tmp_path
+):
+    cfg = principal_database
+    rp.bootstrap_runtime_principal(cfg, apply=True)
+    _install_schema(cfg)
+    with rp.operator_connection(cfg) as connection:
+        connection.execute(
+            text(
+                f'GRANT TEMPORARY ON DATABASE "{cfg["database"]}" TO "{cfg["user"]}" WITH GRANT OPTION'
+            )
+        )
+    engine = _runtime_engine(cfg)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f'GRANT TEMPORARY ON DATABASE "{cfg["database"]}" TO "{pg_instance["user"]}"'
+                )
+            )
+    finally:
+        engine.dispose()
+    receipt = tmp_path / "dependent-temp.json"
+    plan = rp.bind_runtime_principal(cfg, receipt_path=receipt)
+    with pytest.raises(Exception, match="dependent privileges exist"):
+        rp.bind_runtime_principal(cfg, apply=True, receipt_path=receipt)
+    assert not receipt.with_name("dependent-temp.result.json").exists()
+    with rp.operator_connection(cfg) as connection:
+        assert (
+            rp._database_access(connection, rp._target(cfg)) == plan["database_access"]
+        )
+        assert (
+            connection.execute(
+                text(
+                    f'SELECT count(*) FROM "{cfg["schema_name"]}".tapdb_runtime_principal_scope'
+                )
+            ).scalar_one()
+            == 0
+        )
+
+
 @pytest.fixture
-def principal_database(pg_instance, tmp_path):
+def principal_database(pg_instance, tmp_path, request):
     suffix = uuid.uuid4().hex[:12]
     operator = f"principal_operator_{suffix}"
-    runtime = f"principal_runtime_{suffix}"
+    runtime = f"{getattr(request, 'param', 'principal_runtime')}_{suffix}"
     database = f"principal_database_{suffix}"
     cfg = {
         "config_path": str(tmp_path / "target.yaml"),

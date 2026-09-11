@@ -43,6 +43,8 @@ def test_coverage_failures_enforces_present_numeric_branch_aware_percent() -> No
         "files": {
             "daylily_tapdb/good.py": {"summary": {"percent_covered": 90.0}},
             "daylily_tapdb/low.py": {"summary": {"percent_covered": 89.999}},
+            "daylily_tapdb/backup/recovery.py": {"summary": {"percent_covered": 86.72}},
+            "daylily_tapdb/backup/service.py": {"summary": {"percent_covered": 89.57}},
             "admin/no_percent.py": {"summary": {}},
         }
     }
@@ -52,6 +54,8 @@ def test_coverage_failures_enforces_present_numeric_branch_aware_percent() -> No
         [
             "daylily_tapdb/good.py",
             "daylily_tapdb/low.py",
+            "daylily_tapdb/backup/recovery.py",
+            "daylily_tapdb/backup/service.py",
             "admin/no_percent.py",
             "admin/missing.py",
         ],
@@ -61,6 +65,8 @@ def test_coverage_failures_enforces_present_numeric_branch_aware_percent() -> No
     assert measured == [
         ("daylily_tapdb/good.py", 90.0),
         ("daylily_tapdb/low.py", 89.999),
+        ("daylily_tapdb/backup/recovery.py", 86.72),
+        ("daylily_tapdb/backup/service.py", 89.57),
     ]
     assert failures == [
         "daylily_tapdb/low.py: 90.00% is below 90.00%",

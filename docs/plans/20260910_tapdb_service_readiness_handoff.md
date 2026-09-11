@@ -12,9 +12,10 @@ GitHub, PyPI, or any service.
 | Claim | Current state | Required terminal evidence |
 |---|---|---|
 | Source implementation | Implementation prepared; no independently qualified frozen candidate | Reviewed PR merge commit on `main` |
-| Independent PostgreSQL qualification | Incomplete; current independent turn ended in a tooling refusal | Authorized independent rerun against one frozen commit on exact PostgreSQL 16.13 |
+| Independent PostgreSQL qualification | Human reviewer volunteered; no verdict or final-candidate evidence yet | Human review verdict and required evidence tied to one frozen commit on exact PostgreSQL 16.13 |
 | Isolated Aurora PostgreSQL 16.13 acceptance | Author preparation/binding evidence exists; independent acceptance incomplete | Independent exact-target acceptance receipt against the frozen commit |
-| Full suite and coverage | Not green/frozen | Zero-failure, zero-unexpected-skip full suite on exact PostgreSQL 16.13 and aggregate plus changed-module branch coverage at or above 90% |
+| Runtime `TEMP` confinement | Implemented;134 exact16.13 principal author cases and53 root CLI/core/release contract checks pass; human and final Aurora acceptance pending | Reviewed bind plan/result proving exact database ACL review, `PUBLIC` and runtime revocation, explicit operator preservation when needed, and effective runtime `TEMP=false`; then independent frozen-candidate acceptance with recreated runtime sessions |
+| Full suite and coverage | Not green/frozen; two measured 10.1.0 changed-module exceptions are approved | Zero-failure, zero-unexpected-skip full suite on exact PostgreSQL 16.13; aggregate branch coverage and every other changed production module at or above 90%; numeric reports retained for approved `backup/recovery.py` 86.72% and `backup/service.py` 89.57% exceptions |
 | CI | Not run on a reviewed release commit | Green protected-branch required checks for the approved PostgreSQL 16.13 release scope, quality, security, and build/install smoke |
 | Tag | Not created | Immutable annotated bare tag `10.1.0`, peeled to the exact release commit |
 | Wheel and sdist | Not release-built | Clean-build names and SHA-256 values from the tagged commit |
@@ -44,8 +45,11 @@ receipt is lost but the maintenance session remains available. It proves the
 public reconciliation path does not change database identities and the next
 allocation does not reuse them. Combining that case with the unchanged-source
 partial baseline yields diagnostic recovery coverage of 86.72%; backup service
-remains 89.57%. Both remain below the existing 90% changed-module gate. This is
-not a replacement for a complete frozen-candidate run or independent acceptance.
+remains 89.57%. The user subsequently approved those two measured, named
+10.1.0 changed-module exceptions. Their numeric reports remain required;
+aggregate branch coverage and every other changed production module retain the
+90% threshold. The exceptions do not replace a complete frozen-candidate run,
+functional gates, or independent acceptance.
 
 E verified fresh core and GUI installs from this exact candidate under
 `runtime/qualification/e-package-20260911T001928Z`. Candidate-only SHA-256:
@@ -86,6 +90,10 @@ candidate checkout hash into a release slot.
 | Installed wheel `RECORD` / schema-asset verification | **PENDING** |
 
 The release is not complete while any required field is `PENDING`.
+
+The user-requested `TEMP` restriction is a candidate change after the package
+receipts recorded below. No frozen post-change candidate, human verdict, or
+release artifact exists yet.
 
 ## Candidate compatibility and dependency contract
 
@@ -157,6 +165,22 @@ All exact interfaces and markers must be re-read from the tagged installed
 wheel. This draft cannot freeze them before independent qualification and the
 reviewed release commit.
 
+The runtime-principal bind plan/result must expose the exact
+`database_access` inventory (`acl`, `runtime_connect`, `runtime_temp`,
+`operator_temp`, and `operator_temp_after_revokes`), two explicit
+`database_revokes` entries for `PUBLIC` and the configured runtime role with
+`privileges: ["TEMPORARY"]`, and any required explicit operator preservation in
+`operator_database_grants`. It must also carry
+`runtime_session_requirement.action` as
+`close_and_recreate_pre_binding_runtime_sessions`, with `verified: false` and
+`performed_by_bind: false`. The applied result must bind the unchanged plan
+through `plan_sha256`, report `runtime_temp_denied: true`, and preserve the same
+session requirement. These are sealed public-interface receipts, not fields for
+an operator to invent. `runtime_temp_denied` certifies the effective privilege
+check only; it does not certify session closure or removal of existing temporary
+objects. Apply uses `RESTRICT`; dependent grants must fail rather than cascade
+outside the reviewed scope.
+
 ## Source crosswalk
 
 | Consumer plan | Exact source evidence | TapDB prerequisite | Service-owned remainder |
@@ -173,8 +197,19 @@ The required service ordering is:
 4. Apply the receipt-bound schema migration.
 5. Perform the service-owned data/config/dependency conversion.
 6. Verify identity preservation, complete retained allocator floors, session
-   closure, and receipt-bound runtime binding.
+   closure, receipt-bound runtime binding, and effective runtime `TEMP=false`
+   from newly created service connections.
 7. Run service-owned acceptance and deployment/cutover gates.
+
+Before step 6 apply, the service owner must stop new runtime work and close all
+existing connections or pool sessions for the configured runtime principal.
+TapDB does not terminate sessions automatically or claim existing temporary
+objects were removed. The bind plan must disclose the exact database ACL,
+effective `TEMP`, revocation from `PUBLIC` and the runtime principal, and any
+explicit operator grant. Revoking `PUBLIC TEMP` affects other roles on the same
+database that relied on that implicit grant. Applications that require
+temporary tables or sequences need an explicit design change; no compatibility
+allowance is inferred.
 
 ## Evidence available for an independent reviewer
 
@@ -186,8 +221,9 @@ These are development/author receipts, not release acceptance:
 | B author matrix | After the allocator-resolution correction, 204 tests passed on each of exact PostgreSQL 16.13 and 17.11 with zero skips; catalog coverage was 100% and principal coverage 99%. This is author evidence, not the frozen-candidate result. |
 | `runtime/qualification/c-backup-recovery63.xml` | Author/integration checkpoint: 63 exact-16.13 backup and repeated-replacement recovery tests passed. |
 | `runtime/qualification/root-backup-surfaces-integration5.xml` | Root integration checkpoint: 168 backup API/HTTP/GUI/surface cases passed on exact PostgreSQL 16.13. |
-| `runtime/qualification/d-auth16-temp2.xml` | Independent P1 finding: a temporary sequence could redirect an unqualified managed allocator helper. This is failure evidence, not acceptance. |
-| Isolated Aurora plan/apply receipts | Author binding used an exact qualification-only PostgreSQL 16.13 database. The later CONNECT-aware plan/result hashes were recorded in the controlling ledger. Effective `PUBLIC TEMP` made independent temporary-object shadowing proof mandatory. Production remained unchanged. |
+| `runtime/qualification/d-auth16-temp2.xml` | Independent P1 finding: a temporary sequence could redirect an unqualified managed allocator helper. This is failure evidence, not acceptance. The allocator correction remains required despite the later `TEMP`-denial amendment. |
+| Isolated Aurora plan/apply receipts | Historical author binding used an exact qualification-only PostgreSQL 16.13 database. The later CONNECT-aware plan/result hashes were recorded in the controlling ledger. Those receipts observed effective `PUBLIC TEMP` and predate the requested denial, so they do not establish the amended confinement contract. Production remained unchanged. |
+| `runtime/qualification/root-temp-cli-contract.xml` | Root integration checkpoint: 53 CLI, core, and release-contract checks passed for the `TEMP` amendment. This is not principal author evidence, a human verdict, or frozen-candidate/Aurora acceptance. |
 | `runtime/qualification/e-package-20260910T234815Z/` | Pre-final-documentation SCM-pretend `10.1.0` source-snapshot diagnostic: build, Twine, wheel-asset verification, and sdist inspection passed. Wheel SHA-256 `25f03f754754968ecd257146c981e58e9cf029c1a78d8d1434cf98d484bdcb55`; sdist SHA-256 `3f79552d613f712f9b21dc1b5361e98e15561b7b38022e37a6a8e9c75b17d9d9`. Embedded allocator and migration hashes matched the source. The final filename/crosswalk documentation corrections followed this build. These are not release artifacts and do not fill the immutable slots above. |
 | `runtime/qualification/e-package-20260911T000027Z/` | Exact clean candidate commit `c3eee0e8e2aa26ad69ab1c24ad5b58c0dcf8c9f3`, tree `8fa980b87934eb578c44692bfe9ed5dc61087674`, archived before build. Core-only and separate GUI-extra fresh public-index installation, pip check, required imports/assets and outside-checkout CLI help pass. FastAPI is absent from core. Wheel SHA-256 `54095f722d089bd39ff73d9560270c926ad83588f656dac4a9a7fe81b547a4da`; sdist `b9a350546b576fa9ac87308d6e395d2dc2911613041ebcf4ee33a51cacbdd464`. Candidate-only proof, not publication; later ledger/test changes are not covered by these artifact hashes. |
 
@@ -235,14 +271,19 @@ Required evidence:
 3. The complete `python -m pytest tests -q` matrix with no deselection, no
    failures, no errors, and no unexpected skips.
 4. Aggregate branch coverage at least 90% and at least 90% for each changed
-   production module via `scripts/verify_changed_coverage.py`.
+   production module via `scripts/verify_changed_coverage.py`, except the two
+   approved 10.1.0 numeric reports: `daylily_tapdb/backup/recovery.py` 86.72%
+   and `daylily_tapdb/backup/service.py` 89.57%. Missing reports or exceptions
+   for any other module are not approved.
 5. Ruff check/format, configured mypy, Bandit, and detect-secrets results.
 6. Independent allocator, family-root, writer-fence, session-closure,
-   principal-confinement, historical-source, backup/recovery, migration,
-   API/GUI, typed-reference, lineage, and DAG-v2 acceptance.
+   principal-confinement (including recreated-session effective `TEMP=false`),
+   historical-source, backup/recovery, migration, API/GUI, typed-reference,
+   lineage, and DAG-v2 acceptance.
 7. Independent isolated Aurora 16.13 acceptance against only the separately
    authorized qualification target, including the corrected managed allocator
-   resolution and runtime temporary-object case.
+   resolution, reviewed database-wide `PUBLIC TEMP` impact, any explicit
+   operator `TEMP` preservation, and runtime temporary-object denial.
 8. A local candidate build with `SETUPTOOLS_SCM_PRETEND_VERSION=10.1.0`, Twine
    validation, `scripts/verify_wheel_assets.py --expected-version 10.1.0`, and
    a fresh installed-wheel smoke. This is candidate evidence only until the

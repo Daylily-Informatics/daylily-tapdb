@@ -230,6 +230,26 @@ evidence for the deferred qualification; they are not 10.1.0 acceptance.
 Configuration of a gate, an author test, or an earlier candidate run is not
 evidence that the frozen release candidate passed it.
 
+The user approved exactly two 10.1.0 changed-module coverage exceptions:
+`daylily_tapdb/backup/recovery.py` at the measured 86.72% and
+`daylily_tapdb/backup/service.py` at 89.57%. Numeric coverage reports for both
+remain mandatory. Aggregate branch coverage and every other changed production
+module remain at or above 90%. These exceptions do not waive any functional
+PostgreSQL/Aurora, review, packaging, or publication gate.
+
+Runtime-principal bootstrap remains CONNECT-only and does not change database
+`TEMP`. The separate receipt-bound bind must review the exact database ACL and
+effective `TEMP`, revoke database `TEMP` from `PUBLIC` and the configured
+runtime principal, preserve operator `TEMP` only through an explicit reviewed
+grant when the plan shows its pre-existing effective privilege would otherwise
+be lost, and verify runtime effective `TEMP=false`. Because the
+`PUBLIC` revocation affects every role that relied on it, applications needing
+temporary tables or sequences require an explicit design change; never add a
+silent compatibility allowance. Service adoption owns closure and recreation
+of existing runtime sessions. TapDB does not terminate them or claim that
+pre-existing temporary objects were removed. Retain and independently qualify
+the schema-qualified allocator correction as defense in depth.
+
 Do not weaken RLS, auth, exact identity, no-fallback, or evidence checks to make
 a test pass. Fix the fixture to supply the same explicit contract as runtime.
 

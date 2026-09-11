@@ -30,7 +30,7 @@ and record their exact versions, checksums, or immutable references:
 | TLS trust files and certificate deployment | `pg_dump --no-owner --no-acl` and RDS snapshots do not preserve client trust material or its deployment. |
 | IAM policies, trust relationships, and explicit AWS profile selection | A database artifact cannot prove the caller's cloud identity or authorization. |
 | Operator and runtime secret references plus a separately managed recovery method | TapDB receipts reject secrets. Never copy a secret value into a receipt, manifest, handoff, or repository. |
-| PostgreSQL principal-state inventory | The owning system must capture login/role attributes, memberships, database/schema/object ownership and ACLs, immutable domain/owner/tenant scope bindings, and IAM-to-database-role mapping. Do not record secret values. A `--no-owner --no-acl` dump and a later bootstrap/bind result do not preserve or prove the original state. |
+| PostgreSQL principal-state inventory | The owning system must capture login/role attributes, memberships, database/schema/object ownership and ACLs (including database `TEMP` grants and effective privileges), immutable domain/owner/tenant scope bindings, and IAM-to-database-role mapping. Do not record secret values. A `--no-owner --no-acl` dump and a later bootstrap/bind result do not preserve or prove the original state. |
 | Service runtime files | Container/image digests, process definitions, environment-file references, mounted files, and application config are service-owned. |
 | External receipt journals and their head anchors | Allocator intents, writer-fence state, recovery floors, and ambiguous outcomes live outside the restored database. |
 | Deployment and acceptance receipts | A restored schema does not prove that a consumer was pinned, deployed, rebound, or accepted. |
@@ -57,7 +57,7 @@ The service-readiness CLI groups are:
 | Final allocator floor check | `tapdb db sequences verify` |
 | Stalled fence or lost-acknowledgement reconciliation | `tapdb db sequences reconcile` |
 | Offline runtime-principal plan and CONNECT-only preparation | `tapdb db runtime-principal bootstrap` |
-| Receipt-bound runtime database/schema binding | `tapdb db runtime-principal bind` |
+| Receipt-bound runtime database/schema binding and `TEMP` confinement | `tapdb db runtime-principal bind` |
 | Backup, verification, staged restore, and rehearsal | `tapdb backup ...` |
 
 The public Python entry points, for callers that already own the transaction
@@ -118,6 +118,7 @@ or edit a sealed receipt.
 | Historical source contract | `schema_version: str`, exact `source_version: str`, `source_version_evidence: "operator_declared"`, complete `identity_inventory: object`, complete `sequence_inventory: object`, optional unchanged `recovery_family: object`, `sha256: str` | `tapdb db identity inventory --source-version ... --receipt <new-file>`; library callers use `capture_source_contract(...)`. |
 | Sequence advance plan | `schema_version: str`, `schema_name: str`, exact `target: object`, sealed `inventory: object`, `floors: list[{name: str, value: int, source: str}]`, `advances: list[{name: str, floor: int, next_value: int}]`, `sha256: str`; a family plan also carries `recovery_family`, `input_floors`, and `family_state_sha256` | Dry-run `tapdb db sequences advance --receipt <new-file> ...`; library callers use `build_sequence_advance_plan(...)`. Apply requires that unchanged preflight receipt. |
 | Writer fence | `schema_version: str`, `phase: "acquired"`, exact `target` and `physical_target`, `fence: object`, allocator `inventory_sha256`, connection/control/provider evidence, original database ACL, intent IDs, and `sha256`; family operations also carry the unchanged `recovery_family` | `tapdb db sequences advance --apply --establish-writer-fence --control-config ... --receipts-dir ...`; the library authority is `acquire_database_writer_fence(...)`. It must be validated and later released or reconciled through the public sequence lifecycle. |
+| Runtime-principal bind plan/result | Both carry `format: "tapdb-runtime-principal/v1"`, `operation: "bind"`, exact `target: object`, `database_access: {acl: str|null, runtime_connect: bool, runtime_temp: bool, operator_temp: bool, operator_temp_after_revokes: bool}`, exact `database_revokes: list[{database: str, grantee: str, grantee_kind: "public"|"role", privileges: ["TEMPORARY"]}]`, `operator_database_grants: list[{database: str, grantee: str, privileges: ["TEMPORARY"]}]`, `runtime_session_requirement: {action: "close_and_recreate_pre_binding_runtime_sessions", verified: false, performed_by_bind: false, reason: str}`, and `sha256: str`. The planned receipt has `status: "planned"`; the result has `status: "applied"`, `plan_sha256: str`, `runtime_temp_denied: true`, and `privileges_verified: true`. `runtime_temp_denied` certifies the effective privilege check only, not session closure or removal of existing temporary objects. | Dry-run `tapdb db runtime-principal bind --receipt <new-file>` writes the plan. The same command with the unchanged receipt and `--apply` writes a separate result next to it. Library callers use `bind_runtime_principal(...)`; operators must not handwrite or edit either sealed receipt. |
 | Restore `recovery_source` payload | JSON object with exact `purpose`. `isolated_rehearsal` requires `{"purpose": "isolated_rehearsal"}` and, when present in the backup contract, its unchanged `recovery_family`. `fenced_source_recovery` requires `purpose`, the freshly captured sealed `source_contract`, its verified `writer_fence` (or the separately supplied quarantine receipt), canonical absolute `source_receipts_dir`, and unchanged `recovery_family`. | The operator composes this input only from the public source-contract, family, fence/quarantine, and journal outputs. `tapdb backup restore-plan` validates it against live/source history and binds it into the reviewed plan fingerprint; `tapdb backup restore` accepts only the unchanged validated payload. |
 
 `fenced_migration` is the exact purpose recorded internally by the public
@@ -202,7 +203,8 @@ tapdb --config /abs/path/to/target-config.yaml \
 ```
 
 Bootstrap does not create the database, apply schema, seed data, grant schema
-access, or bind runtime scope. Role collision, elevation, unexpected
+access, bind runtime scope, or change database `TEMP` privileges. It remains a
+CONNECT-only principal-preparation step. Role collision, elevation, unexpected
 membership/settings, effective database `CREATE`, or an incomplete operator
 authority check is a hard failure.
 
@@ -280,7 +282,10 @@ historical template binding differs.
 
 At this point the owning service updates its exact dependency pin and lock,
 applies its domain conversion, binds its external registries/runtime files, and
-runs application tests. The named plan rows consume the shared TapDB
+runs application tests. Before the later runtime-principal bind apply, the
+service owner must stop new runtime work and close every existing connection or
+pool session for the configured runtime principal. TapDB does not terminate
+those sessions automatically. The named plan rows consume the shared TapDB
 prerequisites above, while their remaining pin, conversion, deployment,
 cleanup, and acceptance work is service-owned. The relevant cross-repo plan
 rows are:
@@ -332,16 +337,34 @@ Apply writes a separate result next to the reviewed plan. Binding grants exact
 database `CONNECT`, managed-schema privileges, proven managed sequence access,
 and immutable runtime scope. It must deny managed-schema and startup DDL,
 elevation, broad default privileges, and access to preserved service objects
-that TapDB does not own. Database `TEMP` may remain available; TapDB's managed
-allocator functions use qualified object resolution so temporary objects
-cannot redirect them.
+that TapDB does not own. The reviewed plan must inventory the exact database
+ACL and effective `TEMP` privilege, disclose revocation of database `TEMP` from
+both `PUBLIC` and the configured runtime principal, and disclose any explicit
+operator `TEMP` grant needed to preserve operator maintenance access. Apply
+must verify that the runtime principal's effective database `TEMP` privilege is
+false. Revoking `PUBLIC` affects every other role that relied on that implicit
+database grant; each such role must receive an explicit reviewed grant or stop
+using temporary objects. An application that needs temporary tables or
+sequences requires an explicit design change, not a silent compatibility
+allowance. Revocation uses `RESTRICT`; dependent grants fail the apply rather
+than being silently cascaded away.
+
+After apply succeeds, recreate the service's runtime connections and verify the
+new sessions use the configured runtime principal and cannot create temporary
+objects before application acceptance. Binding does not terminate old
+sessions, remove temporary objects that already exist, or prove that existing
+objects were removed. The schema-qualified allocator correction remains
+required defense in depth and must still be independently qualified; `TEMP`
+denial does not replace it.
 
 ### 7. Run service acceptance
 
 The service owner must prove the exact source and package pin, deployment
 identity, runtime principal, config/registry/TLS/IAM rebinding, application data
-conversion, API/GUI behavior, rollback posture, and acceptance tests. A passing
-TapDB migration or restore is prerequisite evidence, not service acceptance.
+conversion, closure and recreation of runtime sessions, effective `TEMP=false`
+on a newly created runtime connection, API/GUI behavior, rollback posture, and
+acceptance tests. A passing TapDB migration or restore is prerequisite evidence,
+not service acceptance.
 
 ## Writer fence and ambiguous outcomes
 

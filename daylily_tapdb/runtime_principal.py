@@ -343,10 +343,25 @@ def _database_access(connection: Any, target: Mapping[str, Any]) -> dict[str, An
         connection.execute(
             text("""/* tapdb_principal:database_access */
         SELECT d.datacl::text AS acl,
-          pg_catalog.has_database_privilege(:role, d.oid, 'CONNECT') AS runtime_connect
-        FROM pg_catalog.pg_database d WHERE d.datname = current_database()
+          pg_catalog.has_database_privilege(runtime.oid, d.oid, 'CONNECT') AS runtime_connect,
+          pg_catalog.has_database_privilege(runtime.oid, d.oid, 'TEMPORARY') AS runtime_temp,
+          pg_catalog.has_database_privilege(operator.oid, d.oid, 'TEMPORARY') AS operator_temp,
+          (operator.rolsuper OR EXISTS (
+            SELECT 1 FROM pg_catalog.aclexplode(
+              COALESCE(d.datacl, pg_catalog.acldefault('d', d.datdba))
+            ) permission
+            WHERE permission.privilege_type = 'TEMPORARY'
+              AND CASE WHEN permission.grantee NOT IN (
+                0, runtime.oid
+              ) THEN pg_catalog.pg_has_role(operator.oid, permission.grantee, 'USAGE')
+              ELSE false END
+          )) AS operator_temp_after_revokes
+        FROM pg_catalog.pg_database d
+          JOIN pg_catalog.pg_roles operator ON operator.rolname = :operator
+          JOIN pg_catalog.pg_roles runtime ON runtime.rolname = :role
+        WHERE d.datname = current_database()
     """),
-            {"role": target["user"]},
+            {"role": target["user"], "operator": target["operator_user"]},
         )
         .mappings()
         .one()
@@ -548,12 +563,14 @@ def _default_acl_guard_sql(
     )
     return f"""DO $tapdb_default_acl$ BEGIN IF EXISTS (
       SELECT 1 FROM pg_catalog.pg_default_acl d
+      JOIN pg_catalog.pg_roles operator ON operator.rolname = {operator}
+      JOIN pg_catalog.pg_roles runtime ON runtime.rolname = {runtime}
       CROSS JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) permission
-      WHERE d.defaclrole = {operator}::regrole
+      WHERE d.defaclrole = operator.oid
         AND d.defaclnamespace IN (0, (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = {schema}))
         AND d.defaclobjtype IN ('r', 'S')
         AND (permission.grantee = 0 OR CASE WHEN permission.grantee <> 0 THEN
-          pg_catalog.pg_has_role({runtime}::regrole, permission.grantee, 'USAGE') ELSE false END)
+          pg_catalog.pg_has_role(runtime.oid, permission.grantee, 'USAGE') ELSE false END)
         AND (permission.grantee = 0 OR d.defaclnamespace = 0)
     ) THEN RAISE EXCEPTION 'Global or PUBLIC default privileges conflict with constrained runtime binding';
     END IF; END $tapdb_default_acl$"""
@@ -907,6 +924,39 @@ def _build_runtime_principal_binding_plan(
         "database_grants": [
             {"database": target["database"], "privileges": ["CONNECT"]}
         ],
+        "database_revokes": [
+            {
+                "database": target["database"],
+                "grantee": "PUBLIC",
+                "grantee_kind": "public",
+                "privileges": ["TEMPORARY"],
+            },
+            {
+                "database": target["database"],
+                "grantee": target["user"],
+                "grantee_kind": "role",
+                "privileges": ["TEMPORARY"],
+            },
+        ],
+        "operator_database_grants": [
+            {
+                "database": target["database"],
+                "grantee": target["operator_user"],
+                "privileges": ["TEMPORARY"],
+            }
+        ]
+        if database_access["operator_temp"]
+        and not database_access["operator_temp_after_revokes"]
+        else [],
+        "runtime_session_requirement": {
+            "action": "close_and_recreate_pre_binding_runtime_sessions",
+            "verified": False,
+            "performed_by_bind": False,
+            "reason": (
+                "Database TEMP revocation does not remove existing temporary objects "
+                "or prove existing sessions cannot create more."
+            ),
+        },
         "schema": dict(schema),
         "principal": principal,
         "objects": objects,
@@ -1033,10 +1083,12 @@ def _verify_bound_permissions(
 def bind_runtime_principal(
     cfg: Mapping[str, Any], *, apply: bool = False, receipt_path: Path
 ) -> dict[str, Any]:
-    """Receipt-bind exact CONNECT/schema grants and immutable runtime scope.
+    """Receipt-bind CONNECT/schema grants, TEMP denial and immutable scope.
 
     CONNECT is explicit here because a restored target can be created after
-    role bootstrap. No role creation or other database privileges are granted.
+    role bootstrap. Existing operator TEMP is preserved, not expanded. Revoking
+    TEMP does not close old runtime sessions or remove their temporary objects;
+    service adoption must close and recreate those sessions separately.
     """
     target = _target(cfg)
     receipt_path = Path(receipt_path)
@@ -1080,6 +1132,27 @@ def bind_runtime_principal(
         connection.execute(
             text(f"GRANT CONNECT ON DATABASE {_ident(target['database'])} TO {role}")
         )
+        for grant in plan["operator_database_grants"]:
+            connection.execute(
+                text(
+                    f"GRANT TEMPORARY ON DATABASE {_ident(grant['database'])} "
+                    f"TO {_ident(grant['grantee'])}"
+                )
+            )
+        for revoke in plan["database_revokes"]:
+            grantee = (
+                "PUBLIC"
+                if revoke["grantee_kind"] == "public"
+                else _ident(revoke["grantee"])
+            )
+            # Default RESTRICT must reject dependent grants, never cascade
+            # privilege changes into roles outside the reviewed target.
+            connection.execute(
+                text(
+                    f"REVOKE TEMPORARY ON DATABASE {_ident(revoke['database'])} "
+                    f"FROM {grantee} RESTRICT"
+                )
+            )
         connection.execute(text(runtime_scope_binding_sql(target["schema_name"], cfg)))
         connection.execute(text(f"REVOKE ALL ON SCHEMA {schema} FROM {role}"))
         connection.execute(text(f"GRANT USAGE ON SCHEMA {schema} TO {role}"))
@@ -1119,6 +1192,14 @@ def bind_runtime_principal(
             raise RuntimePrincipalError(
                 "Runtime principal CONNECT to the exact target was not established"
             )
+        if database_access["runtime_temp"]:
+            raise RuntimePrincipalError(
+                "Runtime principal retains effective TEMP on the exact target database"
+            )
+        if database_access["operator_temp"] != plan["database_access"]["operator_temp"]:
+            raise RuntimePrincipalError(
+                "Configured operator TEMP privilege was not preserved"
+            )
     result = _seal(
         {
             "format": _FORMAT,
@@ -1131,6 +1212,10 @@ def bind_runtime_principal(
             "grants": plan["grants"],
             "database_access": database_access,
             "database_grants": plan["database_grants"],
+            "database_revokes": plan["database_revokes"],
+            "operator_database_grants": plan["operator_database_grants"],
+            "runtime_temp_denied": True,
+            "runtime_session_requirement": plan["runtime_session_requirement"],
             "privileges_verified": True,
             "default_privileges": plan["planned_default_privileges"],
         }

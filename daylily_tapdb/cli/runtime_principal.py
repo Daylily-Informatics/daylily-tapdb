@@ -14,7 +14,7 @@ from daylily_tapdb.runtime_principal import (
 )
 
 runtime_principal_app = typer.Typer(
-    help="Constrained runtime login preparation and separate receipt-bound CONNECT/schema grants"
+    help="Constrained runtime login preparation and receipt-bound access with runtime TEMP denial"
 )
 
 
@@ -58,10 +58,14 @@ def bind(
     apply: bool = typer.Option(
         False,
         "--apply",
-        help="Apply exact database CONNECT, schema grants, and immutable scope from the unchanged reviewed receipt",
+        help="Apply reviewed CONNECT/schema grants, immutable scope, and database TEMP restriction; existing runtime sessions must be restarted",
     ),
 ) -> None:
-    """Activate reviewed access to an existing schema; never apply/reset/seed it."""
+    """Bind existing schema access and deny runtime temporary-object creation.
+
+    The plan discloses database-wide PUBLIC TEMP revocation. Apply does not
+    terminate existing sessions or apply/reset/seed the schema.
+    """
     try:
         result = bind_runtime_principal(
             get_db_config(), apply=_apply(apply), receipt_path=receipt
