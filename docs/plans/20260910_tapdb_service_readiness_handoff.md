@@ -25,7 +25,14 @@ GitHub, PyPI, or any service.
 
 No production service or database was changed by preparation of this handoff.
 
-Current runtime/test candidate: `17d0ca0bc2758e10a1a0469d7ff5480831d4d287`.
+Current runtime/test candidate: `24075ba7628d38502538b1897e09ae3cb58e21a7`.
+Ordinary PG16.13 run:2964PASS, zero errors/skips, aggregate94.73%; changed-module
+gate passes with the two approved exceptions. The same two independent
+authorization modules remain unrun, so this is not complete qualification.
+Actual isolated Aurora migration/recovery and TEMP binding now pass author
+checks, including fresh runtime TEMP table/sequence denial. Production remains
+unchanged. Current production payload is identical to package-verified aeb5ac0;
+24075ba changes only test-server isolation and the ledger.
 TEMP author proof:134 cases pass on exact16.13, zero skips, in
 `runtime/qualification/b-temp-denial-final-pg16.xml`. Human/final acceptance is
 still pending. Historical partial-matrix checkpoint:
@@ -96,7 +103,7 @@ candidate checkout hash into a release slot.
 The release is not complete while any required field is `PENDING`.
 
 The user-requested `TEMP` restriction is a candidate change after the historical
-package receipts recorded below. Runtime/test commit17d0ca0 is now fixed for
+package receipts recorded below. Runtime/test commit24075ba is now fixed for
 review; no human verdict or release artifact exists yet.
 
 ## Candidate compatibility and dependency contract

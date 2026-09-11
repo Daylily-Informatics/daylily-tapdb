@@ -3,10 +3,13 @@
 Reviewer: user / `iamh2o` (volunteered; responded "proceed" to this candidate's
 review prompt, authorizing continuation; no detailed findings or independent
 test evidence supplied).
-Runtime/test candidate under review: **`17d0ca0bc2758e10a1a0469d7ff5480831d4d287`**,
-including the requested runtime `TEMP` restriction and the approved numeric
-coverage exceptions. Subsequent review-packet/ledger-only commits do not change
-this implementation. Earlier commits are retained only as historical context.
+Current runtime/test candidate: **`24075ba7628d38502538b1897e09ae3cb58e21a7`**.
+The user's "proceed" disposition was for earlier TEMP candidate17d0ca0.
+Subsequent bounded changes fix Aurora provider lookup/preload compatibility,
+add actionable census refusal details, and isolate disposable test servers from
+automatic vacuum. Production code is identical to package-verified
+`aeb5ac079959d4d74160de3b537e49a3013135b3`;24075ba adds only test isolation and
+ledger evidence. Final independent acceptance is not implied.
 Scope: PostgreSQL/Aurora 16.13. PG17 deferred under
 [issue 107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107).
 The recorded user disposition is "proceed". It is not a GitHub approval or a
@@ -75,6 +78,9 @@ Code-review approval alone is not full release or Aurora acceptance.
 | `runtime/qualification/c-retained-outcome16-MtoTN6/test.xml` | One retained-session lost-receipt recovery scenario passes and contributes to measured recovery coverage of 86.72% | Full-suite, functional, or independent acceptance |
 | `runtime/qualification/root-temp-cli-contract.xml` | 53 root CLI, core, and release-contract checks pass for the amendment | Principal author evidence, human verdict, or frozen-candidate/Aurora acceptance |
 | `runtime/qualification/b-temp-denial-final-pg16.xml` | 134 author cases pass on exact16.13, zero skips; TEMP denial, operator preservation, ordinary allocation and exact role names | Human or independent acceptance of the final frozen candidate |
+| `runtime/qualification/root-24075ba-pg16-partial.xml` | 2964PASS, zero errors/skips, aggregate94.73%; all changed-module gates pass with the two approved exceptions | Complete suite: the two independent authorization modules remain unrun |
+| `runtime/qualification/aurora-68595f8-migration-result.json` and `aurora-68595f8-temp-plan.result.json` | Actual isolated Aurora migration/recovery committed, fence released, TEMP bind applied with runtime TEMPfalse and operator TEMPtrue; separate fresh sessions reject TEMP table/sequence creation | Independent consumer/recovery acceptance or service deployment |
+| `runtime/qualification/e-package-aeb5ac0-rjx4UT/` | Current unchanged production payload builds and fresh core wheel installation passes | Public publication; final sdist/test-configuration hash |
 
 Raw runtime evidence is retained locally, not committed. The
 [controlling ledger](20260910_tapdb_service_readiness_ledger.md) records source
@@ -86,9 +92,9 @@ hashes, prior findings, ownership and the complete implementation history.
   **pending human review/evidence**, not a passed AI gate.
 - Complete final-candidate PG16 suite: **pending**, including the two previously
   unrun authorization modules. No tests are silently removed or marked passed.
-- Exact isolated Aurora16.13 acceptance: **pending**; existing author preparation
-  and pre-amendment bind receipts are not final acceptance. No production target
-  is in scope.
+- Exact isolated Aurora16.13 independent acceptance: **pending**; the actual
+  corrected migration and TEMP-binding author checks now pass, but do not
+  substitute for independent qualification. No production target is in scope.
 - Runtime `TEMP` confinement: **implemented, author-tested; pending human and final Aurora acceptance**. Service
   adoption must close/recreate existing runtime sessions; no automatic
   termination or existing-object removal claim is authorized.
