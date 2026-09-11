@@ -211,18 +211,24 @@ See `docs/consumer-discoverability-guide.md` for the tested adoption flow.
 ## Testing and release floor
 
 TapDB 10.0.0 is the latest verified public release. TapDB 10.1.0 is an
-unreleased candidate until independent PostgreSQL/Aurora qualification, a
-reviewed green merge, immutable annotated tag, publication, and fresh public
-installation all have exact receipts.
+unreleased candidate until independent exact PostgreSQL 16.13 and isolated
+Aurora PostgreSQL 16.13 qualification, a reviewed green merge, immutable
+annotated tag, publication, and fresh public installation all have exact
+receipts. PostgreSQL 17 qualification is deferred from 10.1.0 and has not
+passed; it is tracked in
+[GitHub issue #107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107),
+and this is not a declaration that PostgreSQL 17 is unsupported.
 
-The 10.1.0 release matrix runs the same complete suite against exact community
-PostgreSQL 16.13 and 17.11 without deselecting integration tests, plus isolated
-Aurora PostgreSQL 16.13 acceptance. It enables local documentation examples and
-requires no unexpected skips. Shared CI gates also run Ruff check and format,
-mypy, Bandit, detect-secrets, branch coverage for `daylily_tapdb` and `admin`,
-wheel build, schema/migration-asset inspection, and installed-wheel smoke
-checks. Configuration of a gate, an author test, or an earlier candidate run is
-not evidence that the frozen release candidate passed it.
+The 10.1.0 release matrix runs the complete approved release-scope suite against
+exact community PostgreSQL 16.13 without deselecting integration tests, plus
+isolated Aurora PostgreSQL 16.13 acceptance. It enables local documentation
+examples and requires no unexpected skips. Shared CI gates also run Ruff check
+and format, mypy, Bandit, detect-secrets, branch coverage for
+`daylily_tapdb` and `admin`, wheel build, schema/migration-asset inspection, and
+installed-wheel smoke checks. Historical PostgreSQL 17.11 results remain
+evidence for the deferred qualification; they are not 10.1.0 acceptance.
+Configuration of a gate, an author test, or an earlier candidate run is not
+evidence that the frozen release candidate passed it.
 
 Do not weaken RLS, auth, exact identity, no-fallback, or evidence checks to make
 a test pass. Fix the fixture to supply the same explicit contract as runtime.

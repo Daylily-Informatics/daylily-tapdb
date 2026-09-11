@@ -135,7 +135,7 @@ def test_consumer_and_service_readiness_guides_are_public_safe() -> None:
         assert "TapDB 10.0.0 is the latest verified public release" in normalized
         assert "TapDB 10.1.0" in normalized
         assert "unreleased candidate" in normalized
-        assert "PostgreSQL 16.13 and 17.11" in normalized
+        assert "PostgreSQL 16.13" in normalized
         assert "Aurora PostgreSQL 16.13" in normalized
 
 
@@ -194,9 +194,6 @@ def test_ci_runs_the_complete_release_matrix() -> None:
         "postgres_label: '16.13'",
         "postgres_image: postgres:16.13",
         "postgres_major: '16'",
-        "postgres_label: '17'",
-        "postgres:17",
-        "postgres_major: '17'",
         "image: ${{ matrix.postgres_image }}",
         '"postgresql-${{ matrix.postgres_major }}"',
         '"postgresql-client-${{ matrix.postgres_major }}"',

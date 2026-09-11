@@ -80,10 +80,8 @@ jobs:
             postgres_image: postgres:16.13
             postgres_major: '16'
             postgres_source: '16.13'
-          - postgres_label: '17'
-            postgres_image: postgres:17.11
-            postgres_major: '17'
-            postgres_source: '17.11'
+          # PG17 qualification is deferred for 10.1.0 by explicit release scope.
+          # Follow-up: https://github.com/Daylily-Informatics/daylily-tapdb/issues/107
 
     services:
       postgres:

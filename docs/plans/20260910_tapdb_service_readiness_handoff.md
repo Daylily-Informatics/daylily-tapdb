@@ -12,10 +12,10 @@ GitHub, PyPI, or any service.
 | Claim | Current state | Required terminal evidence |
 |---|---|---|
 | Source implementation | Implementation prepared; no independently qualified frozen candidate | Reviewed PR merge commit on `main` |
-| Independent PostgreSQL qualification | Incomplete; current independent turn ended in a tooling refusal | Authorized independent rerun against one frozen commit on exact PostgreSQL 16.13 and 17.11 |
+| Independent PostgreSQL qualification | Incomplete; current independent turn ended in a tooling refusal | Authorized independent rerun against one frozen commit on exact PostgreSQL 16.13 |
 | Isolated Aurora PostgreSQL 16.13 acceptance | Author preparation/binding evidence exists; independent acceptance incomplete | Independent exact-target acceptance receipt against the frozen commit |
-| Full suite and coverage | Not green/frozen | Zero-failure, zero-unexpected-skip full suites and aggregate plus changed-module branch coverage at or above 90% |
-| CI | Not run on a reviewed release commit | Green protected-branch PR checks for quality, security, both PostgreSQL jobs, and build/install smoke |
+| Full suite and coverage | Not green/frozen | Zero-failure, zero-unexpected-skip full suite on exact PostgreSQL 16.13 and aggregate plus changed-module branch coverage at or above 90% |
+| CI | Not run on a reviewed release commit | Green protected-branch required checks for the approved PostgreSQL 16.13 release scope, quality, security, and build/install smoke |
 | Tag | Not created | Immutable annotated bare tag `10.1.0`, peeled to the exact release commit |
 | Wheel and sdist | Not release-built | Clean-build names and SHA-256 values from the tagged commit |
 | Publication | Not performed | GitHub and PyPI retrieval plus metadata receipts |
@@ -30,6 +30,12 @@ and 2952 passes / 2 failures / 1 setup error on 17.11. Aggregate coverage is
 94.67% / 94.68%; recovery (84.37%) and backup service (89.57%) do not satisfy
 the existing changed-module threshold. Two screened authorization modules
 remain unrun, so these results are not full or independent qualification.
+The 10.1.0 release scope is now exact community PostgreSQL 16.13 plus isolated
+Aurora PostgreSQL 16.13. PostgreSQL 17 qualification and its observed failures
+are deferred under
+[GitHub issue #107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107);
+they are retained here as evidence and are not being relabeled as passes or as
+proof that PostgreSQL 17 is unsupported.
 Further tests are limited to demonstrated defects and distinct operational
 requirements, not duplicate assertions or coverage-only bookkeeping.
 
@@ -76,7 +82,11 @@ The release is not complete while any required field is `PENDING`.
 ## Candidate compatibility and dependency contract
 
 - Python: `>=3.12`.
-- Release qualification targets: exact PostgreSQL `16.13` and `17.11`.
+- Release qualification targets: exact community PostgreSQL `16.13` and
+  isolated Aurora PostgreSQL `16.13`.
+- PostgreSQL `17.11` author and partial-regression evidence is retained below,
+  but PostgreSQL 17 qualification is deferred and not part of the 10.1.0
+  release claim. Deferred and unqualified does not mean unsupported.
 - Required core dependencies at the current source checkpoint:
   `sqlalchemy>=2.0`, `psycopg2-binary>=2.9`, `pydantic`,
   `jsonschema>=4.0`, `typer`, `rich`, `pyyaml`, `uuid6>=2024.1.12`,
@@ -195,10 +205,12 @@ corrects that import boundary without adding dependencies or replacing the
 existing public web implementations. E independently verified a bare-wheel
 fresh install with FastAPI absent and all required CLI help commands passing;
 the separate GUI-extra install also passed. The exact candidate package
-receipts above resolve PKG-01 only. The ordinary PostgreSQL regression runs
-still failed, and independent/Aurora acceptance remains unavailable. Publication
-requires fresh-install proof from the eventual published wheel, not this
-unreleased diagnostic artifact.
+receipts above resolve PKG-01 only. The partial PostgreSQL 16.13 run passed its
+executed tests but is not the complete or independent release-scope
+qualification; the failing PostgreSQL 17.11 run is retained as deferred
+evidence. Independent PostgreSQL 16.13 and Aurora 16.13 acceptance remain
+unavailable. Publication requires fresh-install proof from the eventual
+published wheel, not this unreleased diagnostic artifact.
 
 ## Independent frozen-candidate acceptance
 
@@ -210,8 +222,8 @@ Required evidence:
 
 1. `git status --short --branch`, exact commit, diff against the 10.0.0
    baseline, and candidate version metadata.
-2. Exact PostgreSQL `16.13` and `17.11` binaries built by
-   `scripts/build_qualification_postgres.sh` with the checked-in source hashes.
+2. Exact PostgreSQL `16.13` binaries built by
+   `scripts/build_qualification_postgres.sh` with the checked-in source hash.
 3. The complete `python -m pytest tests -q` matrix with no deselection, no
    failures, no errors, and no unexpected skips.
 4. Aggregate branch coverage at least 90% and at least 90% for each changed
@@ -230,6 +242,11 @@ Required evidence:
 
 The exact frozen commit must then pass the protected PR checks before the
 coordinator may merge, tag, build release artifacts, or publish.
+
+PostgreSQL 17.11 qualification is explicitly deferred from this release. Its
+recorded failures remain open evidence for later qualification; neither this
+release nor this handoff claims PostgreSQL 17 acceptance or lack of runtime
+support.
 
 ## Publication proof required after merge
 

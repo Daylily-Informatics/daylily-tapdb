@@ -3,8 +3,13 @@
 This is the operator contract for preparing an existing TapDB-backed service
 for inventory, recovery, schema migration, and service acceptance.
 
-> **Release status:** TapDB 10.1.0 is an unreleased candidate. Its independent
-> PostgreSQL/Aurora qualification, reviewed merge, immutable tag, published
+> **Release status:** TapDB 10.1.0 is an unreleased candidate. This release's
+> qualification scope is exact community PostgreSQL 16.13 and isolated Aurora
+> PostgreSQL 16.13. PostgreSQL 17 qualification is deferred to
+> [GitHub issue #107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107)
+> and has not passed; that deferral is not a claim that the runtime is
+> unsupported. Independent
+> 16.13/Aurora qualification, reviewed merge, immutable tag, published
 > artifacts, and fresh-install verification are not complete. Do not pin a
 > consumer to 10.1.0 until the release handoff contains those receipts.
 

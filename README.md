@@ -40,8 +40,11 @@ verification are not complete. Do not pin 10.1.0 until the release handoff
 contains those receipts.
 
 The 10.1.0 candidate requires Python 3.12 or newer. Its release gates target
-exact community PostgreSQL 16.13 and 17.11 plus isolated Aurora PostgreSQL
-16.13 acceptance.
+exact community PostgreSQL 16.13 plus isolated Aurora PostgreSQL 16.13
+acceptance. PostgreSQL 17 qualification is deferred to
+[GitHub issue #107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107)
+and has not passed; this is not a declaration that PostgreSQL 17 is
+unsupported.
 
 ```bash
 python -m pip install "daylily-tapdb[cli,gui]"
@@ -325,14 +328,16 @@ python -m build
 ```
 
 The 10.1.0 candidate release CI is configured to run the same complete suite
-independently against exact community PostgreSQL 16.13 and 17.11, including
-local-doc examples and branch coverage. The shared release gates also run Ruff,
-mypy, Bandit, detect-secrets, wheel build, schema/migration asset verification,
-and installed-wheel smoke checks. CI does not hide integration tests with
+independently against exact community PostgreSQL 16.13, including local-doc
+examples and branch coverage, with separate isolated Aurora PostgreSQL 16.13
+acceptance. The shared release gates also run Ruff, mypy, Bandit,
+detect-secrets, wheel build, schema/migration asset verification, and
+installed-wheel smoke checks. CI does not hide integration tests with
 deselects. These configured gates are not a success claim until one frozen,
-reviewed candidate passes them. The mypy file list in `pyproject.toml` covers
-the new 10.1 implementation modules; older dynamically mapped ORM and Typer
-modules are not yet globally strict-clean.
+reviewed candidate passes them. PostgreSQL 17 results remain evidence for the
+deferred qualification, not 10.1.0 acceptance. The mypy file list in
+`pyproject.toml` covers the new 10.1 implementation modules; older dynamically
+mapped ORM and Typer modules are not yet globally strict-clean.
 
 ## Documentation
 
