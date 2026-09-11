@@ -152,12 +152,17 @@ def pg_instance(tmp_path_factory, pytestconfig):
     )
 
     # --- start ---
+    # These disposable fixtures exercise exclusive maintenance sessions.
+    # Background vacuum races are tested by the explicit census cases, not by
+    # nondeterministic launcher timing across unrelated tests. Production and
+    # Aurora settings are unchanged; live competing workers still fail fencing.
     options = (
         f"-p {port} "
         f"-k {socket_dir} "
         f"-c listen_addresses=localhost "
         f"-c unix_socket_directories='{socket_dir}' "
-        f"-c logging_collector=off"
+        f"-c logging_collector=off "
+        f"-c autovacuum=off"
     )
     subprocess.run(
         [pg_ctl, "start", "-D", str(data_dir), "-l", str(log_file), "-o", options],
