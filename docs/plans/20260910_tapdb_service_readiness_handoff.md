@@ -24,6 +24,24 @@ GitHub, PyPI, or any service.
 
 No production service or database was changed by preparation of this handoff.
 
+Latest candidate checkpoint: `878b9a0448ab16401dfcb7ceffdd4070b8349525`.
+The parallel partial regression runs report 2955 passes on PostgreSQL 16.13
+and 2952 passes / 2 failures / 1 setup error on 17.11. Aggregate coverage is
+94.67% / 94.68%; recovery (84.37%) and backup service (89.57%) do not satisfy
+the existing changed-module threshold. Two screened authorization modules
+remain unrun, so these results are not full or independent qualification.
+Further tests are limited to demonstrated defects and distinct operational
+requirements, not duplicate assertions or coverage-only bookkeeping.
+
+E verified fresh core and GUI installs from this exact candidate under
+`runtime/qualification/e-package-20260911T001928Z`. Candidate-only SHA-256:
+wheel `9d5fa818524a061a93b1a61dbbf856681754d15bc78f745bb53c501c0d9ebe53`;
+sdist `455b24731dd851d2a3c0b2b3167aa6b8d972400d4f9940d5fad597b352d7bc19`.
+These do not fill the published-release slots below. No PR exists for the
+candidate branch; `iamh2o` authentication is verified, but “admin approve” is
+not a GitHub CLI operation. Review approval and administrative bypass merge
+are distinct and neither has been performed.
+
 ## Immutable release slots
 
 Fill these only from the owning system after each event succeeds. Do not copy a
