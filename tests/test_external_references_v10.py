@@ -486,7 +486,7 @@ def _reference_row(target, *, uid=31, euid="persisted-reference"):
         category="reference",
         type="external_identifier",
         subtype=template.subtype,
-        version="1.0",
+        version=template.version,
         domain_code="Z",
         issuer_app_code="daylily-tapdb",
         tenant_id=getattr(target, "tenant_id", None),

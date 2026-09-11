@@ -26,9 +26,9 @@ from daylily_tapdb.validation.instantiation_layouts import (
 logger = logging.getLogger(__name__)
 
 _SYSTEM_USER_COORDS = ("actor", "user", "system")
-_RESERVED_EXTERNAL_REFERENCE_COORDS = {
-    ("reference", "external_identifier", "tapdb_object", "1.0"),
-    ("reference", "external_identifier", "opaque", "1.0"),
+_RESERVED_EXTERNAL_REFERENCE_TYPES = {
+    ("reference", "external_identifier", "tapdb_object"),
+    ("reference", "external_identifier", "opaque"),
 }
 _EXTERNAL_REFERENCE_WRITER_TOKEN = object()
 _IDENTITY_NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9._/-]*$")
@@ -96,10 +96,9 @@ def _require_generic_template_write_allowed(
         template.category,
         template.type,
         template.subtype,
-        template.version,
     )
     if (
-        coordinates in _RESERVED_EXTERNAL_REFERENCE_COORDS
+        coordinates in _RESERVED_EXTERNAL_REFERENCE_TYPES
         and writer_token is not _EXTERNAL_REFERENCE_WRITER_TOKEN
     ):
         raise PermissionError(

@@ -498,7 +498,6 @@ DECLARE
     child_category TEXT;
     child_type TEXT;
     child_subtype TEXT;
-    child_version TEXT;
     child_json_addl JSONB;
     approved_global_link BOOLEAN;
 BEGIN
@@ -516,9 +515,9 @@ BEGIN
     END IF;
 
     SELECT domain_code, issuer_app_code, tenant_id,
-           category, type, subtype, version, json_addl
+           category, type, subtype, json_addl
       INTO child_domain, child_owner, child_tenant,
-           child_category, child_type, child_subtype, child_version,
+           child_category, child_type, child_subtype,
            child_json_addl
       FROM generic_instance
      WHERE uid = NEW.child_instance_uid
@@ -558,8 +557,8 @@ BEGIN
        AND parent_tenant IS NOT DISTINCT FROM NEW.tenant_id
        AND child_tenant IS NULL
        AND approved_global_link
-       AND (child_category, child_type, child_version) =
-           ('reference', 'external_identifier', '1.0')
+       AND (child_category, child_type) =
+           ('reference', 'external_identifier')
        AND (
            child_subtype = 'tapdb_object'
            OR (

@@ -45,6 +45,9 @@ from daylily_tapdb.cli.context import set_cli_context
 from daylily_tapdb.cli.db_config import get_admin_settings, get_db_config
 from daylily_tapdb.euid import validate_euid
 from daylily_tapdb.external_references import (
+    OPAQUE_IDENTIFIER_TEMPLATE_CODE,
+    TAPDB_OBJECT_TEMPLATE_CODE,
+    _canonical_xrf_filter,
     _is_xrf_coordinates,
     _project_outbound_external_references,
 )
@@ -1046,18 +1049,17 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
                 .filter_by(
                     category="reference",
                     type="external_identifier",
-                    version="1.0",
                     is_deleted=False,
                 )
-                .filter(generic_template.subtype.in_(("tapdb_object", "opaque")))
+                .filter(_canonical_xrf_filter(generic_template))
                 .all()
             )
             external_template_codes = sorted(
                 _template_code(template) for template in external_templates
             )
             external_templates_ready = external_template_codes == [
-                "reference/external_identifier/opaque/1.0/",
-                "reference/external_identifier/tapdb_object/1.0/",
+                OPAQUE_IDENTIFIER_TEMPLATE_CODE,
+                TAPDB_OBJECT_TEMPLATE_CODE,
             ]
             template_count = len(
                 session.query(generic_template)

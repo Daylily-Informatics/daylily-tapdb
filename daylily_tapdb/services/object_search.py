@@ -12,6 +12,7 @@ from sqlalchemy.orm import aliased
 from daylily_tapdb.external_references import (
     ExternalIdentifierTarget,
     TapDBObjectTarget,
+    _target_template_version,
 )
 from daylily_tapdb.external_references import (
     _decode_cursor as _decode_external_cursor,
@@ -328,7 +329,7 @@ def search_external_reference_sources(
             reference_instance.category == "reference",
             reference_instance.type == "external_identifier",
             reference_instance.subtype == subtype,
-            reference_instance.version == "1.0",
+            reference_instance.version == _target_template_version(target),
             reference_instance.identity_key == target.identity_key,
         )
     )

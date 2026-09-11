@@ -24,7 +24,7 @@ Current built-in core templates are exactly:
 - `governance/position/scheme/1.0`
 - `evidence/repair/record/1.0`
 - `message/webhook/event/1.0`
-- `reference/external_identifier/tapdb_object/1.0`
+- `reference/external_identifier/tapdb_object/2.0`
 - `reference/external_identifier/opaque/1.0`
 
 There is no passive inheritance of generic client-usable prefixes from TapDB
@@ -42,10 +42,36 @@ exact bundled content. A client pack cannot gain `SYS`, `XRF`, `MSG`, `GVR`,
 `actor/user/system/1.0` exists for the optional bundled GUI/auth subsystem. It
 is not a universal business-domain primitive; future extraction of that
 optional subsystem is tracked by issue #12. A cross-service relationship uses
-the separate typed `reference/external_identifier/tapdb_object/1.0` object plus
+the separate typed `reference/external_identifier/tapdb_object/2.0` object plus
 lineage and must never reuse System User as an external-reference surrogate.
 
 ## JSON Pack Shape
+
+A template's version is a numeric identity coordinate, not a compatibility,
+priority, authorization, or major/minor signal. Do not infer behavior from its
+value or select a template by ordering versions. Native XRF paths read the exact
+identity declared by the installed template pack; version values are not coded
+into the writer, reader, search, graph, or lineage authorization rules.
+
+Loaded semantic definitions are immutable, including defaults, properties,
+validation schemas, names and prefix bindings. Give changed definitions a new
+template identity. Additive seeding (`overwrite=False`) preserves existing rows.
+`overwrite=True` now rejects changed semantic fields instead of rewriting them;
+it never reactivates deleted or retired definitions. Explicit lifecycle or
+migration bookkeeping must remain separate from semantic definitions and retain
+its audit/receipt evidence. Zero bound instances does not authorize an overwrite.
+
+Schema and allocator migration does not convert application objects. Historical
+templates, bound instances, deleted records and lineage retain their identities
+and definitions. Application-owned conversion must select exact records and
+preserve applicable allocator floors; it is not implied by an upgrade.
+
+For issue #111, the declared TapDB-object definition now has a distinct version
+coordinate in the core JSON pack. Historical `1.0` rows are neither overwritten
+nor relabeled. Native XRF APIs use the newly declared identity and do not
+reinterpret historical payloads. Services already storing references under an
+earlier declared identity must plan any object conversion explicitly before
+adopting a new pack; no generic compatibility reader is installed.
 
 Template packs are JSON documents with a top-level `templates` array.
 
@@ -97,7 +123,7 @@ Examples:
 
 - `actor/user/system/1.0/`
 - `message/webhook/event/1.0/`
-- `reference/external_identifier/tapdb_object/1.0/`
+- `reference/external_identifier/tapdb_object/2.0/`
 - `container/plate/96well-generic/1.0/`
 - `container/tube/1.5ml-eppi/1.0/`
 

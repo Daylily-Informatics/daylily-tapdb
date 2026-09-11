@@ -65,7 +65,7 @@ def _object(
     properties: object | None = None,
 ):
     coords = (
-        ("reference", "external_identifier", "tapdb_object", "1.0")
+        ("reference", "external_identifier", "tapdb_object", "2.0")
         if typed
         else ("content", "specimen", "sample", "1.0")
     )

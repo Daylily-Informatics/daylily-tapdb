@@ -2312,7 +2312,7 @@ def db_seed(
     skip_existing: bool = typer.Option(
         True,
         "--skip-existing/--overwrite",
-        help="Skip existing templates (overwrite uses upsert)",
+        help="Skip existing templates; --overwrite validates immutable definitions and rejects semantic changes",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be seeded without making changes"

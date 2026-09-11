@@ -204,7 +204,7 @@ def test_active_docs_state_identity_system_user_and_adopter_hard_cuts() -> None:
     assert "optional bundled GUI/auth subsystem" in templates
     assert "not a universal business-domain primitive" in templates
     assert "issue #12" in templates
-    assert "reference/external_identifier/tapdb_object/1.0" in templates
+    assert "reference/external_identifier/tapdb_object/2.0" in templates
     assert "reference/external_identifier/opaque/1.0" in templates
     assert "Z-AGX-1AD" not in identity
     assert "meridian-euid==0.4.8" in identity

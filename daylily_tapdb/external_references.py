@@ -16,9 +16,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
+from importlib.resources import files
 from typing import Any, Literal, Sequence, TypeAlias, cast
 from urllib.parse import urlsplit
 
+from sqlalchemy import tuple_
 from sqlalchemy.orm import aliased
 
 from daylily_tapdb.euid import validate_euid
@@ -28,13 +30,36 @@ from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.templates.manager import TemplateManager
 
-TAPDB_OBJECT_TEMPLATE_CODE = "reference/external_identifier/tapdb_object/1.0/"
-OPAQUE_IDENTIFIER_TEMPLATE_CODE = "reference/external_identifier/opaque/1.0/"
+
+def _packaged_reference_coordinates(filename: str, subtype: str) -> tuple[str, ...]:
+    """Read an exact declared identity; version carries no behavior or ordering."""
+    resource = files("daylily_tapdb").joinpath("core_config", "system", filename)
+    definitions = json.loads(resource.read_text())["templates"]
+    if len(definitions) != 1:
+        raise RuntimeError(
+            f"Packaged XRF definition must select one template: {filename}"
+        )
+    template = definitions[0]
+    if (template["category"], template["type"], template["subtype"]) != (
+        "reference",
+        "external_identifier",
+        subtype,
+    ):
+        raise RuntimeError(f"Packaged XRF definition has the wrong role: {filename}")
+    return tuple(
+        str(template[key]) for key in ("category", "type", "subtype", "version")
+    )
+
+
+_TAPDB_COORDS = _packaged_reference_coordinates(
+    "external_reference.json", "tapdb_object"
+)
+_OPAQUE_COORDS = _packaged_reference_coordinates("external_identifier.json", "opaque")
+TAPDB_OBJECT_TEMPLATE_CODE = "/".join(_TAPDB_COORDS) + "/"
+OPAQUE_IDENTIFIER_TEMPLATE_CODE = "/".join(_OPAQUE_COORDS) + "/"
 TAPDB_OBJECT_IDENTITY_NAMESPACE = "tapdb.external-reference/v1"
 OPAQUE_IDENTITY_NAMESPACE = "tapdb.external-identifier/v1"
 
-_TAPDB_COORDS = ("reference", "external_identifier", "tapdb_object", "1.0")
-_OPAQUE_COORDS = ("reference", "external_identifier", "opaque", "1.0")
 _XRF_COORDS = {_TAPDB_COORDS, _OPAQUE_COORDS}
 _SERVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _LOWER_TOKEN_RE = re.compile(r"^[a-z][a-z0-9._-]*$")
@@ -262,6 +287,12 @@ def _is_xrf_coordinates(obj: Any) -> bool:
     return _coordinates(obj) in _XRF_COORDS
 
 
+def _canonical_xrf_filter(model: Any) -> Any:
+    return tuple_(model.category, model.type, model.subtype, model.version).in_(
+        sorted(_XRF_COORDS)
+    )
+
+
 @lru_cache(maxsize=2)
 def _canonical_template_definition(subtype: str) -> dict[str, Any]:
     from daylily_tapdb.templates.loader import (
@@ -274,10 +305,16 @@ def _canonical_template_definition(subtype: str) -> dict[str, Any]:
             template.get("category"),
             template.get("type"),
             template.get("subtype"),
-            template.get("version"),
+            str(template.get("version")),
             template.get("instance_prefix"),
-        ) == ("reference", "external_identifier", subtype, "1.0", "XRF"):
-            return dict(template)
+        ) == (
+            "reference",
+            "external_identifier",
+            subtype,
+            _TAPDB_COORDS[3] if subtype == "tapdb_object" else _OPAQUE_COORDS[3],
+            "XRF",
+        ):
+            return {**template, "version": str(template["version"])}
     raise RuntimeError(f"installed TapDB core inventory has no exact {subtype} XRF")
 
 
@@ -355,6 +392,12 @@ def _target_template_code(target: ExternalTarget) -> str:
         TAPDB_OBJECT_TEMPLATE_CODE
         if isinstance(target, TapDBObjectTarget)
         else OPAQUE_IDENTIFIER_TEMPLATE_CODE
+    )
+
+
+def _target_template_version(target: ExternalTarget) -> str:
+    return (
+        _TAPDB_COORDS[3] if isinstance(target, TapDBObjectTarget) else _OPAQUE_COORDS[3]
     )
 
 
@@ -812,7 +855,7 @@ class ExternalReferenceService:
             subtype=(
                 "tapdb_object" if isinstance(target, TapDBObjectTarget) else "opaque"
             ),
-            version="1.0",
+            version=_target_template_version(target),
         )
         query = (
             query.filter(generic_instance.tenant_id.is_(None))
@@ -971,10 +1014,7 @@ class ExternalReferenceService:
         query = query.filter(
             generic_instance_lineage.parent_instance_uid == source.uid,
             generic_instance_lineage.uid > after_uid,
-            reference_model.category == "reference",
-            reference_model.type == "external_identifier",
-            reference_model.subtype.in_(("tapdb_object", "opaque")),
-            reference_model.version == "1.0",
+            _canonical_xrf_filter(reference_model),
             reference_model.is_deleted.is_(False),
         )
         if not include_inactive:

@@ -75,7 +75,7 @@ natural-identity winner is selected.
 
 Both target types use the reserved `XRF` prefix and exact core templates:
 
-- `reference/external_identifier/tapdb_object/1.0/`
+- `reference/external_identifier/tapdb_object/2.0/`
 - `reference/external_identifier/opaque/1.0/`
 
 The direction is always local source to XRF:

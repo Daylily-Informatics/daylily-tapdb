@@ -842,7 +842,6 @@ def _upsert_template(
     if not overwrite:
         return "skipped", existing
 
-    changed = False
     target_values = {
         "name": str(template.get("name") or ""),
         "polymorphic_discriminator": str(
@@ -857,18 +856,20 @@ def _upsert_template(
         "json_addl": dict(template.get("json_addl") or {}),
         "validator_ref": normalize_validator_ref(template.get("validator_ref")),
         "json_addl_schema": template.get("json_addl_schema"),
-        "bstatus": str(template.get("bstatus") or "active"),
         "is_singleton": bool(template.get("is_singleton", False)),
-        "is_deleted": False,
     }
-    for key, value in target_values.items():
-        if getattr(existing, key, None) != value:
-            setattr(existing, key, value)
-            changed = True
-
-    if changed:
-        session.flush()
-        return "updated", existing
+    changed_fields = [
+        key
+        for key, value in target_values.items()
+        if getattr(existing, key, None) != value
+    ]
+    if changed_fields:
+        raise ValueError(
+            f"Loaded template definition {'/'.join(_template_key(template))} is immutable; "
+            f"publish a new template version to change {', '.join(changed_fields)}"
+        )
+    # Seeding never reactivates a deleted/retired historical definition. Lifecycle
+    # or migration bookkeeping requires an explicit, separately audited operation.
     return "skipped", existing
 
 

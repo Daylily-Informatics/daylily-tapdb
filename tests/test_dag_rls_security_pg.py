@@ -180,7 +180,7 @@ def _insert_template(
             "reference",
             "external_identifier",
             "tapdb_object",
-            "1.0",
+            "2.0",
             "XRF",
         )
     elif opaque_xrf:
@@ -219,7 +219,7 @@ def _insert_instance(
     if typed_xrf and opaque_xrf:
         raise ValueError("an XRF test instance must select one subtype")
     if typed_xrf:
-        coordinates = ("reference", "external_identifier", "tapdb_object", "1.0")
+        coordinates = ("reference", "external_identifier", "tapdb_object", "2.0")
     elif opaque_xrf:
         coordinates = ("reference", "external_identifier", "opaque", "1.0")
     else:
