@@ -633,6 +633,7 @@ def run_all(
     from daylily_tapdb.identity_inventory import (
         capture_identity_inventory,
         verify_identity_inventory,
+        with_inventory_limits,
     )
 
     target_schema = schema or str(cfg["schema_name"])
@@ -652,7 +653,9 @@ def run_all(
         )
         return checks
     actual = capture_identity_inventory(
-        session, schema_name=target_schema, target=target
+        session,
+        schema_name=target_schema,
+        target=with_inventory_limits(target, identity_inventory),
     )
     result = verify_identity_inventory(
         identity_inventory,

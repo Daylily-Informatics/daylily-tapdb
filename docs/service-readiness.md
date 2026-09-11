@@ -3,6 +3,11 @@
 This is the operator contract for preparing an existing TapDB-backed service
 for inventory, recovery, schema migration, and service acceptance.
 
+The branch-only `10.1.1rc1` prerelease adds configurable complete inventory
+budgets, a read-only historical principal census, and corrected drift-check
+JSON/exit codes. See its [Dewey handoff](plans/20260911_tapdb_dewey_prerelease_handoff.md)
+for exact commands and the intentionally bounded qualification scope.
+
 > **Release status:** TapDB10.1.0 is published and fresh public installation
 > is verified. This release's
 > qualification scope is exact community PostgreSQL 16.13 and isolated Aurora

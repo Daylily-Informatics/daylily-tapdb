@@ -469,6 +469,8 @@ def inventory_target(cfg: Mapping[str, Any]) -> dict[str, Any]:
         raise BackupVerificationError("complete explicit inventory target is required")
     if "sequence_mappings" in cfg:
         result["sequence_mappings"] = cfg["sequence_mappings"]
+    if "inventory_limits" in cfg:
+        result["inventory_limits"] = cfg["inventory_limits"]
     return result
 
 
@@ -479,7 +481,7 @@ def _source_contract_config(
     if contract is None:
         return cfg
     from daylily_tapdb.backup.source_contract import validate_source_contract
-    from daylily_tapdb.identity_inventory import validate_target
+    from daylily_tapdb.identity_inventory import validate_target, with_inventory_limits
 
     validate_source_contract(contract)
     target = validate_target(inventory_target(cfg), str(cfg["schema_name"]))
@@ -492,7 +494,9 @@ def _source_contract_config(
         raise BackupVerificationError(
             "source contract and config declare conflicting sequence mappings"
         )
-    return dict(cfg, sequence_mappings=mappings)
+    return with_inventory_limits(
+        dict(cfg, sequence_mappings=mappings), contract["identity_inventory"]
+    )
 
 
 def _backup_recovery_family(
@@ -1313,9 +1317,9 @@ def _capture(
                     ]
                     contract_descriptor = source_contract_descriptor(contract)
                     identity_asset = staging / IDENTITY_ASSET
-                    identity_asset.write_bytes(
-                        canonical_bytes(contract["identity_inventory"])
-                    )
+                    from daylily_tapdb.migration_identity import write_json_receipt
+
+                    write_json_receipt(identity_asset, contract["identity_inventory"])
 
     manifest = BackupManifest(
         backup_id=backup_id,

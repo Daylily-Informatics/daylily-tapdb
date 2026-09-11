@@ -22,6 +22,7 @@ from sqlalchemy.exc import DBAPIError
 
 from daylily_tapdb import TAPDBConnection
 from daylily_tapdb.backup.engine import sanitized_libpq_environment
+from daylily_tapdb.cli.census import census
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config
 from daylily_tapdb.cli.identity import identity_app
 from daylily_tapdb.cli.runtime_principal import runtime_principal_app
@@ -918,6 +919,8 @@ db_app.add_typer(identity_app, name="identity")
 db_app.add_typer(sequences_app, name="sequences")
 db_app.add_typer(runtime_principal_app, name="runtime-principal")
 
+db_app.command("census")(census)
+
 
 @db_app.callback()
 def _db_callback(ctx: typer.Context) -> None:
@@ -1289,55 +1292,40 @@ def db_schema_drift_check(
     ),
 ):
     """Detect TAPDB schema drift against canonical TAPDB schema assets."""
+    from cli_core_yo.runtime import get_context
+
+    json_output = bool(json_output or get_context().json_mode)
     env = Environment.target
     cfg = _get_db_config(env)
-    if not _check_db_exists(env, cfg["database"]):
-        message = f"Database '{cfg['database']}' does not exist"
+
+    def emit_failure(message: str) -> None:
         if json_output:
-            ccyo_out.print_text(
-                json.dumps(
-                    {
-                        "status": "error",
-                        "target": "explicit",
-                        "database": cfg["database"],
-                        "schema_name": cfg["schema_name"],
-                        "strict": strict,
-                        "error": message,
-                    },
-                    indent=2,
-                    sort_keys=True,
-                )
+            ccyo_out.emit_json(
+                {
+                    "status": "error",
+                    "target": "explicit",
+                    "database": cfg["database"],
+                    "schema_name": cfg["schema_name"],
+                    "strict": strict,
+                    "error": message,
+                }
             )
         else:
-            ccyo_out.error(f"{message}")
-        raise typer.Exit(2)
+            ccyo_out.error(message)
+
+    if not _check_db_exists(env, cfg["database"]):
+        emit_failure(f"Database '{cfg['database']}' does not exist")
+        raise SystemExit(2)
 
     try:
         payload, has_drift = _run_schema_drift_check(env, strict=strict)
     except Exception as exc:
-        message = str(exc)
-        if json_output:
-            ccyo_out.print_text(
-                json.dumps(
-                    {
-                        "status": "error",
-                        "target": "explicit",
-                        "database": cfg["database"],
-                        "schema_name": cfg["schema_name"],
-                        "strict": strict,
-                        "error": message,
-                    },
-                    indent=2,
-                    sort_keys=True,
-                )
-            )
-        else:
-            ccyo_out.error(f"Drift check failed: {message}")
-        raise typer.Exit(2) from exc
+        emit_failure(str(exc))
+        raise SystemExit(2) from exc
 
     if json_output:
-        ccyo_out.print_text(json.dumps(payload, indent=2, sort_keys=True))
-        raise typer.Exit(1 if has_drift else 0)
+        ccyo_out.emit_json(payload)
+        raise SystemExit(1 if has_drift else 0)
 
     schema_name = payload.get("schema_name") or "(not found)"
     ccyo_out.print_text(
@@ -1364,7 +1352,7 @@ def db_schema_drift_check(
                 ccyo_out.print_text(f"  {category} ({len(values)}):")
                 for value in values:
                     ccyo_out.print_text(f"    - {value}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     ccyo_out.success("\nNo TAPDB schema drift detected")
 
@@ -1703,6 +1691,11 @@ def db_migrate(
         "domain_code": cfg["domain_code"],
         "owner_repo_name": cfg["owner_repo_name"],
         **({"server_port": cfg["server_port"]} if "server_port" in cfg else {}),
+        **(
+            {"inventory_limits": cfg["inventory_limits"]}
+            if "inventory_limits" in cfg
+            else {}
+        ),
     }
     try:
         if sequence_mappings is not None:

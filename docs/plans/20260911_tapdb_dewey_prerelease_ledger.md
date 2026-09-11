@@ -24,9 +24,9 @@
 
 | ID | Area | Requirement | Status | Category | Approval gate | Owner | Evidence | Root cause | Terminal note |
 |---|---|---|---|---|---|---|---|---|---|
-| T01 | Inventory | Validated public limits, shared propagation and safe diagnostics | IN_PROGRESS | feature_implementation | User request | Coordinator | Baseline fixed250000rows/8MiBrow/128MiBevidence; shared capture callers inventoried | Actual Dewey evidence exceeds128MiB | |
-| T02 | Census | Read-only principal/access/activity and named-database census | OPEN | feature_implementation | User request | Coordinator | Public historical census absent | Bind/fence APIs are not read-only original-state inventory | |
-| T03 | CLI | Canonical drift-check JSON with correct exit codes | OPEN | contract_test | User request | Coordinator | Existing print_text JSON suppressed by global JSON | Wrong output emitter | |
+| T01 | Inventory | Validated public limits, shared propagation and safe diagnostics | COMPLETE | feature_implementation | User request | Coordinator | Focused tests include complete >128MiB capture/receipt roundtrip, native config flags, policy rejection/propagation, existing inventory/source-contract/migration contracts | Actual Dewey evidence exceeds128MiB | Public budgets added without partial evidence or new migration engine |
+| T02 | Census | Read-only principal/access/activity and named-database census | COMPLETE | feature_implementation | User request | Coordinator | Four focused cases; public CLI on existing localPG16.13: read_only=on, source exists, two explicitly named databases absent,16roles/173objects; private runtime/qualification/dewey-prerelease-local-census.json | Bind/fence APIs are not read-only original-state inventory | No DDL, grants, schema initialization or session termination |
+| T03 | CLI | Canonical drift-check JSON with correct exit codes | COMPLETE | contract_test | User request | Coordinator | Eight native-entrypoint cases: root/local JSON x clean/drift/missing/error, exit0/1/2; existing direct command test adjusted | Wrong output emitter and native framework return handling for Typer exits | Correct payload and native process status |
 | REL | Prerelease | Minimal affected tests, immutable tag, public artifacts/install handoff | OPEN | feature_implementation | Explicit no-main prerelease request | Coordinator | Pending | | |
 
 Inventory design: retain complete in-memory row evidence with explicit finite
@@ -43,3 +43,20 @@ metadata/assets and fresh public install. No full suite, coverage-percentage
 campaign, production inventory, deploy, restore or migration run.
 
 All rows terminal: no. Objective complete: no.
+
+## Candidate evidence
+
+- 123 focused tests passed in 3.37s; two pre-existing Typer/Click deprecation
+  warnings. Evidence: private `runtime/qualification/dewey-prerelease-focused.log`
+  and `dewey-prerelease-focused.xml`. Test selection: inventory_limits,
+  principal_census, drift_json_output, identity_inventory, identity_inventory_cli,
+  backup_source_contract, migration_identity_contract, and the affected
+  test_status_drift_and_nuke_branches (mocked, no database reset).
+- Changed Python files pass Ruff; `git diff --check` passes.
+- Existing direct-command test now explicitly supplies plain output context;
+  no production workaround or broadened test campaign was added.
+- Tag10.1.1rc1 absent remotely and PyPI version endpoint404 before publication.
+- [Consumable handoff](20260911_tapdb_dewey_prerelease_handoff.md) records native
+  commands, limits/receipt contracts, boundaries and service-owned acceptance.
+- Final artifact hashes, release commit and fresh public install follow below
+  only after successful publication. No claim of stable10.1.1 publication.

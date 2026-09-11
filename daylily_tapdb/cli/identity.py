@@ -11,9 +11,11 @@ from cli_core_yo import ccyo_out
 
 from daylily_tapdb.cli.db_config import get_db_config
 from daylily_tapdb.identity_inventory import (
+    InventoryLimitExceededError,
     capture_identity_inventory,
     validate_target,
     verify_identity_inventory,
+    with_inventory_limits,
 )
 from daylily_tapdb.migration_identity import write_json_receipt
 from daylily_tapdb.runtime_principal import RuntimePrincipalError, operator_connection
@@ -50,6 +52,8 @@ def _resolve(
         },
         cfg["schema_name"],
     )
+    if "inventory_limits" in cfg:
+        target["inventory_limits"] = cfg["inventory_limits"]
     if sequence_mappings is not None:
         target["sequence_mappings"] = _read(sequence_mappings)
     return cfg, target
@@ -71,7 +75,12 @@ def _fail(exc: Exception) -> None:
         if isinstance(exc, (ValueError, OSError, RuntimePrincipalError))
         else type(exc).__name__
     )
-    ccyo_out.emit_error_json("identity_inventory_error", message)
+    if isinstance(exc, InventoryLimitExceededError):
+        ccyo_out.emit_error_json(
+            "identity_inventory_limit", message, details=exc.diagnostics
+        )
+    else:
+        ccyo_out.emit_error_json("identity_inventory_error", message)
     raise SystemExit(2)
 
 
@@ -219,6 +228,7 @@ def verify(
     try:
         cfg, target = _resolve(sequence_mappings)
         original = _identity(_read(before))
+        target = with_inventory_limits(target, original)
         if after is None:
             with operator_connection(
                 cfg, isolation_level="REPEATABLE READ", read_only=True

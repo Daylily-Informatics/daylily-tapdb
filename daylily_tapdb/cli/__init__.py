@@ -1419,6 +1419,30 @@ def build_app():
 
     @config_root_app.command("update")
     def config_update(
+        inventory_max_rows: Annotated[
+            Optional[int],
+            typer.Option(
+                "--inventory-max-rows",
+                min=1,
+                help="Maximum complete identity-inventory rows",
+            ),
+        ] = None,
+        inventory_max_row_bytes: Annotated[
+            Optional[int],
+            typer.Option(
+                "--inventory-max-row-bytes",
+                min=1,
+                help="Maximum bytes in one serialized source row",
+            ),
+        ] = None,
+        inventory_max_receipt_bytes: Annotated[
+            Optional[int],
+            typer.Option(
+                "--inventory-max-receipt-bytes",
+                min=1,
+                help="Maximum cumulative identity row-evidence bytes",
+            ),
+        ] = None,
         engine_type: Optional[str] = typer.Option(
             None, "--engine-type", help="Database engine type for this target"
         ),
@@ -1726,6 +1750,25 @@ def build_app():
         tls = _required_mapping(ui_root, "tls", "admin.ui")
         metrics = _required_mapping(admin_root, "metrics", "admin")
 
+        inventory_changes = {
+            key: value
+            for key, value in {
+                "max_rows": inventory_max_rows,
+                "max_row_bytes": inventory_max_row_bytes,
+                "max_receipt_bytes": inventory_max_receipt_bytes,
+            }.items()
+            if value is not None
+        }
+        if inventory_changes:
+            from dataclasses import asdict
+
+            from daylily_tapdb.identity_inventory import InventoryLimits
+
+            current_limits = asdict(InventoryLimits.parse(root.get("inventory_limits")))
+            root["inventory_limits"] = asdict(
+                InventoryLimits.parse(current_limits | inventory_changes)
+            )
+
         updates = _explicit_aurora_config_fields(
             region=region,
             aws_profile=aws_profile,
@@ -1963,6 +2006,7 @@ def build_app():
             and not safety_changed
             and not backup_changed
             and not operator_changed
+            and not inventory_changes
         ):
             raise RuntimeError("No config changes requested.")
 

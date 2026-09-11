@@ -6,8 +6,6 @@ application version or used to waive a physical inventory mismatch.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from typing import Any, Mapping
 
@@ -18,14 +16,11 @@ IDENTITY_ASSET = "identity-inventory.json"
 
 
 def contract_hash(payload: Mapping[str, Any]) -> str:
-    return hashlib.sha256(
-        json.dumps(
-            {key: value for key, value in payload.items() if key != "sha256"},
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-    ).hexdigest()
+    from daylily_tapdb.identity_inventory import content_hash
+
+    return content_hash(
+        {key: value for key, value in payload.items() if key != "sha256"}
+    )
 
 
 def capture_source_contract(
@@ -40,7 +35,9 @@ def capture_source_contract(
     from daylily_tapdb.identity_inventory import capture_identity_inventory
     from daylily_tapdb.sequences import capture_sequence_inventory
 
-    if not re.fullmatch(r"\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.-]+)?", source_version):
+    if not re.fullmatch(
+        r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+|[.-][A-Za-z0-9.-]+)?", source_version
+    ):
         raise BackupVerificationError(
             "source_version must be an explicit exact version"
         )
@@ -81,7 +78,8 @@ def validate_source_contract(contract: Mapping[str, Any]) -> None:
     if contract.get("source_version_evidence") != "operator_declared":
         raise BackupVerificationError("source version provenance must be explicit")
     if not re.fullmatch(
-        r"\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.-]+)?", str(contract.get("source_version", ""))
+        r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+|[.-][A-Za-z0-9.-]+)?",
+        str(contract.get("source_version", "")),
     ):
         raise BackupVerificationError("source contract has no explicit exact version")
     identity = contract.get("identity_inventory")

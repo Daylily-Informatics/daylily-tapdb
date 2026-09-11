@@ -1369,6 +1369,9 @@ def restore_backup(
         source_cfg = dict(
             cfg, sequence_mappings=source["sequence_inventory"]["sequence_mappings"]
         )
+        from daylily_tapdb.identity_inventory import with_inventory_limits
+
+        source_cfg = with_inventory_limits(source_cfg, source["identity_inventory"])
         if quarantine_receipt is not None and (
             control_cfg is None or control_cfg["database"] == source_cfg["database"]
         ):

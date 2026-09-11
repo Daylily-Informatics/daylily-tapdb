@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, NoReturn
 
 from sqlalchemy import text
 
 from daylily_tapdb.identity_inventory import (
+    InventoryLimits,
     capture_identity_inventory,
     quote_identifier,
     seal_receipt,
@@ -764,6 +766,11 @@ def build_writer_fence_takeover_plan(
     if control_connection.in_transaction():
         _fail("Takeover planning requires a transaction-free control session")
     exact = validate_target(target, str(target["schema_name"]))
+    if "inventory_limits" in target:
+        target = dict(
+            target,
+            inventory_limits=asdict(InventoryLimits.parse(target["inventory_limits"])),
+        )
     receipts, head = read_fence_history(receipts_dir)
     epoch = active_epoch(receipts, exact)
     if epoch is None or epoch.receipt_id != fence_intent_receipt_id:
@@ -828,6 +835,11 @@ def build_writer_fence_takeover_plan(
                     "schema_version": TAKEOVER_VERSION,
                     "phase": "planned",
                     "target": exact,
+                    **(
+                        {"inventory_limits": target["inventory_limits"]}
+                        if "inventory_limits" in target
+                        else {}
+                    ),
                     "sequence_mappings": dict(
                         target.get("sequence_mappings", origin["sequence_mappings"])
                     ),
@@ -879,6 +891,10 @@ def apply_writer_fence_takeover(
             "An unchanged reviewed takeover plan and its exact external journal are required"
         )
     target = dict(plan["target"], sequence_mappings=plan["sequence_mappings"])
+    if "inventory_limits" in plan:
+        target["inventory_limits"] = asdict(
+            InventoryLimits.parse(plan["inventory_limits"])
+        )
     expected = build_writer_fence_takeover_plan(
         control_connection,
         target=target,

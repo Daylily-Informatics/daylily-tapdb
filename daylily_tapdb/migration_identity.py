@@ -230,7 +230,13 @@ def _canonical_json(value: Any) -> str:
 
 
 def _sha256(value: Any) -> str:
-    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256()
+    encoder = json.JSONEncoder(
+        default=_jsonable, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    for chunk in encoder.iterencode(value):
+        digest.update(chunk.encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _validated_transformation_contracts(
@@ -495,9 +501,14 @@ def build_migration_preflight(
         for item in assets
         if item["filename"] not in applied_names
     ]
-    from daylily_tapdb.identity_inventory import capture_identity_inventory
+    from daylily_tapdb.identity_inventory import (
+        capture_identity_inventory,
+        with_inventory_limits,
+    )
     from daylily_tapdb.sequences import capture_sequence_inventory
 
+    if source_contract is not None:
+        target = with_inventory_limits(target, source_contract["identity_inventory"])
     identity_inventory = capture_identity_inventory(
         connection, schema_name=schema_name, target=target
     )
@@ -1157,6 +1168,9 @@ def apply_migration_preflight(
     """Apply exactly the receipt-bound migration set in the current transaction."""
     if not connection.in_transaction():
         raise MigrationPreflightError("migration apply requires an active transaction")
+    from daylily_tapdb.identity_inventory import with_inventory_limits
+
+    target = with_inventory_limits(target, preflight["identity_inventory"])
     schema_name = str(target.get("schema_name") or "").strip()
     lock_key = derive_advisory_lock_key(
         "tapdb.schema.migrate", target.get("database"), schema_name
@@ -1328,6 +1342,7 @@ def finalize_migration_recovery(
     from daylily_tapdb.identity_inventory import (
         capture_identity_inventory,
         verify_identity_inventory,
+        with_inventory_limits,
     )
     from daylily_tapdb.sequences import (
         capture_sequence_inventory,
@@ -1347,7 +1362,11 @@ def finalize_migration_recovery(
     )
     validate_writer_fence(connection, observed, writer_fence)
     identity = capture_identity_inventory(
-        connection, schema_name=target["schema_name"], target=target
+        connection,
+        schema_name=target["schema_name"],
+        target=with_inventory_limits(
+            target, payload["postflight"]["identity_inventory"]
+        ),
     )
     verified = verify_identity_inventory(
         payload["postflight"]["identity_inventory"], identity
@@ -1433,9 +1452,7 @@ def write_json_receipt(path: Path, receipt: Mapping[str, Any]) -> None:
     if not path.is_absolute():
         raise MigrationPreflightError("receipt path must be absolute")
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = (json.dumps(_jsonable(receipt), indent=2, sort_keys=True) + "\n").encode(
-        "utf-8"
-    )
+    encoder = json.JSONEncoder(default=_jsonable, indent=2, sort_keys=True)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent,
         prefix=f".{path.name}.",
@@ -1445,7 +1462,9 @@ def write_json_receipt(path: Path, receipt: Mapping[str, Any]) -> None:
     linked = False
     try:
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
-            handle.write(payload)
+            for chunk in encoder.iterencode(receipt):
+                handle.write(chunk.encode("utf-8"))
+            handle.write(b"\n")
             handle.flush()
             os.fsync(handle.fileno())
             os.fchmod(handle.fileno(), 0o444)
