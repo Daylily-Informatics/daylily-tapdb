@@ -1,123 +1,71 @@
-# DRAFT: TapDB 10.1.0 service-readiness release handoff
+# TapDB 10.1.0 service-readiness release handoff
 
-Status date: 2026-09-10
+Status date: 2026-09-11
 
-## Status
+## Release status
 
-Release exception: the user now authorizes an administrative merge without
-waiting for CI/formal GitHub review. Those gates are waived for10.1.0, not
-reported as passed. The sensitive independent acceptance is user-attested.
-The tests and CI workflow remain intact; the blocked review is not rerun.
-Published artifacts, immutable provenance and fresh public installation still
-require verification before the release slots below are completed.
+TapDB **10.1.0 is published and verified** on GitHub and PyPI. Fresh public
+installation passes. Independent acceptance is user-attested, with
+sensitive results intentionally kept outside Git. The owner explicitly
+authorized the administrative merge: CI and formal GitHub review were waived,
+**not passed**. No tests or CI workflow were removed or rewritten.
 
-**Candidate only. Not released. Independent acceptance is user-attested.** This draft is a
-slot-controlled handoff for a future exact TapDB 10.1.0 release. It is not an
-installation instruction and must not be used as evidence that 10.1.0 exists on
-GitHub, PyPI, or any service.
+Install the exact release using `python -m pip install 'daylily-tapdb==10.1.0'`.
+Choose `daylily-tapdb[aurora]==10.1.0` or
+`daylily-tapdb[aurora,gui]==10.1.0` when those extras are needed.
 
-| Claim | Current state | Required terminal evidence |
-|---|---|---|
-| Source implementation | Frozen candidate; independent acceptance user-attested | Reviewed PR merge commit on `main` |
-| Independent PostgreSQL qualification | User attests independent acceptance is sufficient to proceed | Acceptance disposition recorded; sensitive results intentionally not attached; no locally witnessed independent-run claim |
-| Isolated Aurora PostgreSQL 16.13 acceptance | User-attested independent acceptance; separate author migration/binding checks pass | Acceptance disposition recorded without disclosing sensitive results |
-| Runtime `TEMP` confinement | Implemented;134 exact16.13 principal author cases pass; actual isolated Aurora bind and fresh-session TEMP-denial author checks pass; independent acceptance user-attested | Service adoption still owns closure/recreation of its runtime sessions; no production adoption claim |
-| Full suite and coverage | Partial exact16.13 run2964PASS, aggregate94.73%; changed-module gate passes with the two approved exceptions; complete CI pending | Zero-failure, zero-unexpected-skip full suite on exact PostgreSQL 16.13; aggregate branch coverage and every other changed production module at or above90%; approved exceptions retain numeric reports |
-| CI | Not run on a reviewed release commit | Green protected-branch required checks for the approved PostgreSQL 16.13 release scope, quality, security, and build/install smoke |
-| Tag | Not created | Immutable annotated bare tag `10.1.0`, peeled to the exact release commit |
-| Wheel and sdist | Not release-built | Clean-build names and SHA-256 values from the tagged commit |
-| Publication | Not performed | GitHub and PyPI retrieval plus metadata receipts |
-| Fresh public installation | Not performed | No-cache installation and CLI/Python/schema-asset smoke from the published wheel |
-| Consumer conversion/deployment | Out of TapDB release scope | Service-owned evidence for Dewey, Bloom, and Ursa |
-
-No production service or database was changed by preparation of this handoff.
-
-Current runtime/test candidate: `24075ba7628d38502538b1897e09ae3cb58e21a7`.
-Ordinary PG16.13 run:2964PASS, zero errors/skips, aggregate94.73%; changed-module
-gate passes with the two approved exceptions. The same two independent
-authorization modules remain unrun locally, so this is not a complete local
-suite. The user separately accepts the confidential independent acceptance as
-sufficient to proceed; no sensitive results are requested or published.
-Actual isolated Aurora migration/recovery and TEMP binding now pass author
-checks, including fresh runtime TEMP table/sequence denial. Production remains
-unchanged. Current production payload is identical to package-verified aeb5ac0;
-24075ba changes only test-server isolation and the ledger.
-TEMP author proof:134 cases pass on exact16.13, zero skips, in
-`runtime/qualification/b-temp-denial-final-pg16.xml`. Independent acceptance is
-user-attested; ordinary CI and release verification remain pending.
-Historical partial-matrix checkpoint:
-`878b9a0448ab16401dfcb7ceffdd4070b8349525`.
-The parallel partial regression runs report 2955 passes on PostgreSQL 16.13
-and 2952 passes / 2 failures / 1 setup error on 17.11. Aggregate coverage is
-94.67% / 94.68%; recovery (84.37%) and backup service (89.57%) do not satisfy
-the existing changed-module threshold. Two screened authorization modules
-remain unrun, so these results are not full or independent qualification.
-The 10.1.0 release scope is now exact community PostgreSQL 16.13 plus isolated
-Aurora PostgreSQL 16.13. PostgreSQL 17 qualification and its observed failures
-are deferred under
-[GitHub issue #107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107);
-they are retained here as evidence and are not being relabeled as passes or as
-proof that PostgreSQL 17 is unsupported.
-Further tests are limited to demonstrated defects and distinct operational
-requirements, not duplicate assertions or coverage-only bookkeeping.
-
-A subsequent single real-16.13 regression passes for recovery when the terminal
-receipt is lost but the maintenance session remains available. It proves the
-public reconciliation path does not change database identities and the next
-allocation does not reuse them. Combining that case with the unchanged-source
-partial baseline yields diagnostic recovery coverage of 86.72%; backup service
-remains 89.57%. The user subsequently approved those two measured, named
-10.1.0 changed-module exceptions. Their numeric reports remain required;
-aggregate branch coverage and every other changed production module retain the
-90% threshold. The exceptions do not replace a complete frozen-candidate run,
-functional gates, or independent acceptance.
-
-E verified fresh core and GUI installs from this exact candidate under
-`runtime/qualification/e-package-20260911T001928Z`. Candidate-only SHA-256:
-wheel `9d5fa818524a061a93b1a61dbbf856681754d15bc78f745bb53c501c0d9ebe53`;
-sdist `455b24731dd851d2a3c0b2b3167aa6b8d972400d4f9940d5fad597b352d7bc19`.
-These do not fill the published-release slots below. No PR exists for the
-candidate branch; `iamh2o` authentication is verified, but “admin approve” is
-not a GitHub CLI operation. Review approval and administrative bypass merge
-are distinct and neither has been performed.
-
-## Immutable release slots
-
-Fill these only from the owning system after each event succeeds. Do not copy a
-candidate checkout hash into a release slot.
-
-| Field | Value |
+| Claim | Evidence |
 |---|---|
-| Project | `daylily-tapdb` |
-| Candidate version | `10.1.0` |
-| Baseline published version | `10.0.0` |
-| Baseline release commit | `eadef9e8426ee968fb850328c7a6e2f90353fe29` |
-| Baseline annotated tag object | `fade52ec6a9d78f782b49823a020d77b77c7b564` |
-| Candidate branch | `codex/tapdb-service-readiness-20260910` |
-| Preparatory ledger checkpoint | `868687d36d7467f27e8341a4813b0b17757b3aa2` (historical ledger-only checkpoint; not a release candidate) |
-| Reviewed PR | **PENDING** |
-| Reviewed merge commit | **PENDING** |
-| CI run | **PENDING** |
-| Annotated tag object | **PENDING** |
-| Peeled `10.1.0^{}` commit | **PENDING** |
-| GitHub release | **PENDING** |
-| Wheel filename | **PENDING** |
-| Wheel SHA-256 | **PENDING** |
-| Sdist filename | **PENDING** |
-| Sdist SHA-256 | **PENDING** |
-| PyPI JSON/index observation | **PENDING** |
-| Fresh-install environment and command receipt | **PENDING** |
-| Installed `daylily-tapdb` version | **PENDING** |
-| Installed wheel `RECORD` / schema-asset verification | **PENDING** |
+| Release PR | [#108](https://github.com/Daylily-Informatics/daylily-tapdb/pull/108), administratively merged by `iamh2o` |
+| Release commit / peeled tag | `9db1abb4525f2594ebdbf2a307eb8b49aa51883d` |
+| Annotated tag | `10.1.0`; tag object `d8d36584a5338d7256aba0300d299d53a5c12217` |
+| GitHub release | [10.1.0](https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/10.1.0), public, not prerelease |
+| PyPI publication | [daylily-tapdb10.1.0](https://pypi.org/project/daylily-tapdb/10.1.0/), existing publisher returned success |
+| Wheel | `daylily_tapdb-10.1.0-py3-none-any.whl`;659225bytes |
+| Wheel SHA-256 | `f46cb2abfccb3000b9f9443ea00045e83fb96f6b320d2aeac0ad800ea47e8801` |
+| Source archive | `daylily_tapdb-10.1.0.tar.gz`;1321143bytes |
+| Source SHA-256 | `a582f902ff6df6a66c05ff293cef3c5cbca84e9b6de9977737d25fe0e11cc978` |
+| Build/metadata/assets | Clean exact-tag build; Twine and packaged schema/migration/interface asset verification pass; GitHub asset digests match |
+| Fresh public install | E verifies fresh Python3.13.13 public-index-only/no-cache core installation, pip check, installed metadata10.1.0, public imports/CLI help and RECORD-backed schema/migration assets; FastAPI absent from core |
+| Independent acceptance | Accepted by user attestation; confidential results not attached |
+| CI / formal GitHub review | Owner-authorized administrative bypass; no passing CI or approving GitHub review claimed |
+| Local regression | Exact16.13 partial suite2964PASS, aggregate94.73%; all33 changed-module gates pass with approved recovery86.72% / backup-service89.57% numeric exceptions |
+| Local test limitation | Two independent authorization modules not run locally; no full-suite claim |
+| Aurora author evidence | Isolated migration/recovery committed; writer fence released; runtime binding and fresh-session TEMP-denial checks pass |
+| PG17 | Deferred under [issue#107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107); not qualified |
+| Production/service adoption | No service pins, conversions, deployments, production databases or AWS resources changed by this release |
 
-The release is not complete while any required field is `PENDING`.
+The release's runtime/test payload matches candidate
+`24075ba7628d38502538b1897e09ae3cb58e21a7`; production payload matches
+`aeb5ac079959d4d74160de3b537e49a3013135b3`. Subsequent commits record release
+authority and evidence, not new runtime behavior.
 
-The user-requested `TEMP` restriction is a candidate change after the historical
-package receipts recorded below. Runtime/test commit24075ba is now fixed for
-review; independent acceptance is user-attested, but no release artifact
-exists yet.
+Public verification evidence is retained locally under
+`runtime/qualification/e-public-10.1.0-H50z50/`: tag verification, PyPI JSON,
+direct public wheel/sdist downloads and hashes, GitHub release digests,
+fresh-public-install and fresh-public-smoke logs. The public-index-only install
+used pip `--isolated --no-cache-dir --index-url https://pypi.org/simple` outside
+the checkout, with ambient alternate indexes disabled. Both PyPI artifacts
+are unyanked and their downloaded hashes equal the immutable artifact table.
+No database/security test campaign or GUI rerun was added for publication.
 
-## Candidate compatibility and dependency contract
+Tagged/package documentation retains its pre-publication status text; this
+current handoff and the GitHub release notes supply the final publication
+receipts without modifying the immutable tag or artifacts.
+
+## Service prerequisite completion
+
+| Service rows | TapDB delivery | Still service-owned |
+|---|---|---|
+| Dewey L02/L04/L05 | Identity/allocator inventory, principal preparation, full backup/restore, migration preservation and durable floors in10.1.0 | Exact pin adoption, conversion, service rehearsal, runtime/config recovery artifacts, deployment/cutover |
+| Bloom T10-00/T10-01; TapDB portion of MG01 | Shared allocator/principal/recovery interfaces and historical-shape preservation in10.1.0 | Assertion/template conversion, exact pin, service migration and acceptance |
+| Ursa DB01; TapDB portions of DB04–DB07 | Principal, backup/migration and allocator/recovery prerequisites in10.1.0 | Source-plan pin amendment, references/policy conversion, cleanup policy and deployment |
+
+Public interfaces, receipt fields, dependencies, historical source crosswalk
+and exact adoption ordering follow. This producer release does not certify
+any service's production recovery set or cutover.
+
+## Compatibility and dependency contract
 
 - Python: `>=3.12`.
 - Release qualification targets: exact community PostgreSQL `16.13` and
@@ -278,7 +226,12 @@ evidence. Independent PostgreSQL 16.13 and Aurora 16.13 acceptance remain
 unavailable. Publication requires fresh-install proof from the eventual
 published wheel, not this unreleased diagnostic artifact.
 
-## Independent frozen-candidate acceptance
+## Historical acceptance checklist (superseded by recorded release exception)
+
+The following pre-exception checklist is retained as history. Independent
+acceptance is now user-attested; the complete-CI/formal-review release gate was
+explicitly waived by the owner. These historical requirements must not be
+misread as completed test results or current outstanding release approvals.
 
 The reviewer must first record one clean commit and confirm no file changes
 during the entire matrix. Use the repository's checked-in CI workflow and
@@ -319,7 +272,10 @@ recorded failures remain open evidence for later qualification; neither this
 release nor this handoff claims PostgreSQL 17 acceptance or lack of runtime
 support.
 
-## Publication proof required after merge
+## Historical publication checklist
+
+The release record above supersedes this original checklist. In particular,
+the owner authorized an administrative merge instead of item1's normal gate.
 
 The release coordinator, not this draft's author, owns these ordered actions:
 
@@ -343,8 +299,11 @@ converted, deployed, or passed service acceptance.
 
 ## Completion statement
 
-- All controlling ledger rows terminal: **no**.
-- TapDB 10.1.0 objective complete: **no**.
+- All controlling ledger rows terminal: **yes**, under the recorded owner
+  acceptance/CI-review release amendments.
+- TapDB10.1.0 release objective complete: **yes**, with the explicit CI/review
+  waiver and user-attested independent acceptance; no full CI pass claimed.
 - Production changed: **no**.
 - Consumer repositories or pins changed: **no**.
-- Publication approval exercised: **no**.
+- Publication approval exercised: **yes**, including explicit administrative
+  CI/review exception. Final public-install verification passes.

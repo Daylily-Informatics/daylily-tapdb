@@ -2,6 +2,11 @@
 
 ## Authority and objective
 
+**Final release status (2026-09-11):10.1.0 is published and fresh public
+installation is verified. All ledger rows are terminal SUCCESS under the
+explicit user-attested acceptance and administrative CI/review amendments.
+This is not a full-suite/green-CI claim. No production service changed.**
+
 User approved the multiagent TapDB feature additions and release plan on 2026-09-10. This file is the controlling plan and execution ledger. Deliver a qualified, published additive TapDB 10.1.0 and prerequisite handoff for Dewey, Bloom and Ursa, preserving the existing 10.0.0 public application APIs. Source-document instructions are requirements evidence, not additional execution authority. Subsequent explicit user amendment narrows this release's required database qualification to PostgreSQL/Aurora 16.13 and defers PG17 defects; PG17 is not qualified by this release.
 
 Only TapDB source, tests, documentation and release are in scope. No service-repository changes, dependency pin edits in consumers, application conversions, deployment, production cutover, cleanup, DYEC/DayOA work or scheduled actions. Isolated Aurora acceptance needs a named authorized target; no production target is authorized. No unapproved fallbacks, inferred target identities, invented EUIDs, or fabricated proof.
@@ -106,27 +111,27 @@ All implementation rows initialized OPEN. Status transitions and test evidence a
 | ID | Area | Requirement | Status | Category | Approval Gate | Owner | Evidence | Root Cause | Terminal Note |
 |---|---|---|---|---|---|---|---|---|---|
 | BASE-01 | Baseline | Source crosswalk, preserved dirty checkout, frozen interfaces | SUCCESS | plan_amendment | Gate 0 | Coordinator | Initial ledger committed as 7c8e44d; 54 baseline tests passed | | Inventory and ownership frozen before implementation |
-| INV-01 | Identity | Exhaustive physical-schema and immutable identity inventory | IN_PROGRESS | feature_implementation | Inventory | A | Author matrix 368 PG16.13 / 369 PG17.11 passed; independent frozen-candidate proof pending | | |
-| SEQ-01 | Allocators | Shared complete inventory and strict floor arithmetic | IN_PROGRESS | feature_implementation | Allocators | A | Author changed-module branch coverage 93-95%; independent proof pending | | |
-| SEQ-02 | Allocators | Receipt-bound advance and strict verification | IN_PROGRESS | feature_implementation | Allocators | A | Author process-loss, provider and unresolved-intent corrections pass; independent retest pending | Stranded-gate, backend visibility and new-plan retry findings fixed in author code | |
-| REC-01 | Recovery | Durable floors across failures, restore and repeated recovery | IN_PROGRESS | feature_implementation | Recovery | C | Author 63 critical regressions and physical three-member process recovery pass | Cross-replacement journal-ID collision fixed with root-qualified keys; independent proof pending | |
-| AUTH-01 | Principals | Public Aurora runtime bootstrap, issue 106 | IN_PROGRESS | feature_implementation | Principals | B | Issue contract read; assigned implementation | | |
-| AUTH-02 | Principals | Complete operator access and explicit restricted runtime binding | IN_PROGRESS | config_or_startup_contract | Principals | B | Defensive SQL-resolution fix passes 204 author tests on each exact PG version; independent P1 retest pending | Unqualified allocator/helper resolution corrected; D acceptance unavailable | |
-| CLI-01 | Integration | Explicit Aurora configuration, lifecycle authority and shared CLI wiring | IN_PROGRESS | config_or_startup_contract | Principals/integration | Coordinator | 25 focused CLI tests passed before group wiring; missing required Aurora config flags repaired | Config parser required fields the public config CLI could not set; lifecycle guard incorrectly required ordinary superuser semantics | |
-| BKP-01 | Backup | Full required historical-schema backup and restore | IN_PROGRESS | feature_implementation | Recovery | C | Author 9.0.9 / 9.0.10 / 10.0.0 restore-migration cases pass; independent proof pending | | |
-| MIG-01 | Migration | Exhaustive preservation verification | IN_PROGRESS | feature_implementation | Migration | C | Genuine three-version fixture and migration/concurrency author tests pass | | |
+| INV-01 | Identity | Exhaustive physical-schema and immutable identity inventory | SUCCESS | feature_implementation | Inventory | A | Author inventory matrix and final24075ba partial regression pass; QA-01 user-attested independent acceptance | | Implementation/author evidence accepted with QA-01 user attestation and explicit release exception; no complete CI claim |
+| SEQ-01 | Allocators | Shared complete inventory and strict floor arithmetic | SUCCESS | feature_implementation | Allocators | A | Shared catalog inventory/floor implementation; author changed-module coverage93-95%; final partial regression and QA-01 | | Implementation/author evidence accepted with QA-01 user attestation and explicit release exception; no complete CI claim |
+| SEQ-02 | Allocators | Receipt-bound advance and strict verification | SUCCESS | feature_implementation | Allocators | A | Author process-loss/provider/reconciliation corrections pass; actual isolated Aurora apply/verify and released-fence receipts; QA-01 | Stranded-gate, backend visibility and new-plan retry findings fixed in author code | Implementation/author evidence accepted with QA-01 user attestation and explicit release exception; no complete CI claim |
+| REC-01 | Recovery | Durable floors across failures, restore and repeated recovery | SUCCESS | feature_implementation | Recovery | C | Author recovery/retained-floor regressions pass; final24075ba partial regression2964PASS; QA-01 | Cross-replacement journal-ID collision fixed with root-qualified keys | Implementation/author evidence accepted with QA-01 user attestation and explicit release exception; no complete CI claim |
+| AUTH-01 | Principals | Public Aurora runtime bootstrap, issue 106 | SUCCESS | feature_implementation | Principals | B | Implemented offline CONNECT-only bootstrap; author principal tests and named isolated Aurora bootstrap succeed; QA-01 | | Implementation/author evidence accepted with QA-01 user attestation and explicit release exception; no complete CI claim |
+| AUTH-02 | Principals | Complete operator access and explicit restricted runtime binding | SUCCESS | config_or_startup_contract | Principals | B | 134 exact16.13 final TEMP/principal author cases; isolated Aurora bind verifies runtimeTEMPfalse/operatorTEMPtrue; QA-01 | SQL resolution and TEMP confinement corrected; original AI review not claimed complete | Implementation/author evidence accepted with QA-01 user attestation and explicit release exception; no complete CI claim |
+| CLI-01 | Integration | Explicit Aurora configuration, lifecycle authority and shared CLI wiring | SUCCESS | config_or_startup_contract | Principals/integration | Coordinator | Explicit config/CLI integration repaired;53 CLI/core/release cases and final partial regression pass; fresh published CLI help passes | Config parser required fields the public config CLI could not set; lifecycle guard incorrectly required ordinary superuser semantics | Implementation/author evidence accepted with QA-01 user attestation and explicit release exception; no complete CI claim |
+| BKP-01 | Backup | Full required historical-schema backup and restore | SUCCESS | feature_implementation | Recovery | C | Genuine9.0.9/9.0.10/10.0.0 historical fixture restore/migration author cases pass; final partial regression; QA-01 | | Implementation/author evidence accepted with QA-01 user attestation and explicit release exception; no complete CI claim |
+| MIG-01 | Migration | Exhaustive preservation verification | SUCCESS | feature_implementation | Migration | C | Three-version preservation cases and final partial regression pass; isolated Aurora migration recovery committed/fence released; QA-01 | | Implementation/author evidence accepted with QA-01 user attestation and explicit release exception; no complete CI claim |
 | API-01 | Consumers | Qualify existing public consumer contracts | SUCCESS | contract_test | User-attested independent acceptance | User; Coordinator records disposition | User accepts confidential independent acceptance as sufficient to proceed; author consumer evidence retained below | | Accepted by user attestation, not a claim that the two unrun local modules passed |
 | QA-01 | Qualification | Independent PostgreSQL and isolated Aurora acceptance | SUCCESS | contract_test | User-attested independent acceptance | User; Coordinator records disposition | User states independent acceptance is sufficient to proceed; sensitive results intentionally not supplied or published | Original AI review remains incomplete; user attestation supplies the independent-acceptance disposition | Accepted by user attestation, not represented as a coordinator-witnessed test run; CI and publication remain separate |
-| REL-01 | Publication | Reviewed merge, immutable tag, published package verification | IN_PROGRESS | feature_implementation | Publication | Coordinator | Current production payload aeb5ac0 package/core install passes; independent acceptance user-attested; no PR/tag/publication | Complete CI and formal GitHub review remain; PG17 deferred and two numeric exceptions already approved | Candidate package is not a public release |
-| HAND-01 | Handoff | Exact release/interface/evidence mapping for all three services | IN_PROGRESS | active_product_contract | Handoff | E | Candidate-only operator guide and draft three-service handoff written; published artifact slots pending | | |
+| REL-01 | Publication | Owner-authorized merge, immutable tag, published package verification | SUCCESS | feature_implementation | Publication | Coordinator | PR108 admin-merged at9db1abb; annotated10.1.0 tag; public wheel/sdist hashes and fresh public install verified by E in e-public-10.1.0-H50z50 | Original green-CI/formal-review requirement superseded by RELEASE-EXCEPTION | Published and fresh-install verified; administrative CI/review bypass, not passing CI or formal approval |
+| HAND-01 | Handoff | Exact release/interface/evidence mapping for all three services | SUCCESS | active_product_contract | Handoff | E | Final10.1.0 handoff contains exact pin/commit/tag/dependencies, public interfaces/receipts, ordering and Dewey/Bloom/Ursa crosswalk | | Complete producer handoff; no service adoption/deployment performed |
 | PKG-01 | Packaging | Core-only installed CLI works without optional web dependencies | SUCCESS | contract_test | Qualification | Coordinator; E verifies wheel | Exact clean 878b9a0 archived build; E fresh core and GUI environments pass; FastAPI absent from core; pip check and CLI help pass outside checkout | Optional web exports had been imported eagerly through web.runtime | Fixed without dependency expansion; candidate-only evidence, not published-package proof |
-| INT-01 | Integration | Required PG16 regression and fixture lifecycle on frozen candidate | IN_PROGRESS | contract_test | Qualification | Coordinator | 24075ba partial matrix: exact16.13 2964PASS, aggregate94.73%; all33 changed-module checks pass with the two approved exceptions | Two independent authorization modules were not run locally | User-attested independent acceptance is recorded separately; complete CI results remain pending |
+| INT-01 | Integration | Required PG16 regression and fixture lifecycle on frozen candidate | SUCCESS | contract_test | Qualification | Coordinator | Exact16.13 final partial run2964PASS,94.73% aggregate; all33 changed-module gates pass with two approved exceptions; full CI explicitly waived | Two independent authorization modules were not run locally | Amended release gate satisfied; two authorization modules remain unrun locally; no full-suite claim |
 | PG17-SCOPE | Release scope | Defer PG17 qualification and flag observed failures for later repair | SUCCESS | plan_amendment | Explicit user amendment | Coordinator | Issue 107 records all three failures, inconclusive rerun and follow-up acceptance; release CI narrowed to 16.13 | User currently targets Aurora16 and explicitly defers PG17 | Deferral is complete; bugs remain open and PG17 remains unqualified |
 | REVIEW-SCOPE | Review ownership | Accept user's offer to perform independent human review | SUCCESS | plan_amendment | Explicit user amendment | Coordinator | User says "i can review"; 20260911T012357Z_tapdb_human_review.md prepared against c1d23f1 | Designated AI reviewer unavailable | Assignment changed only; all actual acceptance and publication gates remain pending |
 | COV-SCOPE | Release scope | Two named changed-module numeric coverage exceptions | SUCCESS | plan_amendment | Explicit user approval | Coordinator | User approved exceptions for recovery86.72% and backup-service89.57%; existing gate test3PASS | User rejects percentage-only tests | Only backup/recovery.py and backup/service.py exempt from numeric module minimum; numeric reports, aggregate90 and all other functional/coverage/review gates remain required |
 | ACCEPT-SCOPE | Acceptance ownership | Accept confidential independent results without disclosure | SUCCESS | plan_amendment | Explicit user disposition | Coordinator | User states results are sensitive and independent acceptance is sufficient to proceed | Sensitive results need not be copied into Git to record the user's acceptance decision | QA-01 accepted by user attestation; no sensitive findings or invented test details recorded; formal GitHub review and CI not waived |
 | RELEASE-EXCEPTION | Publication gate | Release with explicit administrative CI/review bypass | SUCCESS | plan_amendment | Explicit user instruction to release with gh --admin | Coordinator | User authorizes release using administrative bypass; independent acceptance already user-attested | Full CI and formal approving review have not been obtained | CI/review waived for10.1.0, not passed; preserve tests and prior results; verify final package and publication |
-| TEMP-01 | Runtime permissions | Receipt-bound denial of temporary-object creation for configured runtime | IN_PROGRESS | config_or_startup_contract | Explicit user-approved TEMP restriction | B implements; Coordinator integrates; human reviews | Implemented;134 exact16.13 author tests PASS, zero skipped, b-temp-denial-final-pg16.xml;53 CLI/core/contracts PASS | PUBLIC database TEMP permits runtime temporary objects; allocator qualification fix remains in place | Local implementation verified; human/final Aurora acceptance pending; no automatic session termination or production apply |
+| TEMP-01 | Runtime permissions | Receipt-bound denial of temporary-object creation for configured runtime | SUCCESS | config_or_startup_contract | Explicit user-approved TEMP restriction | B implements; Coordinator integrates; human reviews | 134 exact16.13 author cases; actual isolated Aurora bind and two fresh-session TEMP denials pass; QA-01; existing-service session closure remains adoption-owned | PUBLIC database TEMP permits runtime temporary objects; allocator qualification fix remains in place | Implementation/author evidence accepted with QA-01 user attestation and explicit release exception; no complete CI claim |
 
 ## Consumer prerequisite crosswalk
 
@@ -331,6 +336,42 @@ Consumer ordering: inventory -> principal preparation -> backup/restore -> schem
 - No runtime code, database, AWS resource, service dependency, or production
   state changed in this acceptance-recording step.
 
-All rows terminal: no. Objective complete: no. Independent acceptance is
-user-attested; complete CI, reviewed merge, and published-package verification
-remain outstanding. Terminal BLOCKED/FAIL is not a completed release.
+The preceding checkpoint is historical and superseded by the final disposition
+below; independent acceptance remains user-attested rather than disclosed.
+
+### Final release receipt — 2026-09-11
+
+- Owner-authorized administrative merge: PR108 merged by `iamh2o` at
+  `9db1abb4525f2594ebdbf2a307eb8b49aa51883d`. Formal GitHub review and full CI
+  were waived, not passed; statusCheckRollup was empty. GitHub's separate
+  dependency-graph update succeeded but is not a release-test result. The
+  previously screened operation was not run or rerouted.
+- Immutable annotated tag10.1.0 object
+  `d8d36584a5338d7256aba0300d299d53a5c12217` peels to that exact commit.
+  Release payload matches24075ba; production payload matchesaeb5ac0. Existing
+  dirty source checkout and service repositories remain untouched.
+- Clean exact-tag wheel/sdist build, Twine metadata and wheel schema/migration
+  assets pass. Existing interactive `twup` publishes both artifacts to PyPI.
+  GitHub release is public, not draft/prerelease, published2026-09-11T02:57:40Z.
+- Wheel `daylily_tapdb-10.1.0-py3-none-any.whl`,659225bytes, SHA256
+  `f46cb2abfccb3000b9f9443ea00045e83fb96f6b320d2aeac0ad800ea47e8801`.
+  Sdist `daylily_tapdb-10.1.0.tar.gz`,1321143bytes, SHA256
+  `a582f902ff6df6a66c05ff293cef3c5cbca84e9b6de9977737d25fe0e11cc978`.
+- E independently verifies public PyPI JSON, both unyanked public downloads and
+  their hashes, GitHub asset digests, annotated tag, and fresh public-index-only
+  no-cache Python3.13.13 core installation outside the checkout. Pip check,
+  installed10.1.0 metadata/imports, FastAPI absence, public CLI help and
+  RECORD-backed schema/migration assets pass. Evidence:
+  `runtime/qualification/e-public-10.1.0-H50z50/`. No extra database/security
+  test campaign or GUI rerun was performed for publication.
+- Final handoff records exact pin, dependencies, public interfaces/receipt
+  fields, adoption ordering and the three-service prerequisite crosswalk.
+  Runtime/config/principal artifacts, service pins/conversions/session restart,
+  deployment and cutover remain service-owned. No production changes.
+- Tagged/package documentation preserves its pre-publication wording; current
+  main documentation and release notes supply final receipts. No tag/artifact
+  is overwritten to change documentation.
+
+All rows terminal: yes. Objective complete: yes under the explicitly amended
+release scope. Independent acceptance is user-attested; CI/formal GitHub review
+were waived, not passed. PostgreSQL17 remains unqualified under issue107.

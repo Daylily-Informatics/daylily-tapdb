@@ -216,11 +216,12 @@ Independent acceptance is user-attested with confidential results retained
 outside Git. CI is waived, not passed. Artifact/publication verification remains
 mandatory. This exception does not change normal gates for subsequent releases.
 
-TapDB 10.0.0 is the latest verified public release. TapDB 10.1.0 is an
-unreleased candidate until independent exact PostgreSQL 16.13 and isolated
-Aurora PostgreSQL 16.13 qualification, a reviewed green merge, immutable
-annotated tag, publication, and fresh public installation all have exact
-receipts. PostgreSQL 17 qualification is deferred from 10.1.0 and has not
+TapDB10.1.0 is published with an immutable annotated tag, verified public
+wheel/sdist hashes and successful fresh public installation. Independent
+acceptance is user-attested, while the owner explicitly waived CI/formal
+GitHub review for this release. See the release handoff for exact provenance
+and the retained partial-suite limitations. PostgreSQL17 qualification is
+deferred from10.1.0 and has not
 passed; it is tracked in
 [GitHub issue #107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107),
 and this is not a declaration that PostgreSQL 17 is unsupported.

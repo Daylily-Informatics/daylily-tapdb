@@ -33,20 +33,23 @@ but never becomes the relationship authority.
 
 ## Install
 
-TapDB 10.0.0 is the latest verified public release. This checkout is preparing
-TapDB 10.1.0 as an unreleased candidate; its independent PostgreSQL/Aurora
-qualification, reviewed merge, immutable tag, publication, and fresh-install
-verification are not complete. Do not pin 10.1.0 until the release handoff
-contains those receipts.
+TapDB **10.1.0 is published** on
+[PyPI](https://pypi.org/project/daylily-tapdb/10.1.0/) and
+[GitHub](https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/10.1.0).
+Artifact hashes and fresh public installation are verified. Independent
+acceptance is user-attested; CI and formal GitHub review were explicitly
+waived through an owner-authorized administrative merge, not reported passed.
+See the [release handoff](docs/plans/20260910_tapdb_service_readiness_handoff.md)
+for exact provenance, qualification limitations and service adoption ordering.
 
-The 10.1.0 candidate requires Python 3.12 or newer. Its release gates target
+The 10.1.0 release requires Python 3.12 or newer. Its database scope targets
 exact community PostgreSQL 16.13 plus isolated Aurora PostgreSQL 16.13
 acceptance. PostgreSQL 17 qualification is deferred to
 [GitHub issue #107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107)
 and has not passed; this is not a declaration that PostgreSQL 17 is
 unsupported.
 
-The candidate's receipt-bound runtime-principal bind revokes database `TEMP`
+The receipt-bound runtime-principal bind revokes database `TEMP`
 from `PUBLIC` and the configured runtime principal. When the reviewed plan shows
 that revocation would remove the operator's pre-existing effective `TEMP`, it
 records an explicit operator preservation grant. This database-wide change also
@@ -337,7 +340,7 @@ bandit -c pyproject.toml -r daylily_tapdb admin
 python -m build
 ```
 
-The 10.1.0 candidate release CI is configured to run the same complete suite
+The checked-in release CI is configured to run the same complete suite
 independently against exact community PostgreSQL 16.13, including local-doc
 examples and branch coverage, with separate isolated Aurora PostgreSQL 16.13
 acceptance. The shared release gates also run Ruff, mypy, Bandit,
@@ -359,7 +362,9 @@ PostgreSQL/Aurora acceptance, or review.
 The frozen-candidate PostgreSQL/Aurora acceptance must also verify the reviewed
 database ACL, `PUBLIC` and runtime `TEMP` revocations, any explicit operator
 `TEMP` preservation grant, and effective `TEMP=false` from a newly created
-runtime session. These checks are pending and are not a release claim.
+runtime session. The isolated author checks passed; independent acceptance is
+user-attested. The10.1.0 release's CI/formal-review gate was separately waived
+by explicit owner authorization; this does not change normal future CI gates.
 
 ## Documentation
 
