@@ -399,8 +399,16 @@ def test_exact_retained_backend_is_the_only_permitted_activity():
     [
         ("", False, True),
         ("pg_stat_statements", False, True),
-        ("rdsutils", True, True),
-        ("rdsutils", False, False),
+        (
+            "rdsutils,rds_casts,pg_stat_statements,writeforward,aws_s3_native,rds_blue_green",
+            True,
+            True,
+        ),
+        (
+            "rdsutils,rds_casts,pg_stat_statements,writeforward,aws_s3_native,rds_blue_green",
+            False,
+            False,
+        ),
         ("pg_cron", True, False),
         ("unknown_extension", False, False),
     ],

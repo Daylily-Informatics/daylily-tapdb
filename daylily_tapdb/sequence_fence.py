@@ -349,7 +349,13 @@ def worker_baseline(
             {"oid": database_oid, "role": operator_role},
         ).mappings()
     ]
-    allowed = {"pg_stat_statements"} | ({"rdsutils"} if aurora else set())
+    # These are the provider-loaded baseline on the authenticated Aurora16.13
+    # target, not customer schedulers or arbitrary configurable extensions.
+    allowed = {"pg_stat_statements"} | (
+        {"rdsutils", "rds_casts", "writeforward", "aws_s3_native", "rds_blue_green"}
+        if aurora
+        else set()
+    )
     for value in [
         *settings.values(),
         *(item["setting"].split("=", 1)[1] for item in overrides),
