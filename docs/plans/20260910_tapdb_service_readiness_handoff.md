@@ -153,6 +153,7 @@ These are development/author receipts, not release acceptance:
 | `runtime/qualification/d-auth16-temp2.xml` | Independent P1 finding: a temporary sequence could redirect an unqualified managed allocator helper. This is failure evidence, not acceptance. |
 | Isolated Aurora plan/apply receipts | Author binding used an exact qualification-only PostgreSQL 16.13 database. The later CONNECT-aware plan/result hashes were recorded in the controlling ledger. Effective `PUBLIC TEMP` made independent temporary-object shadowing proof mandatory. Production remained unchanged. |
 | `runtime/qualification/e-package-20260910T234815Z/` | Pre-final-documentation SCM-pretend `10.1.0` source-snapshot diagnostic: build, Twine, wheel-asset verification, and sdist inspection passed. Wheel SHA-256 `25f03f754754968ecd257146c981e58e9cf029c1a78d8d1434cf98d484bdcb55`; sdist SHA-256 `3f79552d613f712f9b21dc1b5361e98e15561b7b38022e37a6a8e9c75b17d9d9`. Embedded allocator and migration hashes matched the source. The final filename/crosswalk documentation corrections followed this build. These are not release artifacts and do not fill the immutable slots above. |
+| `runtime/qualification/e-package-20260911T000027Z/` | Exact clean candidate commit `c3eee0e8e2aa26ad69ab1c24ad5b58c0dcf8c9f3`, tree `8fa980b87934eb578c44692bfe9ed5dc61087674`, archived before build. Core-only and separate GUI-extra fresh public-index installation, pip check, required imports/assets and outside-checkout CLI help pass. FastAPI is absent from core. Wheel SHA-256 `54095f722d089bd39ff73d9560270c926ad83588f656dac4a9a7fe81b547a4da`; sdist `b9a350546b576fa9ac87308d6e395d2dc2911613041ebcf4ee33a51cacbdd464`. Candidate-only proof, not publication; later ledger/test changes are not covered by these artifact hashes. |
 
 The subsequent independent real-PostgreSQL turn ended in a tooling
 cybersecurity-risk refusal. Do not bypass or reproduce the blocked work, count
@@ -170,15 +171,16 @@ https://pypi.org/simple <candidate-wheel>`, with ambient index variables unset
 and pip configuration disabled. Installed 10.1.0 metadata, public Python
 imports, and installed documentation/schema/migration assets passed.
 
-The core-install CLI smoke did not pass: loading
-`daylily_tapdb.cli.register` failed because `fastapi` was absent. `fastapi` is
-currently declared only by the optional `api` and `gui` extras even though the
-core/CLI dependency contract says `tapdb --help` works after a core install.
-This is an unresolved candidate interface/package-metadata gap. It must be
-resolved and the clean public-index install repeated against the frozen
-candidate; installing an extra merely to bypass the core contract is not
-acceptance. Even after that correction, publication requires the same
-fresh-install proof from the published 10.1.0 wheel.
+The earlier core-install CLI smoke failed because importing `web.runtime`
+eagerly imported optional FastAPI-backed web exports. Candidate `c3eee0e`
+corrects that import boundary without adding dependencies or replacing the
+existing public web implementations. E independently verified a bare-wheel
+fresh install with FastAPI absent and all required CLI help commands passing;
+the separate GUI-extra install also passed. The exact candidate package
+receipts above resolve PKG-01 only. The ordinary PostgreSQL regression runs
+still failed, and independent/Aurora acceptance remains unavailable. Publication
+requires fresh-install proof from the eventual published wheel, not this
+unreleased diagnostic artifact.
 
 ## Independent frozen-candidate acceptance
 

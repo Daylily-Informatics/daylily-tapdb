@@ -63,6 +63,14 @@ def test_instance_euid_trigger_uses_template_instance_prefix_not_taxonomy():
         "CREATE OR REPLACE FUNCTION set_generic_instance_euid()", 1
     )[1].split("$$ LANGUAGE plpgsql;", 1)[0]
 
-    assert "SELECT t.instance_prefix INTO prefix" in function_body
-    assert "t.uid = NEW.template_uid" in function_body
+    assert "SELECT t.instance_prefix FROM %I.generic_template t" in function_body
+    assert (
+        "WHERE t.uid = $1 AND t.domain_code = $2 AND t.issuer_app_code = $3"
+        in function_body
+    )
+    assert "TG_TABLE_SCHEMA" in function_body
+    assert (
+        "INTO prefix USING NEW.template_uid, NEW.domain_code, NEW.issuer_app_code"
+        in function_body
+    )
     assert "tapdb_validate_meridian_prefix(NEW.category)" not in function_body
