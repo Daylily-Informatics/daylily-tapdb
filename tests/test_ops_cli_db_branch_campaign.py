@@ -197,13 +197,14 @@ def test_run_psql_aurora_wraps_sql_and_files(
 
     monkeypatch.setattr(AuroraSchemaDeployer, "run_psql", staticmethod(fake_run))
     assert db._run_psql(db.Environment.target, sql="SELECT 1") == (True, "ok")
-    assert "session.current_schema_name" in str(seen[-1]["sql"])
+    assert "session.current_schema_name" in str(seen[-1]["setup_sql"])
+    assert seen[-1]["sql"] == "SELECT 1"
 
     sql_file = tmp_path / "schema.sql"
     sql_file.write_text("SELECT 2;", encoding="utf-8")
     db._run_psql(db.Environment.target, file=sql_file)
-    assert seen[-1]["file"] is None
-    assert "SELECT 2" in str(seen[-1]["sql"])
+    assert seen[-1]["file"] == sql_file
+    assert "session.current_schema_name" in str(seen[-1]["setup_sql"])
 
     configured["iam_auth"] = "false"
     db._run_psql(db.Environment.target, sql="SELECT 3", database="postgres")
@@ -400,12 +401,12 @@ def test_db_create_and_delete_paths(
         "_ensure_local_role",
         lambda *_args: (_ for _ in ()).throw(RuntimeError("role")),
     )
-    with pytest.raises(typer.Exit):
+    with pytest.raises(SystemExit):
         db.db_create(owner=None)
 
     monkeypatch.setattr(db, "_ensure_local_role", lambda *_args: None)
     monkeypatch.setattr(db, "_run_psql", lambda *_args, **_kwargs: (False, "offline"))
-    with pytest.raises(typer.Exit):
+    with pytest.raises(SystemExit):
         db.db_create(owner=None)
 
     monkeypatch.setattr(db, "_run_psql", lambda *_args, **_kwargs: (True, ""))
@@ -546,6 +547,13 @@ class _Transaction:
     def rollback(self) -> None:
         self.events.append("rollback")
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, *_args):
+        self.rollback() if exc_type else self.commit()
+        return False
+
 
 class _EngineConnection:
     def __init__(self, events: list[str]):
@@ -566,7 +574,10 @@ class _EngineConnection:
 
 class _TapdbConnection:
     def __init__(self, events: list[str]):
-        self.engine = SimpleNamespace(connect=lambda: _EngineConnection(events))
+        self.engine = SimpleNamespace(
+            connect=lambda: _EngineConnection(events),
+            update_execution_options=lambda **kwargs: events.append("isolation"),
+        )
 
     def __enter__(self):
         return self
@@ -582,6 +593,9 @@ class _TapdbConnection:
 def test_migrate_preflight_apply_and_validation(
     configured: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(
+        "cli_core_yo.runtime.get_context", lambda: SimpleNamespace(dry_run=False)
+    )
     monkeypatch.setattr(db, "_check_db_exists", lambda *_args: True)
     monkeypatch.setattr(db, "_schema_exists", lambda *_args: True)
     monkeypatch.setattr(db, "_schema_root_candidates", lambda: [tmp_path])
@@ -592,6 +606,18 @@ def test_migrate_preflight_apply_and_validation(
         "_tapdb_connection_for_env",
         lambda *_args, **_kwargs: _TapdbConnection(events),
     )
+
+    @contextmanager
+    def readonly_operator(_cfg, **_kwargs):
+        yield _EngineConnection(events)
+        events.append("rollback")
+
+    @contextmanager
+    def retained_operator(_cfg, **_kwargs):
+        yield _EngineConnection(events)
+
+    monkeypatch.setattr(db, "operator_connection", readonly_operator)
+    monkeypatch.setattr(db, "operator_session", retained_operator)
     monkeypatch.setattr(db, "_log_operation", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         db,
@@ -612,10 +638,21 @@ def test_migrate_preflight_apply_and_validation(
     monkeypatch.setattr(
         db, "apply_migration_preflight", lambda *_args, **_kwargs: result
     )
+    monkeypatch.setattr(db, "_load_evidence_object", lambda _path: {"fenced": True})
+    monkeypatch.setattr(
+        db,
+        "finalize_migration_recovery",
+        lambda *_args, **_kwargs: {"allocator_result": {}},
+    )
     receipt = tmp_path / "result.json"
     approved = tmp_path / "approved.json"
     db.db_migrate(
-        dry_run=False, apply=True, receipt=receipt, preflight_receipt=approved
+        dry_run=False,
+        apply=True,
+        receipt=receipt,
+        preflight_receipt=approved,
+        writer_fence=tmp_path / "fence.json",
+        receipts_dir=tmp_path / "durable",
     )
     assert "commit" in events
 
@@ -734,6 +771,10 @@ def test_template_validation_seed_and_adapter_helpers(
         db, "_tapdb_connection_for_env", lambda *_args, **_kwargs: _TapdbConnection([])
     )
     monkeypatch.setattr(db, "_loader_seed_templates", lambda *_args, **_kwargs: summary)
+    monkeypatch.setattr(
+        "daylily_tapdb.runtime_principal.grant_proven_runtime_sequences",
+        lambda *_args: [],
+    )
     monkeypatch.setattr(db, "_loader_find_tapdb_core_config_dir", lambda: tmp_path)
     monkeypatch.setattr(db, "_log_operation", lambda *_args, **_kwargs: None)
     db.db_seed(tmp_path, include_workflow=True, skip_existing=False, dry_run=False)
@@ -757,9 +798,18 @@ def test_default_admin_setup_and_public_adapters(
     configured["safety_tier"] = "production"
     assert db._create_default_admin(db.Environment.target, True) is False
     configured["safety_tier"] = "shared"
+    configured["server_port"] = "5432"
+    configured["aws_profile"] = "qualification-profile"
+    configured["sslrootcert"] = "/explicit/qualification-ca.pem"
 
     fake = _TapdbConnection([])
-    monkeypatch.setattr(db, "TAPDBConnection", lambda **_kwargs: fake)
+    connection_args = {}
+
+    def open_connection(**kwargs):
+        connection_args.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(db, "TAPDBConnection", open_connection)
     import daylily_tapdb.user_store as user_store
 
     monkeypatch.setattr(
@@ -768,6 +818,9 @@ def test_default_admin_setup_and_public_adapters(
         lambda *_args, **_kwargs: (SimpleNamespace(username="tapdb_admin"), True),
     )
     assert db._create_default_admin(db.Environment.target, True) is True
+    assert connection_args["server_port"] == 5432
+    assert connection_args["aws_profile"] == "qualification-profile"
+    assert connection_args["sslrootcert"] == "/explicit/qualification-ca.pem"
     monkeypatch.setattr(
         user_store,
         "create_or_get",
@@ -873,9 +926,12 @@ def test_remaining_database_refusal_branches(
     with pytest.raises(RuntimeError, match="insert failed"):
         db._write_migration_baseline(db.Environment.target)
 
-    monkeypatch.setattr(
-        db, "_run_psql", lambda *_args, **_kwargs: (False, "sequence failed")
-    )
+    @contextmanager
+    def failed_sequence_connection(*args, **kwargs):
+        raise RuntimeError("sequence failed")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(db, "operator_connection", failed_sequence_connection)
     with pytest.raises(RuntimeError, match="sequence failed"):
         db._ensure_instance_prefix_sequence(db.Environment.target, "SMP")
 

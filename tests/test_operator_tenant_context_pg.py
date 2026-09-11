@@ -74,7 +74,9 @@ def _runtime_connection(
     )
 
 
-def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(pg_instance):
+def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(
+    pg_instance, request
+):
     tenant_a = uuid.uuid4()
     tenant_b = uuid.uuid4()
     keys: dict[uuid.UUID | None, str | None] = {
@@ -102,8 +104,10 @@ def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(pg_instanc
     instance_uids: dict[uuid.UUID | None, int] = {}
     operator = create_engine(
         pg_instance["operator_dsn"],
+        isolation_level="REPEATABLE READ",
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
+    request.addfinalizer(operator.dispose)
     with operator.begin() as connection:
         connection.execute(
             text(
@@ -199,14 +203,6 @@ def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(pg_instanc
                 ).scalars()
             )
             assert visible == {names[tenant_a]}
-            session.execute(
-                text(
-                    "CREATE TEMP TABLE audit_log ("
-                    "rel_table_name text, rel_table_uid_fk bigint, "
-                    "rel_table_euid_fk text, tenant_id uuid, domain_code text, "
-                    "issuer_app_code text, changed_by text, operation_type text)"
-                )
-            )
             audited_uid = session.execute(
                 text(
                     f'INSERT INTO "{pg_instance["schema_name"]}".'
@@ -218,7 +214,7 @@ def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(pg_instanc
                     "RETURNING uid"
                 ),
                 {
-                    "name": f"Temp shadow audit proof {suffix}",
+                    "name": f"Persistent audit proof {suffix}",
                     "tenant_id": str(tenant_a),
                     "template_uid": template_uid,
                 },
@@ -235,28 +231,6 @@ def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(pg_instanc
                 == 1
             )
 
-            session.execute(
-                text(
-                    "CREATE TEMP TABLE generic_instance ("
-                    "uid bigint, domain_code text, issuer_app_code text, "
-                    "tenant_id uuid, category text, type text, subtype text, "
-                    "version text, is_deleted boolean)"
-                )
-            )
-            session.execute(
-                text(
-                    "INSERT INTO pg_temp.generic_instance VALUES "
-                    "(:parent, 'Z', 'daylily-tapdb', :tenant, 'message', "
-                    "'webhook', 'event', '1.0', false), "
-                    "(:child, 'Z', 'daylily-tapdb', :tenant, 'message', "
-                    "'webhook', 'event', '1.0', false)"
-                ),
-                {
-                    "parent": instance_uids[tenant_a],
-                    "child": instance_uids[tenant_b],
-                    "tenant": str(tenant_a),
-                },
-            )
             nested = session.begin_nested()
             with pytest.raises(Exception, match="endpoints are unavailable"):
                 session.execute(
@@ -277,19 +251,6 @@ def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(pg_instanc
             nested.rollback()
             session.execute(
                 text("SELECT set_config('session.current_tenant_id', :tenant, true)"),
-                {"tenant": str(tenant_b)},
-            )
-            session.execute(
-                text(
-                    "CREATE TEMP TABLE tapdb_runtime_principal_scope ("
-                    "role_name name, tenant_id uuid)"
-                )
-            )
-            session.execute(
-                text(
-                    "INSERT INTO pg_temp.tapdb_runtime_principal_scope "
-                    "VALUES (session_user, :tenant)"
-                ),
                 {"tenant": str(tenant_b)},
             )
             session.execute(text("SET LOCAL search_path TO pg_temp, public"))
@@ -345,6 +306,7 @@ def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(pg_instanc
 
     migrations = Path(__file__).resolve().parents[1] / "schema" / "migrations"
     runtime_engine = create_engine(pg_instance["dsn"])
+    request.addfinalizer(runtime_engine.dispose)
     with runtime_engine.begin() as connection:
         with pytest.raises(MigrationPreflightError, match="operator connection"):
             build_migration_preflight(

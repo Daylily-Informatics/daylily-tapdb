@@ -34,9 +34,9 @@
   {% if review.mode == "in_place" %}
   <div class="notice error">
     <strong>This replaces live data in {{ review.target_schema }}.</strong>
-    A safety backup is taken first and the current schema is renamed aside
-    rather than dropped, so a failure at any point before verification passes
-    restores the original. It is still a destructive operation.
+    A safety backup and explicit writer fencing are required. Interrupted
+    operations retain their recovery evidence and may leave access closed;
+    reconcile the outcome before retrying. This is a destructive operation.
   </div>
   {% else %}
   <div class="notice">
@@ -44,6 +44,38 @@
     database. Live data is not touched.
   </div>
   {% endif %}
+</section>
+
+{% set evidence = review.get('recovery', {}) %}
+<section class="band">
+  <h2>Stage recovery evidence</h2>
+  <p>A database dump does not cover later allocations, runtime configuration,
+     files, or principal artifacts. Restored runtime access requires explicit rebinding.</p>
+  <form method="post" action="{{ review_url }}/stage" id="stage-evidence-form">
+    <input type="hidden" name="mode" value="{{ review.mode }}">
+    <label>Explicit target database
+      <input name="target_database" value="{{ review.options.target_database or '' }}"
+             {% if review.mode != 'in_place' %}required{% endif %}>
+    </label>
+    <label>Recovery-source JSON
+      <textarea name="recovery_source" rows="6" required>{% if evidence.get('recovery_source') %}{{ evidence.recovery_source | tojson }}{% endif %}</textarea>
+    </label>
+    <p>For a rehearsal only, explicitly enter <code>{"purpose":"isolated_rehearsal"}</code>.
+       Recovery of later allocations requires the complete fenced-source evidence and retained journals.</p>
+    <label>Target writer-fence JSON (when required by the operation)
+      <textarea name="writer_fence" rows="4">{% if evidence.get('writer_fence') %}{{ evidence.writer_fence | tojson }}{% endif %}</textarea>
+    </label>
+    <label>Explicit operator control-config path (when required)
+      <input name="control_config" value="{{ evidence.get('control_target', {}).get('config_identity', '') if evidence.get('control_target') else '' }}">
+    </label>
+    <label>Aurora provider-contract JSON
+      <textarea name="provider_contract" rows="4">{% if evidence.get('provider_contract') %}{{ evidence.provider_contract | tojson }}{% endif %}</textarea>
+    </label>
+    <label>Source quarantine-receipt JSON
+      <textarea name="quarantine_receipt" rows="4">{% if evidence.get('quarantine_receipt') %}{{ evidence.quarantine_receipt | tojson }}{% endif %}</textarea>
+    </label>
+    <button type="submit">Stage and review evidence</button>
+  </form>
 </section>
 
 <section class="band">
@@ -78,6 +110,8 @@
   <h2>Confirm</h2>
   {% if review.blocking %}
     <p>Apply is unavailable while preflight is failing.</p>
+  {% elif not evidence.get('recovery_source') %}
+    <p>Stage explicit recovery evidence before applying a restore.</p>
   {% else %}
   {# Only ask for the typed label when apply will actually check it. Asking
      otherwise would assert a control the service does not enforce -- the
@@ -99,6 +133,18 @@
        applying something the operator never saw. #}
     <input type="hidden" name="plan_fingerprint" value="{{ review.plan_fingerprint }}">
     <input type="hidden" name="mode" value="{{ review.mode }}">
+    <input type="hidden" name="recovery_source" value="{{ evidence.recovery_source | tojson | forceescape }}">
+    {% if evidence.get('writer_fence') %}
+    <input type="hidden" name="writer_fence" value="{{ evidence.writer_fence | tojson | forceescape }}">
+    {% endif %}
+    {% if evidence.get('control_target') %}
+    <input type="hidden" name="control_config" value="{{ evidence.control_target.config_identity }}">
+    {% endif %}
+    {% for field in ('provider_contract', 'quarantine_receipt') %}
+    {% if evidence.get(field) %}
+    <input type="hidden" name="{{ field }}" value="{{ evidence[field] | tojson | forceescape }}">
+    {% endif %}
+    {% endfor %}
     {% if review.options.target_database %}
       <input type="hidden" name="target_database"
              value="{{ review.options.target_database }}">

@@ -41,7 +41,7 @@ jobs:
           scripts/verify_wheel_assets.py
 
       - name: Mypy release surfaces
-        # pyproject.toml lists every new 10.0 module explicitly. The older dynamic
+        # pyproject.toml lists every new 10.1 module explicitly. The older dynamic
         # ORM/Typer surfaces remain outside this strict gate until modernized.
         run: mypy
 
@@ -79,9 +79,9 @@ jobs:
           - postgres_label: '16.13'
             postgres_image: postgres:16.13
             postgres_major: '16'
-          - postgres_label: '17'
-            postgres_image: postgres:17
-            postgres_major: '17'
+            postgres_source: '16.13'
+          # PG17 qualification is deferred for 10.1.0 by explicit release scope.
+          # Follow-up: https://github.com/Daylily-Informatics/daylily-tapdb/issues/107
 
     services:
       postgres:
@@ -102,6 +102,7 @@ jobs:
       PGPASSWORD: operator-password
       TAPDB_RUN_DOCS_LOCAL: '1'
       TAPDB_TEST_CONFIG: /tmp/tapdb-ci/tapdb-config.yaml
+      TAPDB_TEST_EXPECTED_PG_VERSION: ${{ matrix.postgres_label }}
 
     steps:
       - uses: actions/checkout@v4
@@ -132,6 +133,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,cli,aurora,gui]"
+
+      - name: Build exact PostgreSQL ${{ matrix.postgres_source }} for ephemeral-fixture acceptance
+        run: |
+          bash scripts/build_qualification_postgres.sh "${{ matrix.postgres_source }}" \
+            "$RUNNER_TEMP/tapdb-postgres-${{ matrix.postgres_source }}" \
+            "$RUNNER_TEMP/tapdb-postgres-${{ matrix.postgres_source }}-source"
+          echo "$RUNNER_TEMP/tapdb-postgres-${{ matrix.postgres_source }}/bin" >> "$GITHUB_PATH"
 
       - name: Install Chromium for GUI acceptance
         run: python -m playwright install --with-deps chromium
@@ -166,7 +174,9 @@ jobs:
           --cov-report=json:coverage.json
           --cov-fail-under=90
 
-      - name: Require 90 percent in every changed production module
+      # Only backup/recovery.py and backup/service.py have user-approved
+      # numeric exceptions for 10.1.0; aggregate coverage remains >=90%.
+      - name: Check changed-module coverage with approved 10.1.0 exceptions
         run: >-
           python scripts/verify_changed_coverage.py
           --base origin/main
@@ -188,7 +198,7 @@ jobs:
 
       - name: Build distributions
         env:
-          SETUPTOOLS_SCM_PRETEND_VERSION: '10.0.0'
+          SETUPTOOLS_SCM_PRETEND_VERSION: '10.1.0'
         run: |
           python -m pip install --upgrade pip build twine
           python -m build
@@ -197,9 +207,24 @@ jobs:
         run: python -m twine check dist/*
 
       - name: Verify wheel schema and migration assets
-        run: python scripts/verify_wheel_assets.py --expected-version 10.0.0
+        run: python scripts/verify_wheel_assets.py --expected-version 10.1.0
 
-      - name: Smoke-test the installed wheel
+      - name: Smoke-test the core-only installed wheel outside the checkout
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-core-smoke"
+          wheels=("$PWD"/dist/*.whl)
+          "$RUNNER_TEMP/wheel-core-smoke/bin/python" -m pip install "${wheels[0]}"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wheel-core-smoke/bin/python" -c "import importlib.util; assert importlib.util.find_spec('fastapi') is None"
+          "$RUNNER_TEMP/wheel-core-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/wheel-core-smoke/bin/tapdb" --help
+          "$RUNNER_TEMP/wheel-core-smoke/bin/tapdb" db identity --help
+          "$RUNNER_TEMP/wheel-core-smoke/bin/tapdb" db sequences --help
+          "$RUNNER_TEMP/wheel-core-smoke/bin/tapdb" db runtime-principal --help
+          "$RUNNER_TEMP/wheel-core-smoke/bin/tapdb" validation --help
+          "$RUNNER_TEMP/wheel-core-smoke/bin/tapdb" backup --help
+
+      - name: Smoke-test the GUI-installed wheel
         run: |
           python -m venv "$RUNNER_TEMP/wheel-smoke"
           wheels=(dist/*.whl)

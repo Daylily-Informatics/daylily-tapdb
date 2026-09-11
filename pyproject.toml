@@ -108,7 +108,7 @@ daylily_tapdb = [
     "templates/schema/*.json",
 ]
 [tool.setuptools.data-files]
-"schema" = ["schema/tapdb_schema.sql", "schema/rls.sql"]
+"schema" = ["schema/tapdb_schema.sql", "schema/rls.sql", "schema/allocator_functions.sql"]
 "schema/migrations" = ["schema/migrations/*.sql"]
 "docs" = ["docs/*.md"]
 
@@ -159,13 +159,20 @@ ignore_missing_imports = true
 follow_imports = "skip"
 # TapDB's older dynamically mapped ORM and Typer surfaces are not yet globally
 # strict-clean. Keep the release gate explicit and expand it as those modules
-# are modernized; every new 10.0 implementation module is checked here.
+# are modernized; every new 10.1 implementation module is checked here.
 files = [
     "daylily_tapdb/advisory_locks.py",
     "daylily_tapdb/external_reference_audit.py",
     "daylily_tapdb/external_references.py",
     "daylily_tapdb/federation.py",
     "daylily_tapdb/migration_identity.py",
+    "daylily_tapdb/backup/recovery.py",
+    "daylily_tapdb/backup/source_contract.py",
+    "daylily_tapdb/identity_inventory.py",
+    "daylily_tapdb/sequences.py",
+    "daylily_tapdb/sequence_fence.py",
+    "daylily_tapdb/runtime_principal.py",
+    "daylily_tapdb/runtime_catalog_contract.py",
     "daylily_tapdb/runtime_info.py",
     "daylily_tapdb/security_context.py",
     "daylily_tapdb/services/graph_payloads.py",
@@ -175,6 +182,9 @@ files = [
     "daylily_tapdb/web/dag_v2.py",
     "daylily_tapdb/cli/objects.py",
     "daylily_tapdb/cli/templates.py",
+    "daylily_tapdb/cli/identity.py",
+    "daylily_tapdb/cli/sequences.py",
+    "daylily_tapdb/cli/runtime_principal.py",
 ]
 
 [tool.bandit]

@@ -12,6 +12,10 @@ tmp dir, torn down afterwards.
 from __future__ import annotations
 
 import shutil
+from copy import deepcopy
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -22,6 +26,8 @@ from daylily_tapdb.backup import introspect, postrestore, service, verify
 from daylily_tapdb.cli import app
 from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 from daylily_tapdb.cli.db_config import get_backup_settings, get_db_config
+from daylily_tapdb.identity_inventory import seal_receipt
+from daylily_tapdb.runtime_principal import operator_connection
 
 runner = CliRunner()
 
@@ -77,7 +83,22 @@ def backup(env):
 def restored(env, backup):
     """A real isolated restore, dropped afterwards."""
     cfg, settings = env
-    result = verify.restore_backup(cfg, settings, backup_id=backup.backup_id)
+    result = verify.restore_backup(
+        cfg,
+        settings,
+        backup_id=backup.backup_id,
+        options=verify.RestoreOptions(
+            target_database="postrestore_" + uuid4().hex[:12]
+        ),
+        recovery_source={"purpose": "isolated_rehearsal"},
+    )
+    # Runtime access is a distinct, receipt-reviewed conversion after restore.
+    from daylily_tapdb.runtime_principal import bind_runtime_principal
+
+    restored_cfg = dict(cfg, database=result.target_database)
+    binding = Path(settings["config_dir"]) / "runtime-binding.json"
+    bind_runtime_principal(restored_cfg, receipt_path=binding)
+    bind_runtime_principal(restored_cfg, apply=True, receipt_path=binding)
     yield result
     from daylily_tapdb.backup import engine as eng
 
@@ -234,54 +255,56 @@ def test_sequence_high_water_detects_a_regression(env, backup, restored):
     prefix = service.find_backup_prefix(cfg, storage, backup.backup_id)
     manifest = service._load_manifest(storage, prefix)
 
-    from daylily_tapdb.backup.manifest import SequenceState
-
     # Claim the backup had a far higher value than the restore carries: this
-    # is exactly the shape of an EUID-reuse regression.
-    manifest.sequences = [
-        SequenceState(name="tpx_instance_seq", last_value=10**9, is_called=True)
-    ]
+    # is exactly the shape of an EUID-reuse regression. Retain the complete
+    # definition and reseal the explicit synthetic backup-floor evidence.
+    inventory = deepcopy(manifest.sequence_inventory)
+    recorded = next(
+        s for s in inventory["sequences"] if s["name"] == "tpx_instance_seq"
+    )
+    recorded.update(last_value=10**9, is_called=True, allocated_floor=10**9)
+    manifest.sequence_inventory = seal_receipt(inventory)
 
-    with _session(cfg, restored.target_database, cfg["schema_name"]) as conn:
-        with conn.session_scope(commit=False) as session:
-            check = postrestore.check_sequence_high_water(
-                session, manifest, cfg["schema_name"]
-            )
+    target_cfg = dict(cfg, database=restored.target_database)
+    with operator_connection(target_cfg, isolation_level="REPEATABLE READ") as session:
+        check = postrestore.check_sequence_high_water(
+            session,
+            manifest,
+            cfg["schema_name"],
+            target=service.inventory_target(target_cfg),
+        )
 
     assert check.failed
-    assert "tpx_instance_seq" in check.data
+    assert "tpx_instance_seq" in check.data["violations"]
 
 
-def test_prefix_projection_warns_but_does_not_block(env, restored):
-    """A sequence behind its data is advisory, not a failure.
-
-    ``ensure_instance_prefix_sequence`` reconciles to
-    ``GREATEST(max(euid_seq) + 1, current)`` before issuing, so this is
-    self-healing. It also arises normally after re-running ``db schema
-    apply``, and failing on it would block recovery for a condition TAPDB
-    fixes itself.
-    """
+def test_prefix_projection_blocks_a_sequence_behind_persisted_identities(env, restored):
+    """Runtime cannot rewind; operator-created corruption fails closed."""
     cfg, _ = env
     schema = cfg["schema_name"]
 
-    with _session(cfg, restored.target_database, schema) as conn:
+    with _session(
+        cfg, restored.target_database, schema, connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             session.execute(text(f"SELECT setval('\"{schema}\".tpx_instance_seq', 1)"))
 
-    with _session(cfg, restored.target_database, schema) as conn:
-        with conn.session_scope(commit=False) as session:
-            check = postrestore.check_prefix_sequences_ahead(session, schema)
+    target_cfg = dict(cfg, database=restored.target_database)
+    with operator_connection(target_cfg, isolation_level="REPEATABLE READ") as session:
+        check = postrestore.check_prefix_sequences_ahead(
+            session, schema, target=service.inventory_target(target_cfg)
+        )
 
-    assert check.status == "warn"
-    assert not check.failed
-    assert "tpx" in check.data
+    assert check.status == "fail"
+    assert check.failed
+    assert "tpx_instance_seq" in check.data["violations"]
 
 
 def test_high_water_is_the_binding_no_reuse_guarantee(env, backup, restored):
     """The check that *does* block: a restore must not lose sequence progress.
 
-    Unlike the projection above, this compares against what the backup
-    recorded, and nothing reconciles a restore that silently rewound.
+    This also compares against what the backup recorded, including issued
+    allocations that did not produce a surviving row.
     """
     cfg, settings = env
     schema = cfg["schema_name"]
@@ -289,14 +312,19 @@ def test_high_water_is_the_binding_no_reuse_guarantee(env, backup, restored):
     prefix = service.find_backup_prefix(cfg, storage, backup.backup_id)
     manifest = service._load_manifest(storage, prefix)
 
-    with _session(cfg, restored.target_database, schema) as conn:
+    with _session(
+        cfg, restored.target_database, schema, connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=True) as session:
             session.execute(text(f"SELECT setval('\"{schema}\".tpx_instance_seq', 1)"))
-        with conn.session_scope(commit=False) as session:
-            check = postrestore.check_sequence_high_water(session, manifest, schema)
+    target_cfg = dict(cfg, database=restored.target_database)
+    with operator_connection(target_cfg, isolation_level="REPEATABLE READ") as session:
+        check = postrestore.check_sequence_high_water(
+            session, manifest, schema, target=service.inventory_target(target_cfg)
+        )
 
     assert check.failed
-    assert "tpx_instance_seq" in check.data
+    assert "tpx_instance_seq" in check.data["violations"]
 
 
 def test_schema_drift_detects_a_hand_made_tapdb_object(env, restored):
@@ -591,18 +619,27 @@ def test_high_water_compares_next_value_not_last_value(env, backup, restored):
     )
     assert recorded is not None, "no called sequence in the manifest to exercise"
 
-    with _session(cfg, restored.target_database, schema) as conn:
+    with _session(
+        cfg, restored.target_database, schema, connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=True) as session:
-            # Same last_value, is_called flipped -> next value is one lower.
+            # Same last_value, is_called flipped -> next value loses one increment.
             session.execute(
                 text(
                     f'SELECT setval(\'"{schema}"."{recorded.name}"\', '
                     f"{recorded.last_value}, false)"
                 )
             )
-        with conn.session_scope(commit=False) as session:
-            live = {q.name: q for q in introspect.capture_sequences(session, schema)}
-            check = postrestore.check_sequence_high_water(session, manifest, schema)
+    target_cfg = dict(cfg, database=restored.target_database)
+    with operator_connection(target_cfg, isolation_level="REPEATABLE READ") as session:
+        target = service.inventory_target(target_cfg)
+        live = {
+            q.name: q
+            for q in introspect.capture_sequences(session, schema, target=target)
+        }
+        check = postrestore.check_sequence_high_water(
+            session, manifest, schema, target=target
+        )
 
     current = live[recorded.name]
     assert current.last_value == recorded.last_value, "premise: last_value matches"
@@ -628,7 +665,9 @@ def test_audit_continuity_uses_next_value_not_last_value(env, backup, restored):
     prefix = service.find_backup_prefix(cfg, storage, backup.backup_id)
     manifest = service._load_manifest(storage, prefix)
 
-    with _session(cfg, restored.target_database, schema) as conn:
+    with _session(
+        cfg, restored.target_database, schema, connection_role="operator"
+    ) as conn:
         with conn.session_scope(commit=False) as session:
             max_uid = session.execute(
                 text(f'SELECT max(uid) FROM "{schema}".audit_log')
@@ -643,10 +682,30 @@ def test_audit_continuity_uses_next_value_not_last_value(env, backup, restored):
                     f"{int(max_uid)}, false)"
                 )
             )
-        with conn.session_scope(commit=False) as session:
-            check = postrestore.check_audit_continuity(session, manifest, schema)
+    target_cfg = dict(cfg, database=restored.target_database)
+    with operator_connection(target_cfg, isolation_level="REPEATABLE READ") as session:
+        check = postrestore.check_audit_continuity(
+            session, manifest, schema, target=service.inventory_target(target_cfg)
+        )
 
     assert check.failed, f"a colliding identity sequence passed: {check.to_payload()}"
+
+
+def test_rehearsals_choose_distinct_primary_targets_at_the_same_time(env, backup):
+    cfg, settings = env
+    moment = datetime(2026, 9, 10, tzinfo=UTC)
+    first = verify.rehearse_restore(
+        cfg, settings, backup_id=backup.backup_id, now=moment
+    )
+    second = verify.rehearse_restore(
+        cfg, settings, backup_id=backup.backup_id, now=moment
+    )
+    assert first.ok and second.ok, (first.error, second.error)
+    assert first.rehearsal_id != second.rehearsal_id
+    assert first.database != second.database
+    assert first.evidence_key != second.evidence_key
+    assert first.database.endswith(first.rehearsal_id)
+    assert second.database.endswith(second.rehearsal_id)
 
 
 def test_a_failing_lookup_reports_the_cause_not_just_the_symptom(env, restored):

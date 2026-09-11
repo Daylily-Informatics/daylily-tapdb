@@ -81,58 +81,16 @@ def capture_row_counts(session: Any, schema_name: str) -> dict[str, int]:
     return counts
 
 
-def capture_sequences(session: Any, schema_name: str) -> list[SequenceState]:
-    """Capture every sequence's position, precisely enough to prevent reuse.
+def capture_sequences(
+    session: Any, schema_name: str, *, target: dict[str, Any]
+) -> list[SequenceState]:
+    """Project the shared complete allocator inventory into manifest records."""
+    from daylily_tapdb.sequences import capture_sequence_inventory
 
-    Read from each sequence relation rather than from ``pg_sequences``. That
-    view reports ``last_value`` as NULL whenever ``is_called`` is false --
-    including after ``setval(s, 5, false)``, which TapDB's own prefix-sequence
-    reconciliation performs. A sequence poised to issue ``5`` was therefore
-    recorded identically to a fresh one poised to issue ``1``: the value was
-    lost, the high-water check skipped it as unknown, and an in-place restore
-    reissued an EUID that had already been handed to a consumer.
-
-    The relation exposes ``last_value`` and ``is_called`` separately, which
-    together determine the next value -- see ``SequenceState.next_value``.
-
-    Sequence values are non-transactional, so this is read *after* the dump
-    completes. The recorded position is therefore a lower bound on the live
-    one, and verification asserts ``>=``. That direction is what guarantees a
-    restore never reissues an EUID.
-    """
-    names = [
-        str(row[0])
-        for row in session.execute(
-            text(
-                """
-                SELECT sequencename
-                FROM pg_sequences
-                WHERE schemaname = :schema
-                ORDER BY sequencename
-                """
-            ),
-            {"schema": schema_name},
-        )
-    ]
-    if not names:
-        return []
-
-    # One round trip. Sequence names come from the catalogue, never from a
-    # caller, and are quoted regardless.
-    union = " UNION ALL ".join(
-        f"SELECT {quote_literal(name)} AS name, last_value, is_called "
-        f"FROM {quote_ident(schema_name)}.{quote_ident(name)}"
-        for name in names
+    inventory = capture_sequence_inventory(
+        session, schema_name=schema_name, target=target
     )
-    rows = session.execute(text(f"SELECT * FROM ({union}) AS s ORDER BY name"))
-    return [
-        SequenceState(
-            name=str(row[0]),
-            last_value=None if row[1] is None else int(row[1]),
-            is_called=bool(row[2]),
-        )
-        for row in rows
-    ]
+    return [SequenceState.from_payload(item) for item in inventory["sequences"]]
 
 
 def euid_bearing_tables(session: Any, schema_name: str) -> list[str]:
@@ -235,9 +193,9 @@ def snapshot_transaction(
     yielding. So a snapshot can never be exported on a scoped session -- hence
     the dedicated connection here.
 
-    ``snapshot_name`` is None when the server will not export one (a read
-    replica, or a pooler in the way); the caller then records
-    ``consistency: best_effort`` rather than claiming a guarantee it lacks.
+    ``snapshot_name`` is None when the server will not export one. Read-only
+    callers may inspect within the replacement repeatable-read transaction;
+    full backup capture must refuse rather than claim a shared dump snapshot.
     Every read this yields is schema-qualified, so the absence of the scoped
     session's ``search_path`` does not matter.
     """
@@ -252,7 +210,7 @@ def snapshot_transaction(
             value = connection.execute(text("SELECT pg_export_snapshot()")).scalar()
             snapshot = str(value) if value else None
         except Exception:
-            # Degrade to best effort without losing the connection.
+            # Preserve read-only inspection; a full dump caller must refuse.
             transaction.rollback()
             transaction = connection.begin()
             connection_manager.install_transaction_context(connection)

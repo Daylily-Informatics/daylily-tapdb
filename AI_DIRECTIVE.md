@@ -210,17 +210,60 @@ See `docs/consumer-discoverability-guide.md` for the tested adoption flow.
 
 ## Testing and release floor
 
-TapDB 10.0.0 supports PostgreSQL 16 and 17. Release qualification runs the same
-complete suite against community PostgreSQL 16.13 and the PostgreSQL 17 minor
-reported by CI without deselecting integration tests. Aurora PostgreSQL has not
-been independently qualified by this release. The matrix enables local
-documentation examples and requires no unexpected skips. Shared CI gates also
-run Ruff check and format, mypy, Bandit, detect-secrets, branch coverage for
-`daylily_tapdb` and `admin`, wheel build, schema-asset inspection, and
-installed-wheel smoke checks.
+For10.1.0 only, the user explicitly authorizes an administrative CI/review
+release exception; see `docs/plans/20260910_tapdb_service_readiness_ledger.md`.
+Independent acceptance is user-attested with confidential results retained
+outside Git. CI is waived, not passed. Artifact/publication verification remains
+mandatory. This exception does not change normal gates for subsequent releases.
+
+TapDB 10.0.0 is the latest verified public release. TapDB 10.1.0 is an
+unreleased candidate until independent exact PostgreSQL 16.13 and isolated
+Aurora PostgreSQL 16.13 qualification, a reviewed green merge, immutable
+annotated tag, publication, and fresh public installation all have exact
+receipts. PostgreSQL 17 qualification is deferred from 10.1.0 and has not
+passed; it is tracked in
+[GitHub issue #107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107),
+and this is not a declaration that PostgreSQL 17 is unsupported.
+
+The 10.1.0 release matrix runs the complete approved release-scope suite against
+exact community PostgreSQL 16.13 without deselecting integration tests, plus
+isolated Aurora PostgreSQL 16.13 acceptance. It enables local documentation
+examples and requires no unexpected skips. Shared CI gates also run Ruff check
+and format, mypy, Bandit, detect-secrets, branch coverage for
+`daylily_tapdb` and `admin`, wheel build, schema/migration-asset inspection, and
+installed-wheel smoke checks. Historical PostgreSQL 17.11 results remain
+evidence for the deferred qualification; they are not 10.1.0 acceptance.
+Configuration of a gate, an author test, or an earlier candidate run is not
+evidence that the frozen release candidate passed it.
+
+The user approved exactly two 10.1.0 changed-module coverage exceptions:
+`daylily_tapdb/backup/recovery.py` at the measured 86.72% and
+`daylily_tapdb/backup/service.py` at 89.57%. Numeric coverage reports for both
+remain mandatory. Aggregate branch coverage and every other changed production
+module remain at or above 90%. These exceptions do not waive any functional
+PostgreSQL/Aurora, review, packaging, or publication gate.
+
+Runtime-principal bootstrap remains CONNECT-only and does not change database
+`TEMP`. The separate receipt-bound bind must review the exact database ACL and
+effective `TEMP`, revoke database `TEMP` from `PUBLIC` and the configured
+runtime principal, preserve operator `TEMP` only through an explicit reviewed
+grant when the plan shows its pre-existing effective privilege would otherwise
+be lost, and verify runtime effective `TEMP=false`. Because the
+`PUBLIC` revocation affects every role that relied on it, applications needing
+temporary tables or sequences require an explicit design change; never add a
+silent compatibility allowance. Service adoption owns closure and recreation
+of existing runtime sessions. TapDB does not terminate them or claim that
+pre-existing temporary objects were removed. Retain and independently qualify
+the schema-qualified allocator correction as defense in depth.
 
 Do not weaken RLS, auth, exact identity, no-fallback, or evidence checks to make
 a test pass. Fix the fixture to supply the same explicit contract as runtime.
+
+Service adoption follows `docs/service-readiness.md`: exact source inventory,
+principal preparation, backup/restore, migration, service-owned conversion,
+final identity/allocator verification and runtime binding, then service-owned
+acceptance. Database dumps do not include TapDB configs, identity registries,
+TLS/IAM/principal-secret state, runtime files, or external receipt journals.
 
 ## Public-safety rule
 

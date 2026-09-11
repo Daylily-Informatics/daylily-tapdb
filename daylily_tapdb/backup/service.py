@@ -20,7 +20,7 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from daylily_tapdb.backup import engine, introspect, template_pack
 from daylily_tapdb.backup.errors import (
@@ -43,6 +43,7 @@ from daylily_tapdb.backup.manifest import (
     PROVENANCE_OPERATOR,
     AssetRef,
     BackupManifest,
+    SequenceState,
     canonical_bytes,
     sha256_file,
     sha256_hex,
@@ -343,6 +344,8 @@ def open_session(
         allow_global_rows=bool(connection_cfg.get("allow_global_claims")),
         config_identity=str(connection_cfg["config_path"]),
         connection_role=connection_role,
+        aws_profile=connection_cfg.get("aws_profile") or None,
+        sslrootcert=connection_cfg.get("sslrootcert") or None,
     )
 
 
@@ -406,7 +409,7 @@ def _target_identity(
         data_scope = {
             "mode": "physical_schema",
             "tenant_id": None,
-            "row_security": "bypassed",
+            "row_security": "verified_complete_operator",
             "physical_schema_complete": True,
             "restore_mode": "isolated_or_in_place",
         }
@@ -444,6 +447,71 @@ def _target_identity(
         "target_label": target_label(cfg),
         "data_scope": data_scope,
     }
+
+
+def inventory_target(cfg: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the exact resolved config into the shared inventory identity."""
+    fields = (
+        "engine_type",
+        "host",
+        "port",
+        "database",
+        "schema_name",
+        "domain_code",
+        "owner_repo_name",
+    )
+    result: dict[str, Any] = {key: str(cfg[key]) for key in fields}
+    result["port"] = int(cfg["port"])
+    result["config_identity"] = str(cfg["config_path"])
+    if "server_port" in cfg:
+        result["server_port"] = int(cfg["server_port"])
+    if any(not str(value).strip() for value in result.values()):
+        raise BackupVerificationError("complete explicit inventory target is required")
+    if "sequence_mappings" in cfg:
+        result["sequence_mappings"] = cfg["sequence_mappings"]
+    return result
+
+
+def _source_contract_config(
+    cfg: dict[str, Any], contract: Optional[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Consume only the verified mappings explicitly carried by this source."""
+    if contract is None:
+        return cfg
+    from daylily_tapdb.backup.source_contract import validate_source_contract
+    from daylily_tapdb.identity_inventory import validate_target
+
+    validate_source_contract(contract)
+    target = validate_target(inventory_target(cfg), str(cfg["schema_name"]))
+    if contract["identity_inventory"]["target"] != target:
+        raise BackupVerificationError(
+            "source contract belongs to a different configured target"
+        )
+    mappings = contract["sequence_inventory"]["sequence_mappings"]
+    if "sequence_mappings" in cfg and cfg["sequence_mappings"] != mappings:
+        raise BackupVerificationError(
+            "source contract and config declare conflicting sequence mappings"
+        )
+    return dict(cfg, sequence_mappings=mappings)
+
+
+def _backup_recovery_family(
+    settings: Mapping[str, Any],
+    source_contract: Optional[Mapping[str, Any]],
+    recovery_family: Optional[Mapping[str, Any]],
+) -> Optional[dict[str, Any]]:
+    from daylily_tapdb.backup.recovery import validate_recovery_family
+
+    recorded = source_contract.get("recovery_family") if source_contract else None
+    if recorded is not None and recovery_family != recorded:
+        raise BackupVerificationError(
+            "backup must explicitly retain its source contract's unchanged recovery family"
+        )
+    if recovery_family is None:
+        return None
+    return validate_recovery_family(
+        recovery_family, required_directory=receipts_directory(dict(settings))
+    )
 
 
 def _tool_block() -> dict[str, Any]:
@@ -615,8 +683,14 @@ def plan_backup(
     *,
     backup_class: str = BACKUP_CLASS_FULL,
     strict_drift: bool = False,
+    source_contract: Optional[Mapping[str, Any]] = None,
+    recovery_family: Optional[Mapping[str, Any]] = None,
 ) -> BackupPlan:
     """Report what a backup would do. Never mutates anything, anywhere."""
+    cfg = _source_contract_config(cfg, source_contract)
+    recovery_family = _backup_recovery_family(
+        settings, source_contract, recovery_family
+    )
     resolved_class = _validate_backup_class(backup_class)
     storage = storage_for(settings)
     checks: list[CheckResult] = []
@@ -711,14 +785,52 @@ def plan_backup(
             app_username="tapdb_backup_plan",
             connection_role=connection_role,
         ) as conn:
-            with conn.session_scope(commit=False) as session:
+            with introspect.snapshot_transaction(conn) as (session, _snapshot):
                 schema_name = str(cfg["schema_name"])
                 versions = introspect.server_version(session)
                 visible_tables = introspect.list_tables(session, schema_name)
                 if resolved_class == BACKUP_CLASS_FULL:
                     tables = visible_tables
-                    sequences = introspect.capture_sequences(session, schema_name)
+                    sequences = introspect.capture_sequences(
+                        session, schema_name, target=inventory_target(cfg)
+                    )
                     drift = _schema_drift(session, cfg)
+                    if source_contract is not None:
+                        from daylily_tapdb.backup.source_contract import (
+                            capture_source_contract,
+                            verify_source_contract,
+                        )
+
+                        actual_contract = capture_source_contract(
+                            session,
+                            schema_name=schema_name,
+                            target=inventory_target(cfg),
+                            source_version=str(source_contract["source_version"]),
+                            recovery_family=recovery_family,
+                        )
+                        verify_source_contract(source_contract, actual_contract)
+                        drift = _not_applicable_drift() | {
+                            "has_drift": False,
+                            "source_contract_sha256": source_contract["sha256"],
+                        }
+                    elif recovery_family is not None:
+                        from daylily_tapdb.backup.recovery import require_family_member
+                        from daylily_tapdb.identity_inventory import (
+                            physical_target,
+                            validate_target,
+                        )
+
+                        require_family_member(
+                            recovery_family,
+                            {
+                                "target": validate_target(
+                                    inventory_target(cfg), schema_name
+                                ),
+                                "physical_target": physical_target(
+                                    session, inventory_target(cfg)
+                                ),
+                            },
+                        )
                 else:
                     tables = (
                         ["generic_template"]
@@ -746,6 +858,9 @@ def plan_backup(
                         resolved_class
                     ),
                     "excluded_state": _excluded_state_for_backup_class(resolved_class),
+                    "recovery_family": dict(recovery_family)
+                    if recovery_family
+                    else None,
                 }
 
                 checks.append(
@@ -895,12 +1010,13 @@ def create_backup(
     actor: Optional[Actor] = None,
     existing_snapshot: Optional[str] = None,
     provenance: Optional[dict[str, Any]] = None,
+    source_contract: Optional[Mapping[str, Any]] = None,
+    recovery_family: Optional[Mapping[str, Any]] = None,
 ) -> BackupResult:
     """Capture a backup and record an immutable receipt.
 
-    The database is only ever read. Drift blocks the run unless explicitly
-    allowed, so an object created by hand-DDL cannot silently ride along in a
-    backup that claims to match the schema assets.
+    The database is only ever read. Historical layouts require an explicit
+    source contract; an allow-drift flag never waives identity validation.
 
     ``provenance`` records *why* this backup exists -- ``{"created_by":
     "restore", "restored_backup_id": ...}`` for a pre-restore safety backup.
@@ -910,6 +1026,14 @@ def create_backup(
     therefore covered by the signature; see ``_capture``.
     """
     resolved_class = _validate_backup_class(backup_class)
+    cfg = _source_contract_config(cfg, source_contract)
+    recovery_family = _backup_recovery_family(
+        settings, source_contract, recovery_family
+    )
+    if allow_drift and source_contract is None:
+        raise BackupVerificationError(
+            "allow_drift cannot waive source validation; supply an explicit source_contract"
+        )
     resolved_actor = actor or Actor(surface=SURFACE_CLI)
     storage = storage_for(settings)
     now = datetime.now(UTC)
@@ -922,7 +1046,13 @@ def create_backup(
     )
 
     if dry_run:
-        plan = plan_backup(cfg, settings, backup_class=resolved_class)
+        plan = plan_backup(
+            cfg,
+            settings,
+            backup_class=resolved_class,
+            source_contract=source_contract,
+            recovery_family=recovery_family,
+        )
         return BackupResult(
             backup_id=backup_id,
             backup_class=resolved_class,
@@ -945,6 +1075,8 @@ def create_backup(
             storage=storage,
             existing_snapshot=existing_snapshot,
             provenance=provenance,
+            source_contract=source_contract,
+            recovery_family=recovery_family,
         )
         _publish(storage, prefix, manifest, staging)
         report = verify_backup(
@@ -1025,10 +1157,28 @@ def _capture(
     storage: Any,
     existing_snapshot: Optional[str] = None,
     provenance: Optional[dict[str, Any]] = None,
+    source_contract: Optional[Mapping[str, Any]] = None,
+    recovery_family: Optional[Mapping[str, Any]] = None,
 ) -> BackupManifest:
     """Read the target and build the artifact plus its manifest."""
+    if backup_class == BACKUP_CLASS_FULL and cfg["engine_type"] == "aurora":
+        # Freeze the client route before the exporting session connects. A
+        # fresh DNS lookup only when pg_dump starts cannot prove it reaches
+        # that session's backend after endpoint failover.
+        address = cfg.get("hostaddr") or _client_resolved_address(str(cfg["host"]))
+        if not address:
+            raise BackupVerificationError(
+                "full Aurora backup requires a pinned reachable client address"
+            )
+        cfg = dict(cfg, hostaddr=address)
     schema_name = str(cfg["schema_name"])
     artifact = staging / _artifact_name(backup_class)
+    identity_asset: Optional[Path] = None
+    sequence_inventory: dict[str, Any] = {}
+    contract_descriptor: dict[str, Any] = {}
+    representatives: list[dict[str, Any]]
+    migrations: list[dict[str, Any]]
+    sequences: list[SequenceState]
 
     connection_role = _connection_role_for_backup_class(backup_class)
     if connection_role is None:
@@ -1069,6 +1219,10 @@ def _capture(
             # snapshot must outlive every read *and* the dump subprocess, and a
             # scoped session cannot export one at all (see snapshot_transaction).
             with introspect.snapshot_transaction(conn) as (session, snapshot):
+                if backup_class == BACKUP_CLASS_FULL and not snapshot:
+                    raise BackupVerificationError(
+                        "full backup requires an exported pinned snapshot"
+                    )
                 backend = introspect.resolved_backend_address(session)
                 versions = introspect.server_version(session)
                 drift = (
@@ -1076,10 +1230,9 @@ def _capture(
                     if backup_class == BACKUP_CLASS_FULL
                     else _not_applicable_drift()
                 )
-                if drift.get("has_drift") and not allow_drift:
+                if drift.get("has_drift") and source_contract is None:
                     raise BackupVerificationError(
-                        "Live schema has drifted from the schema assets. Re-run with "
-                        "allow_drift to capture anyway.",
+                        "Live schema differs from current assets; an explicit historical source contract is required.",
                         detail={"drift": drift.get("counts", {})},
                     )
 
@@ -1104,37 +1257,65 @@ def _capture(
                     migrations = []
                     sequences = []
                 else:
+                    from daylily_tapdb.security_context import assert_operator_role
+
+                    assert_operator_role(
+                        session,
+                        schema_name=schema_name,
+                        operator_user=str(connection_cfg["user"]),
+                    )
                     row_counts = introspect.capture_row_counts(session, schema_name)
                     representatives = introspect.capture_representative_objects(
                         session, schema_name
                     )
                     migrations = introspect.capture_migrations(session, schema_name)
-                    # Degrade rather than lie: a snapshot we cannot pin the dump
-                    # to would yield manifest counts that silently disagree with
-                    # the archive, which is worse than an honest `best_effort`.
-                    # Only a remote target can serve the dump from a different
-                    # backend than the snapshot session. A local connection
-                    # always reaches the same postmaster.
-                    pinned_snapshot = snapshot
-                    if (
-                        snapshot
-                        and str(cfg.get("engine_type") or "").lower() == "aurora"
-                        and not backend.get("address")
-                    ):
-                        pinned_snapshot = None
+                    if str(
+                        cfg.get("engine_type") or ""
+                    ).lower() == "aurora" and not backend.get("address"):
+                        raise BackupVerificationError(
+                            "full Aurora backup cannot prove the exporting backend"
+                        )
                     content_inventory = _run_dump(
                         connection_cfg,
                         schema_name=schema_name,
                         artifact=artifact,
-                        snapshot=pinned_snapshot,
+                        snapshot=snapshot,
                         backend=backend,
                         transaction_context=conn.transaction_context(),
+                        operator_visibility_verified=True,
                     )
-                    if snapshot and pinned_snapshot is None:
-                        snapshot = None
                     # Sequences are non-transactional: read after the dump so
                     # the recorded value is a lower bound on the live one.
-                    sequences = introspect.capture_sequences(session, schema_name)
+                    from daylily_tapdb.backup.source_contract import (
+                        IDENTITY_ASSET,
+                        capture_source_contract,
+                        source_contract_descriptor,
+                        verify_source_contract,
+                    )
+
+                    contract = capture_source_contract(
+                        session,
+                        schema_name=schema_name,
+                        target=inventory_target(cfg),
+                        source_version=str(
+                            source_contract["source_version"]
+                            if source_contract
+                            else _tool_block()["package_version"]
+                        ),
+                        recovery_family=recovery_family,
+                    )
+                    if source_contract is not None:
+                        verify_source_contract(source_contract, contract)
+                    sequence_inventory = contract["sequence_inventory"]
+                    sequences = [
+                        SequenceState.from_payload(item)
+                        for item in sequence_inventory["sequences"]
+                    ]
+                    contract_descriptor = source_contract_descriptor(contract)
+                    identity_asset = staging / IDENTITY_ASSET
+                    identity_asset.write_bytes(
+                        canonical_bytes(contract["identity_inventory"])
+                    )
 
     manifest = BackupManifest(
         backup_id=backup_id,
@@ -1162,10 +1343,17 @@ def _capture(
         ),
         row_counts=row_counts,
         sequences=sequences,
+        sequence_inventory=sequence_inventory,
+        source_contract=contract_descriptor,
         representative_objects=representatives,
         content_inventory=content_inventory,
         governance=_governance_block(cfg),
-        included_assets=[AssetRef.from_file(artifact)],
+        included_assets=[AssetRef.from_file(artifact)]
+        + (
+            [AssetRef.from_file(identity_asset, content_type="application/json")]
+            if identity_asset
+            else []
+        ),
         excluded_state=_excluded_state_for_backup_class(backup_class),
         storage=storage.describe(),
         encryption={"mode": settings.get("encryption_mode", "none")},
@@ -1222,6 +1410,7 @@ def _run_dump(
     snapshot: Optional[str],
     transaction_context: Any,
     backend: Optional[dict[str, Any]] = None,
+    operator_visibility_verified: bool = False,
 ) -> dict[str, Any]:
     """Run pg_dump and return the archive's own content inventory.
 
@@ -1233,6 +1422,13 @@ def _run_dump(
     the manifest but never actually applied.
     """
     from daylily_tapdb.security_context import transaction_context_pgoptions
+
+    if operator_visibility_verified is not True:
+        raise BackupVerificationError(
+            "full dump requires verified complete operator visibility"
+        )
+    if not snapshot:
+        raise BackupVerificationError("full dump requires an exported pinned snapshot")
 
     env = engine.client_env(cfg)
     env["PGOPTIONS"] = transaction_context_pgoptions(transaction_context)
@@ -1264,6 +1460,7 @@ def _run_dump(
             schema_name=schema_name,
             output_path=artifact,
             snapshot=snapshot,
+            enable_row_security=True,
         ),
         env=env,
     )
@@ -1383,7 +1580,7 @@ def verify_backup(
             backup_id=resolved_id, level=resolved_level, checks=checks
         )
         if record_receipt:
-            receipt = write_receipt(
+            path_receipt = write_receipt(
                 receipts_directory(settings),
                 operation=OPERATION_VERIFY,
                 status=STATUS_SUCCEEDED if report.ok else STATUS_FAILED,
@@ -1398,7 +1595,7 @@ def verify_backup(
                 },
                 receipt_mirror=settings.get("receipt_mirror") or {},
             )
-            report = replace(report, receipt_id=receipt.receipt_id)
+            report = replace(report, receipt_id=path_receipt.receipt_id)
         return report
 
     if not backup_id:
@@ -1475,7 +1672,10 @@ def verify_backup(
                     ),
                 )
             )
-            if manifest.backup_class == BACKUP_CLASS_FULL:
+            if (
+                manifest.backup_class == BACKUP_CLASS_FULL
+                and asset.name == engine.DEFAULT_ARTIFACT_NAME
+            ):
                 checks.append(_toc_check(local, manifest))
                 if resolved_level == VERIFY_DEEP:
                     checks.append(_deep_read_check(local))

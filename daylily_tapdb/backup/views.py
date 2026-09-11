@@ -117,6 +117,11 @@ def restore_review_context(
     *,
     backup_id: str,
     options: Optional[verify.RestoreOptions] = None,
+    writer_fence: Optional[dict[str, Any]] = None,
+    recovery_source: Optional[dict[str, Any]] = None,
+    control_cfg: Optional[dict[str, Any]] = None,
+    provider_contract: Optional[dict[str, Any]] = None,
+    quarantine_receipt: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Stage a restore and build the review context.
 
@@ -125,7 +130,15 @@ def restore_review_context(
     the operation the operator would be authorising.
     """
     plan = verify.plan_restore(
-        cfg, settings, backup_id=backup_id, options=options or verify.RestoreOptions()
+        cfg,
+        settings,
+        backup_id=backup_id,
+        options=options or verify.RestoreOptions(),
+        writer_fence=writer_fence,
+        recovery_source=recovery_source,
+        control_cfg=control_cfg,
+        provider_contract=provider_contract,
+        quarantine_receipt=quarantine_receipt,
     )
     payload = plan.to_payload()
     payload["blocking"] = [check.to_payload() for check in plan.blocking]
@@ -142,6 +155,11 @@ def apply_restore_from_review(
     confirm_target: Optional[str],
     options: Optional[verify.RestoreOptions] = None,
     actor: Optional[Actor] = None,
+    writer_fence: Optional[dict[str, Any]] = None,
+    recovery_source: Optional[dict[str, Any]] = None,
+    control_cfg: Optional[dict[str, Any]] = None,
+    provider_contract: Optional[dict[str, Any]] = None,
+    quarantine_receipt: Optional[dict[str, Any]] = None,
 ) -> verify.RestoreResult:
     """Apply a staged restore. **The one code path both surfaces use.**
 
@@ -187,6 +205,11 @@ def apply_restore_from_review(
         confirm_target=confirm_target,
         plan_fingerprint=plan_fingerprint,
         actor=actor,
+        writer_fence=writer_fence,
+        recovery_source=recovery_source,
+        control_cfg=control_cfg,
+        provider_contract=provider_contract,
+        quarantine_receipt=quarantine_receipt,
     )
 
 

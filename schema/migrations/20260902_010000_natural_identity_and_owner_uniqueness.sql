@@ -1,4 +1,6 @@
 -- Add exact natural identity and correct template uniqueness to include owner.
+-- tapdb-allow-schema: generic_template
+-- tapdb-allow-schema: generic_instance
 -- Existing generic_instance rows intentionally retain identity_key = NULL.
 
 ALTER TABLE generic_instance

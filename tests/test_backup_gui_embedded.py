@@ -119,6 +119,12 @@ REVIEW = {
         checks=[
             CheckResult(id="archive.deep_read", status="pass", detail="reads"),
         ],
+        # Rendering fixture only; the real service independently validates
+        # source contracts, physical fences and durable recovery-family journals.
+        recovery={
+            "recovery_source": {"purpose": "fenced_source_recovery"},
+            "writer_fence": None,
+        },
     ).to_payload(),
     # The two keys `restore_review_context` adds on top of the plan.
     "blocking": [],
@@ -418,6 +424,95 @@ def test_the_review_page_is_read_only(gui):
     build().get("/admin/backups/full-abc123/restore")
 
     # Staging must never apply anything.
+    assert calls["applied"] == []
+
+
+def test_restore_without_recovery_evidence_cannot_offer_apply(gui, monkeypatch):
+    import daylily_tapdb.backup.views as views_mod
+
+    monkeypatch.setattr(
+        views_mod, "restore_review_context", lambda *a, **k: {**REVIEW, "recovery": {}}
+    )
+    build, calls = gui
+    response = build().get("/admin/backups/full-abc123/restore")
+    assert response.status_code == 200
+    assert 'id="apply-form"' not in response.text
+    assert 'id="stage-evidence-form"' in response.text
+    assert "Stage explicit recovery evidence" in response.text
+    assert calls["applied"] == []
+
+
+def test_failed_restore_with_unavailable_restage_exposes_no_retry(gui, monkeypatch):
+    import daylily_tapdb.backup.views as views_mod
+    from daylily_tapdb.backup.errors import BackupVerificationError
+
+    attempts = []
+
+    def fail_apply(*args, **kwargs):
+        attempts.append("apply")
+        raise RuntimeError("driver error containing private connection details")
+
+    def fail_review(*args, **kwargs):
+        attempts.append("review")
+        raise BackupVerificationError("unresolved recovery requires reconciliation")
+
+    monkeypatch.setattr(views_mod, "apply_restore_from_review", fail_apply)
+    monkeypatch.setattr(views_mod, "restore_review_context", fail_review)
+    build, _calls = gui
+    response = build().post(
+        "/admin/backups/full-abc123/restore",
+        data={"plan_fingerprint": "reviewed", "mode": "isolated"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "restore_review_unavailable"
+    assert response.json()["detail"]["restore_error"] == "RuntimeError"
+    assert response.json()["detail"]["review_error"] == "backup_verification_failed"
+    assert "reconcile" in response.text
+    assert "private connection" not in response.text
+    assert 'id="apply-form"' not in response.text
+    assert attempts == ["apply", "review"]
+
+
+def test_restore_staging_forwards_explicit_inline_evidence(gui, monkeypatch):
+    import daylily_tapdb.backup.views as views_mod
+
+    seen = []
+
+    def review(*args, **kwargs):
+        seen.append(kwargs)
+        return {
+            **REVIEW,
+            "recovery": {
+                "recovery_source": kwargs["recovery_source"],
+                "writer_fence": kwargs["writer_fence"],
+            },
+        }
+
+    monkeypatch.setattr(views_mod, "restore_review_context", review)
+    build, calls = gui
+    response = build().post(
+        "/admin/backups/full-abc123/restore/stage",
+        data={
+            "mode": "isolated",
+            "target_database": "reviewed_rehearsal",
+            "recovery_source": '{"purpose":"isolated_rehearsal"}',
+            "writer_fence": '{"reviewed":"fence"}',
+        },
+    )
+    assert response.status_code == 200
+    assert seen[0]["options"].target_database == "reviewed_rehearsal"
+    assert seen[0]["recovery_source"] == {"purpose": "isolated_rehearsal"}
+    assert seen[0]["writer_fence"] == {"reviewed": "fence"}
+    assert calls["applied"] == []
+
+
+@pytest.mark.parametrize("value", ["{broken", "[]", '"/server/path"'])
+def test_restore_staging_rejects_invalid_json_objects(gui, value):
+    build, calls = gui
+    response = build().post(
+        "/admin/backups/full-abc123/restore/stage", data={"recovery_source": value}
+    )
+    assert response.status_code == 400
     assert calls["applied"] == []
 
 

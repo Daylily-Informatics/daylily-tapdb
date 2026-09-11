@@ -8,6 +8,12 @@ import subprocess
 from pathlib import Path
 
 SOURCE_ROOTS = ("daylily_tapdb/", "admin/")
+# User-approved numeric exceptions for 10.1.0, recorded in the controlling
+# 20260910 service-readiness ledger. Reports and all functional gates remain
+# required; these exceptions do not change the aggregate 90% threshold.
+RELEASE_101_NUMERIC_EXCEPTIONS = frozenset(
+    {"daylily_tapdb/backup/recovery.py", "daylily_tapdb/backup/service.py"}
+)
 
 
 def _git_lines(*args: str) -> list[str]:
@@ -64,7 +70,7 @@ def coverage_failures(
             continue
         percent = float(raw_percent)
         measured.append((module, percent))
-        if percent < minimum:
+        if percent < minimum and module not in RELEASE_101_NUMERIC_EXCEPTIONS:
             failures.append(f"{module}: {percent:.2f}% is below {minimum:.2f}%")
     return measured, failures
 
@@ -93,12 +99,17 @@ def main() -> None:
     )
 
     for module, percent in measured:
-        print(f"{module}: {percent:.2f}%")
+        note = (
+            " (10.1.0 user-approved numeric exception)"
+            if module in RELEASE_101_NUMERIC_EXCEPTIONS
+            else ""
+        )
+        print(f"{module}: {percent:.2f}%{note}")
     if failures:
         raise SystemExit("changed-module coverage failed:\n" + "\n".join(failures))
     print(
         f"changed-module coverage passed for {len(modules)} module(s) "
-        f"at >= {args.minimum:.2f}%"
+        f"at >= {args.minimum:.2f}% except the explicitly listed 10.1.0 exceptions"
     )
 
 

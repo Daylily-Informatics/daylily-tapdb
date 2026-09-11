@@ -13,7 +13,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 
 from cli_core_yo import ccyo_out
 from cli_core_yo.app import create_app
@@ -37,6 +37,68 @@ DEFAULT_UI_SCHEME = "https"
 # UI runtime paths are derived from the active TapDB namespace context.
 PID_FILE = Path.home() / ".tapdb" / "ui.pid"
 LOG_FILE = Path.home() / ".tapdb" / "ui.log"
+
+
+def _explicit_aurora_config_fields(
+    *,
+    region: str | None,
+    aws_profile: str | None,
+    cluster_identifier: str | None,
+    iam_auth: bool | None,
+    secret_arn: str | None,
+    ssl: str | None,
+    sslrootcert: Path | None,
+    server_port: int | None = None,
+) -> dict[str, object]:
+    """Serialize only operator-supplied Aurora settings, without discovery."""
+    fields: dict[str, object] = {}
+    if server_port is not None:
+        if not 1 <= server_port <= 65535:
+            raise RuntimeError("--server-port must be within 1..65535")
+        fields["server_port"] = str(server_port)
+    for key, value in (
+        ("region", region),
+        ("aws_profile", aws_profile),
+        ("cluster_identifier", cluster_identifier),
+        ("secret_arn", secret_arn),
+        ("ssl", ssl),
+    ):
+        if value is not None:
+            if not value or value != value.strip():
+                raise RuntimeError(
+                    f"--{key.replace('_', '-')} must be exact and nonempty"
+                )
+            fields[key] = value
+    if iam_auth is not None:
+        fields["iam_auth"] = "true" if iam_auth else "false"
+    if sslrootcert is not None:
+        if not sslrootcert.is_absolute() or not sslrootcert.is_file():
+            raise RuntimeError("--sslrootcert must name an absolute existing CA bundle")
+        fields["sslrootcert"] = str(sslrootcert)
+    return fields
+
+
+def _validate_aurora_config_fields(target: dict) -> None:
+    """Do not publish an Aurora config missing its required target contract."""
+    if target.get("engine_type") != "aurora":
+        return
+    for key in ("region", "cluster_identifier", "iam_auth", "ssl", "sslrootcert"):
+        if not str(target.get(key, "")).strip():
+            raise RuntimeError(
+                f"Aurora config requires explicit --{key.replace('_', '-')}"
+            )
+    if str(target["iam_auth"]).lower() not in {"true", "false"}:
+        raise RuntimeError(
+            "Aurora config requires explicit --iam-auth or --no-iam-auth"
+        )
+    if target["ssl"] != "verify-full":
+        raise RuntimeError("Aurora config requires --ssl verify-full")
+    if str(target["iam_auth"]).lower() == "false" and not (
+        target.get("secret_arn") or target.get("password")
+    ):
+        raise RuntimeError(
+            "Aurora password authentication requires --secret-arn or --password"
+        )
 
 
 def _require_context() -> TapdbContext:
@@ -1001,6 +1063,7 @@ def build_app():
         safety_tier: str,
         destructive_operations: str,
         force: bool,
+        aurora_fields: dict[str, object],
     ) -> tuple[Path, dict]:
         current = active_context_overrides()
         set_cli_context(
@@ -1095,6 +1158,7 @@ def build_app():
         )
         root["target"] = {
             **prior_target,
+            **aurora_fields,
             "engine_type": normalized_engine_type,
             "host": str(host).strip(),
             **({"hostaddr": str(hostaddr).strip()} if hostaddr else {}),
@@ -1126,6 +1190,8 @@ def build_app():
             "safety_tier": normalized_safety_tier,
             "destructive_operations": normalized_destructive_operations,
         }
+
+        _validate_aurora_config_fields(root["target"])
 
         # Merge rather than overwrite: re-running `config init` must not silently
         # discard a storage destination or cadence an operator already set.
@@ -1197,6 +1263,46 @@ def build_app():
             help="Physical database backend: local or aurora",
         ),
         host: str = typer.Option(..., "--host", help="Physical database host"),
+        region: Annotated[
+            Optional[str], typer.Option("--region", help="Explicit AWS region")
+        ] = None,
+        aws_profile: Annotated[
+            Optional[str], typer.Option("--aws-profile", help="Explicit AWS profile")
+        ] = None,
+        cluster_identifier: Annotated[
+            Optional[str],
+            typer.Option(
+                "--cluster-identifier", help="Exact Aurora cluster identifier"
+            ),
+        ] = None,
+        iam_auth: Annotated[
+            Optional[bool],
+            typer.Option(
+                "--iam-auth/--no-iam-auth",
+                help="Explicit runtime IAM authentication mode",
+            ),
+        ] = None,
+        secret_arn: Annotated[
+            Optional[str],
+            typer.Option("--secret-arn", help="Runtime Secrets Manager ARN"),
+        ] = None,
+        ssl: Annotated[
+            Optional[str],
+            typer.Option("--ssl", help="Aurora TLS mode; must be verify-full"),
+        ] = None,
+        sslrootcert: Annotated[
+            Optional[Path],
+            typer.Option(
+                "--sslrootcert", help="Absolute existing Aurora CA bundle path"
+            ),
+        ] = None,
+        server_port: Annotated[
+            Optional[int],
+            typer.Option(
+                "--server-port",
+                help="Explicit PostgreSQL server port when different from the local tunnel port",
+            ),
+        ] = None,
         hostaddr: Optional[str] = typer.Option(
             None,
             "--hostaddr",
@@ -1291,6 +1397,16 @@ def build_app():
             safety_tier=safety_tier,
             destructive_operations=destructive_operations,
             force=force,
+            aurora_fields=_explicit_aurora_config_fields(
+                region=region,
+                aws_profile=aws_profile,
+                cluster_identifier=cluster_identifier,
+                iam_auth=iam_auth,
+                secret_arn=secret_arn,
+                ssl=ssl,
+                sslrootcert=sslrootcert,
+                server_port=server_port,
+            ),
         )
         ccyo_out.success("TAPDB explicit-target config initialized")
         ccyo_out.print_text(f"  Namespace: [bold]{client_id}/{database_name}[/bold]")
@@ -1307,6 +1423,46 @@ def build_app():
             None, "--engine-type", help="Database engine type for this target"
         ),
         host: Optional[str] = typer.Option(None, "--host", help="Database host"),
+        region: Annotated[
+            Optional[str], typer.Option("--region", help="Explicit AWS region")
+        ] = None,
+        aws_profile: Annotated[
+            Optional[str], typer.Option("--aws-profile", help="Explicit AWS profile")
+        ] = None,
+        cluster_identifier: Annotated[
+            Optional[str],
+            typer.Option(
+                "--cluster-identifier", help="Exact Aurora cluster identifier"
+            ),
+        ] = None,
+        iam_auth: Annotated[
+            Optional[bool],
+            typer.Option(
+                "--iam-auth/--no-iam-auth",
+                help="Explicit runtime IAM authentication mode",
+            ),
+        ] = None,
+        secret_arn: Annotated[
+            Optional[str],
+            typer.Option("--secret-arn", help="Runtime Secrets Manager ARN"),
+        ] = None,
+        ssl: Annotated[
+            Optional[str],
+            typer.Option("--ssl", help="Aurora TLS mode; must be verify-full"),
+        ] = None,
+        sslrootcert: Annotated[
+            Optional[Path],
+            typer.Option(
+                "--sslrootcert", help="Absolute existing Aurora CA bundle path"
+            ),
+        ] = None,
+        server_port: Annotated[
+            Optional[int],
+            typer.Option(
+                "--server-port",
+                help="Explicit PostgreSQL server port when different from the local tunnel port",
+            ),
+        ] = None,
         hostaddr: Optional[str] = typer.Option(
             None,
             "--hostaddr",
@@ -1570,7 +1726,16 @@ def build_app():
         tls = _required_mapping(ui_root, "tls", "admin.ui")
         metrics = _required_mapping(admin_root, "metrics", "admin")
 
-        updates: dict[str, str] = {}
+        updates = _explicit_aurora_config_fields(
+            region=region,
+            aws_profile=aws_profile,
+            cluster_identifier=cluster_identifier,
+            iam_auth=iam_auth,
+            secret_arn=secret_arn,
+            ssl=ssl,
+            sslrootcert=sslrootcert,
+            server_port=server_port,
+        )
         if engine_type is not None:
             updates["engine_type"] = str(engine_type).strip().lower()
         if host is not None:
@@ -1804,6 +1969,19 @@ def build_app():
         for field_name in clear_fields:
             target_cfg[field_name] = ""
         target_cfg.update(updates)
+        if set(updates).intersection(
+            {
+                "engine_type",
+                "region",
+                "cluster_identifier",
+                "iam_auth",
+                "ssl",
+                "sslrootcert",
+                "secret_arn",
+                "password",
+            }
+        ):
+            _validate_aurora_config_fields(target_cfg)
         root.pop("environments", None)
 
         _write_yaml_or_json_file(config_path, root)

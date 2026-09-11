@@ -3129,6 +3129,7 @@ def create_tapdb_gui_router(
                 allow_drift=bool(form.get("allow_drift")),
                 note=str(form.get("note") or "") or None,
                 actor=actor,
+                **_backup_form_evidence(form, source=True),
             )
         except Exception as exc:
             return RedirectResponse(
@@ -3214,6 +3215,75 @@ def create_tapdb_gui_router(
             cfg, settings, backup_id=_validated_backup_ref(ref), options=options
         )
 
+    def _backup_form_evidence(form: Any, *, source: bool = False) -> dict[str, Any]:
+        from admin.backups import recovery_evidence_from, source_evidence_from
+
+        payload = {}
+        keys = (
+            ("source_contract", "recovery_family")
+            if source
+            else (
+                "recovery_source",
+                "writer_fence",
+                "provider_contract",
+                "quarantine_receipt",
+            )
+        )
+        for key in keys:
+            raw = str(form.get(key) or "").strip()
+            try:
+                payload[key] = json.loads(raw) if raw else None
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"{key} must contain valid JSON"
+                ) from exc
+        if not source:
+            payload["control_config"] = str(form.get("control_config") or "") or None
+        return (
+            source_evidence_from(payload) if source else recovery_evidence_from(payload)
+        )
+
+    @router.post("/admin/backups/{ref}/restore/stage", response_class=HTMLResponse)
+    async def backups_restore_stage_form(
+        request: Request,
+        ref: str,
+        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
+    ):
+        from daylily_tapdb.backup import verify as backup_verify
+        from daylily_tapdb.backup import views as backup_views
+
+        form = await request.form()
+        evidence = _backup_form_evidence(form)
+        options = backup_verify.RestoreOptions(
+            mode=str(form.get("mode") or "isolated"),
+            target_database=str(form.get("target_database") or "") or None,
+            keep_superseded=bool(form.get("keep_superseded")),
+        )
+        cfg, settings = _backup_env()
+        try:
+            review = backup_views.restore_review_context(
+                cfg,
+                settings,
+                backup_id=_validated_backup_ref(ref),
+                options=options,
+                **evidence,
+            )
+        except Exception as exc:
+            from admin.backups import as_http
+
+            raise as_http(exc) from exc
+        return _render(
+            templates,
+            request,
+            "restore_review.html",
+            user=user,
+            review=review,
+            error="",
+            apply_url=gui_url(request, f"/admin/backups/{ref}/restore"),
+            review_url=gui_url(request, f"/admin/backups/{ref}/restore"),
+            backups_url=gui_url(request, "/admin/backups"),
+        )
+
     @router.get("/admin/backups/{ref}/restore", response_class=HTMLResponse)
     async def backups_restore_review(
         request: Request,
@@ -3266,6 +3336,7 @@ def create_tapdb_gui_router(
 
         form = await request.form()
         mode = str(form.get("mode") or "isolated")
+        evidence = _backup_form_evidence(form)
         cfg, settings = _backup_env()
         options = backup_verify.RestoreOptions(
             mode=mode,
@@ -3294,16 +3365,44 @@ def create_tapdb_gui_router(
                 confirm_target=str(form.get("confirm_target") or "") or None,
                 options=options,
                 actor=Actor(surface=SURFACE_GUI, username=user.get("email")),
+                **evidence,
             )
         except Exception as exc:
             # Re-render the review with a *fresh* fingerprint. Handing back the
             # stale one would let the operator retry into the same refusal.
+            # An unresolved recovery journal can deliberately refuse that
+            # read-only restage. Never mask it with an unhandled second error
+            # or put an old apply form back in front of the operator.
+            try:
+                review = backup_views.restore_review_context(
+                    cfg,
+                    settings,
+                    backup_id=_validated_backup_ref(ref),
+                    options=options,
+                    **evidence,
+                )
+            except Exception as review_exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "restore_review_unavailable",
+                        "message": (
+                            "Restore failed and a new review could not be established. "
+                            "Inspect the retained recovery journal and reconcile any "
+                            "unresolved outcome before staging another attempt."
+                        ),
+                        "restore_error": getattr(exc, "code", type(exc).__name__),
+                        "review_error": getattr(
+                            review_exc, "code", type(review_exc).__name__
+                        ),
+                    },
+                ) from review_exc
             return _render(
                 templates,
                 request,
                 "restore_review.html",
                 user=user,
-                review=_review(request, ref, mode),
+                review=review,
                 error=str(exc)[:300],
                 apply_url=gui_url(request, f"/admin/backups/{ref}/restore"),
                 review_url=gui_url(request, f"/admin/backups/{ref}/restore"),

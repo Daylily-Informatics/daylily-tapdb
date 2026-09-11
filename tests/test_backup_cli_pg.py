@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from typer.testing import CliRunner
@@ -307,6 +308,8 @@ def test_a_stale_fingerprint_is_refused(pg_instance, store):
 
 def test_isolated_restore_round_trips_through_the_cli(pg_instance, store):
     created = _payload(_run(pg_instance, "backup", "create", json_mode=True))
+    source = store / "isolated-rehearsal.json"
+    source.write_text(json.dumps({"purpose": "isolated_rehearsal"}), encoding="utf-8")
 
     result = _run(
         pg_instance,
@@ -314,6 +317,10 @@ def test_isolated_restore_round_trips_through_the_cli(pg_instance, store):
         "restore",
         "--backup-id",
         created["backup_id"],
+        "--target-database",
+        "cli_restore_" + uuid4().hex[:12],
+        "--recovery-source",
+        str(source),
         json_mode=True,
     )
 

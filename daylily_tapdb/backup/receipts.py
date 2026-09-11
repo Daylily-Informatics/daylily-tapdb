@@ -19,7 +19,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from daylily_tapdb.backup.manifest import canonical_bytes, sha256_hex
 
@@ -310,6 +310,8 @@ def write_receipt(
         try:
             with os.fdopen(handle, "wb") as stream:
                 stream.write(canonical_bytes(receipt.to_payload()))
+                stream.flush()
+                os.fsync(stream.fileno())
             try:
                 # Atomic publish that fails rather than clobbers.
                 os.link(tmp, target)
@@ -322,6 +324,11 @@ def write_receipt(
         os.chmod(target, 0o400)
         receipt.path = target
         _write_head(base, receipt)
+        directory_fd = os.open(base, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
         # After the local anchor, not before: at the chmod above the local head
         # still records sequence N-1, so mirroring there would publish a stale
         # anchor -- or, computed from `receipt` directly, one running ahead of
@@ -482,6 +489,8 @@ def _write_head(directory: Path, receipt: Receipt) -> None:
         try:
             with os.fdopen(handle, "wb") as stream:
                 stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
             os.replace(tmp, directory / HEAD_FILENAME)
         finally:
             tmp.unlink(missing_ok=True)
@@ -493,7 +502,7 @@ def read_head(directory: Path) -> Optional[dict[str, Any]]:
     """Return the recorded newest-receipt anchor, or None if absent."""
     path = Path(directory) / HEAD_FILENAME
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError):
         return None
 

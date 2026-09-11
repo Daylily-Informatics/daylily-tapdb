@@ -72,6 +72,12 @@ That split is deliberate:
   generic config-file operations.
 - `pg` manages local or system PostgreSQL processes.
 - `db` manages database lifecycle, schema, migrations, and data seeding.
+- `db identity` captures and verifies catalog-complete physical identity/source
+  evidence.
+- `db sequences` plans, applies, verifies, and reconciles fenced allocator
+  changes with external receipts.
+- `db runtime-principal` separates offline/CONNECT-only principal preparation
+  from receipt-bound schema and immutable-scope binding.
 - `templates` exports, validates/imports, and inventories one explicit
   repository-owned template pack.
 - `objects` provides governed search, exact lookup, narrow updates, repair, and
@@ -86,6 +92,11 @@ That split is deliberate:
 - `users` manages actor-backed TAPDB auth users.
 - `cognito` is the TAPDB-side bridge to `daylily-auth-cognito`.
 - `aurora` is optional cloud infrastructure support.
+
+Existing-service recovery and conversion must follow the ordered operator
+contract in [`docs/service-readiness.md`](service-readiness.md). The service
+owns its dependency pin, domain conversion, runtime files, deployment, and
+acceptance; TapDB does not infer or perform those steps.
 
 ## Local Lifecycle
 
@@ -247,10 +258,26 @@ loads the same `create_tapdb_gui_app(...)` factory used for embedding.
 
 ## Aurora
 
-Aurora support is available, but it is optional infrastructure rather than the default developer path.
+Aurora support is available, but it is optional infrastructure rather than the
+default developer path. Every operation still requires one exact config,
+explicit AWS profile and region, TLS trust path, physical database/schema, and
+distinct operator/runtime principals. When a transport tunnel uses a different
+local port, `target.server_port` carries the verified PostgreSQL server port for
+IAM signing; TapDB does not guess it.
 
 - `tapdb aurora ...` manages cloud cluster lifecycle.
 - `tapdb db ...` still owns the logical database operations.
-- The documentation should treat Aurora as an advanced path, not the baseline.
+- `tapdb db runtime-principal bootstrap` plans offline by default; `--apply`
+  creates/validates only the constrained runtime login and exact-database
+  `CONNECT`.
+- `tapdb db runtime-principal bind --receipt <absolute-new-path>` stages the
+  exact catalog/scope plan; the unchanged receipt plus `--apply` performs the
+  bind and writes a distinct result.
+- Membership in an Aurora administrative role is not treated as blanket
+  PostgreSQL superuser authority. Complete operator visibility and the runtime
+  role's lack of elevation, managed-schema/startup DDL, broad default
+  privileges, and unmanaged-object access are verified from the target
+  catalogs. Database `TEMP` may remain available; managed allocator functions
+  use qualified object resolution so temporary objects cannot redirect them.
 
 That keeps the README and local docs aligned with the current CLI contract and avoids mixing cloud rollout mechanics into the core mental model.

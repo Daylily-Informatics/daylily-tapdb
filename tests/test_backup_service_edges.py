@@ -8,6 +8,7 @@ class taking a different verification route.
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import pytest
 from sqlalchemy import text
@@ -20,6 +21,8 @@ from daylily_tapdb.backup.manifest import BACKUP_CLASS_TEMPLATE_PACK
 from daylily_tapdb.cli import app
 from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 from daylily_tapdb.cli.db_config import get_backup_settings, get_db_config
+from daylily_tapdb.runtime_principal import operator_connection
+from tests.test_identity_inventory_helpers import verified_source_sequence_mappings
 
 runner = CliRunner()
 
@@ -59,6 +62,16 @@ def _schema_applied(pg_instance):
 @pytest.fixture
 def env(pg_instance, _schema_applied, tmp_path):
     cfg = get_db_config()
+    with operator_connection(
+        cfg, isolation_level="REPEATABLE READ", read_only=True
+    ) as connection:
+        cfg["sequence_mappings"] = verified_source_sequence_mappings(
+            connection,
+            schema_name=cfg["schema_name"],
+            source_schema_path=Path(__file__).resolve().parents[1]
+            / "schema"
+            / "tapdb_schema.sql",
+        )
     settings = dict(get_backup_settings())
     settings["config_dir"] = str(tmp_path)
     settings["storage_uri"] = f"file://{tmp_path / 'store'}"

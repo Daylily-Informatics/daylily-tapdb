@@ -1,4 +1,8 @@
 -- 20260303_120000_add_tenant_id.sql
+-- tapdb-allow-schema: generic_template
+-- tapdb-allow-schema: generic_instance
+-- tapdb-allow-schema: generic_instance_lineage
+-- tapdb-allow-schema: audit_log
 --
 -- Add nullable tenant_id UUID columns to TapDB core tables and audit_log.
 -- Update audit trigger functions to persist tenant_id into audit_log rows.
@@ -145,4 +149,3 @@ DROP TRIGGER IF EXISTS audit_update_generic_instance_lineage ON generic_instance
 CREATE TRIGGER audit_update_generic_instance_lineage
     AFTER UPDATE ON generic_instance_lineage
     FOR EACH ROW EXECUTE FUNCTION record_update();
-

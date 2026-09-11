@@ -1,4 +1,6 @@
 -- 20260303_120010_add_outbox_event.sql
+-- tapdb-allow-schema: outbox_event
+-- tapdb-allow-new-table: outbox_event
 --
 -- Add a minimal Postgres transactional outbox for durable cross-service events.
 
@@ -26,4 +28,3 @@ CREATE INDEX IF NOT EXISTS idx_outbox_event_status_next_attempt_at
     ON outbox_event(status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS idx_outbox_event_tenant_created_dt
     ON outbox_event(tenant_id, created_dt DESC);
-

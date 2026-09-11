@@ -122,7 +122,12 @@ class AuroraConnectionBuilder:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_secret_password(secret_arn: str, region: Optional[str] = None) -> str:
+    def get_secret_password(
+        secret_arn: str,
+        region: Optional[str] = None,
+        *,
+        profile: Optional[str] = None,
+    ) -> str:
         """Retrieve the master password from Secrets Manager.
 
         The secret value is expected to be a JSON object with a
@@ -131,6 +136,8 @@ class AuroraConnectionBuilder:
         Args:
             secret_arn: Full ARN of the Secrets Manager secret.
             region: AWS region.  Inferred from the ARN if omitted.
+            profile: Explicit AWS profile. Existing callers may use the SDK's
+                configured credential chain by omitting this keyword.
 
         Returns:
             The password string.
@@ -140,7 +147,11 @@ class AuroraConnectionBuilder:
             # arn:aws:secretsmanager:<region>:<account>:secret:<name>
             parts = secret_arn.split(":")
             region = parts[3] if len(parts) > 3 else "us-west-2"
-        client = boto3.client("secretsmanager", region_name=region)
+        if profile:
+            session = boto3.session.Session(profile_name=profile)
+            client = session.client("secretsmanager", region_name=region)
+        else:
+            client = boto3.client("secretsmanager", region_name=region)
         resp = client.get_secret_value(SecretId=secret_arn)
         secret = json.loads(resp["SecretString"])
         return secret["password"]
@@ -212,6 +223,9 @@ class AuroraConnectionBuilder:
         secret_arn: Optional[str] = None,
         password: Optional[str] = None,
         hostaddr: Optional[str] = None,
+        profile: Optional[str] = None,
+        sslrootcert: Optional[str] = None,
+        server_port: Optional[int] = None,
     ) -> str:
         """Build a SQLAlchemy PostgreSQL URL with SSL for Aurora.
 
@@ -232,15 +246,45 @@ class AuroraConnectionBuilder:
             hostaddr: Optional explicit network address for libpq. Use this for
                 local SSM tunnels while keeping ``host`` as the RDS hostname for
                 ``sslmode=verify-full``.
+            profile: Explicit AWS profile for IAM or Secrets Manager. Omission
+                retains the SDK credential chain for existing callers.
+            sslrootcert: Explicit absolute path to an existing CA bundle. Only
+                omission uses the cached or downloaded RDS CA bundle.
+            server_port: Optional explicit remote port for IAM token signing.
+                The socket still uses ``port``. Omission signs the supplied
+                connection port; no different remote port is inferred.
 
         Returns:
             SQLAlchemy connection URL string.
         """
+        if profile is not None and (not profile or profile != profile.strip()):
+            raise ValueError("profile must be a nonempty exact AWS profile name")
+        if server_port is not None and (
+            type(server_port) is not int or not 1 <= server_port <= 65535
+        ):
+            raise ValueError("server_port must be an integer in 1..65535")
+
+        # Reject an invalid explicit CA before fetching credentials or making
+        # any network call. Never replace a supplied path with a default.
+        ca_path = None
+        if sslrootcert is not None:
+            if not sslrootcert or sslrootcert != sslrootcert.strip():
+                raise ValueError("sslrootcert must be an existing absolute file")
+            ca_path = Path(sslrootcert)
+            if not ca_path.is_absolute() or not ca_path.is_file():
+                raise ValueError("sslrootcert must be an existing absolute file")
+
         # Resolve password / token
         if iam_auth:
-            credential = cls.get_iam_auth_token(region, host, port, user)
+            credential = cls.get_iam_auth_token(
+                region,
+                host,
+                port if server_port is None else server_port,
+                user,
+                profile=profile,
+            )
         elif secret_arn:
-            credential = cls.get_secret_password(secret_arn, region)
+            credential = cls.get_secret_password(secret_arn, region, profile=profile)
         elif password:
             credential = password
         else:
@@ -249,8 +293,9 @@ class AuroraConnectionBuilder:
                 "or an explicit password."
             )
 
-        # Ensure CA bundle is available
-        ca_path = cls.ensure_ca_bundle()
+        # Preserve the established CA behavior only when no path was supplied.
+        if ca_path is None:
+            ca_path = cls.ensure_ca_bundle()
 
         # URL-encode the credential (IAM tokens contain special chars)
         encoded_cred = quote_plus(credential)

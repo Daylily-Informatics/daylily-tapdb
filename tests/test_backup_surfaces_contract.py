@@ -20,6 +20,7 @@ thing under test -- that the call happened at all.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -238,6 +239,142 @@ def test_restore_apply_converges_on_one_service_function(spy, gui_client):
     )
 
     assert len(calls) == 3, f"verify.restore_backup reached {len(calls)}/3 times"
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_recovery_evidence_reaches_same_stage_and_apply_engine(
+    spy, gui_client, tmp_path, apply
+):
+    function = "restore_backup" if apply else "plan_restore"
+    calls = spy(verify_mod, function)
+    evidence = {
+        "recovery_source": {"purpose": "isolated_rehearsal"},
+        "writer_fence": {"reviewed": "fixture"},
+        "provider_contract": {"reviewed": "provider"},
+        "quarantine_receipt": {"reviewed": "quarantine"},
+    }
+    control_path = tmp_path / "control-config.yaml"
+    control_path.write_text("# Explicit control config fixture\n", encoding="utf-8")
+    command = [
+        "backup",
+        "restore" if apply else "restore-plan",
+        "--backup-id",
+        BACKUP_ID,
+        "--target-database",
+        "explicit_rehearsal",
+        "--control-config",
+        str(control_path),
+    ]
+    for key, value in evidence.items():
+        receipt = tmp_path / f"{key}.json"
+        receipt.write_text(json.dumps(value), encoding="utf-8")
+        command += ["--" + key.replace("_", "-"), str(receipt)]
+    if apply:
+        command += ["--plan-fingerprint", "reviewed"]
+    _swallow(lambda: runner.invoke(app, command))
+    body = {
+        **evidence,
+        "mode": "isolated",
+        "target_database": "explicit_rehearsal",
+        "plan_fingerprint": "reviewed",
+        "control_config": str(control_path),
+    }
+    if apply:
+        _swallow(
+            lambda: backups_api.apply_payload(
+                dict(CFG), dict(SETTINGS), ref=BACKUP_ID, body=body, actor=_api_actor()
+            )
+        )
+    else:
+        _swallow(
+            lambda: backups_api.stage_payload(
+                dict(CFG), dict(SETTINGS), ref=BACKUP_ID, body=body
+            )
+        )
+    form = {**body, **{key: json.dumps(value) for key, value in evidence.items()}}
+    suffix = "" if apply else "/stage"
+    _swallow(
+        lambda: gui_client.post(
+            f"/admin/backups/{BACKUP_ID}/restore{suffix}", data=form
+        )
+    )
+    assert len(calls) == 3
+    for call in calls:
+        assert {key: call["kwargs"][key] for key in evidence} == evidence
+        assert call["kwargs"]["control_cfg"] == CFG
+        assert call["kwargs"]["options"].target_database == "explicit_rehearsal"
+
+
+def test_source_and_family_evidence_reaches_create_on_every_surface(
+    spy, gui_client, tmp_path
+):
+    calls = spy(service_mod, "create_backup")
+    evidence = {
+        "source_contract": {"reviewed": "source"},
+        "recovery_family": {"reviewed": "family"},
+    }
+    command = ["backup", "create"]
+    for key, value in evidence.items():
+        receipt = tmp_path / f"{key}.json"
+        receipt.write_text(json.dumps(value), encoding="utf-8")
+        command += ["--" + key.replace("_", "-"), str(receipt)]
+    _swallow(lambda: runner.invoke(app, command))
+    _swallow(
+        lambda: backups_api.create_payload(
+            dict(CFG), dict(SETTINGS), body=evidence, actor=_api_actor()
+        )
+    )
+    _swallow(
+        lambda: gui_client.post(
+            "/admin/backups/create",
+            data={key: json.dumps(value) for key, value in evidence.items()},
+        )
+    )
+    assert len(calls) == 3
+    for call in calls:
+        assert {key: call["kwargs"][key] for key in evidence} == evidence
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "writer_fence",
+        "recovery_source",
+        "provider_contract",
+        "quarantine_receipt",
+        "source_contract",
+        "recovery_family",
+    ],
+)
+@pytest.mark.parametrize("value", [[], "server-file.json", 12])
+def test_api_evidence_requires_inline_object(key, value):
+    from fastapi import HTTPException
+
+    reader = (
+        backups_api.recovery_evidence_from
+        if key
+        in {
+            "writer_fence",
+            "recovery_source",
+            "provider_contract",
+            "quarantine_receipt",
+        }
+        else backups_api.source_evidence_from
+    )
+    with pytest.raises(HTTPException) as exc:
+        reader({key: value})
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "control_path", [12, {}, "relative.yaml", "/missing/config.yaml"]
+)
+def test_control_config_requires_explicit_existing_absolute_file(control_path):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        backups_api.recovery_evidence_from({"control_config": control_path})
+    assert exc.value.status_code == 400
 
 
 def test_rehearse_converges_on_one_service_function(spy, gui_client):

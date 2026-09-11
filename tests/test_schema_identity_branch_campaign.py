@@ -14,6 +14,7 @@ from daylily_tapdb import connection as connection_module
 from daylily_tapdb import migration_identity as migration
 from daylily_tapdb import sequences, user_store
 from daylily_tapdb.factory import instance as instance_module
+from tests.test_sequence_protection import inventory as allocator_inventory
 
 
 class _ScalarResult:
@@ -27,48 +28,35 @@ class _ScalarResult:
         return self.value
 
 
-class _SequenceResult:
-    def __init__(self, value):
-        self.value = value
-
-    def one(self):
-        return self.value
-
-
-class _SequenceSession:
-    def __init__(self, state):
-        self.state = state
-
-    def execute(self, statement, _params=None):
-        if "WITH" in str(statement):
-            return _SequenceResult(self.state)
-        return None
-
-
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
-        ({"increment": 2}, "ambiguous issuance settings"),
-        ({"cycle": True}, "ambiguous issuance settings"),
-        ({"cache_size": 2}, "ambiguous issuance settings"),
-        ({"desired_next": 11, "maximum_value": 10}, "cannot advance"),
+        ({"increment_by": 0}, "positive noncycling"),
+        ({"cycle": True}, "positive noncycling"),
+        ({"cache_size": 0}, "cache_size must be positive"),
+        ({"last_value": 101}, "exhausted"),
     ],
 )
 def test_branch_campaign_sequence_rejects_unsafe_advancement(changes, message):
-    state = {
-        "desired_next": 3,
-        "current_next": 1,
-        "increment": 1,
-        "cycle": False,
-        "cache_size": 1,
-        "maximum_value": 100,
-    }
+    state = allocator_inventory()["sequences"][0]
     state.update(changes)
 
     with pytest.raises(ValueError, match=message):
-        sequences.ensure_instance_prefix_sequence(
-            _SequenceSession(SimpleNamespace(**state)), "GX"
-        )
+        sequences.sequence_next_value(state)
+
+
+@pytest.mark.parametrize("schema", [None, "public", "pg_catalog", "information_schema"])
+def test_provisioning_rejects_unconfigured_scope_without_mutation(schema):
+    statements = []
+
+    class Connection:
+        def execute(self, statement):
+            statements.append(str(statement))
+            return _ScalarResult(schema)
+
+    with pytest.raises(ValueError, match="explicitly configured TapDB schema"):
+        sequences.ensure_instance_prefix_sequence(Connection(), "GX")
+    assert statements == ["SELECT current_schema()"]
 
 
 class _DisposableEngine:
@@ -516,7 +504,7 @@ def test_branch_campaign_migration_tracking_and_operator_context_fail_closed():
             "config_identity": "/abs/tapdb-config.yaml",
         },
     )
-    assert len(connection.executed) == 10
+    assert len(connection.executed) == 11
     assert connection.executed[0][1] == {"name": "TimeZone", "value": "UTC"}
 
 
@@ -528,13 +516,19 @@ def _sequence_state(**changes):
         "last_value": 10,
         "is_called": True,
         "start_value": 1,
-        "minimum_value": 1,
-        "maximum_value": 100,
-        "increment": 1,
+        "min_value": 1,
+        "max_value": 100,
+        "increment_by": 1,
         "cycle": False,
         "cache_size": 1,
+        "owner": "operator",
+        "dependencies": [],
+        "mapping": {"kind": "prefix", "prefix": "GX", "evidence": []},
+        "assigned_floor": None,
+        "allocated_floor": 10,
     }
     state.update(changes)
+    state["allocated_floor"] = state["last_value"] if state["is_called"] else None
     return state
 
 
@@ -551,9 +545,9 @@ def _identity_row(key=1, **identity):
 @pytest.mark.parametrize(
     ("sequence_changes", "message"),
     [
-        ({"increment": 0}, "positive increment"),
-        ({"cycle": True}, "must not cycle"),
-        ({"cache_size": 2}, "ambiguous cached state"),
+        ({"increment_by": 0}, "positive noncycling"),
+        ({"cycle": True}, "positive noncycling"),
+        ({"cache_size": 0}, "cache_size must be positive"),
         ({"last_value": 4, "is_called": False}, "behind assigned"),
     ],
 )
@@ -569,7 +563,13 @@ def test_branch_campaign_migration_rejects_ambiguous_generators(
         },
         "sequences": [_sequence_state(**sequence_changes)],
     }
-    with pytest.raises(migration.MigrationPreflightError, match=message):
+    snapshot["sequence_inventory"] = allocator_inventory(
+        _sequence_state(assigned_floor=5, **sequence_changes)
+    )
+    with pytest.raises(
+        (migration.MigrationPreflightError, sequences.SequenceProtectionError),
+        match=message,
+    ):
         migration._validate_scope_and_sequences(snapshot)
 
 
@@ -594,8 +594,11 @@ def test_branch_campaign_migration_validates_missing_scope_and_sequence():
             }
         },
         "sequences": [],
+        "sequence_inventory": allocator_inventory(
+            missing_generators=["gx_instance_seq"]
+        ),
     }
-    with pytest.raises(migration.MigrationPreflightError, match="gx_instance_seq"):
+    with pytest.raises(sequences.SequenceProtectionError, match="gx_instance_seq"):
         migration._validate_scope_and_sequences(missing_sequence)
 
     migration._validate_scope_and_sequences(missing_sequence, validate_generators=False)
@@ -699,16 +702,16 @@ def test_branch_campaign_migration_preservation_validates_declared_sequence_chan
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
-        ({"increment": 0}, "non-positive"),
-        ({"increment": 2, "last_value": 2}, "not aligned"),
-        ({"last_value": 2, "maximum_value": 5}, "without wrapping"),
+        ({"increment_by": 0}, "positive noncycling"),
+        ({"increment_by": 2, "last_value": 2}, "not aligned"),
+        ({"last_value": 2, "max_value": 5}, "beyond its maximum"),
     ],
 )
 def test_branch_campaign_migration_sequence_advance_rejects_unsafe_state(
-    changes, message
+    changes, message, tmp_path
 ):
     sequence_values = {"last_value": 2, "is_called": False, **changes}
-    sequence = _sequence_state(**sequence_values)
+    sequence = _sequence_state(assigned_floor=5, **sequence_values)
     interim = {
         "sequences": [sequence],
         "tables": {
@@ -720,48 +723,65 @@ def test_branch_campaign_migration_sequence_advance_rejects_unsafe_state(
     }
     sequence["owner_table"] = "generic_instance"
     sequence["owner_column"] = "euid_seq"
-    preflight = {"pending_migrations": [{"allowed_sequences": ["gx_instance_seq"]}]}
-    with pytest.raises(migration.MigrationReceiptMismatchError, match=message):
+    interim["sequence_inventory"] = allocator_inventory(sequence)
+    preflight = {
+        "pending_migrations": [{"allowed_sequences": ["gx_instance_seq"]}],
+        "sequence_inventory": allocator_inventory(_sequence_state()),
+    }
+    with pytest.raises(sequences.SequenceProtectionError, match=message):
         migration._advance_permitted_identity_sequences(
             _MigrationConnection(),
             preflight=preflight,
             interim=interim,
             schema_name="tapdb",
+            writer_fence={"explicit": True},
+            receipts_dir=tmp_path,
+            retained_floors=[],
         )
 
 
-def test_branch_campaign_migration_sequence_advance_skips_and_restarts():
-    preflight = {"pending_migrations": [{"allowed_sequences": ["gx_instance_seq"]}]}
-    unowned = _sequence_state(name="ignored_seq")
-    empty = _sequence_state(name="gx_instance_seq")
-    connection = _MigrationConnection()
-    migration._advance_permitted_identity_sequences(
-        connection,
-        preflight=preflight,
-        interim={"sequences": [unowned, empty], "tables": {}},
-        schema_name="tapdb",
-    )
-    assert connection.executed == []
-
-    restart = _sequence_state(last_value=2, is_called=False)
-    interim = {
-        "sequences": [restart],
-        "tables": {
-            "generic_instance": {
-                "columns": ["euid_prefix", "euid_seq"],
-                "rows": [_identity_row(euid_prefix="GX", euid_seq=5)],
-            }
+def test_branch_campaign_migration_sequence_advance_delegates_all_generators(
+    tmp_path, monkeypatch
+):
+    dormant = _sequence_state(name="dormant_seq", last_value=1, is_called=False)
+    before = _sequence_state(last_value=2, is_called=False)
+    original = allocator_inventory(dormant, before)
+    preflight = {
+        "pending_migrations": [{"allowed_sequences": ["gx_instance_seq"]}],
+        "sequence_inventory": original,
+        "sequences": original["sequences"],
+        "allocator_recovery": {
+            "plan": sequences.build_sequence_advance_plan(original, floors=[])
         },
     }
-    migration._advance_permitted_identity_sequences(
+    connection = _MigrationConnection()
+    current = allocator_inventory(
+        dormant, _sequence_state(last_value=2, is_called=False, assigned_floor=5)
+    )
+    seen = []
+
+    def apply_shared(conn, plan, **kwargs):
+        assert conn is connection
+        seen.append((plan, kwargs))
+        return {"status": "shared_allocator_called"}
+
+    monkeypatch.setattr(sequences, "apply_sequence_advance_plan", apply_shared)
+    result = migration._advance_permitted_identity_sequences(
         connection,
         preflight=preflight,
-        interim=interim,
-        schema_name='tap"db',
+        interim={"sequences": current["sequences"], "sequence_inventory": current},
+        schema_name="objects",
+        writer_fence={"explicit": True},
+        receipts_dir=tmp_path,
+        retained_floors=[{"name": "gx_instance_seq", "value": 8, "source": "aborted"}],
     )
-    assert connection.executed == [
-        ('ALTER SEQUENCE "tap""db"."gx_instance_seq" RESTART WITH 6', None)
+    assert result == {"status": "shared_allocator_called"}
+    assert seen[0][0]["advances"] == [
+        {"name": "dormant_seq", "floor": 0, "next_value": 1},
+        {"name": "gx_instance_seq", "floor": 8, "next_value": 9},
     ]
+    assert seen[0][1] == {"writer_fence": {"explicit": True}, "receipts_dir": tmp_path}
+    assert connection.executed == []  # Migration owns no separate restart engine.
 
 
 def test_branch_campaign_migration_preflight_and_receipts_fail_closed(

@@ -6,17 +6,36 @@ from daylily_tapdb.sequences import (
 )
 
 
-def test_ensure_instance_prefix_sequence_sql_uses_euid_seq_and_prefix():
-    sql = _build_ensure_instance_prefix_sequence_sql("agx_instance_seq").lower()
-    assert "max(euid_seq)" in sql
-    assert "where euid_prefix = :prefix" in sql
-    assert "generic_template" in sql
-    assert "audit_log" in sql
+def test_provisioning_state_sql_has_no_fixed_table_floor_or_repair():
+    sql = _build_ensure_instance_prefix_sequence_sql(
+        "agx_instance_seq", schema_name="explicit_schema"
+    ).lower()
+    assert '"explicit_schema"."agx_instance_seq"' in sql
+    for field in (
+        "seqincrement",
+        "seqmin",
+        "seqmax",
+        "seqstart",
+        "seqcache",
+        "seqcycle",
+        "last_value",
+        "is_called",
+    ):
+        assert field in sql
+    assert "generic_template" not in sql
+    assert "audit_log" not in sql
+    assert "max(euid_seq)" not in sql
     assert "regexp_replace(" not in sql
     assert "euid like" not in sql
     assert "setval(" not in sql
-    assert "desired_next" in sql
-    assert "current_next" in sql
+    assert "to_regclass(:qualified)" in sql
+
+
+def test_provisioning_state_sql_quotes_both_identifiers():
+    sql = _build_ensure_instance_prefix_sequence_sql(
+        'seq"quoted', schema_name='schema"quoted'
+    )
+    assert '"schema""quoted"."seq""quoted"' in sql
 
 
 @pytest.mark.parametrize("prefix", ["G-X", "UQ", "", "   "])

@@ -10,6 +10,8 @@ import daylily_tapdb.backup.postrestore as postrestore
 import daylily_tapdb.euid as euid_mod
 import daylily_tapdb.schema_inventory as schema_inventory
 from daylily_tapdb.backup.service import STATUS_FAIL, STATUS_SKIP, STATUS_WARN
+from daylily_tapdb.identity_inventory import seal_receipt
+from tests.test_recovery_floor import TARGET, inventory
 
 
 def _sequence(name: str, next_value: int | None, last_value: int = 1):
@@ -70,10 +72,12 @@ def test_audit_count_mismatch_without_identity_sequence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(postrestore, "_table_exists", lambda *_args: True)
-    monkeypatch.setattr(postrestore.introspect, "capture_sequences", lambda *_args: [])
+    monkeypatch.setattr(
+        postrestore.introspect, "capture_sequences", lambda *_args, **_kw: []
+    )
     session = _Session([_Result(first=(2, 2))])
     result = postrestore.check_audit_continuity(
-        session, SimpleNamespace(row_counts={"audit_log": 3}), "schema"
+        session, SimpleNamespace(row_counts={"audit_log": 3}), "schema", target=TARGET
     )
     assert result.status == STATUS_FAIL
     assert result.data["count"] == {"expected": 3, "live": 2}
@@ -108,28 +112,26 @@ def test_euid_checks_skip_and_report_validation_failures(
 def test_sequence_high_water_covers_missing_old_and_current_sequences(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    live = [_sequence("old", 9), _sequence("current", 20)]
+    live = inventory(name="current", last=22)
     monkeypatch.setattr(
-        postrestore.introspect, "capture_sequences", lambda *_args: live
+        "daylily_tapdb.sequences.capture_sequence_inventory", lambda *_args, **_kw: live
     )
-    manifest = SimpleNamespace(
-        sequences=[
-            _sequence("missing", 3),
-            _sequence("old", None),
-            _sequence("current", 10),
-        ]
+    manifest = SimpleNamespace(sequence_inventory=inventory(name="missing"))
+    result = postrestore.check_sequence_high_water(
+        object(), manifest, "history", target=TARGET
     )
-    result = postrestore.check_sequence_high_water(object(), manifest, "schema")
     assert result.status == STATUS_FAIL
-    assert result.data["missing"] == "missing from the restored schema"
+    assert "retained generator is missing" in result.detail
 
-    manifest.sequences = [_sequence("old", None)]
-    result = postrestore.check_sequence_high_water(object(), manifest, "schema")
-    assert result.status == STATUS_WARN
-    assert result.data == {"uncomparable": ["old"]}
+    manifest.sequence_inventory = {}
+    result = postrestore.check_sequence_high_water(
+        object(), manifest, "history", target=TARGET
+    )
+    assert result.status == STATUS_FAIL
+    assert "complete manifest sequence inventory" in result.detail
 
 
-def test_prefix_projection_skips_missing_table_and_missing_sequence(
+def test_prefix_projection_refuses_missing_target_and_missing_sequence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -137,23 +139,20 @@ def test_prefix_projection_skips_missing_table_and_missing_sequence(
     )
     assert (
         postrestore.check_prefix_sequences_ahead(object(), "schema").status
-        == STATUS_SKIP
+        == STATUS_FAIL
     )
 
-    monkeypatch.setattr(
-        postrestore.introspect,
-        "euid_bearing_tables",
-        lambda *_args: ["generic_instance"],
+    current = seal_receipt(
+        {**inventory(), "missing_generators": ["unmapped_instance_seq"]}
     )
     monkeypatch.setattr(
-        postrestore.introspect,
-        "capture_sequences",
-        lambda *_args: [_sequence("xyz_instance_seq", 10)],
+        "daylily_tapdb.sequences.capture_sequence_inventory", lambda *_a, **_k: current
     )
-    session = _Session([_Result(all_rows=[("missing", 2), ("xyz", 2)])])
-    result = postrestore.check_prefix_sequences_ahead(session, "schema")
-    assert result.status != STATUS_WARN
-    assert result.data == {}
+    result = postrestore.check_prefix_sequences_ahead(
+        object(), "history", target=TARGET
+    )
+    assert result.status == STATUS_FAIL
+    assert "missing" in result.detail.lower()
 
 
 def test_schema_drift_missing_assets_is_advisory(
@@ -192,22 +191,43 @@ def test_representative_objects_empty_and_unaddressable(
 
 def test_reconcile_sequences_applies_only_required_floor(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
-    live = [
-        _sequence("ahead", 10),
-        _sequence("behind", 2),
-        _sequence("legacy", 1),
-    ]
+    live = inventory()
     monkeypatch.setattr(
-        postrestore.introspect, "capture_sequences", lambda *_args: live
+        "daylily_tapdb.sequences.capture_sequence_inventory", lambda *_args, **_kw: live
     )
-    session = _Session([_Result()])
-    floor = [
-        _sequence("legacy", None),
-        _sequence("absent", 4),
-        _sequence("ahead", 5),
-        _sequence("behind", 8),
+    captured = {}
+    monkeypatch.setattr(
+        "daylily_tapdb.sequences.apply_sequence_advance_plan",
+        lambda session, plan, **kw: (
+            captured.update(plan=plan, **kw) or {"phase": "applied_pending_commit"}
+        ),
+    )
+    session = _Session([])
+    fence = {"mode": "database_connections_disabled", "database_oid": 123}
+    floor = [{"name": "history_uid_seq", "value": 35, "source": "prior_attempt"}]
+    result = postrestore.reconcile_sequences_to_floor(
+        session,
+        "history",
+        floor=floor,
+        target=TARGET,
+        writer_fence=fence,
+        receipts_dir=tmp_path,
+    )
+    assert result["phase"] == "applied_pending_commit"
+    assert captured["plan"]["advances"] == [
+        {"name": "history_uid_seq", "floor": 35, "next_value": 36}
     ]
-    advanced = postrestore.reconcile_sequences_to_floor(session, "schema", floor=floor)
-    assert advanced == {"behind": {"from_next": 2, "to_next": 8}}
-    assert session.calls[0][1] == {"value": 8}
+    assert captured["writer_fence"] == fence
+    assert captured["receipts_dir"] == tmp_path
+    assert session.calls == []
+    with pytest.raises(ValueError, match="lacks complete"):
+        postrestore.reconcile_sequences_to_floor(
+            session,
+            "history",
+            floor=[_sequence("legacy", None)],
+            target=TARGET,
+            writer_fence=fence,
+            receipts_dir=tmp_path,
+        )

@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="docs/runtime-and-cli.md">Operate</a> ·
+  <a href="docs/service-readiness.md">Prepare a service</a> ·
   <a href="docs/integration-and-embedding.md">Embed</a> ·
   <a href="docs/consumer-discoverability-guide.md">Discover</a> ·
   <a href="docs/external-references-and-federation.md">Federate</a> ·
@@ -32,10 +33,28 @@ but never becomes the relationship authority.
 
 ## Install
 
-TapDB 10.0.0 requires Python 3.12 or newer and supports PostgreSQL 16 and 17.
-Release qualification runs against community PostgreSQL 16.13 and the
-PostgreSQL 17 minor reported by CI. Aurora PostgreSQL has not been independently
-qualified by this release.
+TapDB 10.0.0 is the latest verified public release. This checkout is preparing
+TapDB 10.1.0 as an unreleased candidate; its independent PostgreSQL/Aurora
+qualification, reviewed merge, immutable tag, publication, and fresh-install
+verification are not complete. Do not pin 10.1.0 until the release handoff
+contains those receipts.
+
+The 10.1.0 candidate requires Python 3.12 or newer. Its release gates target
+exact community PostgreSQL 16.13 plus isolated Aurora PostgreSQL 16.13
+acceptance. PostgreSQL 17 qualification is deferred to
+[GitHub issue #107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107)
+and has not passed; this is not a declaration that PostgreSQL 17 is
+unsupported.
+
+The candidate's receipt-bound runtime-principal bind revokes database `TEMP`
+from `PUBLIC` and the configured runtime principal. When the reviewed plan shows
+that revocation would remove the operator's pre-existing effective `TEMP`, it
+records an explicit operator preservation grant. This database-wide change also
+affects other roles that relied on `PUBLIC TEMP`; applications that need
+temporary objects require an explicit design change. Service adoption must close
+and recreate existing runtime sessions because TapDB does not terminate them or
+claim that existing temporary objects were removed. The qualified
+managed-allocator resolution remains required defense in depth.
 
 ```bash
 python -m pip install "daylily-tapdb[cli,gui]"
@@ -318,13 +337,29 @@ bandit -c pyproject.toml -r daylily_tapdb admin
 python -m build
 ```
 
-Release CI runs the same complete suite independently against community
-PostgreSQL 16.13 and PostgreSQL 17, including local-doc examples and branch
-coverage. The shared release gates also run Ruff, mypy, Bandit, detect-secrets,
-wheel build, and installed-wheel smoke checks. CI does not hide integration
-tests with deselects. The mypy file list in `pyproject.toml` covers every new
-10.0 implementation module; older dynamically mapped ORM and Typer modules are
-not yet globally strict-clean.
+The 10.1.0 candidate release CI is configured to run the same complete suite
+independently against exact community PostgreSQL 16.13, including local-doc
+examples and branch coverage, with separate isolated Aurora PostgreSQL 16.13
+acceptance. The shared release gates also run Ruff, mypy, Bandit,
+detect-secrets, wheel build, schema/migration asset verification, and
+installed-wheel smoke checks. CI does not hide integration tests with
+deselects. These configured gates are not a success claim until one frozen,
+reviewed candidate passes them. PostgreSQL 17 results remain evidence for the
+deferred qualification, not 10.1.0 acceptance. The mypy file list in
+`pyproject.toml` covers the new 10.1 implementation modules; older dynamically
+mapped ORM and Typer modules are not yet globally strict-clean.
+
+For 10.1.0 only, the user approved the measured changed-module coverage
+exceptions `daylily_tapdb/backup/recovery.py` at 86.72% and
+`daylily_tapdb/backup/service.py` at 89.57%. Their numeric reports remain
+required. Aggregate branch coverage and every other changed production module
+must remain at or above 90%; the exceptions do not waive functional tests,
+PostgreSQL/Aurora acceptance, or review.
+
+The frozen-candidate PostgreSQL/Aurora acceptance must also verify the reviewed
+database ACL, `PUBLIC` and runtime `TEMP` revocations, any explicit operator
+`TEMP` preservation grant, and effective `TEMP=false` from a newly created
+runtime session. These checks are pending and are not a release claim.
 
 ## Documentation
 
@@ -333,6 +368,8 @@ not yet globally strict-clean.
   domain, owner, and runtime scope
 - [`docs/template-authoring.md`](docs/template-authoring.md): consumer template packs
 - [`docs/runtime-and-cli.md`](docs/runtime-and-cli.md): explicit-target operation
+- [`docs/service-readiness.md`](docs/service-readiness.md): inventory, principal,
+  recovery, migration, final-floor, and service-acceptance prerequisites
 - [`docs/integration-and-embedding.md`](docs/integration-and-embedding.md): GUI and API embedding
 - [`docs/consumer-discoverability-guide.md`](docs/consumer-discoverability-guide.md): DAG v2 federation contract
 - [`docs/external-references-and-federation.md`](docs/external-references-and-federation.md): canonical XRF lifecycle, federated search/graph composition, and tagged-consumer migration map

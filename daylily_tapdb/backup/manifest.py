@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 
 BACKUP_CLASS_FULL = "full"
 BACKUP_CLASS_TEMPLATE_PACK = "template-pack"
@@ -230,50 +230,66 @@ class AssetRef:
 class SequenceState:
     """A captured sequence high-water mark.
 
-    Sequence values are non-transactional, so they are read after the dump
-    completes. That makes the recorded value a lower bound on the live value at
-    restore time -- verification asserts ``>=``, which is what guarantees no
-    EUID is ever reissued.
+    Complete generator definitions accompany nontransactional allocation state.
+    Restore requires a next value strictly beyond every known issued, assigned,
+    or retained recovery floor. An old dump alone cannot prove later allocations.
     """
 
     name: str
     last_value: Optional[int]
     is_called: bool
+    increment_by: Optional[int] = None
+    min_value: Optional[int] = None
+    max_value: Optional[int] = None
+    start_value: Optional[int] = None
+    cache_size: Optional[int] = None
+    cycle: Optional[bool] = None
+    owner: Optional[str] = None
+    dependencies: list[dict[str, Any]] = field(default_factory=list)
+    mapping: dict[str, Any] = field(default_factory=dict)
+    allocated_floor: Optional[int] = None
+    assigned_floor: Optional[int] = None
 
     @property
     def next_value(self) -> Optional[int]:
         """The value the next ``nextval()`` will hand out.
 
-        ``last_value`` alone does not determine this, and treating it as though
-        it does is what allowed an in-place restore to reissue an EUID:
-
-        =========================  ==========  =========  ==========
-        state                      last_value  is_called  next value
-        =========================  ==========  =========  ==========
-        fresh                      1           False      1
-        ``setval(s, 5, false)``    5           False      5
-        ``setval(s, 5, true)``     5           True       6
-        after ``nextval()``        1           True       2
-        =========================  ==========  =========  ==========
-
-        Two sequences with the same ``last_value`` hand out different next
-        values, so comparisons for reuse safety must use this, not
-        ``last_value``.
-
-        ``None`` means the state was captured by a release that could not
-        record it (see ``introspect.capture_sequences``); callers must treat
-        that as "unknown" rather than as a low number, or they will report a
-        regression on every old manifest.
+        The shared allocator uses the actual increment, called state and
+        bounds. Incomplete older captures return ``None`` and cannot authorize
+        a restore or advance; missing metadata never implies increment one.
         """
-        if self.last_value is None:
+        if self.last_value is None or any(
+            value is None
+            for value in (
+                self.increment_by,
+                self.min_value,
+                self.max_value,
+                self.start_value,
+                self.cache_size,
+                self.cycle,
+            )
+        ):
             return None
-        return self.last_value + (1 if self.is_called else 0)
+        from daylily_tapdb.sequences import sequence_next_value
+
+        return sequence_next_value(self.to_payload())
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "last_value": self.last_value,
             "is_called": self.is_called,
+            "increment_by": self.increment_by,
+            "min_value": self.min_value,
+            "max_value": self.max_value,
+            "start_value": self.start_value,
+            "cache_size": self.cache_size,
+            "cycle": self.cycle,
+            "owner": self.owner,
+            "dependencies": self.dependencies,
+            "mapping": self.mapping,
+            "allocated_floor": self.allocated_floor,
+            "assigned_floor": self.assigned_floor,
         }
 
     @classmethod
@@ -283,6 +299,17 @@ class SequenceState:
             name=str(payload["name"]),
             last_value=None if raw is None else int(raw),
             is_called=bool(payload.get("is_called", False)),
+            increment_by=payload.get("increment_by"),
+            min_value=payload.get("min_value"),
+            max_value=payload.get("max_value"),
+            start_value=payload.get("start_value"),
+            cache_size=payload.get("cache_size"),
+            cycle=payload.get("cycle"),
+            owner=payload.get("owner"),
+            dependencies=list(payload.get("dependencies") or []),
+            mapping=dict(payload.get("mapping") or {}),
+            allocated_floor=payload.get("allocated_floor"),
+            assigned_floor=payload.get("assigned_floor"),
         )
 
 
@@ -303,6 +330,8 @@ class BackupManifest:
     schema_drift: dict[str, Any] = field(default_factory=dict)
     row_counts: dict[str, int] = field(default_factory=dict)
     sequences: list[SequenceState] = field(default_factory=list)
+    sequence_inventory: dict[str, Any] = field(default_factory=dict)
+    source_contract: dict[str, Any] = field(default_factory=dict)
     representative_objects: list[dict[str, Any]] = field(default_factory=list)
     content_inventory: dict[str, Any] = field(default_factory=dict)
     governance: dict[str, Any] = field(default_factory=dict)
@@ -341,6 +370,8 @@ class BackupManifest:
             "schema_drift": self.schema_drift,
             "row_counts": self.row_counts,
             "sequences": [seq.to_payload() for seq in self.sequences],
+            "sequence_inventory": self.sequence_inventory,
+            "source_contract": self.source_contract,
             "representative_objects": self.representative_objects,
             "content_inventory": self.content_inventory,
             "governance": self.governance,
@@ -393,6 +424,8 @@ class BackupManifest:
                 SequenceState.from_payload(item)
                 for item in (payload.get("sequences") or [])
             ],
+            sequence_inventory=dict(payload.get("sequence_inventory") or {}),
+            source_contract=dict(payload.get("source_contract") or {}),
             representative_objects=list(payload.get("representative_objects") or []),
             content_inventory=dict(payload.get("content_inventory") or {}),
             governance=dict(payload.get("governance") or {}),

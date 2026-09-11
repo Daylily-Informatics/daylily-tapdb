@@ -395,6 +395,11 @@ def _build_db_config_from_section(
         "iam_auth": _file_str("iam_auth") or "",
         "ssl": _file_str("ssl") or "",
         "sslrootcert": _file_str("sslrootcert") or "",
+        **(
+            {"server_port": _file_str("server_port")}
+            if _file_str("server_port")
+            else {}
+        ),
         "domain_code": _require_section_str(
             file_cfg,
             "domain_code",

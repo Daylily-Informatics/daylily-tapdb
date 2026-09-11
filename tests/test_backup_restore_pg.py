@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import shutil
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -34,6 +35,9 @@ from daylily_tapdb.backup.verify import (
 from daylily_tapdb.cli import app
 from daylily_tapdb.cli.context import clear_cli_context, set_cli_context
 from daylily_tapdb.cli.db_config import get_backup_settings, get_db_config
+from daylily_tapdb.runtime_principal import operator_connection
+from tests.test_backup_pg_lifecycle import _in_place_restore
+from tests.test_backup_pg_lifecycle import recovery_backup as recovery_backup
 
 runner = CliRunner()
 
@@ -89,18 +93,18 @@ def _live_state(cfg, schema=None):
     """Snapshot row counts and sequence values for the configured schema."""
     from daylily_tapdb.backup import introspect
 
-    target = schema or str(cfg["schema_name"])
-    with service.open_session(
-        cfg, app_username="pytest", connection_role="operator"
-    ) as conn:
-        with conn.session_scope(commit=False) as session:
-            return (
-                introspect.capture_row_counts(session, target),
-                {
-                    s.name: s.last_value
-                    for s in introspect.capture_sequences(session, target)
-                },
-            )
+    schema_name = schema or str(cfg["schema_name"])
+    probe = dict(cfg, schema_name=schema_name)
+    with operator_connection(probe, isolation_level="REPEATABLE READ") as session:
+        return (
+            introspect.capture_row_counts(session, schema_name),
+            {
+                s.name: s.to_payload()
+                for s in introspect.capture_sequences(
+                    session, schema_name, target=service.inventory_target(probe)
+                )
+            },
+        )
 
 
 def _schemas(cfg):
@@ -348,7 +352,7 @@ def test_rls_check_passes_for_the_canonical_forced_policies(env, backup):
     check = next(c for c in plan.checks if c.id == "rls.roles")
 
     assert check.status == "pass"
-    assert "policies" in check.detail
+    assert check.data == {"required": [cfg["operator_user"]], "missing": []}
 
 
 def test_rls_check_reads_the_archive_when_policies_are_present(env, backup):
@@ -376,10 +380,10 @@ def test_rls_check_reads_the_archive_when_policies_are_present(env, backup):
         with conn.session_scope(commit=False) as session:
             check = verify._check_rls_roles(session, manifest, archive_path=archive)
 
-    # The archive really was rendered and parsed; TAPDB's policies name no
-    # roles, so the honest verdict is "applies to PUBLIC".
+    # The archive really was rendered and parsed: the unrestricted operator
+    # policy names the exact configured operator, not PUBLIC.
     assert check.status == "pass"
-    assert "PUBLIC" in check.detail
+    assert check.data == {"required": [cfg["operator_user"]], "missing": []}
 
 
 def test_prefix_claimability_resolves_real_prefixes(env, backup):
@@ -652,25 +656,27 @@ def test_dry_run_mutates_nothing(env, backup):
 
 
 def _drop_db(cfg, name):
-    from daylily_tapdb.backup import engine as eng
-
-    eng.run_command(
-        eng.build_psql_command(
-            cfg, sql=f'DROP DATABASE IF EXISTS "{name}"', database="postgres"
-        ),
-        env=eng.client_env(cfg),
-    )
+    # Explicit local fixture cleanup uses the configured source control DB.
+    verify._admin_sql(cfg, f'DROP DATABASE "{name}"')
+    assert not verify._database_exists(cfg, name)
 
 
 def test_isolated_restore_recreates_the_schema_in_a_new_database(env, backup):
     cfg, settings = env
     result = None
     try:
-        result = verify.restore_backup(cfg, settings, backup_id=backup.backup_id)
+        result = verify.restore_backup(
+            cfg,
+            settings,
+            backup_id=backup.backup_id,
+            options=RestoreOptions(target_database="restore_probe_" + uuid4().hex[:16]),
+            recovery_source={"purpose": "isolated_rehearsal"},
+        )
 
         assert result.ok, [c.to_payload() for c in result.checks if c.failed]
         assert result.target_database != cfg["database"]
         assert result.receipt_id
+        assert result.principal_binding_required
 
         probe = dict(cfg, database=result.target_database)
         counts, _ = _live_state(probe, schema=cfg["schema_name"])
@@ -711,7 +717,13 @@ def test_isolated_restore_leaves_live_data_untouched(env, backup):
     before = _live_state(cfg)
     result = None
     try:
-        result = verify.restore_backup(cfg, settings, backup_id=backup.backup_id)
+        result = verify.restore_backup(
+            cfg,
+            settings,
+            backup_id=backup.backup_id,
+            options=RestoreOptions(target_database="restore_probe_" + uuid4().hex[:16]),
+            recovery_source={"purpose": "isolated_rehearsal"},
+        )
     finally:
         if result is not None:
             _drop_db(cfg, result.target_database)
@@ -719,37 +731,50 @@ def test_isolated_restore_leaves_live_data_untouched(env, backup):
     assert _live_state(cfg) == before
 
 
-def test_a_failed_isolated_restore_drops_the_database_it_created(
+def test_a_failed_isolated_restore_retains_its_quarantined_target_and_evidence(
     env, backup, monkeypatch
 ):
     cfg, settings = env
+    database = "restore_failure_" + uuid4().hex[:16]
+    called = []
 
     def _boom(*args, **kwargs):
+        called.append(kwargs["database"])
         raise BackupVerificationError("simulated pg_restore failure")
 
     monkeypatch.setattr(verify, "_restore_archive", _boom)
 
-    with pytest.raises(BackupVerificationError):
-        verify.restore_backup(
-            cfg,
-            settings,
-            backup_id=backup.backup_id,
-            options=RestoreOptions(target_database="tapdb_isolated_failure_probe"),
+    try:
+        with pytest.raises(
+            BackupVerificationError, match="simulated pg_restore failure"
+        ):
+            verify.restore_backup(
+                cfg,
+                settings,
+                backup_id=backup.backup_id,
+                options=RestoreOptions(target_database=database),
+                recovery_source={"purpose": "isolated_rehearsal"},
+            )
+        assert called == [database], "the intended import failure was never reached"
+        assert verify._database_exists(cfg, database)
+        with operator_connection(cfg, isolation_level="REPEATABLE READ") as connection:
+            allowed = connection.execute(
+                text("SELECT has_database_privilege(:role, :database, 'CONNECT')"),
+                {"role": cfg["user"], "database": database},
+            ).scalar_one()
+        assert allowed is False
+        from daylily_tapdb.backup.recovery import retained_recovery_state
+
+        state = retained_recovery_state(
+            service.receipts_directory(settings),
+            target=service.inventory_target(dict(cfg, database=database)),
+            require_terminal=False,
         )
-
-    # No half-populated database may survive to be mistaken for a recovery.
-    from daylily_tapdb.backup import engine as eng
-
-    found = eng.run_command(
-        eng.build_psql_command(
-            cfg,
-            sql="SELECT 1 FROM pg_database "
-            "WHERE datname = 'tapdb_isolated_failure_probe'",
-            database="postgres",
-        ),
-        env=eng.client_env(cfg),
-    )
-    assert found.stdout.strip() == ""
+        assert state["pending"], (
+            "failed import must retain unresolved recovery evidence"
+        )
+    finally:
+        _drop_db(cfg, database)
 
 
 # ---------------------------------------------------------------------------
@@ -757,17 +782,13 @@ def test_a_failed_isolated_restore_drops_the_database_it_created(
 # ---------------------------------------------------------------------------
 
 
-def test_in_place_restore_replaces_the_schema_and_takes_a_safety_backup(env, backup):
+def test_in_place_restore_replaces_the_schema_and_takes_a_safety_backup(
+    env, recovery_backup
+):
     cfg, settings = env
     before_counts, _ = _live_state(cfg)
 
-    result = verify.restore_backup(
-        cfg,
-        settings,
-        backup_id=backup.backup_id,
-        options=RestoreOptions(mode=MODE_IN_PLACE),
-        confirm_target=service.target_label(cfg),
-    )
+    result = _in_place_restore(cfg, settings, recovery_backup)
 
     assert result.ok, [c.to_payload() for c in result.checks if c.failed]
     assert result.safety_backup_id, "in-place must take a safety backup first"
@@ -776,16 +797,10 @@ def test_in_place_restore_replaces_the_schema_and_takes_a_safety_backup(env, bac
     assert not any("_superseded_" in name for name in _schemas(cfg))
 
 
-def test_in_place_keeps_the_superseded_schema_when_asked(env, backup):
+def test_in_place_keeps_the_superseded_schema_when_asked(env, recovery_backup):
     cfg, settings = env
 
-    result = verify.restore_backup(
-        cfg,
-        settings,
-        backup_id=backup.backup_id,
-        options=RestoreOptions(mode=MODE_IN_PLACE, keep_superseded=True),
-        confirm_target=service.target_label(cfg),
-    )
+    result = _in_place_restore(cfg, settings, recovery_backup, keep_superseded=True)
 
     assert result.superseded_schema
     assert result.superseded_schema in _schemas(cfg)
@@ -806,26 +821,23 @@ def test_in_place_keeps_the_superseded_schema_when_asked(env, backup):
     ],
 )
 def test_a_failed_in_place_restore_leaves_the_original_intact(
-    env, backup, monkeypatch, failing_attr, message
+    env, recovery_backup, monkeypatch, failing_attr, message
 ):
     cfg, settings = env
     before_counts, before_seqs = _live_state(cfg)
     before_schemas = _schemas(cfg)
+    called = []
 
     def _boom(*args, **kwargs):
+        called.append(failing_attr)
         raise BackupVerificationError(message)
 
     monkeypatch.setattr(verify, failing_attr, _boom)
 
-    with pytest.raises(BackupVerificationError):
-        verify.restore_backup(
-            cfg,
-            settings,
-            backup_id=backup.backup_id,
-            options=RestoreOptions(mode=MODE_IN_PLACE),
-            confirm_target=service.target_label(cfg),
-        )
+    with pytest.raises(BackupVerificationError, match=message):
+        _in_place_restore(cfg, settings, recovery_backup)
 
+    assert called == [failing_attr], "the intended failure stage was never reached"
     after_counts, after_seqs = _live_state(cfg)
     assert after_counts == before_counts
     assert after_seqs == before_seqs
@@ -833,47 +845,55 @@ def test_a_failed_in_place_restore_leaves_the_original_intact(
 
 
 def test_a_failed_in_place_restore_still_leaves_a_safety_backup(
-    env, backup, monkeypatch
+    env, recovery_backup, monkeypatch
 ):
     cfg, settings = env
+    called = []
 
     def _boom(*args, **kwargs):
+        called.append(kwargs["database"])
         raise BackupVerificationError("simulated failure")
 
     monkeypatch.setattr(verify, "_restore_archive", _boom)
     before = len(service.list_backups(cfg, settings).entries)
 
-    with pytest.raises(BackupVerificationError):
-        verify.restore_backup(
-            cfg,
-            settings,
-            backup_id=backup.backup_id,
-            options=RestoreOptions(mode=MODE_IN_PLACE),
-            confirm_target=service.target_label(cfg),
-        )
+    with pytest.raises(BackupVerificationError, match="simulated failure"):
+        _in_place_restore(cfg, settings, recovery_backup)
 
+    assert called == [cfg["database"]]
     assert len(service.list_backups(cfg, settings).entries) > before
+    from daylily_tapdb.backup.receipts import read_receipts
+
+    failure = next(
+        row
+        for row in reversed(read_receipts(service.receipts_directory(settings)))
+        if row.operation == "backup_restore"
+    )
+    assert not failure.succeeded
+    safety_id = failure.detail["safety_backup_id"]
+    storage = service.storage_for(settings)
+    safety = service._load_manifest(
+        storage, service.find_backup_prefix(cfg, storage, safety_id)
+    )
+    assert safety.provenance["restored_backup_id"] == recovery_backup.backup_id
 
 
-def test_a_failed_restore_writes_a_failure_receipt(env, backup, monkeypatch):
+def test_a_failed_restore_writes_a_failure_receipt(env, recovery_backup, monkeypatch):
     from daylily_tapdb.backup.receipts import read_receipts
 
     cfg, settings = env
+    called = []
 
     def _boom(*args, **kwargs):
+        called.append(kwargs["database"])
         raise BackupVerificationError("simulated failure")
 
     monkeypatch.setattr(verify, "_restore_archive", _boom)
 
-    with pytest.raises(BackupVerificationError):
-        verify.restore_backup(
-            cfg,
-            settings,
-            backup_id=backup.backup_id,
-            options=RestoreOptions(mode=MODE_IN_PLACE),
-            confirm_target=service.target_label(cfg),
-        )
+    with pytest.raises(BackupVerificationError, match="simulated failure"):
+        _in_place_restore(cfg, settings, recovery_backup)
 
+    assert called == [cfg["database"]]
     receipts = read_receipts(service.receipts_directory(settings))
     restores = [r for r in receipts if r.operation == "backup_restore"]
     assert restores and not restores[-1].succeeded

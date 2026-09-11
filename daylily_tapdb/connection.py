@@ -92,6 +92,9 @@ class TAPDBConnection:
         allow_global_rows: bool = False,
         config_identity: Optional[str] = None,
         connection_role: str = "runtime",
+        aws_profile: Optional[str] = None,
+        sslrootcert: Optional[str] = None,
+        server_port: Optional[int] = None,
     ):
         """
         Initialize database connection.
@@ -128,6 +131,10 @@ class TAPDBConnection:
                 principal. Required for PostgreSQL sessions.
             connection_role: ``runtime`` for normal access or ``operator`` for
                 the distinct migration/DDL role.
+            aws_profile: Explicit AWS profile for Aurora credentials.
+            sslrootcert: Explicit absolute CA bundle path for Aurora TLS.
+            server_port: Explicit remote Aurora port for IAM signing when the
+                connection port is a forward. Does not alter the socket port.
         """
         self.logger = logging.getLogger(__name__ + ".TAPDBConnection")
 
@@ -190,6 +197,9 @@ class TAPDBConnection:
                 secret_arn=secret_arn,
                 password=db_pass,
                 hostaddr=db_hostaddr,
+                profile=aws_profile,
+                sslrootcert=sslrootcert,
+                server_port=server_port,
             )
         elif engine_type in {"local", "compose"}:
             if not db_hostname:

@@ -69,13 +69,18 @@
       </select>
     </label>
     <label>Note <input type="text" name="note" placeholder="optional"></label>
-    {# Without this the GUI has no way through a drift refusal: the button
-       fails permanently and the runbook's remedy ("re-run with --allow-drift")
-       is CLI-only, while the docs list Create on all three surfaces. #}
     <label>
       <input type="checkbox" name="allow_drift" value="1">
-      Capture even though the schema has drifted
+      Acknowledge measured schema drift (requires a verified source contract)
     </label>
+    <label>Reviewed source-contract JSON (required for historical or drifted schemas)
+      <textarea name="source_contract" rows="4"></textarea>
+    </label>
+    <label>Sealed recovery-family JSON (for recovery across replacements)
+      <textarea name="recovery_family" rows="4"></textarea>
+    </label>
+    <p>A database backup does not include service configuration, runtime files,
+       credentials or principal artifacts.</p>
     <button type="submit">Create backup</button>
   </form>
 </section>

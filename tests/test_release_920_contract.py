@@ -1,4 +1,4 @@
-"""Release-level contracts that must hold for TapDB 10.0."""
+"""Release-level contracts that must hold for the TapDB 10.1 candidate."""
 
 from __future__ import annotations
 
@@ -15,12 +15,14 @@ ACTIVE_GUIDES = (
     "AI_DIRECTIVE.md",
     "docs/README.md",
     "docs/architecture.md",
+    "docs/backup-and-recovery.md",
     "docs/consumer-discoverability-guide.md",
     "docs/dag_spec.md",
     "docs/external-references-and-federation.md",
     "docs/integration-and-embedding.md",
     "docs/repository-review.md",
     "docs/runtime-and-cli.md",
+    "docs/service-readiness.md",
     "docs/tapdb_gui_inclusion.md",
     "docs/template-authoring.md",
 )
@@ -94,7 +96,7 @@ def test_release_quality_configuration_is_strict() -> None:
     mypy = project["tool"]["mypy"]
     assert mypy["python_version"] == "3.12"
     assert mypy["follow_imports"] == "skip"
-    assert len(mypy["files"]) == 14
+    assert len(mypy["files"]) == 24
     assert project["project"]["urls"]["Repository"].endswith(
         "/Daylily-Informatics/daylily-tapdb.git"
     )
@@ -112,24 +114,71 @@ def test_dag_spec_is_preserved_exactly() -> None:
     )
 
 
-def test_consumer_guide_and_readme_are_public_safe() -> None:
+def test_consumer_and_service_readiness_guides_are_public_safe() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     directive = (ROOT / "AI_DIRECTIVE.md").read_text(encoding="utf-8")
     guide_path = ROOT / "docs/consumer-discoverability-guide.md"
+    readiness_path = ROOT / "docs/service-readiness.md"
     assert guide_path.is_file()
+    assert readiness_path.is_file()
     guide = guide_path.read_text(encoding="utf-8")
+    readiness = readiness_path.read_text(encoding="utf-8")
 
     assert "consumer-discoverability-guide.md" in readme
+    assert "service-readiness.md" in readme
     assert "<persisted-euid>" in guide
-    assert "/Users/" not in readme
-    assert "/Users/" not in guide
+    for text in (readme, directive, guide, readiness):
+        assert "/Users/" not in text
     assert "meridian-euid==0.4.8" in readme
     for text in (readme, directive):
         normalized = " ".join(text.split())
-        assert "TapDB 10.0.0" in normalized
-        assert "PostgreSQL 16 and 17" in normalized
-        assert "community PostgreSQL 16.13" in normalized
-        assert "Aurora PostgreSQL has not been independently qualified" in normalized
+        assert "TapDB 10.0.0 is the latest verified public release" in normalized
+        assert "TapDB 10.1.0" in normalized
+        assert "unreleased candidate" in normalized
+        assert "PostgreSQL 16.13" in normalized
+        assert "Aurora PostgreSQL 16.13" in normalized
+
+
+def test_service_readiness_requires_complete_explicit_recovery_evidence() -> None:
+    readiness = (ROOT / "docs/service-readiness.md").read_text(encoding="utf-8")
+    handoff = (
+        ROOT / "docs/plans/20260910_tapdb_service_readiness_handoff.md"
+    ).read_text(encoding="utf-8")
+
+    for required in (
+        "Exact TapDB config",
+        "Domain-code and prefix-ownership registries",
+        "TLS trust files",
+        "IAM policies",
+        "Operator and runtime secret references",
+        "Service runtime files",
+        "External receipt journals",
+        "tapdb-recovery-family/v1",
+        "journal root and receipt ID",
+        "runtime-principal bootstrap",
+        "runtime-principal bind",
+        "An ordinary recovery apply must name",
+        "observed-only",
+        "session closure",
+    ):
+        assert required in readiness
+
+    lifecycle = (
+        "Inventory the exact source",
+        "Prepare the target principal",
+        "Back up and restore with explicit recovery authority",
+        "Apply the reviewed schema migration",
+        "Perform the service-owned conversion",
+        "Verify identities, floors, and runtime binding",
+        "Run service acceptance",
+    )
+    offsets = [readiness.index(label) for label in lifecycle]
+    assert offsets == sorted(offsets)
+    assert "**Candidate only. Not released. Not independently accepted.**" in handoff
+    assert (
+        "The release is not complete while any required field is `PENDING`." in handoff
+    )
+    assert "Production changed: **no**" in handoff
 
 
 def test_active_guides_use_the_current_repository_identity() -> None:
@@ -145,9 +194,6 @@ def test_ci_runs_the_complete_release_matrix() -> None:
         "postgres_label: '16.13'",
         "postgres_image: postgres:16.13",
         "postgres_major: '16'",
-        "postgres_label: '17'",
-        "postgres:17",
-        "postgres_major: '17'",
         "image: ${{ matrix.postgres_image }}",
         '"postgresql-${{ matrix.postgres_major }}"',
         '"postgresql-client-${{ matrix.postgres_major }}"',
@@ -163,8 +209,8 @@ def test_ci_runs_the_complete_release_matrix() -> None:
         "--cov-report=json:coverage.json",
         "verify_changed_coverage.py",
         "verify_wheel_assets.py",
-        "SETUPTOOLS_SCM_PRETEND_VERSION: '10.0.0'",
-        "verify_wheel_assets.py --expected-version 10.0.0",
+        "SETUPTOOLS_SCM_PRETEND_VERSION: '10.1.0'",
+        "verify_wheel_assets.py --expected-version 10.1.0",
         "python -m build",
         "python -m twine check dist/*",
         '"${wheels[0]}[gui]"',

@@ -39,6 +39,13 @@ def pytest_addoption(parser):
         default="",
         help="Deprecated; TapDB tests now use the explicit config target.",
     )
+    group.addoption(
+        "--tapdb-test-pg-port",
+        action="store",
+        type=int,
+        default=TAPDB_TEST_PG_PORT,
+        help="Explicit local ephemeral PostgreSQL port for an isolated test process.",
+    )
 
 
 def resolve_tapdb_test_dsn(pytestconfig) -> str:
@@ -95,8 +102,8 @@ def _wait_for_pg(port: int, timeout: float = 15.0) -> bool:
 
 
 @pytest.fixture(scope="session")
-def pg_instance(tmp_path_factory):
-    """Spin up an ephemeral PostgreSQL cluster on port TAPDB_TEST_PG_PORT.
+def pg_instance(tmp_path_factory, pytestconfig):
+    """Start a new isolated PostgreSQL cluster on the explicitly selected port.
 
     Yields a dict:
         port       – int
@@ -115,7 +122,9 @@ def pg_instance(tmp_path_factory):
     if not all([pg_ctl, initdb_bin, createdb_bin, psql_bin]):
         pytest.skip("PostgreSQL binaries (pg_ctl, initdb, createdb, psql) not on PATH")
 
-    port = TAPDB_TEST_PG_PORT
+    port = pytestconfig.getoption("--tapdb-test-pg-port")
+    if not 1024 <= port <= 65535:
+        raise ValueError("--tapdb-test-pg-port must be between 1024 and 65535")
     operator_user = "tapdb_operator"
     base = tmp_path_factory.mktemp("tapdb_pg")
     data_dir = base / "data"
@@ -143,12 +152,17 @@ def pg_instance(tmp_path_factory):
     )
 
     # --- start ---
+    # These disposable fixtures exercise exclusive maintenance sessions.
+    # Background vacuum races are tested by the explicit census cases, not by
+    # nondeterministic launcher timing across unrelated tests. Production and
+    # Aurora settings are unchanged; live competing workers still fail fencing.
     options = (
         f"-p {port} "
         f"-k {socket_dir} "
         f"-c listen_addresses=localhost "
         f"-c unix_socket_directories='{socket_dir}' "
-        f"-c logging_collector=off"
+        f"-c logging_collector=off "
+        f"-c autovacuum=off"
     )
     subprocess.run(
         [pg_ctl, "start", "-D", str(data_dir), "-l", str(log_file), "-o", options],
@@ -163,6 +177,42 @@ def pg_instance(tmp_path_factory):
 
     user = "tapdb_runtime"
     database = "tapdb_test_integ"
+
+    expected_version = os.environ.get("TAPDB_TEST_EXPECTED_PG_VERSION")
+    if expected_version:
+        version = subprocess.run(
+            [
+                psql_bin,
+                "-h",
+                "localhost",
+                "-p",
+                str(port),
+                "-U",
+                operator_user,
+                "-d",
+                "postgres",
+                "-At",
+                "-c",
+                "SHOW server_version",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        version_matches = (
+            version.split()[0] == expected_version
+            if "." in expected_version
+            else version.split()[0].split(".")[0] == expected_version
+        )
+        if not version_matches:
+            subprocess.run(
+                [pg_ctl, "stop", "-D", str(data_dir), "-m", "fast"],
+                check=True,
+                capture_output=True,
+            )
+            raise RuntimeError(
+                f"Required PostgreSQL {expected_version}, fixture started {version}"
+            )
 
     # --- create database ---
     subprocess.run(

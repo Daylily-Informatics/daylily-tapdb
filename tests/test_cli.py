@@ -301,6 +301,8 @@ class TestConfigCLI:
     def test_config_init_writes_aurora_hostaddr_when_explicit(self, tmp_path: Path):
         cfg_path = tmp_path / "tapdb-config.yaml"
         domain_registry, prefix_registry = _write_registries(tmp_path)
+        ca_bundle = tmp_path / "ca.pem"
+        ca_bundle.write_text("test CA fixture; no connection is made\n")
 
         result = runner.invoke(
             app,
@@ -325,6 +327,15 @@ class TestConfigCLI:
                 "aurora",
                 "--host",
                 "db.example.us-west-2.rds.amazonaws.com",
+                "--region",
+                "us-west-2",
+                "--cluster-identifier",
+                "explicit-test-cluster",
+                "--iam-auth",
+                "--ssl",
+                "verify-full",
+                "--sslrootcert",
+                str(ca_bundle),
                 "--hostaddr",
                 "127.0.0.1",
                 "--port",

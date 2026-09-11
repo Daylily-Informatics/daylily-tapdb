@@ -6,6 +6,7 @@ import os
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import typer
@@ -121,10 +122,21 @@ def test_identity_prefix_sync_uses_core_authority_in_client_scope(
 
     monkeypatch.setattr(db_mod, "_get_db_config", lambda env: cfg)
     monkeypatch.setattr(db_mod.GovernanceContext, "load", fake_load)
+
+    class Connection:
+        def execute(self, statement):
+            seen["sql"] = str(statement)
+
+    @contextmanager
+    def operator_connection(config, **kwargs):
+        assert config == cfg
+        assert kwargs == {"isolation_level": "REPEATABLE READ"}
+        yield Connection()
+
+    monkeypatch.setattr(db_mod, "operator_connection", operator_connection)
     monkeypatch.setattr(
-        db_mod,
-        "_run_psql",
-        lambda env, **kwargs: (seen.update(sql=kwargs["sql"]) or True, ""),
+        "daylily_tapdb.runtime_principal.grant_proven_runtime_sequences",
+        lambda connection, config: seen.update(grants_after_sql="sql" in seen),
     )
 
     db_mod._sync_identity_prefix_config(db_mod.Environment.target)
@@ -135,6 +147,7 @@ def test_identity_prefix_sync_uses_core_authority_in_client_scope(
     assert seen["prefixes"] == ["TPX", "EDG", "ADT"]
     assert "'client-service'" in str(seen["sql"])
     assert "'daylily-tapdb'" not in str(seen["sql"])
+    assert seen["grants_after_sql"] is True
 
 
 def test_connection_string_uses_target_database_and_schema_policy() -> None:
@@ -142,6 +155,83 @@ def test_connection_string_uses_target_database_and_schema_policy() -> None:
         db_mod._get_connection_string(db_mod.Environment.target)
         == "postgresql://tapdb@localhost:5533/tapdb_shared"
     )
+
+
+@pytest.mark.parametrize("grant_failure", [False, True])
+def test_seed_provisions_and_grants_in_one_repeatable_read_transaction(
+    monkeypatch, tmp_path, grant_failure
+):
+    events = []
+    seed_session = object()
+
+    class Connection:
+        engine = SimpleNamespace(
+            update_execution_options=lambda **kwargs: events.append(
+                ("isolation", kwargs)
+            )
+        )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            events.append("dispose")
+
+        @contextmanager
+        def session_scope(self, *, commit):
+            assert commit is True
+            events.append("transaction_context")
+            try:
+                yield seed_session
+            except Exception:
+                events.append("rollback")
+                raise
+            else:
+                events.append("commit")
+
+    def provision(session, *args, **kwargs):
+        assert session is seed_session
+        events.append("provision")
+        return SimpleNamespace(inserted=1, updated=0, skipped=0, prefixes_ensured=1)
+
+    def grants(session, cfg):
+        assert session is seed_session
+        assert cfg["user"] == "tapdb"
+        assert cfg["operator_user"] == "tapdb_operator"
+        events.append("grants")
+        if grant_failure:
+            raise ValueError("unproven generator refuses grant")
+        return []
+
+    monkeypatch.setattr(
+        db_mod, "_tapdb_connection_for_env", lambda *a, **k: Connection()
+    )
+    monkeypatch.setattr(db_mod, "_check_db_exists", lambda *a: True)
+    monkeypatch.setattr(db_mod, "_schema_exists", lambda *a: True)
+    monkeypatch.setattr(db_mod, "_resolve_seed_config_dirs", lambda *a: [tmp_path])
+    monkeypatch.setattr(
+        db_mod, "_validate_template_configs", lambda *a, **k: ([{}], [])
+    )
+    monkeypatch.setattr(db_mod, "_find_duplicate_template_keys", lambda *a: {})
+    monkeypatch.setattr(db_mod, "_loader_seed_templates", provision)
+    monkeypatch.setattr(db_mod, "_loader_find_tapdb_core_config_dir", lambda: tmp_path)
+    monkeypatch.setattr(db_mod, "_log_operation", lambda *a: None)
+    monkeypatch.setattr(
+        "daylily_tapdb.runtime_principal.grant_proven_runtime_sequences", grants
+    )
+    if grant_failure:
+        with pytest.raises(SystemExit):
+            db_mod.db_seed(None, False, True, False)
+    else:
+        db_mod.db_seed(None, False, True, False)
+    assert events == [
+        ("isolation", {"isolation_level": "REPEATABLE READ"}),
+        "transaction_context",
+        "provision",
+        "grants",
+        "rollback" if grant_failure else "commit",
+        "dispose",
+    ]
     assert (
         db_mod._get_connection_string(db_mod.Environment.target, database="postgres")
         == "postgresql://tapdb@localhost:5533/postgres"
@@ -302,9 +392,10 @@ def test_operator_connection_uses_distinct_credentials_and_privilege_mode(
     assert seen["db_user"] == "tapdb_operator"
     assert seen["db_pass"] == "operator-password"
     assert seen["connection_role"] == "operator"
-    assert db_mod._operator_role_assertion_sql() in db_mod._set_operator_context_sql(
-        "tapdb_testdb", db_mod._get_db_config(db_mod.Environment.target)
-    )
+    cfg = db_mod._get_db_config(db_mod.Environment.target)
+    assert db_mod._operator_role_assertion_sql(
+        schema_name="tapdb_testdb", cfg=cfg
+    ) in db_mod._set_operator_context_sql("tapdb_testdb", cfg)
 
 
 def test_runtime_psql_context_uses_fixed_config_tenant() -> None:
@@ -348,60 +439,38 @@ def test_create_default_admin_skips_without_insecure_flag() -> None:
     )
 
 
-def test_bootstrap_run_migrations_preflights_then_applies_with_runtime_receipts(
+def test_bootstrap_run_migrations_only_verifies_packaged_baseline(
     monkeypatch: pytest.MonkeyPatch, _explicit_target: Path
 ) -> None:
-    calls: list[dict[str, object]] = []
+    import json
 
-    def fake_db_migrate(**kwargs) -> None:
-        calls.append(kwargs)
-
-    monkeypatch.setattr(db_mod, "db_migrate", fake_db_migrate)
-
-    db_mod.run_migrations(env=db_mod.Environment.target, dry_run=False)
-
-    runtime_dir = (
-        _explicit_target.resolve().parent / "runtime" / "migrations" / "receipts"
+    schema_root = db_mod._find_schema_root(required_subpath=Path("migrations"))
+    filenames = sorted(item.name for item in (schema_root / "migrations").glob("*.sql"))
+    calls = []
+    monkeypatch.setattr(
+        db_mod, "db_migrate", lambda **kwargs: pytest.fail("must not apply")
     )
-    preflight = runtime_dir / "bootstrap-migrate-000001-preflight.json"
-    result = runtime_dir / "bootstrap-migrate-000001-result.json"
-    assert calls == [
-        {
-            "dry_run": True,
-            "apply": False,
-            "receipt": preflight,
-            "preflight_receipt": None,
-        },
-        {
-            "dry_run": False,
-            "apply": True,
-            "receipt": result,
-            "preflight_receipt": preflight,
-        },
-    ]
-    assert preflight.is_absolute()
-    assert result.is_absolute()
-    assert preflight != result
+
+    def read_baseline(env, **kwargs):
+        calls.append(kwargs)
+        return True, json.dumps(filenames)
+
+    monkeypatch.setattr(db_mod, "_run_psql", read_baseline)
+    db_mod.run_migrations(env=db_mod.Environment.target, dry_run=False)
+    assert len(calls) == 1
+    assert calls[0]["sql"].startswith("SELECT ")
+    assert calls[0]["connection_role"] == "operator"
 
 
-def test_bootstrap_run_migrations_propagates_preflight_failure_before_apply(
+def test_bootstrap_run_migrations_refuses_unfenced_pending_migrations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[dict[str, object]] = []
-
-    def refusing_db_migrate(**kwargs) -> None:
-        calls.append(kwargs)
-        raise SystemExit(7)
-
-    monkeypatch.setattr(db_mod, "db_migrate", refusing_db_migrate)
-
-    with pytest.raises(SystemExit) as raised:
+    monkeypatch.setattr(
+        db_mod, "db_migrate", lambda **kwargs: pytest.fail("must not apply")
+    )
+    monkeypatch.setattr(db_mod, "_run_psql", lambda *args, **kwargs: (True, "[]"))
+    with pytest.raises(RuntimeError, match="explicit writer fence"):
         db_mod.run_migrations(env=db_mod.Environment.target, dry_run=False)
-
-    assert raised.value.code == 7
-    assert len(calls) == 1
-    assert calls[0]["dry_run"] is True
-    assert calls[0]["apply"] is False
 
 
 def test_bootstrap_receipt_paths_preserve_partial_attempt_and_advance_ordinal(
@@ -433,6 +502,8 @@ def test_seed_loader_failure_propagates_as_process_failure(
     }
 
     class FakeConnection:
+        engine = SimpleNamespace(update_execution_options=lambda **kwargs: None)
+
         def __enter__(self):
             return self
 

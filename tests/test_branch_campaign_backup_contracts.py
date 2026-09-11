@@ -25,7 +25,7 @@ def _manifest(**changes):
             "data_scope": {
                 "mode": "physical_schema",
                 "tenant_id": None,
-                "row_security": "bypassed",
+                "row_security": "verified_complete_operator",
                 "physical_schema_complete": True,
                 "restore_mode": "isolated_or_in_place",
             },
@@ -70,8 +70,19 @@ class _SequenceSession:
         return self.results.pop(0)
 
 
-def test_branch_campaign_introspection_empty_catalogues_and_missing_migrations():
-    assert introspect.capture_sequences(_SequenceSession(_Rows()), "unit") == []
+def test_branch_campaign_introspection_empty_catalogues_and_missing_migrations(
+    monkeypatch,
+):
+    from tests.test_recovery_floor import TARGET
+
+    monkeypatch.setattr(
+        "daylily_tapdb.sequences.capture_sequence_inventory",
+        lambda *_a, **_k: {"sequences": []},
+    )
+    assert (
+        introspect.capture_sequences(_SequenceSession(_Rows()), "unit", target=TARGET)
+        == []
+    )
     assert introspect.capture_migrations(_SequenceSession(_Rows()), "unit") == []
 
 
@@ -211,6 +222,7 @@ def test_branch_campaign_dump_reports_command_and_listing_failures(
             schema_name="tapdb_unit",
             artifact=tmp_path / "dump",
             snapshot="snapshot-id",
+            operator_visibility_verified=True,
             transaction_context=TapdbTransactionContext(
                 config_identity="config",
                 schema_name="tapdb_unit",
@@ -230,6 +242,7 @@ def test_branch_campaign_dump_reports_command_and_listing_failures(
             schema_name="tapdb_unit",
             artifact=tmp_path / "dump",
             snapshot="snapshot-id",
+            operator_visibility_verified=True,
             transaction_context=TapdbTransactionContext(
                 config_identity="config",
                 schema_name="tapdb_unit",
@@ -427,6 +440,7 @@ def test_branch_campaign_target_probe_and_maintenance_failures(monkeypatch, tmp_
         "operator_user": "operator",
         "operator_password": "",
         "user": "runtime",
+        "database": "explicit_control",
     }
     monkeypatch.setattr(verify, "_database_exists", lambda *_args: True)
     monkeypatch.setattr(verify.engine, "build_psql_command", lambda *_a, **_k: ["psql"])
@@ -480,29 +494,17 @@ def test_branch_campaign_rollback_attempts_rename_after_drop_failure(monkeypatch
         )
 
 
-def test_restore_runtime_access_retains_hardened_function_search_path(monkeypatch):
-    captured = {}
-    monkeypatch.setattr(
-        service,
-        "connection_config_for_role",
-        lambda _cfg, _role: {"user": "tapdb_operator"},
+def test_restore_preserves_function_settings_and_requires_separate_runtime_bind():
+    # Restore may not rewrite historical functions or infer runtime grants.
+    # Exact function/catalog security belongs to the separately reviewed bind.
+    assert not hasattr(verify, "_restore_runtime_access")
+    result = verify.RestoreResult(
+        backup_id="full-unit",
+        mode=verify.MODE_ISOLATED,
+        target_database="restored_database",
+        target_schema="restored_schema",
     )
-    monkeypatch.setattr(
-        verify,
-        "_admin_sql",
-        lambda _cfg, sql, **kwargs: captured.update(sql=sql, kwargs=kwargs),
-    )
-
-    verify._restore_runtime_access(
-        {"user": "tapdb_runtime"},
-        database="restored_database",
-        schema="restored_schema",
-    )
-
-    sql = captured["sql"]
-    assert "SET search_path TO %I, pg_catalog, pg_temp', fn.nspname, fn.proname" in sql
-    assert "SET search_path TO %I', fn.nspname" not in sql
-    assert captured["kwargs"] == {"database": "restored_database"}
+    assert result.principal_binding_required is True
 
 
 def test_branch_campaign_restore_step_description_and_confirmation_bypass():
