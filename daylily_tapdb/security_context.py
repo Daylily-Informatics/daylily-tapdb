@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,6 +32,19 @@ def canonical_additional_tenant_ids(value: Any) -> tuple[str, ...]:
     if len(set(tenants)) != len(tenants):
         raise ValueError("additional_tenant_ids must not contain duplicates")
     return tuple(sorted(tenants))
+
+
+def configured_graph_tenant_scope(
+    cfg: Mapping[str, Any],
+) -> frozenset[str | None] | None:
+    """DAG scope for an explicitly allowlisted service, after runtime RLS admission."""
+    primary = str(cfg.get("tenant_id") or "") or None
+    additional = set(
+        canonical_additional_tenant_ids(cfg.get("additional_tenant_ids", ()))
+    )
+    if not additional.difference({primary}):
+        return None
+    return frozenset({primary, None, *additional})
 
 
 @dataclass(frozen=True)

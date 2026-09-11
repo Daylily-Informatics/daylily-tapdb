@@ -102,6 +102,97 @@ def test_additional_tenant_allowlist_is_bound_and_cannot_be_widened(
         engine.dispose()
 
 
+def test_allowlisted_lineage_accepts_visible_scopes_and_rejects_hidden_endpoint(
+    principal_database, tmp_path
+):
+    from dataclasses import replace
+
+    from sqlalchemy.orm import Session
+
+    from daylily_tapdb.factory import InstanceFactory
+    from daylily_tapdb.models.lineage import generic_instance_lineage
+    from daylily_tapdb.templates import TemplateManager
+
+    cfg = {**principal_database, "additional_tenant_ids": [TENANT_B]}
+    rp.bootstrap_runtime_principal(cfg, apply=True)
+    _install_schema(cfg)
+    receipt = tmp_path / "lineage-allowlist.json"
+    rp.bind_runtime_principal(cfg, receipt_path=receipt)
+    rp.bind_runtime_principal(cfg, apply=True, receipt_path=receipt)
+    factory = InstanceFactory(TemplateManager(), domain_code="Z")
+    with rp.operator_connection(cfg) as connection:
+        apply_transaction_context(
+            connection,
+            replace(
+                _context(cfg),
+                tenant_id=None,
+                allow_global_rows=True,
+            ),
+            assert_runtime_role=False,
+        )
+        with Session(connection) as session:
+            hidden = factory.create_instance(
+                session,
+                "set/scope-2/generic/1.0/",
+                "hidden endpoint",
+                create_children=False,
+                tenant_id=uuid.UUID(int=12),
+            )
+            hidden_uid = hidden.uid
+    engine = _runtime_engine(cfg)
+    try:
+        with Session(engine) as session, session.begin():
+            apply_transaction_context(session, _context(cfg))
+            endpoints = [
+                factory.create_instance(
+                    session,
+                    f"set/scope-{index}/generic/1.0/",
+                    f"allowed endpoint {index}",
+                    create_children=False,
+                    tenant_id=uuid.UUID(tenant),
+                )
+                for index, tenant in enumerate((TENANT_A, TENANT_B))
+            ]
+            parent_uid = endpoints[0].uid
+            edge = generic_instance_lineage(
+                name="permitted service lineage",
+                parent_instance_uid=parent_uid,
+                child_instance_uid=endpoints[1].uid,
+                tenant_id=uuid.UUID(TENANT_A),
+                category="generic",
+                type="lineage",
+                subtype="instance_lineage",
+                version="1.0",
+                relationship_type="contains",
+                bstatus="active",
+                json_addl={"properties": {}},
+            )
+            session.add(edge)
+            session.flush()
+            assert edge.uid is not None and edge.euid
+        with pytest.raises(Exception, match="endpoints are unavailable"):
+            with Session(engine) as session, session.begin():
+                apply_transaction_context(session, _context(cfg))
+                session.add(
+                    generic_instance_lineage(
+                        name="forbidden hidden endpoint",
+                        parent_instance_uid=parent_uid,
+                        child_instance_uid=hidden_uid,
+                        tenant_id=uuid.UUID(TENANT_A),
+                        category="generic",
+                        type="lineage",
+                        subtype="instance_lineage",
+                        version="1.0",
+                        relationship_type="contains",
+                        bstatus="active",
+                        json_addl={"properties": {}},
+                    )
+                )
+                session.flush()
+    finally:
+        engine.dispose()
+
+
 def test_canonical_security_catalog(principal_database):
     cfg = principal_database
     rp.bootstrap_runtime_principal(cfg, apply=True)

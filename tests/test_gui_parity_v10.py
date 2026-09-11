@@ -535,7 +535,11 @@ def test_canonical_rooted_graph_forwards_the_requested_edge_limit(
     monkeypatch.setattr(
         gui_router,
         "get_db_config",
-        lambda **_kwargs: {"client_id": "tapdb"},
+        lambda **_kwargs: {
+            "client_id": "tapdb",
+            "tenant_id": "00000000-0000-0000-0000-000000000001",
+            "additional_tenant_ids": ["00000000-0000-0000-0000-000000000002"],
+        },
     )
     monkeypatch.setattr(
         gui_router,
@@ -566,6 +570,13 @@ def test_canonical_rooted_graph_forwards_the_requested_edge_limit(
 
     assert response.status_code == 200
     assert captured["max_edges"] == 1
+    assert captured["tenant_scope"] == frozenset(
+        {
+            None,
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+        }
+    )
     assert response.json()["meta"]["effective_limits"]["max_edges"] == 1
 
 

@@ -1,0 +1,12 @@
+-- Complete explicit service-allowlist admission for authoritative lineage.
+-- tapdb-allow-schema: generic_template
+-- tapdb-allow-schema: generic_instance
+-- tapdb-allow-schema: generic_instance_lineage
+-- tapdb-allow-schema: audit_log
+-- tapdb-allow-schema: outbox_event
+-- tapdb-allow-schema: outbox_event_attempt
+-- tapdb-allow-schema: inbox_message
+-- tapdb-allow-schema: tapdb_identity_prefix_config
+-- tapdb-allow-schema: tapdb_legacy_outbox_mapping
+-- tapdb-allow-schema: tapdb_runtime_principal_scope
+-- tapdb-include: ../rls.sql

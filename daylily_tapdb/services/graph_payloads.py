@@ -181,7 +181,12 @@ def _scope_tuple(obj: Any) -> tuple[str, str, str | None]:
     )
 
 
-def _validate_lineage_scope(root: Any, lineage: Any, neighbor: Any) -> None:
+def _validate_lineage_scope(
+    root: Any,
+    lineage: Any,
+    neighbor: Any,
+    tenant_scope: frozenset[str | None] | None = None,
+) -> None:
     root_domain, root_owner, root_tenant = _scope_tuple(root)
     neighbor_domain, neighbor_owner, neighbor_tenant = _scope_tuple(neighbor)
     lineage_domain, lineage_owner, lineage_tenant = _scope_tuple(lineage)
@@ -193,6 +198,12 @@ def _validate_lineage_scope(root: Any, lineage: Any, neighbor: Any) -> None:
         )
     if (lineage_domain, lineage_owner) != (root_domain, root_owner):
         raise DagV2GraphContractError("Lineage row scope differs from its endpoints")
+    if tenant_scope is not None:
+        if not {root_tenant, neighbor_tenant, lineage_tenant}.issubset(tenant_scope):
+            raise DagV2GraphContractError(
+                "Lineage lies outside the configured service tenant scope"
+            )
+        return
     if neighbor_tenant == root_tenant and lineage_tenant == root_tenant:
         return
     properties = _properties(lineage)
@@ -299,6 +310,7 @@ def build_graph_v2_payload(
     max_nodes: int,
     max_edges: int | None = None,
     snapshot_at: datetime | None = None,
+    tenant_scope: frozenset[str | None] | None = None,
 ) -> dict[str, Any]:
     """Build one bounded, validated, lineage-only DAG v2 snapshot."""
 
@@ -359,7 +371,7 @@ def build_graph_v2_payload(
                     )
                 if bool(getattr(neighbor, "is_deleted", False)):
                     continue
-                _validate_lineage_scope(obj, lineage, neighbor)
+                _validate_lineage_scope(obj, lineage, neighbor, tenant_scope)
                 if current_depth >= depth:
                     neighbor_euid = str(getattr(neighbor, "euid", "") or "")
                     if neighbor_euid not in visited:
@@ -433,6 +445,7 @@ def build_visible_graph_v2_payload(
     max_nodes: int,
     max_edges: int,
     snapshot_at: datetime | None = None,
+    tenant_scope: frozenset[str | None] | None = None,
 ) -> dict[str, Any]:
     """Build a bounded DAG-v2 view of every instance visible to one session.
 
@@ -485,7 +498,7 @@ def build_visible_graph_v2_payload(
         child_euid = str(getattr(child, "euid", "") or "")
         if parent_euid not in visible or child_euid not in visible:
             continue
-        _validate_lineage_scope(parent, lineage, child)
+        _validate_lineage_scope(parent, lineage, child, tenant_scope)
         if len(included_lineages) >= max_edges:
             truncated_reasons.add("max_edges")
             break

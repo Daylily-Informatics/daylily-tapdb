@@ -539,6 +539,17 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    -- An explicit service allowlist authorizes links among its visible scopes.
+    -- Both active endpoints have already passed caller RLS and exact owner/domain
+    -- checks above; the lineage row must still pass its own RLS WITH CHECK.
+    -- A normal single-tenant principal retains the typed-global exception below.
+    IF NOT tapdb_session_role_is_operator()
+       AND cardinality(array_remove(
+           tapdb_allowed_tenant_ids(), tapdb_current_tenant_id()
+       )) > 0 THEN
+        RETURN NEW;
+    END IF;
+
     approved_global_link := COALESCE(
         NEW.json_addl #> '{properties,approved_global_link}',
         'false'::jsonb

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from daylily_tapdb.cli.context import resolve_context
 from daylily_tapdb.cli.db_config import get_db_config
+from daylily_tapdb.security_context import configured_graph_tenant_scope
 from daylily_tapdb.services.graph_payloads import (
     DagV2GraphContractError,
     build_graph_v2_payload,
@@ -354,6 +355,9 @@ def _build_router(
                         service_id=manifest.service_id,
                         depth=depth,
                         max_nodes=effective_nodes,
+                        tenant_scope=configured_graph_tenant_scope(
+                            get_db_config(config_path=config_path)
+                        ),
                     )
                 except (ValueError, DagV2GraphContractError) as exc:
                     raise HTTPException(

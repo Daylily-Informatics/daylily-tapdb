@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 import daylily_tapdb.services as services
 import daylily_tapdb.services.graph_payloads as graph_payloads
 
@@ -218,3 +220,32 @@ def test_rooted_graph_omits_deleted_endpoints_without_mutating_history() -> None
     assert payload["elements"]["edges"] == []
     assert deleted.is_deleted is True and lineage.is_deleted is False
     assert deleted.json_addl["properties"]["object_euid"] == "retired-display-value"
+
+
+def test_service_allowlist_preserves_shared_lineage_without_widening_single_tenant():
+    from daylily_tapdb.security_context import configured_graph_tenant_scope
+
+    tenant_a = "00000000-0000-0000-0000-000000000001"
+    tenant_b = "00000000-0000-0000-0000-000000000002"
+    scope = configured_graph_tenant_scope(
+        {"tenant_id": tenant_a, "additional_tenant_ids": [tenant_b]}
+    )
+    assert scope == frozenset({tenant_a, tenant_b, None})
+    assert configured_graph_tenant_scope({"tenant_id": tenant_a}) is None
+    common = {
+        "domain_code": "Z",
+        "issuer_app_code": "daylily-tapdb",
+        "json_addl": {"properties": {}},
+    }
+    root = SimpleNamespace(**common, tenant_id=tenant_a)
+    child = SimpleNamespace(**common, tenant_id=tenant_b)
+    lineage = SimpleNamespace(**common, tenant_id=None)
+    graph_payloads._validate_lineage_scope(root, lineage, child, scope)
+    with pytest.raises(graph_payloads.DagV2GraphContractError, match="Cross-tenant"):
+        graph_payloads._validate_lineage_scope(root, lineage, child)
+    child.tenant_id = "00000000-0000-0000-0000-000000000003"
+    with pytest.raises(graph_payloads.DagV2GraphContractError, match="outside"):
+        graph_payloads._validate_lineage_scope(root, lineage, child, scope)
+    child.tenant_id, child.issuer_app_code = tenant_b, "other-owner"
+    with pytest.raises(graph_payloads.DagV2GraphContractError, match="Cross-domain"):
+        graph_payloads._validate_lineage_scope(root, lineage, child, scope)
