@@ -55,8 +55,9 @@ def _set_context(pg_instance, monkeypatch):
 
 
 class TestPgConnectivity:
-    def test_engine_connects(self, pg_instance):
+    def test_engine_connects(self, pg_instance, request):
         engine = create_engine(pg_instance["dsn"])
+        request.addfinalizer(engine.dispose)
         with engine.connect() as conn:
             result = conn.execute(text("SELECT 1")).scalar()
             assert result == 1
@@ -79,9 +80,10 @@ class TestSchemaApply:
         # Should succeed or at least exercise the code path
         assert result.exit_code in (0, 1), f"exit={result.exit_code}\n{output}"
 
-    def test_tables_created(self, pg_instance):
+    def test_tables_created(self, pg_instance, request):
         """Verify core tables exist after schema apply."""
         engine = create_engine(pg_instance["dsn"])
+        request.addfinalizer(engine.dispose)
         with engine.connect() as conn:
             tables = (
                 conn.execute(
@@ -291,13 +293,15 @@ class TestDbCommands:
 
 
 class TestORMOperations:
-    def _engine(self, pg_instance):
-        return create_engine(
+    def _engine(self, pg_instance, request):
+        engine = create_engine(
             pg_instance["dsn"],
             connect_args={
                 "options": f"-csearch_path={pg_instance['schema_name']}",
             },
         )
+        request.addfinalizer(engine.dispose)
+        return engine
 
     @staticmethod
     def _install_context(conn, pg_instance) -> None:
@@ -315,9 +319,9 @@ class TestORMOperations:
                 {"name": name, "value": value},
             )
 
-    def test_query_templates(self, pg_instance):
+    def test_query_templates(self, pg_instance, request):
         """Verify seeded templates are queryable."""
-        engine = self._engine(pg_instance)
+        engine = self._engine(pg_instance, request)
         with engine.connect() as conn:
             self._install_context(conn, pg_instance)
             rows = conn.execute(
@@ -327,9 +331,9 @@ class TestORMOperations:
                 assert rows[0][0] is not None  # uid
                 assert rows[0][1] is not None  # category
 
-    def test_query_instances(self, pg_instance):
+    def test_query_instances(self, pg_instance, request):
         """Verify generic_instance table is accessible."""
-        engine = self._engine(pg_instance)
+        engine = self._engine(pg_instance, request)
         with engine.connect() as conn:
             self._install_context(conn, pg_instance)
             rows = conn.execute(
@@ -337,9 +341,9 @@ class TestORMOperations:
             ).fetchall()
             assert isinstance(rows, list)
 
-    def test_query_lineage(self, pg_instance):
+    def test_query_lineage(self, pg_instance, request):
         """Verify lineage table exists and is queryable."""
-        engine = self._engine(pg_instance)
+        engine = self._engine(pg_instance, request)
         with engine.connect() as conn:
             self._install_context(conn, pg_instance)
             rows = conn.execute(
@@ -347,25 +351,25 @@ class TestORMOperations:
             ).fetchall()
             assert isinstance(rows, list)
 
-    def test_query_audit_log(self, pg_instance):
+    def test_query_audit_log(self, pg_instance, request):
         """Verify audit_log table exists and is queryable."""
-        engine = self._engine(pg_instance)
+        engine = self._engine(pg_instance, request)
         with engine.connect() as conn:
             self._install_context(conn, pg_instance)
             rows = conn.execute(text("SELECT uid FROM audit_log LIMIT 5")).fetchall()
             assert isinstance(rows, list)
 
-    def test_query_outbox(self, pg_instance):
+    def test_query_outbox(self, pg_instance, request):
         """Verify outbox_event table exists and is queryable."""
-        engine = self._engine(pg_instance)
+        engine = self._engine(pg_instance, request)
         with engine.connect() as conn:
             self._install_context(conn, pg_instance)
             rows = conn.execute(text("SELECT id FROM outbox_event LIMIT 5")).fetchall()
             assert isinstance(rows, list)
 
-    def test_sequence_operations(self, pg_instance):
+    def test_sequence_operations(self, pg_instance, request):
         """Test sequence functions against real DB."""
-        engine = self._engine(pg_instance)
+        engine = self._engine(pg_instance, request)
         with engine.connect() as conn:
             seqs = (
                 conn.execute(

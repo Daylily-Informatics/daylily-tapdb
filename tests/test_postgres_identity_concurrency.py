@@ -875,15 +875,25 @@ def _assert_immutable_table_unchanged(before, after):
             )
 
 
-def _apply_test_migration(engine, *, target, migrations_dir, preflight, receipts_dir):
+def _apply_test_migration(
+    engine,
+    *,
+    target,
+    migrations_dir,
+    preflight,
+    receipts_dir,
+    reconcile_failed_apply=True,
+):
     """Run real acquire/apply/commit/finalize/release against an owned test DB.
 
     On a SQL failure, retain the actual rollback snapshot on the exception
     before a separately journaled allocator reconciliation reopens this shared
     fixture. Assertions inspect that snapshot, not post-reconciliation state.
     """
+    from daylily_tapdb.backup.receipts import read_receipts
     from daylily_tapdb.backup.recovery import retained_recovery_state
     from daylily_tapdb.sequences import (
+        SequenceProtectionError,
         acquire_database_writer_fence,
         apply_sequence_advance_plan,
         build_sequence_advance_plan,
@@ -945,6 +955,29 @@ def _apply_test_migration(engine, *, target, migrations_dir, preflight, receipts
                 plan = build_sequence_advance_plan(
                     rollback_snapshot["sequence_inventory"], floors=retained["floors"]
                 )
+                if not reconcile_failed_apply:
+                    # The injected lost-result window must remain ambiguous.
+                    # A different, higher-floor plan cannot waive that intent.
+                    prior_receipts = read_receipts(receipts_dir)
+                    with (
+                        connection.begin(),
+                        pytest.raises(
+                            SequenceProtectionError,
+                            match="Unresolved prior allocator intent",
+                        ) as refused,
+                    ):
+                        apply_sequence_advance_plan(
+                            connection,
+                            plan,
+                            writer_fence=fence["fence"],
+                            receipts_dir=receipts_dir,
+                        )
+                    assert read_receipts(receipts_dir) == prior_receipts
+                    exc.retry_refusal = str(refused.value)
+                    exc.retry_plan = plan
+                    exc.fence_receipt = fence
+                    exc.retained_floors = retained["floors"]
+                    raise
                 with connection.begin():
                     advance = apply_sequence_advance_plan(
                         connection,
@@ -981,6 +1014,90 @@ def _apply_test_migration(engine, *, target, migrations_dir, preflight, receipts
                 control_connection=control,
             )
             return result
+    finally:
+        control_engine.dispose()
+
+
+def _reconcile_lost_migration_result(engine, *, failure, receipts_dir):
+    """Explicitly take over this test's closed gate after its sessions exited.
+
+    Shared observed-only reconciliation retains the missing allocator outcome;
+    only a new reviewed advance and verified release reopen runtime access.
+    """
+    from daylily_tapdb.sequences import (
+        acquire_database_writer_fence,
+        apply_sequence_advance_plan,
+        apply_writer_fence_takeover,
+        build_sequence_advance_plan,
+        build_writer_fence_takeover_plan,
+        capture_sequence_inventory,
+        record_sequence_advance_outcome,
+        release_database_writer_fence,
+    )
+
+    original = failure.rollback_snapshot["sequence_inventory"]
+    target = dict(original["target"], sequence_mappings=original["sequence_mappings"])
+    control_engine = _migration_test_engine(engine.url.set(database="postgres"))
+    try:
+        with control_engine.connect() as control:
+            plan = build_writer_fence_takeover_plan(
+                control,
+                target=target,
+                receipts_dir=receipts_dir,
+                fence_intent_receipt_id=failure.fence_receipt["intent_receipt_id"],
+            )
+            assert plan["observed_connections_allowed"] is False
+            quarantine = apply_writer_fence_takeover(
+                control,
+                plan,
+                target_connection_factory=engine.connect,
+                receipts_dir=receipts_dir,
+            )
+            assert quarantine["phase"] == "quarantined"
+            assert quarantine["old_operation_outcome"] == "unresolved_observed_only"
+            assert quarantine["sequence_inventory"] == original
+            assert all(
+                floor in quarantine["retained_floors"]
+                for floor in failure.retained_floors
+            )
+            with engine.connect() as connection:
+                with connection.begin():
+                    observed = capture_sequence_inventory(
+                        connection, schema_name=target["schema_name"], target=target
+                    )
+                assert observed == original
+                advance_plan = build_sequence_advance_plan(
+                    observed, floors=quarantine["retained_floors"]
+                )
+                fence = acquire_database_writer_fence(
+                    connection,
+                    control_connection=control,
+                    inventory=observed,
+                    receipts_dir=receipts_dir,
+                    quarantine_receipt=quarantine,
+                )
+                with connection.begin():
+                    advance = apply_sequence_advance_plan(
+                        connection,
+                        advance_plan,
+                        writer_fence=fence["fence"],
+                        receipts_dir=receipts_dir,
+                    )
+                committed = record_sequence_advance_outcome(
+                    advance,
+                    receipts_dir=receipts_dir,
+                    outcome="committed",
+                    actor="pytest:lost-result-reconciliation",
+                )
+                assert committed["verification"]["ok"] is True
+                release_database_writer_fence(
+                    connection,
+                    fence,
+                    result=committed,
+                    receipts_dir=receipts_dir,
+                    control_connection=control,
+                )
+                return quarantine
     finally:
         control_engine.dispose()
 
@@ -1998,6 +2115,7 @@ def test_released_9_1_0_schema_migrates_populated_rows_without_identity_change(
             "20260904_061819_tenant_scoped_natural_identity.sql",
             "20260910_203200_aurora_operator_principals.sql",
             "20260910_220000_sequence_prefix_bindings.sql",
+            "20260910_233000_pin_managed_allocator_resolution.sql",
         ]
         _assert_only_catalog_prefix_evidence_added(result.receipt)
         for table_name in (
@@ -2148,6 +2266,7 @@ def test_released_9_2_2_migrates_to_tenant_identity_without_mutating_rows(
                 filename,
                 "20260910_203200_aurora_operator_principals.sql",
                 "20260910_220000_sequence_prefix_bindings.sql",
+                "20260910_233000_pin_managed_allocator_resolution.sql",
             ]
             pending = preflight["pending_migrations"][0]
             assert pending["allowed_columns"] == []
@@ -2332,6 +2451,12 @@ def test_failed_guarded_migration_rolls_back_rows_and_sequences(pg_instance, tmp
 def test_failure_after_transactional_sequence_restart_rolls_back_exactly(
     pg_instance, tmp_path, monkeypatch
 ):
+    from daylily_tapdb.backup.receipts import (
+        read_head,
+        read_receipts,
+        verify_receipt_chain,
+    )
+
     receipts = tmp_path / "recovery-receipts"
     migrations = tmp_path / "post-advance-migrations"
     migrations.mkdir()
@@ -2428,12 +2553,62 @@ def test_failure_after_transactional_sequence_restart_rolls_back_exactly(
             preflight=preflight,
             target=target,
             receipts_dir=receipts,
+            reconcile_failed_apply=False,
         )
     assert observed["advanced"] is True
+    assert failed.value.sequence_result is None
+    assert "Unresolved prior allocator intent" in failed.value.retry_refusal
     after = failed.value.rollback_snapshot
 
     assert after["tables"] == preflight["tables"]
     assert after["sequences"] == preflight["sequences"]
+    pending_events = read_receipts(receipts)
+    original_intent = next(
+        row
+        for row in pending_events
+        if row.operation == "sequence_advance" and row.detail["phase"] == "intent"
+    )
+    retry_plan = failed.value.retry_plan
+    assert retry_plan["sha256"] != original_intent.detail["plan"]["sha256"]
+    retry_next = {item["name"]: item["next_value"] for item in retry_plan["advances"]}
+    original_reserved = [
+        floor
+        for floor in original_intent.detail["floors"]
+        if floor["source"] == "sequence_advance_intent"
+    ]
+    assert original_reserved
+    assert all(
+        retry_next[floor["name"]] > floor["value"] for floor in original_reserved
+    )
+    assert not any(
+        row.operation == "sequence_advance"
+        and row.detail.get("phase")
+        in {"committed", "rolled_back", "reconciled_observed"}
+        for row in pending_events
+    )
+
+    quarantine = _reconcile_lost_migration_result(
+        engine, failure=failed.value, receipts_dir=receipts
+    )
+    reconciled_events = read_receipts(receipts)
+    observed_outcome = next(
+        row.detail
+        for row in reconciled_events
+        if row.operation == "sequence_advance"
+        and row.detail.get("phase") == "reconciled_observed"
+        and row.detail["intent_receipt_id"] == original_intent.receipt_id
+    )
+    assert observed_outcome["prior_transaction_outcome"] == "unknown"
+    assert observed_outcome["observed_inventory"] == after["sequence_inventory"]
+    assert observed_outcome["reconciliation_receipt_sha256"] == quarantine["sha256"]
+    assert observed_outcome["floors"] == original_intent.detail["floors"]
+    assert not any(
+        row.operation == "sequence_advance"
+        and row.detail.get("phase") in {"committed", "rolled_back"}
+        and row.detail.get("intent_receipt_id") == original_intent.receipt_id
+        for row in reconciled_events
+    )
+    assert verify_receipt_chain(reconciled_events, head=read_head(receipts)).ok is True
 
 
 def test_seed_sequence_alignment_is_exact_noop_and_required_restart_rolls_back(

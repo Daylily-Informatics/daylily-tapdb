@@ -74,7 +74,9 @@ def _runtime_connection(
     )
 
 
-def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(pg_instance):
+def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(
+    pg_instance, request
+):
     tenant_a = uuid.uuid4()
     tenant_b = uuid.uuid4()
     keys: dict[uuid.UUID | None, str | None] = {
@@ -105,6 +107,7 @@ def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(pg_instanc
         isolation_level="REPEATABLE READ",
         connect_args={"options": f"-csearch_path={pg_instance['schema_name']}"},
     )
+    request.addfinalizer(operator.dispose)
     with operator.begin() as connection:
         connection.execute(
             text(
@@ -346,6 +349,7 @@ def test_operator_inventory_is_complete_while_runtime_is_fixed_tenant(pg_instanc
 
     migrations = Path(__file__).resolve().parents[1] / "schema" / "migrations"
     runtime_engine = create_engine(pg_instance["dsn"])
+    request.addfinalizer(runtime_engine.dispose)
     with runtime_engine.begin() as connection:
         with pytest.raises(MigrationPreflightError, match="operator connection"):
             build_migration_preflight(

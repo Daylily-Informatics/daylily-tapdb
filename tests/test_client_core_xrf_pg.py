@@ -36,9 +36,10 @@ runner = CliRunner()
 
 
 def test_client_runtime_uses_operator_seeded_core_for_xrf_and_user(
-    pg_instance, tmp_path
+    pg_instance, tmp_path, request
 ):
     clear_cli_context()
+    request.addfinalizer(clear_cli_context)
     set_cli_context(config_path=pg_instance["config_path"])
     applied = runner.invoke(
         app,
@@ -60,6 +61,7 @@ def test_client_runtime_uses_operator_seeded_core_for_xrf_and_user(
         pg_instance["operator_dsn"],
         connect_args={"options": f"-csearch_path={schema_name}"},
     )
+    request.addfinalizer(operator.dispose)
     with operator.begin() as connection:
         connection.exec_driver_sql(
             f'CREATE ROLE "{client_role}" LOGIN NOSUPERUSER NOBYPASSRLS '
@@ -366,4 +368,3 @@ def test_client_runtime_uses_operator_seeded_core_for_xrf_and_user(
             assert projection[0]["target_object_euid"] == target_euid
             assert projection[0]["external_reference_euid"] == result.reference.euid
             assert projection[0]["lineage_euid"] == result.lineage.euid
-    clear_cli_context()
