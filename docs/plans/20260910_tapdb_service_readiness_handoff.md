@@ -4,18 +4,18 @@ Status date: 2026-09-10
 
 ## Status
 
-**Candidate only. Not released. Not independently accepted.** This draft is a
+**Candidate only. Not released. Independent acceptance is user-attested.** This draft is a
 slot-controlled handoff for a future exact TapDB 10.1.0 release. It is not an
 installation instruction and must not be used as evidence that 10.1.0 exists on
 GitHub, PyPI, or any service.
 
 | Claim | Current state | Required terminal evidence |
 |---|---|---|
-| Source implementation | Implementation prepared; no independently qualified frozen candidate | Reviewed PR merge commit on `main` |
-| Independent PostgreSQL qualification | Human reviewer volunteered; no verdict or final-candidate evidence yet | Human review verdict and required evidence tied to one frozen commit on exact PostgreSQL 16.13 |
-| Isolated Aurora PostgreSQL 16.13 acceptance | Author preparation/binding evidence exists; independent acceptance incomplete | Independent exact-target acceptance receipt against the frozen commit |
-| Runtime `TEMP` confinement | Implemented;134 exact16.13 principal author cases and53 root CLI/core/release contract checks pass; human and final Aurora acceptance pending | Reviewed bind plan/result proving exact database ACL review, `PUBLIC` and runtime revocation, explicit operator preservation when needed, and effective runtime `TEMP=false`; then independent frozen-candidate acceptance with recreated runtime sessions |
-| Full suite and coverage | Not green/frozen; two measured 10.1.0 changed-module exceptions are approved | Zero-failure, zero-unexpected-skip full suite on exact PostgreSQL 16.13; aggregate branch coverage and every other changed production module at or above 90%; numeric reports retained for approved `backup/recovery.py` 86.72% and `backup/service.py` 89.57% exceptions |
+| Source implementation | Frozen candidate; independent acceptance user-attested | Reviewed PR merge commit on `main` |
+| Independent PostgreSQL qualification | User attests independent acceptance is sufficient to proceed | Acceptance disposition recorded; sensitive results intentionally not attached; no locally witnessed independent-run claim |
+| Isolated Aurora PostgreSQL 16.13 acceptance | User-attested independent acceptance; separate author migration/binding checks pass | Acceptance disposition recorded without disclosing sensitive results |
+| Runtime `TEMP` confinement | Implemented;134 exact16.13 principal author cases pass; actual isolated Aurora bind and fresh-session TEMP-denial author checks pass; independent acceptance user-attested | Service adoption still owns closure/recreation of its runtime sessions; no production adoption claim |
+| Full suite and coverage | Partial exact16.13 run2964PASS, aggregate94.73%; changed-module gate passes with the two approved exceptions; complete CI pending | Zero-failure, zero-unexpected-skip full suite on exact PostgreSQL 16.13; aggregate branch coverage and every other changed production module at or above90%; approved exceptions retain numeric reports |
 | CI | Not run on a reviewed release commit | Green protected-branch required checks for the approved PostgreSQL 16.13 release scope, quality, security, and build/install smoke |
 | Tag | Not created | Immutable annotated bare tag `10.1.0`, peeled to the exact release commit |
 | Wheel and sdist | Not release-built | Clean-build names and SHA-256 values from the tagged commit |
@@ -28,14 +28,17 @@ No production service or database was changed by preparation of this handoff.
 Current runtime/test candidate: `24075ba7628d38502538b1897e09ae3cb58e21a7`.
 Ordinary PG16.13 run:2964PASS, zero errors/skips, aggregate94.73%; changed-module
 gate passes with the two approved exceptions. The same two independent
-authorization modules remain unrun, so this is not complete qualification.
+authorization modules remain unrun locally, so this is not a complete local
+suite. The user separately accepts the confidential independent acceptance as
+sufficient to proceed; no sensitive results are requested or published.
 Actual isolated Aurora migration/recovery and TEMP binding now pass author
 checks, including fresh runtime TEMP table/sequence denial. Production remains
 unchanged. Current production payload is identical to package-verified aeb5ac0;
 24075ba changes only test-server isolation and the ledger.
 TEMP author proof:134 cases pass on exact16.13, zero skips, in
-`runtime/qualification/b-temp-denial-final-pg16.xml`. Human/final acceptance is
-still pending. Historical partial-matrix checkpoint:
+`runtime/qualification/b-temp-denial-final-pg16.xml`. Independent acceptance is
+user-attested; ordinary CI and release verification remain pending.
+Historical partial-matrix checkpoint:
 `878b9a0448ab16401dfcb7ceffdd4070b8349525`.
 The parallel partial regression runs report 2955 passes on PostgreSQL 16.13
 and 2952 passes / 2 failures / 1 setup error on 17.11. Aggregate coverage is
@@ -104,7 +107,8 @@ The release is not complete while any required field is `PENDING`.
 
 The user-requested `TEMP` restriction is a candidate change after the historical
 package receipts recorded below. Runtime/test commit24075ba is now fixed for
-review; no human verdict or release artifact exists yet.
+review; independent acceptance is user-attested, but no release artifact
+exists yet.
 
 ## Candidate compatibility and dependency contract
 

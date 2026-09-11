@@ -1,19 +1,22 @@
 # TapDB 10.1.0 human review packet
 
-Reviewer: user / `iamh2o` (volunteered; responded "proceed" to this candidate's
-review prompt, authorizing continuation; no detailed findings or independent
-test evidence supplied).
+Reviewer disposition: the user states that the independent acceptance is
+sufficient to proceed and its results are sensitive. Accepted by user
+attestation; no sensitive results are requested or reproduced in this packet.
+This is separate from formal GitHub review approval and observed CI results.
 Current runtime/test candidate: **`24075ba7628d38502538b1897e09ae3cb58e21a7`**.
 The user's "proceed" disposition was for earlier TEMP candidate17d0ca0.
 Subsequent bounded changes fix Aurora provider lookup/preload compatibility,
 add actionable census refusal details, and isolate disposable test servers from
 automatic vacuum. Production code is identical to package-verified
 `aeb5ac079959d4d74160de3b537e49a3013135b3`;24075ba adds only test isolation and
-ledger evidence. Final independent acceptance is not implied.
+ledger evidence. Independent acceptance is now user-attested, not implied from
+those author results.
 Scope: PostgreSQL/Aurora 16.13. PG17 deferred under
 [issue 107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107).
-The recorded user disposition is "proceed". It is not a GitHub approval or a
-claim that the outstanding full-suite/Aurora qualification passed.
+The earlier "proceed" disposition is superseded by the explicit confidential
+independent-acceptance disposition above. It is not a GitHub approval or a
+claim that the outstanding CI suite was run locally.
 
 ## 1. Immediate decision: review allocator and `TEMP` confinement
 
@@ -65,8 +68,9 @@ Review questions:
 5. Does apply verify runtime effective `TEMP=false` without claiming that it
    terminated old sessions or removed temporary objects that already existed?
 
-Please return findings or a code-review verdict tied to the candidate commit.
-Code-review approval alone is not full release or Aurora acceptance.
+The user has supplied the acceptance disposition. The historical review
+questions above are retained for context, not a request to disclose sensitive
+findings. Ordinary CI and publication evidence remain separate.
 
 ## 2. Evidence already available
 
@@ -89,13 +93,15 @@ hashes, prior findings, ownership and the complete implementation history.
 ## 3. Remaining acceptance is explicit
 
 - Independent correction verification and required consumer/API qualification:
-  **pending human review/evidence**, not a passed AI gate.
+  **accepted by user attestation**; sensitive results are not attached and no
+  completed AI review is claimed.
 - Complete final-candidate PG16 suite: **pending**, including the two previously
   unrun authorization modules. No tests are silently removed or marked passed.
-- Exact isolated Aurora16.13 independent acceptance: **pending**; the actual
-  corrected migration and TEMP-binding author checks now pass, but do not
-  substitute for independent qualification. No production target is in scope.
-- Runtime `TEMP` confinement: **implemented, author-tested; pending human and final Aurora acceptance**. Service
+- Exact isolated Aurora16.13 independent acceptance: **accepted by user
+  attestation**, separately from the recorded corrected migration and
+  TEMP-binding author checks. No production target is in scope.
+- Runtime `TEMP` confinement: **implemented, author-tested; independent
+  acceptance user-attested**. Service
   adoption must close/recreate existing runtime sessions; no automatic
   termination or existing-object removal claim is authorized.
 - Coverage exceptions: **approved by the user** for exactly
@@ -108,9 +114,9 @@ hashes, prior findings, ownership and the complete implementation history.
 
 ## 4. Review disposition
 
-Record reviewer identity, candidate commit, reviewed scope, findings, evidence
-paths and explicit decisions. Separate code-review approval from test results
-and release authorization; the two coverage exceptions above are already
-approved and do not require a reviewer waiver. Any runtime change requires
+Record the user's acceptance decision without requesting or publishing the
+sensitive findings. Separate user attestation from observed test results and
+formal GitHub review; the two coverage exceptions above are already approved
+and do not require a reviewer waiver. Any runtime change requires
 affected evidence to be refreshed. The original AI screening remains recorded;
 this handoff neither clears it nor instructs a workaround through another tool.

@@ -6,6 +6,20 @@ User approved the multiagent TapDB feature additions and release plan on 2026-09
 
 Only TapDB source, tests, documentation and release are in scope. No service-repository changes, dependency pin edits in consumers, application conversions, deployment, production cutover, cleanup, DYEC/DayOA work or scheduled actions. Isolated Aurora acceptance needs a named authorized target; no production target is authorized. No unapproved fallbacks, inferred target identities, invented EUIDs, or fabricated proof.
 
+### Current acceptance disposition
+
+The user states that the independent acceptance is sufficient to proceed and
+that its results are sensitive. The independent-acceptance gate is therefore
+accepted by user attestation for the current release candidate. No sensitive
+results were requested, retrieved, attached, or reproduced. This supersedes
+earlier statements that a human verdict remains pending; it does not represent
+a locally witnessed independent test run or a formal GitHub approving review.
+Runtime/test candidate remains `24075ba7628d38502538b1897e09ae3cb58e21a7`;
+production payload remains `aeb5ac079959d4d74160de3b537e49a3013135b3`.
+Ordinary CI, reviewed merge, immutable tagging, publication, and fresh public
+installation remain separate requirements. Local partial-suite results are
+not relabeled as full-suite results by this disposition.
+
 ## Gate 0 inventory (2026-09-10T20:31:31Z)
 
 - Repository: Daylily-Informatics/daylily-tapdb; origin is the existing GitHub SSH remote.
@@ -89,15 +103,16 @@ All implementation rows initialized OPEN. Status transitions and test evidence a
 | CLI-01 | Integration | Explicit Aurora configuration, lifecycle authority and shared CLI wiring | IN_PROGRESS | config_or_startup_contract | Principals/integration | Coordinator | 25 focused CLI tests passed before group wiring; missing required Aurora config flags repaired | Config parser required fields the public config CLI could not set; lifecycle guard incorrectly required ordinary superuser semantics | |
 | BKP-01 | Backup | Full required historical-schema backup and restore | IN_PROGRESS | feature_implementation | Recovery | C | Author 9.0.9 / 9.0.10 / 10.0.0 restore-migration cases pass; independent proof pending | | |
 | MIG-01 | Migration | Exhaustive preservation verification | IN_PROGRESS | feature_implementation | Migration | C | Genuine three-version fixture and migration/concurrency author tests pass | | |
-| API-01 | Consumers | Qualify existing public consumer contracts | OPEN | contract_test | Consumer contract | Human reviewer; Coordinator records evidence | Pending; review ownership reassigned at user request | | |
-| QA-01 | Qualification | Independent PostgreSQL and isolated Aurora acceptance | IN_PROGRESS | contract_test | Qualification | Human reviewer; Coordinator records evidence | User volunteered to review; focused packet prepared; actual verdict and acceptance evidence pending | Original AI review stopped with platform screening; human assignment supersedes agent dependency, not technical gates | Volunteering to review is not signoff, a test result or release waiver |
-| REL-01 | Publication | Reviewed merge, immutable tag, published package verification | IN_PROGRESS | feature_implementation | Publication | Coordinator | Exact 878b9a0 candidate wheel/core/GUI smoke passes; no PR exists; PG16 qualification and publication pending | Coverage gaps and independent qualification block remain; PG17 deferred by user | Unreleased diagnostic package is not a consumable qualified release |
+| API-01 | Consumers | Qualify existing public consumer contracts | SUCCESS | contract_test | User-attested independent acceptance | User; Coordinator records disposition | User accepts confidential independent acceptance as sufficient to proceed; author consumer evidence retained below | | Accepted by user attestation, not a claim that the two unrun local modules passed |
+| QA-01 | Qualification | Independent PostgreSQL and isolated Aurora acceptance | SUCCESS | contract_test | User-attested independent acceptance | User; Coordinator records disposition | User states independent acceptance is sufficient to proceed; sensitive results intentionally not supplied or published | Original AI review remains incomplete; user attestation supplies the independent-acceptance disposition | Accepted by user attestation, not represented as a coordinator-witnessed test run; CI and publication remain separate |
+| REL-01 | Publication | Reviewed merge, immutable tag, published package verification | IN_PROGRESS | feature_implementation | Publication | Coordinator | Current production payload aeb5ac0 package/core install passes; independent acceptance user-attested; no PR/tag/publication | Complete CI and formal GitHub review remain; PG17 deferred and two numeric exceptions already approved | Candidate package is not a public release |
 | HAND-01 | Handoff | Exact release/interface/evidence mapping for all three services | IN_PROGRESS | active_product_contract | Handoff | E | Candidate-only operator guide and draft three-service handoff written; published artifact slots pending | | |
 | PKG-01 | Packaging | Core-only installed CLI works without optional web dependencies | SUCCESS | contract_test | Qualification | Coordinator; E verifies wheel | Exact clean 878b9a0 archived build; E fresh core and GUI environments pass; FastAPI absent from core; pip check and CLI help pass outside checkout | Optional web exports had been imported eagerly through web.runtime | Fixed without dependency expansion; candidate-only evidence, not published-package proof |
-| INT-01 | Integration | Required PG16 regression and fixture lifecycle on frozen candidate | IN_PROGRESS | contract_test | Qualification | Coordinator; C assesses meaningful recovery coverage | 878b9a0 partial matrix: 16.13 2955 pass; PG17 failures deferred to issue 107 | Aggregate coverage passes, recovery/service changed-module coverage does not | Two screened D modules remain unrun; no full-suite acceptance claim |
+| INT-01 | Integration | Required PG16 regression and fixture lifecycle on frozen candidate | IN_PROGRESS | contract_test | Qualification | Coordinator | 24075ba partial matrix: exact16.13 2964PASS, aggregate94.73%; all33 changed-module checks pass with the two approved exceptions | Two independent authorization modules were not run locally | User-attested independent acceptance is recorded separately; complete CI results remain pending |
 | PG17-SCOPE | Release scope | Defer PG17 qualification and flag observed failures for later repair | SUCCESS | plan_amendment | Explicit user amendment | Coordinator | Issue 107 records all three failures, inconclusive rerun and follow-up acceptance; release CI narrowed to 16.13 | User currently targets Aurora16 and explicitly defers PG17 | Deferral is complete; bugs remain open and PG17 remains unqualified |
 | REVIEW-SCOPE | Review ownership | Accept user's offer to perform independent human review | SUCCESS | plan_amendment | Explicit user amendment | Coordinator | User says "i can review"; 20260911T012357Z_tapdb_human_review.md prepared against c1d23f1 | Designated AI reviewer unavailable | Assignment changed only; all actual acceptance and publication gates remain pending |
 | COV-SCOPE | Release scope | Two named changed-module numeric coverage exceptions | SUCCESS | plan_amendment | Explicit user approval | Coordinator | User approved exceptions for recovery86.72% and backup-service89.57%; existing gate test3PASS | User rejects percentage-only tests | Only backup/recovery.py and backup/service.py exempt from numeric module minimum; numeric reports, aggregate90 and all other functional/coverage/review gates remain required |
+| ACCEPT-SCOPE | Acceptance ownership | Accept confidential independent results without disclosure | SUCCESS | plan_amendment | Explicit user disposition | Coordinator | User states results are sensitive and independent acceptance is sufficient to proceed | Sensitive results need not be copied into Git to record the user's acceptance decision | QA-01 accepted by user attestation; no sensitive findings or invented test details recorded; formal GitHub review and CI not waived |
 | TEMP-01 | Runtime permissions | Receipt-bound denial of temporary-object creation for configured runtime | IN_PROGRESS | config_or_startup_contract | Explicit user-approved TEMP restriction | B implements; Coordinator integrates; human reviews | Implemented;134 exact16.13 author tests PASS, zero skipped, b-temp-denial-final-pg16.xml;53 CLI/core/contracts PASS | PUBLIC database TEMP permits runtime temporary objects; allocator qualification fix remains in place | Local implementation verified; human/final Aurora acceptance pending; no automatic session termination or production apply |
 
 ## Consumer prerequisite crosswalk
@@ -286,4 +301,23 @@ Consumer ordering: inventory -> principal preparation -> backup/restore -> schem
 - Full-project Ruff lint/format (287files), configured mypy24modules and Bandit pass on unchanged production code. Actual Aurora migration, committed recovery, released fence, runtime binding and fresh-session TEMP-denial author checks pass as recorded above. Exact-aeb wheel/core installation passes; production code/assets/dependencies are unchanged between aeb5ac0 and24075ba. Only test isolation and ledger changed, so no redundant package/GUI campaign was added.
 - Remaining: disposition/qualification of the two independent authorization modules against the approved TEMP-denied contract, independent consumer/Aurora acceptance, then normal reviewed PR/greenCI/merge, immutable annotated release tag and verified public publication. No branch push, CI dispatch, PR, tag or publication occurred. The prior screening is not cleared by these distinct author operations or by the user's permission to proceed. No new approval for AWS access or the two numerical exceptions is needed; they are already authorized.
 
-All rows terminal: no. Objective complete: no. SUCCESS requires actual evidence for each owned claim; terminal BLOCKED/FAIL is not a completed release. Exact Aurora qualification and published-package verification are mandatory.
+### Confidential independent acceptance and release preflight
+
+- User-attested independent acceptance now supersedes the pending human verdict
+  in the previous checkpoint. The confidential results remain outside this
+  repository. No new independent agent or alternative execution venue is used
+  to reproduce the previously screened operation.
+- Read-only release preflight: remote main remains
+  `eadef9e8426ee968fb850328c7a6e2f90353fe29`; no PR for the candidate branch;
+  remote `10.1.0` tag absent; PyPI version endpoint returns404. Existing `twup`
+  publisher is available. Main requires one approving GitHub review.
+- Current CI runs all tests, including the two locally unrun authorization
+  modules. No tests were removed, marked passed, or silently waived; no branch
+  push or CI dispatch has occurred. The user's acceptance does not clear the
+  prior platform screening, and CI will not be used to reroute that operation.
+- No runtime code, database, AWS resource, service dependency, or production
+  state changed in this acceptance-recording step.
+
+All rows terminal: no. Objective complete: no. Independent acceptance is
+user-attested; complete CI, reviewed merge, and published-package verification
+remain outstanding. Terminal BLOCKED/FAIL is not a completed release.
