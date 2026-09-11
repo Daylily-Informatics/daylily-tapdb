@@ -146,6 +146,9 @@ class RuntimeDBConnection:
                             self._bundle.cfg.get("owner_repo_name") or ""
                         ),
                         tenant_id=self._bundle.cfg.get("tenant_id") or None,
+                        additional_tenant_ids=tuple(
+                            self._bundle.cfg.get("additional_tenant_ids", ())
+                        ),
                         actor=_audit_username_for_session(self.app_username),
                         allow_global_rows=bool(
                             self._bundle.cfg.get("allow_global_claims")

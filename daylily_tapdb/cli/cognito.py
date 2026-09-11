@@ -591,6 +591,7 @@ def _ensure_actor_user_row(
         owner_repo_name=str(cfg["owner_repo_name"]),
         schema_name=str(cfg["schema_name"]),
         tenant_id=str(cfg.get("tenant_id") or "") or None,
+        additional_tenant_ids=tuple(cfg.get("additional_tenant_ids", ())),
         allow_global_rows=bool(cfg.get("allow_global_claims")),
         config_identity=str(cfg["config_path"]),
     ) as conn:

@@ -55,6 +55,7 @@ def _write_config(path: Path, *, safety: str = "confirm_required") -> Path:
         "  user: tapdb\n"
         "  password: ''\n"
         "  tenant_id: 00000000-0000-4000-8000-000000000001\n"
+        "  additional_tenant_ids: [00000000-0000-4000-8000-000000000002]\n"
         "  operator:\n"
         "    user: tapdb_operator\n"
         "    password: operator-password\n"
@@ -90,6 +91,7 @@ def test_environment_and_config_are_single_target() -> None:
     assert cfg["database_name"] == "testdb"
     assert cfg["database"] == "tapdb_shared"
     assert cfg["tenant_id"] == "00000000-0000-4000-8000-000000000001"
+    assert cfg["additional_tenant_ids"] == ["00000000-0000-4000-8000-000000000002"]
     assert cfg["operator_user"] == "tapdb_operator"
     assert cfg["operator_configured"] is True
     assert db_mod._get_schema_name(db_mod.Environment.target) == "tapdb_testdb"
@@ -369,6 +371,7 @@ def test_tapdb_connection_for_env_passes_schema(
     assert seen["db_name"] == "tapdb_shared"
     assert seen["app_username"] == "tester"
     assert seen["tenant_id"] == "00000000-0000-4000-8000-000000000001"
+    assert seen["additional_tenant_ids"] == ("00000000-0000-4000-8000-000000000002",)
     assert seen["echo_sql"] is False
 
 

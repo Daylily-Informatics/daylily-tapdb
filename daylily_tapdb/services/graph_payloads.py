@@ -357,6 +357,8 @@ def build_graph_v2_payload(
                     raise DagV2GraphContractError(
                         "Lineage endpoint could not be resolved"
                     )
+                if bool(getattr(neighbor, "is_deleted", False)):
+                    continue
                 _validate_lineage_scope(obj, lineage, neighbor)
                 if current_depth >= depth:
                     neighbor_euid = str(getattr(neighbor, "euid", "") or "")

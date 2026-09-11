@@ -95,6 +95,7 @@ class TAPDBConnection:
         aws_profile: Optional[str] = None,
         sslrootcert: Optional[str] = None,
         server_port: Optional[int] = None,
+        additional_tenant_ids: tuple[str, ...] = (),
     ):
         """
         Initialize database connection.
@@ -125,6 +126,8 @@ class TAPDBConnection:
             schema_name: PostgreSQL schema to use as this session's search_path.
             tenant_id: Fixed tenant UUID for this runtime principal, or ``None``
                 for a deliberately global principal.
+            additional_tenant_ids: Explicit finite UUID allowlist bound to the
+                same principal; never inferred from request state or database rows.
             allow_global_rows: Permit the fixed principal to access deliberate
                 global rows in its own domain and owner scope.
             config_identity: Exact absolute config path bound to the database
@@ -147,6 +150,7 @@ class TAPDBConnection:
         self.owner_repo_name = owner_repo_name
         self.schema_name = (schema_name or "").strip() or None
         self.tenant_id = tenant_id
+        self.additional_tenant_ids = additional_tenant_ids
         self.allow_global_rows = allow_global_rows
         self.config_identity = str(config_identity or "").strip()
         postgres_target = (
@@ -342,6 +346,7 @@ class TAPDBConnection:
             domain_code=self.domain_code or "",
             owner_repo_name=self.owner_repo_name or "",
             tenant_id=self.tenant_id,
+            additional_tenant_ids=self.additional_tenant_ids,
             actor=self.app_username,
             allow_global_rows=self.allow_global_rows,
         )

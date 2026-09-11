@@ -431,6 +431,11 @@ def _build_db_config_from_section(
                 f"Config {resolved_config_path}: {section_name}.tenant_id must be a UUID"
             ) from exc
     cfg["tenant_id"] = tenant_id
+    from daylily_tapdb.security_context import canonical_additional_tenant_ids
+
+    cfg["additional_tenant_ids"] = list(
+        canonical_additional_tenant_ids(file_cfg.get("additional_tenant_ids", ()))
+    )
     allow_global_claims = file_cfg.get("allow_global_claims", False)
     if not isinstance(allow_global_claims, bool):
         raise RuntimeError(

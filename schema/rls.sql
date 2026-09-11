@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS tapdb_runtime_principal_scope (
     allow_global_rows BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+-- Existing bindings retain exactly their old scope. New bindings may explicitly
+-- add a finite set of tenants; ordinary runtime sessions cannot edit this table.
+ALTER TABLE tapdb_runtime_principal_scope
+    ADD COLUMN IF NOT EXISTS additional_tenant_ids UUID[] NOT NULL DEFAULT '{}'
+        CHECK (array_position(additional_tenant_ids, NULL) IS NULL);
 ALTER TABLE tapdb_runtime_principal_scope ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tapdb_runtime_principal_scope FORCE ROW LEVEL SECURITY;
 REVOKE ALL ON tapdb_runtime_principal_scope FROM PUBLIC;
@@ -159,6 +164,28 @@ EXCEPTION WHEN invalid_text_representation THEN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION tapdb_allowed_tenant_ids()
+RETURNS UUID[] LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path FROM CURRENT AS $$
+DECLARE
+    primary_tenant UUID;
+    additional_tenants UUID[];
+BEGIN
+    IF tapdb_session_role_is_operator() THEN
+        primary_tenant := tapdb_current_tenant_id();
+        RETURN array_remove(ARRAY[primary_tenant], NULL);
+    END IF;
+    SELECT tenant_id, additional_tenant_ids
+      INTO primary_tenant, additional_tenants
+      FROM tapdb_runtime_principal_scope
+     WHERE role_name = session_user;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'TapDB runtime role has no immutable scope binding';
+    END IF;
+    RETURN array_remove(ARRAY[primary_tenant], NULL) || additional_tenants;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION tapdb_current_actor()
 RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
 DECLARE
@@ -207,6 +234,7 @@ DECLARE
     bound_domain_code TEXT;
     bound_owner_repo_name TEXT;
     bound_tenant_id UUID;
+    bound_additional_tenant_ids UUID[];
     bound_allow_global_rows BOOLEAN;
 BEGIN
     SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication, rolbypassrls
@@ -241,9 +269,10 @@ BEGIN
     END IF;
 
     SELECT config_identity, schema_name, domain_code, issuer_app_code,
-           tenant_id, allow_global_rows
+           tenant_id, additional_tenant_ids, allow_global_rows
       INTO bound_config_identity, bound_schema_name, bound_domain_code,
-           bound_owner_repo_name, bound_tenant_id, bound_allow_global_rows
+           bound_owner_repo_name, bound_tenant_id, bound_additional_tenant_ids,
+           bound_allow_global_rows
       FROM tapdb_runtime_principal_scope
      WHERE role_name = session_user;
     IF NOT FOUND THEN
@@ -260,6 +289,8 @@ BEGIN
            IS DISTINCT FROM bound_owner_repo_name
        OR trim(current_setting('session.current_tenant_id', true))
            IS DISTINCT FROM COALESCE(bound_tenant_id::TEXT, '')
+       OR current_setting('session.additional_tenant_ids', true)::UUID[]
+           IS DISTINCT FROM bound_additional_tenant_ids
        OR lower(trim(current_setting('session.allow_global_rows', true)))
            IS DISTINCT FROM bound_allow_global_rows::TEXT THEN
         RAISE EXCEPTION
@@ -293,6 +324,7 @@ BEGIN
         'tapdb_current_domain_code',
         'tapdb_current_owner_repo_name',
         'tapdb_current_tenant_id',
+        'tapdb_allowed_tenant_ids',
         'tapdb_allow_global_rows',
         'tapdb_assert_runtime_role'
     ] LOOP
@@ -392,13 +424,13 @@ CREATE POLICY generic_template_scope_isolation ON generic_template
     USING (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
-        AND (tenant_id IS NULL OR tenant_id = tapdb_current_tenant_id())
+        AND (tenant_id IS NULL OR tenant_id = ANY(tapdb_allowed_tenant_ids()))
     )
     WITH CHECK (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
         AND (
-            tenant_id = tapdb_current_tenant_id()
+            tenant_id = ANY(tapdb_allowed_tenant_ids())
             OR (tenant_id IS NULL AND (
                 tapdb_current_tenant_id() IS NULL OR tapdb_allow_global_rows()
             ))
@@ -414,13 +446,13 @@ CREATE POLICY generic_instance_scope_isolation ON generic_instance
     USING (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
-        AND (tenant_id IS NULL OR tenant_id = tapdb_current_tenant_id())
+        AND (tenant_id IS NULL OR tenant_id = ANY(tapdb_allowed_tenant_ids()))
     )
     WITH CHECK (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
         AND (
-            tenant_id = tapdb_current_tenant_id()
+            tenant_id = ANY(tapdb_allowed_tenant_ids())
             OR (tenant_id IS NULL AND (
                 tapdb_current_tenant_id() IS NULL OR tapdb_allow_global_rows()
             ))
@@ -436,13 +468,13 @@ CREATE POLICY generic_instance_lineage_scope_isolation ON generic_instance_linea
     USING (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
-        AND (tenant_id IS NULL OR tenant_id = tapdb_current_tenant_id())
+        AND (tenant_id IS NULL OR tenant_id = ANY(tapdb_allowed_tenant_ids()))
     )
     WITH CHECK (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
         AND (
-            tenant_id = tapdb_current_tenant_id()
+            tenant_id = ANY(tapdb_allowed_tenant_ids())
             OR (tenant_id IS NULL AND (
                 tapdb_current_tenant_id() IS NULL OR tapdb_allow_global_rows()
             ))
@@ -546,13 +578,13 @@ CREATE POLICY audit_log_scope_isolation ON audit_log
     USING (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
-        AND (tenant_id IS NULL OR tenant_id = tapdb_current_tenant_id())
+        AND (tenant_id IS NULL OR tenant_id = ANY(tapdb_allowed_tenant_ids()))
     )
     WITH CHECK (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
         AND (
-            tenant_id = tapdb_current_tenant_id()
+            tenant_id = ANY(tapdb_allowed_tenant_ids())
             OR (tenant_id IS NULL AND (
                 tapdb_current_tenant_id() IS NULL OR tapdb_allow_global_rows()
             ))
@@ -568,13 +600,13 @@ CREATE POLICY outbox_event_scope_isolation ON outbox_event
     USING (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
-        AND (tenant_id IS NULL OR tenant_id = tapdb_current_tenant_id())
+        AND (tenant_id IS NULL OR tenant_id = ANY(tapdb_allowed_tenant_ids()))
     )
     WITH CHECK (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
         AND (
-            tenant_id = tapdb_current_tenant_id()
+            tenant_id = ANY(tapdb_allowed_tenant_ids())
             OR (tenant_id IS NULL AND (
                 tapdb_current_tenant_id() IS NULL OR tapdb_allow_global_rows()
             ))
@@ -592,7 +624,7 @@ CREATE POLICY outbox_event_attempt_scope_isolation ON outbox_event_attempt
              WHERE event.id = outbox_event_attempt.outbox_event_id
                AND event.domain_code = tapdb_current_domain_code()
                AND event.issuer_app_code = tapdb_current_owner_repo_name()
-               AND (event.tenant_id IS NULL OR event.tenant_id = tapdb_current_tenant_id())
+               AND (event.tenant_id IS NULL OR event.tenant_id = ANY(tapdb_allowed_tenant_ids()))
         )
     )
     WITH CHECK (
@@ -602,7 +634,7 @@ CREATE POLICY outbox_event_attempt_scope_isolation ON outbox_event_attempt
                AND event.domain_code = tapdb_current_domain_code()
                AND event.issuer_app_code = tapdb_current_owner_repo_name()
                AND (
-                   event.tenant_id = tapdb_current_tenant_id()
+                   event.tenant_id = ANY(tapdb_allowed_tenant_ids())
                    OR (event.tenant_id IS NULL AND (
                        tapdb_current_tenant_id() IS NULL OR tapdb_allow_global_rows()
                    ))
@@ -618,13 +650,13 @@ CREATE POLICY inbox_message_scope_isolation ON inbox_message
     USING (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
-        AND (tenant_id IS NULL OR tenant_id = tapdb_current_tenant_id())
+        AND (tenant_id IS NULL OR tenant_id = ANY(tapdb_allowed_tenant_ids()))
     )
     WITH CHECK (
         domain_code = tapdb_current_domain_code()
         AND issuer_app_code = tapdb_current_owner_repo_name()
         AND (
-            tenant_id = tapdb_current_tenant_id()
+            tenant_id = ANY(tapdb_allowed_tenant_ids())
             OR (tenant_id IS NULL AND (
                 tapdb_current_tenant_id() IS NULL OR tapdb_allow_global_rows()
             ))

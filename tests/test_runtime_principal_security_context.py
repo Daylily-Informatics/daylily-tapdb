@@ -38,6 +38,10 @@ def context(**changes):
         {"actor": "\n"},
         {"tenant_id": "invalid"},
         {"allow_global_rows": "true"},
+        {"additional_tenant_ids": "*"},
+        {"additional_tenant_ids": [None]},
+        {"additional_tenant_ids": ["invalid"]},
+        {"additional_tenant_ids": ["00000000-0000-0000-0000-000000000001"] * 2},
     ],
 )
 def test_context_rejects_missing_or_malformed_authority(changes):
@@ -55,6 +59,7 @@ def test_context_is_atomic_explicit_and_transaction_local():
     settings = {params["name"]: params["value"] for _, params in calls if params}
     assert settings["session.current_config_identity"] == "/explicit path/target.yaml"
     assert settings["session.current_tenant_id"] == ""
+    assert settings["session.additional_tenant_ids"] == "{}"
     assert settings["session.allow_global_rows"] == "false"
     assert all(
         "set_config(:name, :value, true)" in sql for sql, params in calls if params

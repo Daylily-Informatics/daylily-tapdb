@@ -580,6 +580,10 @@ def _set_runtime_context_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
             + _quoted_sql_literal(owner_repo_name),
             "SET session.current_tenant_id = "
             + _quoted_sql_literal(str(cfg.get("tenant_id") or "")),
+            "SET session.additional_tenant_ids = "
+            + _quoted_sql_literal(
+                "{" + ",".join(cfg.get("additional_tenant_ids", ())) + "}"
+            ),
             "SET session.current_username = " + _quoted_sql_literal(actor),
             "SET session.allow_global_rows = "
             + _quoted_sql_literal(
@@ -646,6 +650,18 @@ def _runtime_scope_binding_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
     ):
         raise ValueError("runtime scope binding requires complete target identity")
     tenant_sql = "NULL" if not tenant_id else f"{_quoted_sql_literal(tenant_id)}::uuid"
+    from daylily_tapdb.security_context import canonical_additional_tenant_ids
+
+    additional_sql = (
+        _quoted_sql_literal(
+            "{"
+            + ",".join(
+                canonical_additional_tenant_ids(cfg.get("additional_tenant_ids", ()))
+            )
+            + "}"
+        )
+        + "::uuid[]"
+    )
     values = ", ".join(
         [
             _quoted_sql_literal(runtime_user),
@@ -654,6 +670,7 @@ def _runtime_scope_binding_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
             _quoted_sql_literal(domain_code),
             _quoted_sql_literal(owner_repo_name),
             tenant_sql,
+            additional_sql,
             "TRUE" if bool(cfg.get("allow_global_claims")) else "FALSE",
         ]
     )
@@ -664,6 +681,7 @@ def _runtime_scope_binding_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
             f"domain_code = {_quoted_sql_literal(domain_code)}",
             f"issuer_app_code = {_quoted_sql_literal(owner_repo_name)}",
             f"tenant_id IS NOT DISTINCT FROM {tenant_sql}",
+            f"additional_tenant_ids = {additional_sql}",
             "allow_global_rows IS "
             + ("TRUE" if bool(cfg.get("allow_global_claims")) else "FALSE"),
         ]
@@ -672,7 +690,7 @@ def _runtime_scope_binding_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
     return (
         "INSERT INTO tapdb_runtime_principal_scope "
         "(role_name, config_identity, schema_name, domain_code, issuer_app_code, "
-        f"tenant_id, allow_global_rows) VALUES ({values}) "
+        f"tenant_id, additional_tenant_ids, allow_global_rows) VALUES ({values}) "
         "ON CONFLICT (role_name) DO NOTHING; "
         "DO $tapdb_scope_binding$ BEGIN "
         "IF NOT EXISTS (SELECT 1 FROM tapdb_runtime_principal_scope "
@@ -2205,6 +2223,7 @@ def _tapdb_connection_for_env(
         owner_repo_name=str(cfg["owner_repo_name"]),
         schema_name=str(cfg["schema_name"]),
         tenant_id=str(cfg.get("tenant_id") or "") or None,
+        additional_tenant_ids=tuple(cfg.get("additional_tenant_ids", ())),
         allow_global_rows=bool(cfg.get("allow_global_claims")),
         config_identity=str(cfg["config_path"]),
         echo_sql=False,

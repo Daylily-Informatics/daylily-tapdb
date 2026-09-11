@@ -29,7 +29,10 @@ from daylily_tapdb.runtime_catalog_contract import (
     canonical_security_contract,
     validate_managed_security,
 )
-from daylily_tapdb.security_context import operator_role_assertion_sql
+from daylily_tapdb.security_context import (
+    canonical_additional_tenant_ids,
+    operator_role_assertion_sql,
+)
 
 _FORMAT = "tapdb-runtime-principal/v1"
 _WRITABLE = {
@@ -152,6 +155,12 @@ def _target(cfg: Mapping[str, Any]) -> dict[str, Any]:
     target["allow_global_claims"] = _boolean(
         cfg.get("allow_global_claims"), "target.allow_global_claims"
     )
+    try:
+        target["additional_tenant_ids"] = list(
+            canonical_additional_tenant_ids(cfg.get("additional_tenant_ids", ()))
+        )
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise RuntimePrincipalError(str(exc)) from exc
     if not re.fullmatch(r"[0-9A-HJ-KMNP-TV-Z]{1,4}", target["domain_code"]):
         raise RuntimePrincipalError("domain_code must be an exact Meridian domain code")
     if not re.fullmatch(r"[a-z0-9]+([._-][a-z0-9]+)*", target["owner_repo_name"]):
@@ -520,6 +529,7 @@ def runtime_scope_binding_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
         "issuer_app_code": target["owner_repo_name"],
         "tenant_id": target["tenant_id"] or None,
         "allow_global_rows": target["allow_global_claims"],
+        "additional_tenant_ids": "{" + ",".join(target["additional_tenant_ids"]) + "}",
     }
     rendered = {
         key: (
@@ -876,7 +886,7 @@ def _build_runtime_principal_binding_plan(
     existing = (
         connection.execute(
             text(
-                f"SELECT config_identity, schema_name::text, domain_code, issuer_app_code, tenant_id::text, allow_global_rows FROM {_ident(target['schema_name'])}.{_SCOPE} WHERE role_name = :role"
+                f"SELECT config_identity, schema_name::text, domain_code, issuer_app_code, tenant_id::text, allow_global_rows, additional_tenant_ids::text[] FROM {_ident(target['schema_name'])}.{_SCOPE} WHERE role_name = :role"
             ),
             {"role": target["user"]},
         )
@@ -890,6 +900,7 @@ def _build_runtime_principal_binding_plan(
         "issuer_app_code": target["owner_repo_name"],
         "tenant_id": target["tenant_id"] or None,
         "allow_global_rows": target["allow_global_claims"],
+        "additional_tenant_ids": target["additional_tenant_ids"],
     }
     if existing is not None and dict(existing) != scope:
         raise RuntimePrincipalError(

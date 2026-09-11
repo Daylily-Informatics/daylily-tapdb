@@ -19,6 +19,20 @@ def _exact(value: Any, field: str, *, allow_empty: bool = False) -> str:
     return normalized
 
 
+def canonical_additional_tenant_ids(value: Any) -> tuple[str, ...]:
+    """Validate a finite UUID allowlist; never accept wildcards or inferred scope."""
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("additional_tenant_ids must be a list of canonical UUIDs")
+    tenants = []
+    for tenant in value:
+        if not isinstance(tenant, str) or str(uuid.UUID(tenant)) != tenant:
+            raise ValueError("additional_tenant_ids must contain canonical UUIDs")
+        tenants.append(tenant)
+    if len(set(tenants)) != len(tenants):
+        raise ValueError("additional_tenant_ids must not contain duplicates")
+    return tuple(sorted(tenants))
+
+
 @dataclass(frozen=True)
 class TapdbTransactionContext:
     """All security-relevant state installed together inside one transaction."""
@@ -30,6 +44,7 @@ class TapdbTransactionContext:
     tenant_id: str | uuid.UUID | None
     actor: str
     allow_global_rows: bool = False
+    additional_tenant_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _exact(self.config_identity, "config_identity")
@@ -41,10 +56,19 @@ class TapdbTransactionContext:
             uuid.UUID(str(self.tenant_id))
         if not isinstance(self.allow_global_rows, bool):
             raise ValueError("allow_global_rows must be boolean")
+        object.__setattr__(
+            self,
+            "additional_tenant_ids",
+            canonical_additional_tenant_ids(self.additional_tenant_ids),
+        )
 
     @property
     def tenant_setting(self) -> str:
         return "" if self.tenant_id is None else str(self.tenant_id)
+
+    @property
+    def additional_tenants_setting(self) -> str:
+        return "{" + ",".join(self.additional_tenant_ids) + "}"
 
 
 def is_postgresql_session(session: Any) -> bool:
@@ -73,6 +97,7 @@ def transaction_context_pgoptions(context: TapdbTransactionContext) -> str:
         ("session.current_domain_code", context.domain_code),
         ("session.current_owner_repo_name", context.owner_repo_name),
         ("session.current_tenant_id", context.tenant_setting),
+        ("session.additional_tenant_ids", context.additional_tenants_setting),
         ("session.current_username", context.actor),
         (
             "session.allow_global_rows",
@@ -99,6 +124,7 @@ def apply_transaction_context(
         ("session.current_domain_code", context.domain_code),
         ("session.current_owner_repo_name", context.owner_repo_name),
         ("session.current_tenant_id", context.tenant_setting),
+        ("session.additional_tenant_ids", context.additional_tenants_setting),
         ("session.current_username", context.actor),
         (
             "session.allow_global_rows",

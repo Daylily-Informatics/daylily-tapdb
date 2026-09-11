@@ -28,13 +28,87 @@ TENANT_A = "00000000-0000-0000-0000-00000000000a"
 TENANT_B = "00000000-0000-0000-0000-00000000000b"
 
 
+def test_additional_tenant_allowlist_is_bound_and_cannot_be_widened(
+    principal_database, tmp_path
+):
+    cfg = {**principal_database, "additional_tenant_ids": [TENANT_B]}
+    rp.bootstrap_runtime_principal(cfg, apply=True)
+    _install_schema(cfg)
+    receipt = tmp_path / "allowlist.json"
+    plan = rp.bind_runtime_principal(cfg, receipt_path=receipt)
+    assert plan["scope"]["additional_tenant_ids"] == [TENANT_B]
+    rp.bind_runtime_principal(cfg, apply=True, receipt_path=receipt)
+    engine = _runtime_engine(cfg)
+    try:
+        with engine.begin() as connection:
+            apply_transaction_context(connection, _context(cfg))
+            assert connection.execute(
+                text("SELECT name FROM generic_template ORDER BY name")
+            ).scalars().all() == ["row-0", "row-1", "row-2"]
+            assert (
+                connection.execute(text("SELECT session_user")).scalar_one()
+                == cfg["user"]
+            )
+            assert (
+                connection.execute(
+                    text("SELECT has_database_privilege(current_database(), 'TEMP')")
+                ).scalar_one()
+                is False
+            )
+            assert (
+                connection.execute(
+                    text(
+                        "UPDATE generic_template SET name = 'allowed-write' WHERE name = 'row-1' RETURNING tenant_id::text"
+                    )
+                ).scalar_one()
+                == TENANT_B
+            )
+        for sql in (
+            "CREATE TABLE forbidden_table(id integer)",
+            "CREATE TEMP TABLE forbidden_temp(id integer)",
+            "UPDATE generic_template SET tenant_id = '00000000-0000-0000-0000-00000000000c' WHERE name = 'allowed-write'",
+            "UPDATE generic_template SET name = 'forbidden' WHERE name = 'row-2'",
+            "UPDATE tapdb_runtime_principal_scope SET additional_tenant_ids = '{}'",
+        ):
+            with pytest.raises(Exception):
+                with engine.begin() as connection:
+                    apply_transaction_context(connection, _context(cfg))
+                    connection.execute(text(sql))
+        with engine.begin() as connection:
+            apply_transaction_context(connection, _context(cfg))
+            connection.execute(
+                text(
+                    "SELECT set_config('session.additional_tenant_ids', '{00000000-0000-0000-0000-00000000000c}', true)"
+                )
+            )
+            assert connection.execute(
+                text("SELECT tapdb_allowed_tenant_ids()::text[]")
+            ).scalar_one() == [TENANT_A, TENANT_B]
+            with pytest.raises(Exception, match="does not match immutable"):
+                connection.execute(text("SELECT tapdb_assert_runtime_role()"))
+        with pytest.raises(rp.RuntimePrincipalError, match="conflicting immutable"):
+            rp.bind_runtime_principal(
+                {**cfg, "additional_tenant_ids": []},
+                receipt_path=tmp_path / "conflict.json",
+            )
+        with pytest.raises(Exception, match="immutable"):
+            with rp.operator_connection(cfg) as connection:
+                connection.execute(
+                    text(
+                        f"UPDATE \"{cfg['schema_name']}\".tapdb_runtime_principal_scope SET additional_tenant_ids = '{{}}'"
+                    )
+                )
+    finally:
+        engine.dispose()
+
+
 def test_canonical_security_catalog(principal_database):
     cfg = principal_database
     rp.bootstrap_runtime_principal(cfg, apply=True)
     _install_schema(cfg)
     with rp.operator_connection(cfg, isolation_level="REPEATABLE READ") as connection:
         plan = rp.build_runtime_principal_binding_plan(connection, cfg)
-    assert len(plan["routine_grants"]) == 30
+    assert len(plan["routine_grants"]) == 31
     assert len(plan["triggers"]) == 19
     assert set(plan["security_asset_sha256"]) == {
         "tapdb_schema.sql",
@@ -392,6 +466,7 @@ def _context(cfg):
         tenant_id=cfg["tenant_id"],
         actor="test:runtime-principal",
         allow_global_rows=False,
+        additional_tenant_ids=tuple(cfg.get("additional_tenant_ids", ())),
     )
 
 

@@ -63,7 +63,7 @@ def test_complete_canonical_authority_and_preserved_extra_metadata():
     catalog["policies"].append({"relation": "historical", "name": "arbitrary"})
     catalog["triggers"].append({"relation": "historical", "name": "arbitrary"})
     granted = rc.validate_managed_security(contract, **catalog)
-    assert len(granted) == 30
+    assert len(granted) == 31
     assert all(row["name"] != "historical" for row in granted)
 
 

@@ -86,9 +86,9 @@ def policy_expressions(schema_sql: str) -> dict[str, tuple[str, str]]:
     s = schema_sql
     scope = f"(domain_code = {s}.tapdb_current_domain_code()) AND (issuer_app_code = {s}.tapdb_current_owner_repo_name())"
     read_tenant = (
-        f"((tenant_id IS NULL) OR (tenant_id = {s}.tapdb_current_tenant_id()))"
+        f"((tenant_id IS NULL) OR (tenant_id = ANY ({s}.tapdb_allowed_tenant_ids())))"
     )
-    write_tenant = f"((tenant_id = {s}.tapdb_current_tenant_id()) OR ((tenant_id IS NULL) AND (({s}.tapdb_current_tenant_id() IS NULL) OR {s}.tapdb_allow_global_rows())))"
+    write_tenant = f"((tenant_id = ANY ({s}.tapdb_allowed_tenant_ids())) OR ((tenant_id IS NULL) AND (({s}.tapdb_current_tenant_id() IS NULL) OR {s}.tapdb_allow_global_rows())))"
     result = {
         name: (f"({scope} AND {read_tenant})", f"({scope} AND {write_tenant})")
         for name in (
@@ -137,6 +137,7 @@ _TYPES = {
     "BIGINT": (20, "bigint"),
     "BOOLEAN": (16, "boolean"),
     "UUID": (2950, "uuid"),
+    "UUID[]": (2951, "uuid[]"),
     "VOID": (2278, "void"),
     "TRIGGER": (2279, "trigger"),
     "CHAR": (1042, "character"),
