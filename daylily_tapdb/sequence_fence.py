@@ -306,7 +306,12 @@ def census(
             or not row["backend_type"]
             or not row["usename"]
         ):
-            _fail("Allocator sessions or unsupported background workers remain")
+            _fail(
+                "Allocator sessions or unsupported background workers remain: "
+                f"pid={row['pid']}, backend_type={row['backend_type']!r}, "
+                f"backend_start={identity['backend_start']!r}, "
+                f"expected_retained_backend={retained_backend!r}"
+            )
     prepared = connection.execute(
         text("SELECT count(*) FROM pg_prepared_xacts WHERE database=:database"),
         {"database": database},

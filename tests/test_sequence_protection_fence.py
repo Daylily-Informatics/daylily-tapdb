@@ -337,8 +337,10 @@ def test_every_other_target_backend_type_is_excluded(backend_type):
             }
         ]
     )
-    with pytest.raises(SequenceProtectionError, match="sessions|workers"):
+    with pytest.raises(SequenceProtectionError, match="sessions|workers") as error:
         fence.census(connection, database="target", database_oid=42)
+    assert "pid=4" in str(error.value)
+    assert f"backend_type={backend_type!r}" in str(error.value)
 
 
 @pytest.mark.parametrize(
