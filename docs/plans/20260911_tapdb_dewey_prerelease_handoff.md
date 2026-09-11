@@ -6,8 +6,8 @@ This is a tagged, pip-installable prerelease, not a merge to main or a stable
 
 ## Install and resume
 
-After the ledger records verified publication, install the exact pin in the
-service's intended environment:
+Publication and fresh public installation are verified. Dewey can now install
+the exact pin in the service's intended environment:
 
 ```bash
 python -m pip install --index-url https://pypi.org/simple 'daylily-tapdb==10.1.1rc1'

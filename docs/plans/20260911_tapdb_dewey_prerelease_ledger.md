@@ -27,7 +27,7 @@
 | T01 | Inventory | Validated public limits, shared propagation and safe diagnostics | COMPLETE | feature_implementation | User request | Coordinator | Focused tests include complete >128MiB capture/receipt roundtrip, native config flags, policy rejection/propagation, existing inventory/source-contract/migration contracts | Actual Dewey evidence exceeds128MiB | Public budgets added without partial evidence or new migration engine |
 | T02 | Census | Read-only principal/access/activity and named-database census | COMPLETE | feature_implementation | User request | Coordinator | Four focused cases; public CLI on existing localPG16.13: read_only=on, source exists, two explicitly named databases absent,16roles/173objects; private runtime/qualification/dewey-prerelease-local-census.json | Bind/fence APIs are not read-only original-state inventory | No DDL, grants, schema initialization or session termination |
 | T03 | CLI | Canonical drift-check JSON with correct exit codes | COMPLETE | contract_test | User request | Coordinator | Eight native-entrypoint cases: root/local JSON x clean/drift/missing/error, exit0/1/2; existing direct command test adjusted | Wrong output emitter and native framework return handling for Typer exits | Correct payload and native process status |
-| REL | Prerelease | Minimal affected tests, immutable tag, public artifacts/install handoff | OPEN | feature_implementation | Explicit no-main prerelease request | Coordinator | Pending | | |
+| REL | Prerelease | Minimal affected tests, immutable tag, public artifacts/install handoff | COMPLETE | feature_implementation | Explicit no-main prerelease request | Coordinator | Public GitHub/PyPI artifacts and hashes verified; fresh index-only install, pip check, imports, native version/help passed | Dewey needs an installable bounded fix without main merge | Exact10.1.1rc1 pin ready for service-owned acceptance |
 
 Inventory design: retain complete in-memory row evidence with explicit finite
 row, source-row-byte and evidence-byte budgets; expose validated config/library
@@ -42,7 +42,8 @@ propagation and CLI tests; one synthetic complete capture exceeding the old
 metadata/assets and fresh public install. No full suite, coverage-percentage
 campaign, production inventory, deploy, restore or migration run.
 
-All rows terminal: no. Objective complete: no.
+All rows terminal: yes. Prerelease objective complete: yes. Actual Dewey
+inventory and migration acceptance remain service-owned and were not executed.
 
 ## Candidate evidence
 
@@ -60,3 +61,40 @@ All rows terminal: no. Objective complete: no.
   commands, limits/receipt contracts, boundaries and service-owned acceptance.
 - Final artifact hashes, release commit and fresh public install follow below
   only after successful publication. No claim of stable10.1.1 publication.
+
+## Verified publication — 2026-09-11
+
+- Package: `daylily-tapdb==10.1.1rc1`; Python>=3.12;
+  `meridian-euid==0.4.8` unchanged.
+- Exact clean release commit: `02ab7c9d0325dfcbf9dc47a03be66b62e0a22f2c`.
+- Annotated non-v tag `10.1.1rc1`:
+  `1ac2f09a1787b9e747eda582c45a628ca60b7020`; remote peeled commit verified.
+- Feature branch: `codex/tapdb-dewey-inventory-prerelease`. No PR created or
+  merged. Remote main remains `6f378b8d9387937c7041b9b765b497c24aef8f5e`.
+  Receipt-only commits after release do not move the immutable release tag.
+- [GitHub release](https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/10.1.1rc1):
+  `isPrerelease=true`, `isDraft=false`; explicitly not marked Latest.
+- [PyPI package](https://pypi.org/project/daylily-tapdb/10.1.1rc1/): both public
+  artifacts retrievable. GitHub asset digests and PyPI JSON digests match the
+  built artifacts exactly:
+
+| Artifact | SHA256 |
+|---|---|
+| daylily_tapdb-10.1.1rc1-py3-none-any.whl | 26de691dd5f9c8fac596a18119c9220f4ea78826094753b47f9eb936b0677ce7 |
+| daylily_tapdb-10.1.1rc1.tar.gz | abf2e5b18184db736c8e54fb77cbc96e78c77921f0f65b7c8f026ebb20a8a5fb |
+
+- Built in detached exact-tag worktree; wheel runtime/schema asset verifier and
+  `twine check` passed. Published using existing interactive-shell `twup`.
+- Fresh venv outside checkout, `pip install --isolated --no-cache-dir
+  --index-url https://pypi.org/simple daylily-tapdb==10.1.1rc1` succeeded.
+  `pip check`: no broken requirements. Installed metadata and `tapdb version`:
+  10.1.1rc1. New library imports, census help and inventory config flags passed.
+  An initial verifier used unsupported `tapdb --version`; corrected to the
+  documented `tapdb version` subcommand, without package changes.
+- Local build/install evidence retained under
+  `/tmp/tapdb-10.1.1rc1-release.8x4QaN/`; authoritative public artifacts and hashes
+  above do not depend on this temporary directory. Private test/census evidence
+  remains in the task's ignored `runtime/qualification/` directory.
+- No full suite/CI, Aurora run, database deployment, restore, migration or
+  production/service mutation was performed for this release. These limitations
+  are explicit in the release notes and handoff, not represented as passed.
