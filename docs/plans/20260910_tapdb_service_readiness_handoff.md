@@ -25,7 +25,11 @@ GitHub, PyPI, or any service.
 
 No production service or database was changed by preparation of this handoff.
 
-Latest candidate checkpoint: `878b9a0448ab16401dfcb7ceffdd4070b8349525`.
+Current runtime/test candidate: `17d0ca0bc2758e10a1a0469d7ff5480831d4d287`.
+TEMP author proof:134 cases pass on exact16.13, zero skips, in
+`runtime/qualification/b-temp-denial-final-pg16.xml`. Human/final acceptance is
+still pending. Historical partial-matrix checkpoint:
+`878b9a0448ab16401dfcb7ceffdd4070b8349525`.
 The parallel partial regression runs report 2955 passes on PostgreSQL 16.13
 and 2952 passes / 2 failures / 1 setup error on 17.11. Aggregate coverage is
 94.67% / 94.68%; recovery (84.37%) and backup service (89.57%) do not satisfy
@@ -91,9 +95,9 @@ candidate checkout hash into a release slot.
 
 The release is not complete while any required field is `PENDING`.
 
-The user-requested `TEMP` restriction is a candidate change after the package
-receipts recorded below. No frozen post-change candidate, human verdict, or
-release artifact exists yet.
+The user-requested `TEMP` restriction is a candidate change after the historical
+package receipts recorded below. Runtime/test commit17d0ca0 is now fixed for
+review; no human verdict or release artifact exists yet.
 
 ## Candidate compatibility and dependency contract
 

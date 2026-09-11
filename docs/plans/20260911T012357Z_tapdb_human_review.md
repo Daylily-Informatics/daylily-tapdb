@@ -1,9 +1,10 @@
 # TapDB 10.1.0 human review packet
 
 Reviewer: user / `iamh2o` (volunteered; review not yet performed).
-Candidate under review: **PENDING** frozen commit after the requested runtime
-`TEMP` restriction. Commit `c1d23f170371c6330ae438fd8772a634cfe3438b`
-predates that amendment and is retained only as historical review context.
+Runtime/test candidate under review: **`17d0ca0bc2758e10a1a0469d7ff5480831d4d287`**,
+including the requested runtime `TEMP` restriction and the approved numeric
+coverage exceptions. Subsequent review-packet/ledger-only commits do not change
+this implementation. Earlier commits are retained only as historical context.
 Scope: PostgreSQL/Aurora 16.13. PG17 deferred under
 [issue 107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107).
 This packet records review scope only; the human reviewer has not returned a
