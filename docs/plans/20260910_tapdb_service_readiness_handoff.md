@@ -4,6 +4,13 @@ Status date: 2026-09-10
 
 ## Status
 
+Release exception: the user now authorizes an administrative merge without
+waiting for CI/formal GitHub review. Those gates are waived for10.1.0, not
+reported as passed. The sensitive independent acceptance is user-attested.
+The tests and CI workflow remain intact; the blocked review is not rerun.
+Published artifacts, immutable provenance and fresh public installation still
+require verification before the release slots below are completed.
+
 **Candidate only. Not released. Independent acceptance is user-attested.** This draft is a
 slot-controlled handoff for a future exact TapDB 10.1.0 release. It is not an
 installation instruction and must not be used as evidence that 10.1.0 exists on

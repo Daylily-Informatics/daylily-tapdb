@@ -8,6 +8,18 @@ Only TapDB source, tests, documentation and release are in scope. No service-rep
 
 ### Current acceptance disposition
 
+Release amendment: the user explicitly authorizes building/publishing10.1.0
+with `gh --admin` instead of waiting for CI/review requirements. This is an
+administrative release exception, not a passing CI result or GitHub review
+approval. The previously recorded local results remain partial, and sensitive
+independent acceptance remains user-attested. No blocked review operation is
+rerun or routed through CI. Release-preparation and merge commits use the
+ordinary GitHub CI-skip directive for this authorized exception; the CI
+workflow and tests themselves are unchanged. This exception supersedes the
+earlier mandatory-green merge gate for10.1.0 only. Artifact metadata/assets,
+immutable tag provenance, publication, and fresh public installation are
+still verified. No production adoption or AWS operation is authorized here.
+
 The user states that the independent acceptance is sufficient to proceed and
 that its results are sensitive. The independent-acceptance gate is therefore
 accepted by user attestation for the current release candidate. No sensitive
@@ -113,6 +125,7 @@ All implementation rows initialized OPEN. Status transitions and test evidence a
 | REVIEW-SCOPE | Review ownership | Accept user's offer to perform independent human review | SUCCESS | plan_amendment | Explicit user amendment | Coordinator | User says "i can review"; 20260911T012357Z_tapdb_human_review.md prepared against c1d23f1 | Designated AI reviewer unavailable | Assignment changed only; all actual acceptance and publication gates remain pending |
 | COV-SCOPE | Release scope | Two named changed-module numeric coverage exceptions | SUCCESS | plan_amendment | Explicit user approval | Coordinator | User approved exceptions for recovery86.72% and backup-service89.57%; existing gate test3PASS | User rejects percentage-only tests | Only backup/recovery.py and backup/service.py exempt from numeric module minimum; numeric reports, aggregate90 and all other functional/coverage/review gates remain required |
 | ACCEPT-SCOPE | Acceptance ownership | Accept confidential independent results without disclosure | SUCCESS | plan_amendment | Explicit user disposition | Coordinator | User states results are sensitive and independent acceptance is sufficient to proceed | Sensitive results need not be copied into Git to record the user's acceptance decision | QA-01 accepted by user attestation; no sensitive findings or invented test details recorded; formal GitHub review and CI not waived |
+| RELEASE-EXCEPTION | Publication gate | Release with explicit administrative CI/review bypass | SUCCESS | plan_amendment | Explicit user instruction to release with gh --admin | Coordinator | User authorizes release using administrative bypass; independent acceptance already user-attested | Full CI and formal approving review have not been obtained | CI/review waived for10.1.0, not passed; preserve tests and prior results; verify final package and publication |
 | TEMP-01 | Runtime permissions | Receipt-bound denial of temporary-object creation for configured runtime | IN_PROGRESS | config_or_startup_contract | Explicit user-approved TEMP restriction | B implements; Coordinator integrates; human reviews | Implemented;134 exact16.13 author tests PASS, zero skipped, b-temp-denial-final-pg16.xml;53 CLI/core/contracts PASS | PUBLIC database TEMP permits runtime temporary objects; allocator qualification fix remains in place | Local implementation verified; human/final Aurora acceptance pending; no automatic session termination or production apply |
 
 ## Consumer prerequisite crosswalk

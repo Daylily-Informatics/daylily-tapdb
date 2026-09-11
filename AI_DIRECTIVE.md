@@ -210,6 +210,12 @@ See `docs/consumer-discoverability-guide.md` for the tested adoption flow.
 
 ## Testing and release floor
 
+For10.1.0 only, the user explicitly authorizes an administrative CI/review
+release exception; see `docs/plans/20260910_tapdb_service_readiness_ledger.md`.
+Independent acceptance is user-attested with confidential results retained
+outside Git. CI is waived, not passed. Artifact/publication verification remains
+mandatory. This exception does not change normal gates for subsequent releases.
+
 TapDB 10.0.0 is the latest verified public release. TapDB 10.1.0 is an
 unreleased candidate until independent exact PostgreSQL 16.13 and isolated
 Aurora PostgreSQL 16.13 qualification, a reviewed green merge, immutable
