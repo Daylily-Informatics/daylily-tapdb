@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit manual additive SQL application after native fence release.
+"""Explicit manual additive SQL application after truthful manual ACL restoration.
 
 This is not native full-preservation migration acceptance. The user waived
 another full database inventory. No native guard is modified or monkeypatched.
@@ -51,13 +51,14 @@ def inputs():
 
 def apply_sql(args, cfg, evidence):
     require(args.confirm_bloom_stopped, 'Lead must affirm Bloom remains stopped')
-    require(args.release_receipt is not None and args.release_receipt.is_absolute(), 'Exact native release receipt required')
+    require(args.release_receipt is not None and args.release_receipt.is_absolute(), 'Exact manual ACL restoration receipt required')
     released = json.loads(args.release_receipt.read_text())
-    validate_receipt(released, 'tapdb-sequence-apply/v1')
-    require(released['phase'] == 'committed', 'Native allocator outcome must be committed')
-    fence = released['writer_fence_release']
-    validate_receipt(fence, 'tapdb-writer-fence/v1')
-    require(fence['phase'] == 'released', 'Native original ACL release must be complete')
+    validate_receipt(released, 'tapdb-manual-acl-restoration/v1')
+    require(released['status'] == 'committed', 'Manual ACL restoration must be committed')
+    require(released['native_epoch_reconciled'] is False, 'Manual receipt must preserve unreconciled native epoch truth')
+    require(released['allocator_floors_satisfied'] is True, 'Retained allocator floors must be satisfied before access restoration')
+    require(released['original_acl_restored'] is True, 'Exact original ACL restoration required')
+    fence = released
     require(fence['target']['database'] == 'tapdb_bloom_prod' and fence['target']['schema_name'] == SCHEMA, 'Wrong released target')
     require(fence['physical_target']['database_oid'] == 17040, 'Wrong physical database')
     distribution = importlib.metadata.distribution('daylily-tapdb')
@@ -76,7 +77,8 @@ def apply_sql(args, cfg, evidence):
         'operator': 'dayhoff', 'runtime_user': 'bloom_runtime_10',
         'migration_filename': MIGRATION, 'asset_path': str(asset_path), 'asset_sha256': ASSET_SHA256,
         'operator_package': '10.1.5', 'inputs': evidence,
-        'native_release_receipt': str(args.release_receipt), 'native_release_sha256': released['sha256'],
+        'manual_acl_restoration_receipt': str(args.release_receipt), 'manual_acl_restoration_sha256': released['sha256'],
+        'native_epoch_reconciled': False,
         'bloom_stopped_affirmed_by_operator': True,
         'planned_effects': ['create exact private identity access table and its FK constraints',
             'enable/force RLS and operator-only policy on new table',

@@ -16,3 +16,9 @@ Use existing native `db sequences reconcile` to recover the original failed fenc
 Built Bloom10.0.6 with TapDB10.1.4 is source-compatible with a successful10.1.5 migration because runtime/schema assets are identical. Do not rebuild it solely for corrected migration declaration metadata.
 
 No implementation or further release is implied by this feature request.
+
+## Observed latency cause and manual restoration requirement
+
+At09:27:56UTC the interrupted read-only planner stack was inside `require_family_member` → `recovery_family_state` → `validate_recovery_family` → `_history` → `verify_receipt_chain` → repeated receipt checksums. It was not performing a new required data mutation. A previously completed quarantine receipt already retained the sequence inventory and all floors. Avoid recursively revalidating every historical receipt multiple times inside the same operation when a successful preservation receipt is explicitly trusted. Preserve epoch/identity checks without rescanning the full historical chain.
+
+The user explicitly waived repeated preservation checks and asked for a minimal workaround. The retained result requires56of66sequence next-values to advance by1; discarding these floors is not an acceptable shortcut. A bounded manual restoration must apply only those monotonic floors, restore exactly the recorded original ACL, and emit a truthful manual receipt. Native epoch reconciliation remains an explicit upstream follow-up; do not forge a native release receipt or claim the journal was reconciled by manual work.
