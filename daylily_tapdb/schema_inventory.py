@@ -492,6 +492,7 @@ def schema_asset_files(schema_root: Path) -> list[Path]:
         schema_root / "tapdb_schema.sql",
         schema_root / "rls.sql",
         schema_root / "allocator_functions.sql",
+        schema_root / "runtime_identity_authorization.sql",
     ]
     migrations_dir = schema_root / "migrations"
     if migrations_dir.exists():

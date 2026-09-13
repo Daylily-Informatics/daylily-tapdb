@@ -1165,6 +1165,10 @@ def db_schema_apply(
     if not rls_file.is_file():
         ccyo_out.error(f"Required RLS schema asset not found: {rls_file}")
         raise typer.Exit(1)
+    identity_file = schema_file.parent / "runtime_identity_authorization.sql"
+    if not identity_file.is_file():
+        ccyo_out.error(f"Required identity authorization asset not found: {identity_file}")
+        raise typer.Exit(1)
     schema_name = _get_schema_name(env)
     runtime_user = str(cfg["user"])
     operator_user = str(_auth_for_connection_role(cfg, "operator")["user"])
@@ -1192,6 +1196,8 @@ def db_schema_apply(
         + schema_file.read_text(encoding="utf-8")
         + "\n"
         + rls_file.read_text(encoding="utf-8")
+        + "\n"
+        + identity_file.read_text(encoding="utf-8")
         + "\n"
         + _runtime_scope_binding_sql(schema_name, cfg)
         + ";\n"

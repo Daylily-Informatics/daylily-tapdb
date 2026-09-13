@@ -50,6 +50,8 @@ _READABLE = {
     "_tapdb_migrations",
 }
 _SCOPE = "tapdb_runtime_principal_scope"
+_IDENTITY_ACCESS = "tapdb_runtime_identity_access"
+_PRIVATE = {_SCOPE, _IDENTITY_ACCESS}
 
 
 class RuntimePrincipalError(RuntimeError):
@@ -606,7 +608,7 @@ def runtime_schema_grants_sql(
     ]
     statements.extend(
         f"REVOKE ALL ON TABLE {schema}.{_ident(name)} FROM {runtime}"
-        for name in sorted(_WRITABLE | _READABLE | {_SCOPE})
+        for name in sorted(_WRITABLE | _READABLE | _PRIVATE)
     )
     statements.extend(
         f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {schema}.{_ident(name)} TO {runtime}"
@@ -631,7 +633,7 @@ def _managed_sequence_bindings(
             connection,
             schema_name=target["schema_name"],
             target={**target, "config_identity": target["config_path"]},
-            managed_tables=sorted(_WRITABLE | _READABLE | {_SCOPE}),
+            managed_tables=sorted(_WRITABLE | _READABLE | _PRIVATE),
         )
     except IdentityInventoryError as exc:
         raise RuntimePrincipalError(
@@ -808,6 +810,9 @@ def _build_runtime_principal_binding_plan(
           p.proparallel::text AS parallel, p.proleakproof AS leakproof, p.proretset AS returns_set,
           p.prosupport::oid::bigint AS support, p.procost::float AS cost, p.prorows::float AS rows,
           p.proacl::text AS acl,
+          EXISTS (SELECT 1 FROM pg_catalog.aclexplode(
+              COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))) privilege
+              WHERE privilege.grantee = 0 AND privilege.privilege_type = 'EXECUTE') AS public_execute,
           CASE WHEN p.prokind = 'a' THEN NULL
             ELSE md5(pg_catalog.pg_get_functiondef(p.oid)) END AS definition_hash
         FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid = p.prolang
@@ -831,7 +836,7 @@ def _build_runtime_principal_binding_plan(
         ).mappings()
     ]
     tables = {row["name"]: row for row in objects if row["kind"] in ("r", "p")}
-    expected = _WRITABLE | _READABLE | {_SCOPE}
+    expected = _WRITABLE | _READABLE | _PRIVATE
     if not expected.issubset(tables):
         raise RuntimePrincipalError(
             "Managed schema table inventory differs from the explicit TapDB binding contract"
@@ -1014,7 +1019,7 @@ def _verify_bound_permissions(
     """
     grants = {grant["name"]: grant for grant in plan["grants"]}
     for obj in plan["objects"]:
-        managed = obj["name"] in grants or obj["name"] == _SCOPE
+        managed = obj["name"] in grants or obj["name"] in _PRIVATE
         if unmanaged_only and managed:
             continue
         qualified = f"{_ident(target['schema_name'])}.{_ident(obj['name'])}"
@@ -1189,7 +1194,8 @@ def bind_runtime_principal(
                     f"GRANT EXECUTE ON ROUTINE {schema}.{_ident(function['name'])}({function['arguments']}) TO {role}"
                 )
             )
-        connection.execute(text(f"REVOKE ALL ON TABLE {schema}.{_SCOPE} FROM {role}"))
+        for private_table in sorted(_PRIVATE):
+            connection.execute(text(f"REVOKE ALL ON TABLE {schema}.{_ident(private_table)} FROM {role}"))
         connection.execute(
             text(
                 _default_acl_sql(
@@ -1235,6 +1241,117 @@ def bind_runtime_principal(
     return result
 
 
+def set_runtime_identity_access(
+    cfg: Mapping[str, Any], *, user_uid: int, user_euid: str, enabled: bool,
+    reason: str, receipt_path: Path, apply: bool = False,
+) -> dict[str, Any]:
+    """Plan/apply one exact canonical global identity grant, preserving runtime scope.
+
+    Only the separately authenticated schema operator can apply this native
+    policy. A reviewed catalog/identity/state hash prevents stale or replayed
+    application. No user/token fields or generic object privileges are changed.
+    """
+    target = _target(cfg)
+    if isinstance(user_uid, bool) or not isinstance(user_uid, int) or not 0 < user_uid < 2**63:
+        raise RuntimePrincipalError("user_uid must be an exact positive BIGINT")
+    user_euid = _exact(user_euid, "user_euid")
+    reason = _exact(reason, "reason")
+    if type(enabled) is not bool:
+        raise RuntimePrincipalError("enabled must be an explicit boolean")
+    receipt_path = Path(receipt_path)
+    if not receipt_path.is_absolute():
+        raise RuntimePrincipalError("receipt_path must be absolute")
+    result_path = receipt_path.with_name(receipt_path.stem + ".result.json")
+    reviewed = None
+    if apply:
+        reviewed = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if not isinstance(reviewed, dict) or reviewed != _seal(reviewed):
+            raise RuntimePrincipalError("Identity access receipt has an invalid digest")
+        if result_path.exists():
+            raise RuntimePrincipalError("Identity access result already exists; do not replay")
+    elif receipt_path.exists() or result_path.exists():
+        raise RuntimePrincipalError("Identity access receipt path must be unused")
+    schema = _ident(target["schema_name"])
+    with operator_connection(cfg, isolation_level="SERIALIZABLE", read_only=not apply) as connection:
+        binding = build_runtime_principal_binding_plan(connection, cfg)
+        if binding["existing_scope"] is None:
+            raise RuntimePrincipalError("Identity access requires an existing runtime scope binding")
+        _verify_bound_permissions(connection, target, binding)
+        actor = connection.execute(text(f"""
+            SELECT actor.uid, actor.euid, actor.domain_code, actor.issuer_app_code,
+                   actor.tenant_id::text AS tenant_id,
+                   actor.json_addl->>'role' AS role,
+                   NOT actor.is_deleted
+                     AND lower(COALESCE(actor.bstatus::text, '')) = 'active'
+                     AND COALESCE(lower(actor.json_addl->>'is_active') IN ('true','1','yes','on'), false)
+                     AS is_active
+            FROM {schema}.generic_instance actor
+            JOIN {schema}.generic_template template ON template.uid = actor.template_uid
+            WHERE actor.uid = :uid AND actor.euid = :euid
+              AND actor.domain_code = :domain AND actor.issuer_app_code = 'daylily-tapdb'
+              AND actor.tenant_id IS NULL
+              AND actor.polymorphic_discriminator = 'actor_instance'
+              AND actor.category = 'actor' AND actor.type = 'user' AND actor.subtype = 'system'
+              AND template.category = 'actor' AND template.type = 'user'
+              AND template.subtype = 'system' AND template.version = '1.0'
+              AND template.domain_code = actor.domain_code
+              AND template.issuer_app_code = actor.issuer_app_code
+              AND template.tenant_id IS NULL
+              AND template.polymorphic_discriminator = 'actor_template'
+              AND template.instance_polymorphic_identity = 'actor_instance'
+              AND lower(COALESCE(template.bstatus::text, '')) = 'active'
+              AND NOT template.is_deleted
+        """), {"uid": user_uid, "euid": user_euid, "domain": target["domain_code"]}).mappings().one_or_none()
+        if actor is None:
+            raise RuntimePrincipalError("Exact canonical global identity is unavailable")
+        if enabled and (not actor["is_active"] or not actor["role"]):
+            raise RuntimePrincipalError("Identity grant requires an active owner with an explicit role")
+        current = connection.execute(text(f"""
+            SELECT user_euid, enabled, plan_sha256, approved_by::text AS approved_by,
+                   approved_at::text AS approved_at
+            FROM {schema}.{_IDENTITY_ACCESS}
+            WHERE role_name = :role AND user_uid = :uid
+        """), {"role": target["user"], "uid": user_uid}).mappings().one_or_none()
+        if current is not None and current["user_euid"] != user_euid:
+            raise RuntimePrincipalError("Identity grant conflicts with the persisted EUID")
+        if (current is None and not enabled) or (current is not None and current["enabled"] == enabled):
+            raise RuntimePrincipalError("Identity access is already in the requested state")
+        plan = _seal({
+            "format": _FORMAT, "operation": "identity-access", "status": "planned",
+            "target": target, "catalog_sha256": binding["sha256"],
+            "identity": dict(actor), "enabled": enabled, "reason": reason,
+            "previous": dict(current) if current is not None else None,
+        })
+        if not apply:
+            _write_receipt(receipt_path, plan)
+            return plan
+        if reviewed != plan:
+            raise RuntimePrincipalError("Identity access receipt is stale or does not match the exact request")
+        connection.execute(text(f"""
+            INSERT INTO {schema}.{_IDENTITY_ACCESS}
+                (role_name, user_uid, user_euid, enabled, plan_sha256, approved_by)
+            VALUES (:role, :uid, :euid, :enabled, :plan, session_user)
+            ON CONFLICT (role_name, user_uid) DO UPDATE
+            SET enabled = EXCLUDED.enabled, plan_sha256 = EXCLUDED.plan_sha256,
+                approved_by = session_user, approved_at = CURRENT_TIMESTAMP
+        """), {"role": target["user"], "uid": user_uid, "euid": user_euid,
+               "enabled": enabled, "plan": plan["sha256"]})
+        if enabled:
+            connection.execute(text(
+                f"GRANT EXECUTE ON FUNCTION {schema}.tapdb_resolve_user_authorization(BIGINT) "
+                f"TO {_ident(target['user'])}"
+            ))
+        _verify_bound_permissions(connection, target, binding)
+    result = _seal({
+        "format": _FORMAT, "operation": "identity-access", "status": "applied",
+        "target": target, "identity": dict(actor), "enabled": enabled,
+        "plan_sha256": plan["sha256"], "applied_at": datetime.now(UTC).isoformat(),
+        "ordinary_scope_unchanged": True,
+    })
+    _write_receipt(result_path, result)
+    return result
+
+
 def grant_proven_runtime_sequences(
     connection_or_session: Connection | Session, cfg: Mapping[str, Any]
 ) -> list[dict[str, Any]]:
@@ -1275,4 +1392,5 @@ __all__ = [
     "operator_session",
     "runtime_schema_grants_sql",
     "runtime_scope_binding_sql",
+    "set_runtime_identity_access",
 ]

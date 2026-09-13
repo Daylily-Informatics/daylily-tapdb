@@ -11,6 +11,7 @@ from daylily_tapdb.cli.db_config import get_db_config
 from daylily_tapdb.runtime_principal import (
     bind_runtime_principal,
     bootstrap_runtime_principal,
+    set_runtime_identity_access,
 )
 
 runtime_principal_app = typer.Typer(
@@ -45,6 +46,32 @@ def bootstrap(
         raise typer.BadParameter(
             f"Runtime principal bootstrap failed: {message}"
         ) from None
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@runtime_principal_app.command("identity-access")
+def identity_access(
+    user_uid: int = typer.Option(..., "--user-uid", min=1),
+    user_euid: str = typer.Option(..., "--user-euid"),
+    enabled: bool = typer.Option(..., "--grant/--revoke"),
+    reason: str = typer.Option(..., "--reason"),
+    receipt: Path = typer.Option(..., "--receipt"),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    """Plan, then apply one exact authorization-only user grant for target.user.
+
+    No user enumeration, ordinary object access, issuer reassignment or token
+    changes. Apply requires the unchanged plan and existing operator context.
+    """
+    try:
+        result = set_runtime_identity_access(
+            get_db_config(), user_uid=user_uid, user_euid=user_euid,
+            enabled=enabled, reason=reason, receipt_path=receipt, apply=_apply(apply),
+        )
+    except Exception as exc:
+        from daylily_tapdb.runtime_principal import RuntimePrincipalError
+        message = str(exc) if isinstance(exc, RuntimePrincipalError) else type(exc).__name__
+        raise typer.BadParameter(f"Runtime identity access failed: {message}") from None
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
 
 

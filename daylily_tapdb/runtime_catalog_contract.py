@@ -56,7 +56,7 @@ def security_assets() -> dict[str, str]:
     """Read only the imported distribution's assets, never cwd discovery."""
     return {
         name: _asset_path(name).read_text(encoding="utf-8")
-        for name in ("tapdb_schema.sql", "rls.sql", "allocator_functions.sql")
+        for name in ("tapdb_schema.sql", "rls.sql", "allocator_functions.sql", "runtime_identity_authorization.sql")
     }
 
 
@@ -135,6 +135,7 @@ _TRIGGER = re.compile(
 _TYPES = {
     "TEXT": (25, "text"),
     "BIGINT": (20, "bigint"),
+    "JSONB": (3802, "jsonb"),
     "BOOLEAN": (16, "boolean"),
     "UUID": (2950, "uuid"),
     "UUID[]": (2951, "uuid[]"),
@@ -196,7 +197,7 @@ def canonical_security_contract(schema_name: str, schema_sql: str) -> dict[str, 
     pinned = set()
     for block in re.findall(
         r"DO \$tapdb_pin_[a-z_]+\$(.*?)END;\s*\$tapdb_pin_[a-z_]+\$;",
-        assets["rls.sql"] + "\n" + assets["allocator_functions.sql"],
+        assets["rls.sql"] + "\n" + assets["allocator_functions.sql"] + "\n" + assets["runtime_identity_authorization.sql"],
         re.S,
     ):
         names = re.search(
@@ -209,7 +210,7 @@ def canonical_security_contract(schema_name: str, schema_sql: str) -> dict[str, 
         pinned.update(re.findall(r"'([a-z_]+)'", names[1]))
     # Allocators are checked byte-for-byte above, then parsed once from the
     # standalone base copy. Do not let last-wins parsing conceal copy drift.
-    for source in (assets["tapdb_schema.sql"], assets["rls.sql"]):
+    for source in (assets["tapdb_schema.sql"], assets["rls.sql"], assets["runtime_identity_authorization.sql"]):
         matches = list(_FUNCTION.finditer(source))
         if len(matches) != len(
             re.findall(r"^CREATE OR REPLACE FUNCTION ", source, re.M)
@@ -364,6 +365,8 @@ def validate_managed_security(
             raise RuntimeCatalogContractError(
                 f"Current canonical RLS migration routine is missing: {key}"
             )
+        if key[0] == "tapdb_resolve_user_authorization" and routine_row.get("public_execute") is not False:
+            raise RuntimeCatalogContractError("Canonical identity projection must deny PUBLIC EXECUTE")
         if (
             set(expected) - set(routine_row)
             or routine_row["owner"] != owner

@@ -108,7 +108,7 @@ daylily_tapdb = [
     "templates/schema/*.json",
 ]
 [tool.setuptools.data-files]
-"schema" = ["schema/tapdb_schema.sql", "schema/rls.sql", "schema/allocator_functions.sql"]
+"schema" = ["schema/tapdb_schema.sql", "schema/rls.sql", "schema/allocator_functions.sql", "schema/runtime_identity_authorization.sql"]
 "schema/migrations" = ["schema/migrations/*.sql"]
 "docs" = ["docs/*.md"]
 

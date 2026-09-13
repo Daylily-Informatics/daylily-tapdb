@@ -1,0 +1,4 @@
+-- Add exact runtime grants and minimal canonical-user authorization projection.
+-- No actor, token, issuer, tenant, or existing scope binding is changed.
+-- tapdb-allow-schema: tapdb_runtime_identity_access
+-- tapdb-include: ../runtime_identity_authorization.sql
