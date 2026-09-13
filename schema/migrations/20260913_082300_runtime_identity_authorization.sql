@@ -1,4 +1,8 @@
 -- Add exact runtime grants and minimal canonical-user authorization projection.
 -- No actor, token, issuer, tenant, or existing scope binding is changed.
 -- tapdb-allow-schema: tapdb_runtime_identity_access
+-- tapdb-allow-new-table: tapdb_runtime_identity_access
+-- Foreign-key back-reference triggers are added to these existing parent tables.
+-- tapdb-allow-schema: generic_instance
+-- tapdb-allow-schema: tapdb_runtime_principal_scope
 -- tapdb-include: ../runtime_identity_authorization.sql
