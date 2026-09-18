@@ -1,0 +1,21 @@
+{
+  "schema": "bloom.native-fence-epoch-read/1",
+  "read_only": true,
+  "started_at": "2026-09-18T13:20:55.128643+00:00",
+  "completed_at": "2026-09-18T13:21:10.035925+00:00",
+  "journal_path": "/home/ubuntu/bloom_ops/tapdb101-20260911/journal",
+  "receipt_count": 38,
+  "family_id": "d869afb8-47a7-41dd-813a-f24d0ca96fa8",
+  "journal_head": {
+    "receipt_id": "000038-20260913T093102Z",
+    "sequence": 38,
+    "sha256": "058c4ec4e3027c32808ba2795acf4967f52d2a9898efb6faaa2fdda0d6344733"
+  },
+  "active_epoch": {
+    "receipt_id": "000033-20260913T090834Z",
+    "operation": "sequence_writer_fence",
+    "phase": "takeover_intent",
+    "status": "intent"
+  },
+  "interpretation": "Allocator recovery pending_count=0 does not settle the independent writer-fence epoch. Native acquire requires explicit reconciliation before another fence."
+}

@@ -1,0 +1,148 @@
+{
+  "acl_matches_original_epoch": true,
+  "acl_sha256": "77a60edeee9ecd94101b2e212afeed91ac66291155f2b546eecb370e1284feb2",
+  "active_epoch": {
+    "phase": "takeover_intent",
+    "receipt_id": "000033-20260913T090834Z",
+    "status": "intent"
+  },
+  "applied": false,
+  "bloom_runtime_has_direct_connect": true,
+  "completed_at": "2026-09-18T13:32:01.110456+00:00",
+  "control_state": {
+    "control_database": "postgres",
+    "current_role": "dayhoff",
+    "database": "tapdb_bloom_prod",
+    "database_oid": 17040,
+    "datallowconn": true,
+    "operator_role": "dayhoff",
+    "owner_oid": 16409,
+    "owner_role": "dayhoff",
+    "server_address": "10.0.2.148/32",
+    "server_port": 5432,
+    "server_version_num": 160013
+  },
+  "family_id": "d869afb8-47a7-41dd-813a-f24d0ca96fa8",
+  "fence_events": [
+    {
+      "phase": "acquire_intent",
+      "receipt_id": "000001-20260911T192649Z",
+      "status": "intent"
+    },
+    {
+      "phase": "acquired",
+      "receipt_id": "000002-20260911T192649Z",
+      "status": "succeeded"
+    },
+    {
+      "phase": "release_intent",
+      "receipt_id": "000009-20260911T193434Z",
+      "status": "intent"
+    },
+    {
+      "phase": "released",
+      "receipt_id": "000010-20260911T193435Z",
+      "status": "succeeded"
+    },
+    {
+      "phase": "acquire_intent",
+      "receipt_id": "000011-20260912T004204Z",
+      "status": "intent"
+    },
+    {
+      "phase": "acquired",
+      "receipt_id": "000012-20260912T004206Z",
+      "status": "succeeded"
+    },
+    {
+      "phase": "release_intent",
+      "receipt_id": "000019-20260912T004812Z",
+      "status": "intent"
+    },
+    {
+      "phase": "released",
+      "receipt_id": "000020-20260912T004820Z",
+      "status": "succeeded"
+    },
+    {
+      "phase": "acquire_intent",
+      "receipt_id": "000021-20260912T022346Z",
+      "status": "intent"
+    },
+    {
+      "phase": "acquired",
+      "receipt_id": "000022-20260912T022355Z",
+      "status": "succeeded"
+    },
+    {
+      "phase": "release_intent",
+      "receipt_id": "000026-20260912T022425Z",
+      "status": "intent"
+    },
+    {
+      "phase": "released",
+      "receipt_id": "000027-20260912T022437Z",
+      "status": "succeeded"
+    },
+    {
+      "phase": "acquire_intent",
+      "receipt_id": "000028-20260913T085859Z",
+      "status": "intent"
+    },
+    {
+      "phase": "acquired",
+      "receipt_id": "000029-20260913T085913Z",
+      "status": "succeeded"
+    },
+    {
+      "phase": "takeover_intent",
+      "receipt_id": "000033-20260913T090834Z",
+      "status": "intent"
+    },
+    {
+      "phase": "acl_quarantined",
+      "receipt_id": "000034-20260913T090859Z",
+      "status": "succeeded"
+    },
+    {
+      "phase": "quarantine_open_intent",
+      "receipt_id": "000035-20260913T091026Z",
+      "status": "intent"
+    },
+    {
+      "phase": "quarantined",
+      "receipt_id": "000036-20260913T091549Z",
+      "status": "succeeded"
+    }
+  ],
+  "journal_head": {
+    "receipt_id": "000038-20260913T093102Z",
+    "sequence": 38,
+    "sha256": "058c4ec4e3027c32808ba2795acf4967f52d2a9898efb6faaa2fdda0d6344733"
+  },
+  "native_census": {
+    "clear": true
+  },
+  "postgres_timeouts": {
+    "idle_in_transaction_session_timeout": "1d",
+    "lock_timeout": "0",
+    "statement_timeout": "0"
+  },
+  "public_has_direct_connect": true,
+  "read_only": true,
+  "rolled_back": true,
+  "schema": "bloom.native-fence-owner-read/1",
+  "started_at": "2026-09-18T13:31:28.139896+00:00",
+  "target": {
+    "config_identity": "/home/ubuntu/bloom_ops/tapdb101-20260911/operator.yaml",
+    "database": "tapdb_bloom_prod",
+    "domain_code": "M",
+    "engine_type": "aurora",
+    "host": "dayhoff-lsmcok1-tapdb.cluster-ch4mq8a6wcdf.us-west-2.rds.amazonaws.com",
+    "owner_repo_name": "bloom",
+    "port": 5432,
+    "schema_name": "tapdb_bloom_lsmcok1_local",
+    "server_port": 5432
+  },
+  "transaction_read_only": "on"
+}

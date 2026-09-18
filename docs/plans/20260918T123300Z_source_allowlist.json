@@ -1,0 +1,101 @@
+{
+  "applied": false,
+  "base_commit": "1566aa345f5d85826b0637660fbd4dac21242e49",
+  "base_release": "10.1.5",
+  "branch": "codex/kahlo-reader-resolver-20260918",
+  "files": [
+    {
+      "kind": "source",
+      "path": "daylily_tapdb/runtime_principal.py",
+      "sha256": "e52d04f1f894473fe1a5ee489c4b0b1af0a6b474671f21d20a21efa6f0c91c95"
+    },
+    {
+      "kind": "source",
+      "path": "schema/runtime_identity_authorization.sql",
+      "sha256": "4d1c9ee33c1bffdc0be264d1c68a3e60a74799dd17f95ed13c0031d98d3d72f1"
+    },
+    {
+      "kind": "source",
+      "path": "schema/migrations/20260918_070400_system_user_authorization_contract.sql",
+      "sha256": "e3b7313fd91777c86d3d7393c1e461f043b077b094c6dbbd340b02b70d74baf2"
+    },
+    {
+      "kind": "source",
+      "path": "daylily_tapdb/sequence_fence.py",
+      "sha256": "61fba37e209c91e058d1def319ed9f9167c7d59462c8bc9de7c72d25f7da994e"
+    },
+    {
+      "kind": "source",
+      "path": "daylily_tapdb/sequences.py",
+      "sha256": "a8efba7b85b41adc75c138af6de4798a3462c6fa481ac42f72493b04533acb57"
+    },
+    {
+      "kind": "source",
+      "path": "daylily_tapdb/cli/sequences.py",
+      "sha256": "ec199fca56d220475b1b6bfffd5bee22b2db41427cf4fe8d8e6984e8d0e6988a"
+    },
+    {
+      "kind": "source",
+      "path": "daylily_tapdb/backup/recovery.py",
+      "sha256": "4ef30eac89749ad80f4d56c6c4f01e894dbaf5dfbd020b828bde58c90e6800d1"
+    },
+    {
+      "kind": "source",
+      "path": "daylily_tapdb/migration_identity.py",
+      "sha256": "3fcc3ee39fc35d9fd2bcf1b87627d992c52f85111dc38de415bd59ab24ad8aa1"
+    },
+    {
+      "kind": "child_document",
+      "path": "docs/plans/20260918T123300Z_bloom_native_migration_preview.py",
+      "sha256": "fc2603c973cb8f9b242ffaa6e769de246067ad2de1662824767f4c69561b0c7f"
+    },
+    {
+      "kind": "child_document",
+      "path": "docs/plans/20260918T123300Z_candidate_assets.json",
+      "sha256": "a20e6ac9faa9059995307f4b2fa512df81f2f39209bd8d20b76ab220d094307f"
+    },
+    {
+      "kind": "child_document",
+      "path": "docs/plans/20260918T123300Z_kahlo_reader_authorization_ledger.md",
+      "sha256": "1d3cd3dffe7314624430cbcbdb1e82a8b559f55ce316c1d781be36bafd790aaa"
+    },
+    {
+      "kind": "child_document",
+      "path": "docs/plans/20260918T131508Z_native_preview_status.json",
+      "sha256": "24692241866bd2c637de5f0fb34fc0ef87b4c4c06f17d0d1dff956676d5589d1"
+    },
+    {
+      "kind": "child_document",
+      "path": "docs/plans/20260918T132110Z_native_fence_epoch.json",
+      "sha256": "23ccef859d18219da33142dafb877d32a75e29ffd282c15717f577954a1c7cbf"
+    },
+    {
+      "kind": "child_document",
+      "path": "docs/plans/20260918T132800Z_read_native_fence_state.py",
+      "sha256": "d329c2db2c046aaa397f15ba228520e1035116651b2d7ec803e8948bc05835e5"
+    },
+    {
+      "kind": "child_document",
+      "path": "docs/plans/20260918T133201Z_native_fence_owner_read.json",
+      "sha256": "e4590055e14fcb574d2060f04ed0086827b6c2a83888a3a28f388f7aedbc79e1"
+    },
+    {
+      "kind": "child_document",
+      "path": "docs/plans/20260918T133300Z_tapdb1016_rollout_proposal.md",
+      "sha256": "037922dd69d64a642e6c6d007d07f913495a23c35f5e0c44d98841523e33f692"
+    },
+    {
+      "kind": "child_document",
+      "path": "docs/plans/20260918T135200Z_restoration_performance_candidate.md",
+      "sha256": "441c4a7d2cf318ac2edb5c67deb0dccb7d0a2f3781548bcfc98358efc72e5a29"
+    }
+  ],
+  "native_preview": "original SQL candidate completed; new restoration/performance code not invoked",
+  "proposed_release": "10.1.6",
+  "schema": "tapdb.authorization-fix-source-allowlist/1",
+  "self_path": "docs/plans/20260918T123300Z_source_allowlist.json",
+  "source_frozen": false,
+  "source_ready_for_review": true,
+  "tests_run": false,
+  "worktree": "/Users/jmajor/projects/mega_dayhoff/.codex-worktrees/tapdb-kahlo-reader-resolver-20260918"
+}

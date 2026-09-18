@@ -192,6 +192,7 @@ def recovery_family_state(
     members = {content_hash(family["origin"]): family["origin"]}
     rows: list[tuple[str, Receipt]] = []
     heads = {}
+    receipt_ids: dict[str, list[str]] = {}
     # Receipt identifiers are unique within a journal, not across the family's
     # explicitly configured roots. Different roots may write the same sequence
     # number in the same second.
@@ -199,15 +200,23 @@ def recovery_family_state(
     intents: dict[str, Receipt] = {}
     pending: dict[str, str] = {}
     for root in family["receipts_dirs"]:
-        history = _history(Path(root))
         heads[root] = read_head(Path(root))
+        history = _history(Path(root))
+        if read_head(Path(root)) != heads[root]:
+            raise BackupVerificationError("recovery family journal changed during capture")
+        receipt_ids[root] = [receipt.receipt_id for receipt in history]
         for receipt in history:
             rows.append((root, receipt))
             data = receipt.detail
             declared = data.get("recovery_family")
             if declared is None:
                 continue
-            declared = validate_recovery_family(declared, required_directory=root)
+            # The exact canonical descriptor and every declared root were fully
+            # validated above. Revalidating identical embedded copies repeats
+            # the same complete journals once per receipt. Different declared
+            # families still require their own full validation.
+            if declared != family:
+                declared = validate_recovery_family(declared, required_directory=root)
             if declared["family_id"] != family["family_id"]:
                 continue
             if declared != family:
@@ -380,6 +389,13 @@ def recovery_family_state(
     unique_floors = {
         (item["name"], item["value"], item["source"]): item for item in floors
     }
+    for root in family["receipts_dirs"]:
+        final_history = _history(Path(root))
+        if (
+            read_head(Path(root)) != heads[root]
+            or [receipt.receipt_id for receipt in final_history] != receipt_ids[root]
+        ):
+            raise BackupVerificationError("recovery family journal changed during validation")
     return {
         "family_sha256": family["sha256"],
         "members": [members[key] for key in sorted(members)],

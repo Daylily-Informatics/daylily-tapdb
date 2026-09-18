@@ -1,52 +1,8 @@
--- Canonical additive authorization-only identity capability.
--- No existing user, token, scope, audit row or ordinary RLS policy is changed.
-
--- Exact canonical-user authorization grants are native principal policy, not
--- replicated user records. Runtime principals cannot read or change this table.
-CREATE TABLE IF NOT EXISTS tapdb_runtime_identity_access (
-    role_name NAME NOT NULL REFERENCES tapdb_runtime_principal_scope(role_name),
-    user_uid BIGINT NOT NULL REFERENCES generic_instance(uid),
-    user_euid TEXT NOT NULL,
-    enabled BOOLEAN NOT NULL,
-    plan_sha256 TEXT NOT NULL CHECK (plan_sha256 ~ '^[0-9a-f]{64}$'),
-    approved_by NAME NOT NULL,
-    approved_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (role_name, user_uid)
-);
-ALTER TABLE tapdb_runtime_identity_access ENABLE ROW LEVEL SECURITY;
-ALTER TABLE tapdb_runtime_identity_access FORCE ROW LEVEL SECURITY;
-REVOKE ALL ON tapdb_runtime_identity_access FROM PUBLIC;
-
--- Add only the identity policy; existing object RLS is left untouched.
-DO $tapdb_identity_operator_policy$
-DECLARE
-    scope_schema TEXT := current_schema();
-    operator_role NAME;
-BEGIN
-    SELECT pg_catalog.pg_get_userbyid(nspowner) INTO STRICT operator_role
-      FROM pg_catalog.pg_namespace WHERE nspname = scope_schema;
-    IF session_user <> operator_role OR current_user <> session_user THEN
-        RAISE EXCEPTION 'Identity policy installation requires the exact schema operator';
-    END IF;
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_catalog.pg_class relation
-        JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
-        WHERE namespace.nspname = scope_schema
-          AND relation.relname = 'tapdb_runtime_identity_access'
-          AND pg_catalog.pg_get_userbyid(relation.relowner) = operator_role
-    ) THEN
-        RAISE EXCEPTION 'Identity access table must belong to the exact schema operator';
-    END IF;
-    EXECUTE pg_catalog.format(
-        'DROP POLICY IF EXISTS tapdb_operator_access ON %I.tapdb_runtime_identity_access',
-        scope_schema
-    );
-    EXECUTE pg_catalog.format(
-        'CREATE POLICY tapdb_operator_access ON %I.tapdb_runtime_identity_access TO %I USING (true) WITH CHECK (true)',
-        scope_schema, operator_role
-    );
-END;
-$tapdb_identity_operator_policy$;
+-- Correct the canonical system-user authorization contract.
+-- The actual actor discriminator remains required; optional creation hints
+-- are not authorization authority. No template, actor, grant or token changes.
+-- Replace only the existing native function and pin its existing search path.
+-- Source: schema/runtime_identity_authorization.sql in this release.
 
 CREATE OR REPLACE FUNCTION tapdb_resolve_user_authorization(user_uid BIGINT)
 RETURNS JSONB LANGUAGE plpgsql STABLE SECURITY DEFINER
@@ -105,7 +61,6 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION tapdb_resolve_user_authorization(BIGINT) FROM PUBLIC;
 DO $tapdb_pin_identity_search_path$
 DECLARE
     scope_schema TEXT := current_schema();

@@ -40,6 +40,9 @@ from daylily_tapdb.sequence_fence import (
     build_writer_fence_takeover_plan as build_writer_fence_takeover_plan,
 )
 from daylily_tapdb.sequence_fence import (
+    reconcile_original_acl_restoration as reconcile_original_acl_restoration,
+)
+from daylily_tapdb.sequence_fence import (
     reconcile_writer_fence_release as reconcile_writer_fence_release,
 )
 from daylily_tapdb.sequence_fence import (

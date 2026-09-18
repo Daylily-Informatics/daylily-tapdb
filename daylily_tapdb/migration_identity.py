@@ -478,6 +478,26 @@ def build_migration_preflight(
     _reviewed_recovery: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Capture deterministic, sanitized preflight evidence without mutation."""
+    from daylily_tapdb.backup.recovery import validate_recovery_family
+    from daylily_tapdb.sequence_fence import read_fence_history
+
+    if recovery_family is not None:
+        if receipts_dir is None and _reviewed_recovery is None:
+            raise MigrationPreflightError(
+                "family migration requires explicit receipts_dir"
+            )
+        recovery_family = validate_recovery_family(
+            recovery_family, required_directory=receipts_dir
+        )
+    journal_roots = (
+        recovery_family["receipts_dirs"]
+        if recovery_family is not None
+        else [str(receipts_dir)] if receipts_dir is not None else []
+    )
+    journal_starts: dict[str, tuple[Any, list[str]]] = {}
+    for root in journal_roots:
+        history, head = read_fence_history(Path(root))
+        journal_starts[root] = (head, [item.receipt_id for item in history])
     schema_name = str(target.get("schema_name") or "").strip()
     if not schema_name:
         raise MigrationPreflightError("schema_name is required")
@@ -521,7 +541,6 @@ def build_migration_preflight(
         require_family_member,
         require_retained_definitions,
         retained_recovery_state,
-        validate_recovery_family,
     )
     from daylily_tapdb.sequences import build_sequence_advance_plan
 
@@ -533,13 +552,6 @@ def build_migration_preflight(
             "migration must explicitly retain its source recovery family"
         )
     if recovery_family is not None:
-        if receipts_dir is None and _reviewed_recovery is None:
-            raise MigrationPreflightError(
-                "family migration requires explicit receipts_dir"
-            )
-        recovery_family = validate_recovery_family(
-            recovery_family, required_directory=receipts_dir
-        )
         require_family_member(recovery_family, sequence_inventory)
     if _reviewed_recovery is not None:
         allocator_recovery = dict(_reviewed_recovery)
@@ -628,6 +640,10 @@ def build_migration_preflight(
         "template_instance_prefix_mapping": template_prefix_mapping,
     }
     _validate_scope_and_sequences(snapshot, validate_generators=_validate_generators)
+    for root, (start_head, start_ids) in journal_starts.items():
+        history, head = read_fence_history(Path(root))
+        if head != start_head or [item.receipt_id for item in history] != start_ids:
+            raise MigrationPreflightError("recovery journal changed during migration preflight")
     snapshot["evidence_sha256"] = _sha256(snapshot)
     return snapshot
 

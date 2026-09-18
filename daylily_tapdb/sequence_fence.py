@@ -28,6 +28,7 @@ from daylily_tapdb.identity_inventory import (
 TAKEOVER_VERSION = "tapdb-writer-fence-takeover/v1"
 FENCE_VERSION = "tapdb-writer-fence/v1"
 PROVIDER_VERSION = "tapdb-fence-provider/v1"
+RESTORATION_VERSION = "tapdb-writer-fence-restoration/v1"
 
 
 def _fail(message: str) -> NoReturn:
@@ -582,6 +583,33 @@ def active_epoch(receipts: list[Any], target: Mapping[str, Any]) -> Any:
         for item in relevant
     ):
         return None
+    if latest.detail["phase"] == "takeover_intent":
+        for item in relevant:
+            if item.detail.get("phase") != "original_acl_restoration_reconciled":
+                continue
+            observed = item.detail.get("receipt", {})
+            if observed.get("intent_receipt_id") != latest.receipt_id:
+                continue
+            validate_receipt(observed, RESTORATION_VERSION)
+            if (
+                item.sequence <= latest.sequence
+                or observed.get("original_acl") != latest.detail["original_acl"]
+                or observed.get("recovery_family") != latest.detail.get("recovery_family")
+                or observed.get("observation") != "original_acl_and_open_gate"
+                or observed.get("sequence_verification", {}).get("ok") is not True
+                or observed.get("read_only_observation") is not True
+                or observed.get("transaction_isolation") != "repeatable read"
+                or observed.get("control_transaction_isolation") != "repeatable read"
+                or observed.get("phase") != "original_acl_restoration_reconciled"
+                or observed.get("target") != target
+                or observed.get("physical_target") != latest.detail["physical_target"]
+                or observed.get("intent_sha256") != latest.checksum()
+                or observed.get("old_operation_outcome") != "unknown"
+                or observed.get("establishes_writer_fence") is not False
+                or observed.get("requires_new_review") is not True
+            ):
+                _fail("Malformed original-ACL restoration reconciliation")
+            return None
     return latest
 
 
@@ -1565,6 +1593,243 @@ def release_database_writer_fence(
     with connection.begin():
         unlock_session(connection)
     return receipt
+
+
+def reconcile_original_acl_restoration(
+    control_connection: Any,
+    *,
+    target_connection_factory: Callable[[], AbstractContextManager[Any]],
+    target: Mapping[str, Any],
+    fence_intent_receipt_id: str,
+    receipts_dir: Path,
+    recovery_family: Mapping[str, Any],
+    provider_contract: Mapping[str, Any] | None = None,
+    dry_run: bool = True,
+    preflight_receipt: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Audit an already restored quarantine without changing the database.
+
+    This observes current safety evidence; it does not infer the old operation's
+    outcome or establish writer exclusion. Any later maintenance needs its own
+    fresh review and native writer fence. Apply appends only an external receipt.
+    """
+    from daylily_tapdb.backup.recovery import (
+        recovery_family_state,
+        require_family_member,
+        require_retained_definitions,
+        retained_recovery_state,
+        validate_recovery_family,
+    )
+    from daylily_tapdb.identity_inventory import content_hash, physical_target
+    from daylily_tapdb.sequences import (
+        capture_sequence_inventory,
+        verify_sequence_floors,
+    )
+
+    if control_connection.in_transaction():
+        _fail("Restoration review requires a transaction-free control session")
+    exact = validate_target(target, str(target["schema_name"]))
+    receipts, head = read_fence_history(receipts_dir)
+    epoch = active_epoch(receipts, exact)
+    if (
+        epoch is None
+        or epoch.receipt_id != fence_intent_receipt_id
+        or epoch.detail.get("phase") != "takeover_intent"
+    ):
+        _fail("The exact latest unresolved takeover intent is required")
+    origin = epoch.detail
+    if recovery_family != origin.get("recovery_family") or not recovery_family:
+        _fail("Restoration review requires the exact original explicit recovery family")
+    if target.get("sequence_mappings") != origin.get("sequence_mappings"):
+        _fail("Restoration review requires the original explicit sequence mappings")
+    quarantines = [
+        item.detail.get("receipt", {})
+        for item in receipts
+        if item.operation == "sequence_writer_fence"
+        and item.detail.get("phase") == "quarantined"
+        and item.detail.get("receipt", {}).get("intent_receipt_id") == epoch.receipt_id
+    ]
+    if len(quarantines) != 1:
+        _fail("The takeover needs exactly one completed native quarantine receipt")
+    quarantine = quarantines[0]
+    validate_receipt(quarantine, TAKEOVER_VERSION)
+    if (
+        quarantine.get("phase") != "quarantined"
+        or quarantine.get("target") != exact
+        or quarantine.get("physical_target") != origin["physical_target"]
+        or quarantine.get("original_acl") != origin["original_acl"]
+        or quarantine.get("recovery_family") != recovery_family
+        or quarantine.get("source_receipts_dir") != str(receipts_dir)
+    ):
+        _fail("Native quarantine does not match the original exact epoch")
+    family = validate_recovery_family(recovery_family, required_directory=receipts_dir)
+    family_state = recovery_family_state(family, require_terminal=True)
+    recovery = retained_recovery_state(receipts_dir, target=exact, require_terminal=True)
+    floors = [
+        *retained_floors(receipts, exact),
+        *family_state["floors"],
+        *recovery["floors"],
+    ]
+    if not dry_run:
+        if preflight_receipt is None:
+            _fail("Restoration reconciliation requires an unchanged reviewed plan")
+        validate_receipt(preflight_receipt, RESTORATION_VERSION)
+
+    def verify_control() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]:
+        isolation = control_connection.execute(text("SHOW transaction_isolation")).scalar_one()
+        if (
+            isolation != "repeatable read"
+            or control_connection.execute(text("SHOW transaction_read_only")).scalar_one() != "on"
+        ):
+            _fail("Restoration control observation requires read-only repeatable read")
+        state = control_state(control_connection, exact)
+        _verify_origin(state, origin)
+        acl = acl_snapshot(control_connection, state["database_oid"])
+        _restorable_acl(origin["original_acl"], state)
+        if state["datallowconn"] is not True or acl != origin["original_acl"]:
+            _fail("The open gate and exact original database ACL must already be restored")
+        provider = provider_evidence(
+            control_connection,
+            target=exact,
+            operator_role=state["operator_role"],
+            provider_contract=provider_contract,
+        )
+        if provider["provider_role"] != origin["provider_evidence"]["provider_role"]:
+            _fail("Provider identity changed since the original takeover")
+        return state, acl, provider, isolation
+
+    try:
+        with control_connection.begin():
+            control_connection.execute(text("SET TRANSACTION READ ONLY"))
+            state, acl, provider, control_isolation = verify_control()
+            lock_session(control_connection, state["database_oid"])
+            census(
+                control_connection,
+                database=exact["database"],
+                database_oid=state["database_oid"],
+            )
+        with target_connection_factory() as connection:
+            if connection.in_transaction():
+                _fail("Restoration target factory must yield a transaction-free session")
+            try:
+                with connection.begin():
+                    connection.execute(text("SET TRANSACTION READ ONLY"))
+                    target_isolation = connection.execute(text("SHOW transaction_isolation")).scalar_one()
+                    if (
+                        target_isolation != "repeatable read"
+                        or connection.execute(text("SHOW transaction_read_only")).scalar_one() != "on"
+                    ):
+                        _fail("Restoration target observation requires read-only repeatable read")
+                    if physical_target(connection, exact) != origin["physical_target"]:
+                        _fail("Restoration observation connected to another physical target")
+                    if connection.execute(text("SELECT session_user")).scalar_one() != state["operator_role"]:
+                        _fail("Restoration observation authenticated another operator")
+                    backend = backend_identity(connection)
+                    lock_session(connection, state["database_oid"])
+                    census(
+                        connection,
+                        database=exact["database"],
+                        database_oid=state["database_oid"],
+                        retained_backend=backend,
+                    )
+                    baseline = worker_baseline(
+                        connection,
+                        database_oid=state["database_oid"],
+                        operator_role=state["operator_role"],
+                        aurora=exact["engine_type"] == "aurora",
+                    )
+                    extensions = target_extensions(connection)
+                    inventory = capture_sequence_inventory(
+                        connection, schema_name=exact["schema_name"], target=target
+                    )
+                    require_family_member(family, inventory)
+                    require_retained_definitions(
+                        inventory, [*family_state["inventories"], *recovery["inventories"]]
+                    )
+                    verification = verify_sequence_floors(inventory, floors=floors)
+                    if verification["ok"] is not True:
+                        _fail("Observed allocators do not exceed every retained floor")
+                    if capture_sequence_inventory(
+                        connection, schema_name=exact["schema_name"], target=target
+                    ) != inventory:
+                        _fail("Allocator evidence changed during restoration observation")
+                    with control_connection.begin():
+                        control_connection.execute(text("SET TRANSACTION READ ONLY"))
+                        final_state, final_acl, final_provider, final_isolation = verify_control()
+                        if (final_state, final_acl, final_provider, final_isolation) != (state, acl, provider, control_isolation):
+                            _fail("Control identity, roles, ACL or provider evidence changed")
+                        census(
+                            control_connection,
+                            database=exact["database"],
+                            database_oid=state["database_oid"],
+                            retained_backend=backend,
+                        )
+                        for root, expected_head in family_state["journal_heads"].items():
+                            if read_fence_history(Path(root))[1] != expected_head:
+                                _fail("Recovery-family journal changed during restoration review")
+                        if read_fence_history(receipts_dir)[1] != head:
+                            _fail("Original journal changed during restoration review")
+                        planned = seal_receipt(
+                            {
+                                "schema_version": RESTORATION_VERSION,
+                                "phase": "original_acl_restoration_planned",
+                                "target": exact,
+                                "physical_target": origin["physical_target"],
+                                "operator_role": state["operator_role"],
+                                "control_database": state["control_database"],
+                                "intent_receipt_id": epoch.receipt_id,
+                                "intent_sha256": epoch.checksum(),
+                                "quarantine_sha256": quarantine["sha256"],
+                                "original_acl": acl,
+                                "provider_evidence": provider,
+                                "worker_baseline": baseline,
+                                "target_extensions": extensions,
+                                "sequence_inventory": inventory,
+                                "sequence_verification": verification,
+                                "retained_floors": verification["floors"],
+                                "recovery_family": family,
+                                "family_state_sha256": content_hash(family_state),
+                                "family_journal_heads": family_state["journal_heads"],
+                                "source_receipts_dir": str(receipts_dir),
+                                "source_journal_head": head,
+                                "observation": "original_acl_and_open_gate",
+                                "read_only_observation": True,
+                                "transaction_isolation": target_isolation,
+                                "control_transaction_isolation": control_isolation,
+                                "old_operation_outcome": "unknown",
+                                "establishes_writer_fence": False,
+                                "requires_new_review": True,
+                            }
+                        )
+                        if dry_run:
+                            return planned
+                        if preflight_receipt != planned:
+                            _fail("Restoration plan changed; a new explicit review is required")
+                        receipt = seal_receipt(
+                            {
+                                **planned,
+                                "phase": "original_acl_restoration_reconciled",
+                                "reviewed_plan_sha256": planned["sha256"],
+                                "observation_backend": backend,
+                            }
+                        )
+                        journal(
+                            receipts_dir,
+                            phase="original_acl_restoration_reconciled",
+                            actor=state["operator_role"],
+                            detail={"target": exact, "receipt": receipt},
+                        )
+                        return receipt
+            finally:
+                if connection.in_transaction():
+                    connection.rollback()
+                with connection.begin():
+                    unlock_session(connection)
+    finally:
+        if control_connection.in_transaction():
+            control_connection.rollback()
+        with control_connection.begin():
+            unlock_session(control_connection)
 
 
 def reconcile_writer_fence_release(

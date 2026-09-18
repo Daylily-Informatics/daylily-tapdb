@@ -1298,7 +1298,7 @@ def set_runtime_identity_access(
               AND template.issuer_app_code = actor.issuer_app_code
               AND template.tenant_id IS NULL
               AND template.polymorphic_discriminator = 'actor_template'
-              AND template.instance_polymorphic_identity = 'actor_instance'
+              -- The persisted actor type is authoritative, not a factory hint.
               AND lower(COALESCE(template.bstatus::text, '')) = 'active'
               AND NOT template.is_deleted
         """), {"uid": user_uid, "euid": user_euid, "domain": target["domain_code"]}).mappings().one_or_none()
