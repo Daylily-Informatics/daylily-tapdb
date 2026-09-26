@@ -42,7 +42,12 @@ def configured_graph_tenant_scope(
     additional = set(
         canonical_additional_tenant_ids(cfg.get("additional_tenant_ids", ()))
     )
+    # Explicit native global visibility also admits ordinary shared-catalog
+    # lineage for a single tenant. RLS remains the read authority; this merely
+    # validates the already-visible graph against the exact configured scope.
     if not additional.difference({primary}):
+        if primary is not None and cfg.get("allow_global_claims") is True:
+            return frozenset({primary, None})
         return None
     return frozenset({primary, None, *additional})
 

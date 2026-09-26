@@ -109,6 +109,23 @@
           "repair_payload": {}
         }
       }
+    },
+    {
+      "name": "Scope Assignment Correction",
+      "polymorphic_discriminator": "generic_template",
+      "category": "evidence",
+      "type": "repair",
+      "subtype": "scope_assignment",
+      "version": "1.0",
+      "instance_prefix": "GVR",
+      "instance_polymorphic_identity": "generic_instance",
+      "validator_ref": "UNIVERSAL_PASS@1",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Reviewed native operator correction with exact before/after scope and unchanged historical identity.",
+        "properties": {}
+      }
     }
   ]
 }

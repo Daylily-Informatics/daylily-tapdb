@@ -707,9 +707,13 @@ class InstanceFactory:
         Returns:
             The created lineage record.
         """
+        # A shared global parent does not make its private child relationship
+        # global. The database still authorizes both endpoints and this scope.
+        parent_tenant = getattr(parent, "tenant_id", None)
+        lineage_tenant = parent_tenant if parent_tenant is not None else getattr(child, "tenant_id", None)
         lineage = generic_instance_lineage(
             name=f"{parent.euid}->{child.euid}",
-            tenant_id=getattr(parent, "tenant_id", None),
+            tenant_id=lineage_tenant,
             polymorphic_discriminator="generic_instance_lineage",
             category="generic",
             type="lineage",

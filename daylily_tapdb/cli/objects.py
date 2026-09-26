@@ -20,6 +20,8 @@ from daylily_tapdb.services.object_operations import (
 from daylily_tapdb.services.object_search import search_objects
 
 objects_app = typer.Typer(help="Exact-selector object reads and governed mutations")
+scope_app = typer.Typer(help="Exact reviewed native operator scope correction")
+objects_app.add_typer(scope_app, name="scope-correct")
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -214,3 +216,67 @@ def objects_delete(
 
 
 __all__ = ["objects_app"]
+
+
+@scope_app.command("preview")
+def scope_preview(
+    request: str = typer.Option(..., "--request"),
+    receipt: str = typer.Option(..., "--receipt"),
+) -> None:
+    from daylily_tapdb.services.scope_corrections import (
+        load_scope_document, preview_scope_correction, validate_request, write_scope_document,
+    )
+
+    inputs = validate_request(load_scope_document(request))
+    with _tapdb_connection_for_env(
+        Environment.target, app_username=inputs["actor"], connection_role="operator"
+    ) as conn:
+        with conn.session_scope(commit=False) as session:
+            payload = preview_scope_correction(session, inputs)
+    write_scope_document(receipt, payload)
+    _emit({"status": "preview", "sha256": payload["sha256"], "receipt": receipt})
+
+
+@scope_app.command("apply")
+def scope_apply(
+    plan: str = typer.Option(..., "--plan"),
+    expected_plan_sha256: str = typer.Option(..., "--expected-plan-sha256"),
+    receipt: str = typer.Option(..., "--receipt"),
+) -> None:
+    from daylily_tapdb.services.scope_corrections import (
+        apply_scope_correction, load_scope_document, validate_request, write_scope_document,
+    )
+
+    if _dry_run_requested():
+        raise typer.BadParameter("scope-correct apply cannot run with global dry-run; use preview")
+    document = load_scope_document(plan)
+    inputs = validate_request(document["request"])
+    with _tapdb_connection_for_env(
+        Environment.target, app_username=inputs["actor"], connection_role="operator"
+    ) as conn:
+        with conn.session_scope(commit=True) as session:
+            payload = apply_scope_correction(session, document, expected_plan_sha256)
+    payload["status"] = "committed"
+    write_scope_document(receipt, payload)
+    _emit(payload)
+
+
+@scope_app.command("status")
+def scope_status(
+    plan: str = typer.Option(..., "--plan"),
+    expected_plan_sha256: str = typer.Option(..., "--expected-plan-sha256"),
+    receipt: str = typer.Option(..., "--receipt"),
+) -> None:
+    from daylily_tapdb.services.scope_corrections import (
+        get_scope_correction_status, load_scope_document, validate_request, write_scope_document,
+    )
+
+    document = load_scope_document(plan)
+    inputs = validate_request(document["request"])
+    with _tapdb_connection_for_env(
+        Environment.target, app_username=inputs["actor"], connection_role="operator"
+    ) as conn:
+        with conn.session_scope(commit=False) as session:
+            payload = get_scope_correction_status(session, document, expected_plan_sha256)
+    write_scope_document(receipt, payload)
+    _emit(payload)
