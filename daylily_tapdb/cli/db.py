@@ -56,7 +56,7 @@ from daylily_tapdb.schema_inventory import (
     schema_asset_files,
     schema_root_candidates,
 )
-from daylily_tapdb.security_context import operator_role_assertion_sql
+from daylily_tapdb.security_context import assert_operator_role, operator_role_assertion_sql
 from daylily_tapdb.templates import (
     ConfigIssue as _ConfigIssue,
 )
@@ -862,6 +862,30 @@ def _schema_exists(env: Environment) -> bool:
         return _parse_single_int(psql_out) > 0
     except ValueError:
         return False
+
+
+def _seed_operator_schema_exists(cfg: Mapping[str, Any]) -> bool:
+    """Verify the exact seed target and schema with the authenticated operator."""
+    schema_name = str(cfg["schema_name"])
+    with operator_connection(cfg, read_only=True) as connection:
+        exists = connection.execute(
+            text(
+                "SELECT EXISTS ("
+                "SELECT 1 FROM pg_catalog.pg_namespace n "
+                "JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid "
+                "WHERE n.nspname = :schema_name "
+                "AND c.relname = 'generic_template' AND c.relkind IN ('r', 'p')"
+                ")"
+            ),
+            {"schema_name": schema_name},
+        ).scalar_one()
+        if exists:
+            assert_operator_role(
+                connection,
+                schema_name=schema_name,
+                operator_user=str(cfg["operator_user"]),
+            )
+        return bool(exists)
 
 
 def _ensure_schema_exists(env: Environment) -> None:
@@ -2358,13 +2382,17 @@ def db_seed(
     for directory in seed_config_dirs:
         ccyo_out.print_text(f"  - {directory}")
 
-    # Check database and schema exist
-    if not _check_db_exists(env, cfg["database"]):
-        ccyo_out.error(f"Database '{cfg['database']}' does not exist")
-        ccyo_out.print_text("  Create with: [cyan]tapdb db create[/cyan]")
-        raise SystemExit(1)
-
-    if not _schema_exists(env):
+    # The seed writer uses the operator. Its preflight must authenticate the
+    # same physical role and exact database before inspecting the schema.
+    try:
+        schema_exists = _seed_operator_schema_exists(cfg)
+    except Exception as exc:
+        ccyo_out.error(
+            "Operator seed preflight could not verify the configured database "
+            f"and schema ({type(exc).__name__})"
+        )
+        raise SystemExit(1) from exc
+    if not schema_exists:
         ccyo_out.error("TAPDB schema not found")
         ccyo_out.print_text("  Initialize with: [cyan]tapdb db schema apply[/cyan]")
         raise SystemExit(1)

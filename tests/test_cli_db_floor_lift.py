@@ -208,8 +208,7 @@ def test_seed_provisions_and_grants_in_one_repeatable_read_transaction(
     monkeypatch.setattr(
         db_mod, "_tapdb_connection_for_env", lambda *a, **k: Connection()
     )
-    monkeypatch.setattr(db_mod, "_check_db_exists", lambda *a: True)
-    monkeypatch.setattr(db_mod, "_schema_exists", lambda *a: True)
+    monkeypatch.setattr(db_mod, "_seed_operator_schema_exists", lambda cfg: True)
     monkeypatch.setattr(db_mod, "_resolve_seed_config_dirs", lambda *a: [tmp_path])
     monkeypatch.setattr(
         db_mod, "_validate_template_configs", lambda *a, **k: ([{}], [])
@@ -238,6 +237,62 @@ def test_seed_provisions_and_grants_in_one_repeatable_read_transaction(
         db_mod._get_connection_string(db_mod.Environment.target, database="postgres")
         == "postgresql://tapdb@localhost:5533/postgres"
     )
+
+
+def test_seed_preflight_checks_schema_with_exact_read_only_operator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = db_mod._get_db_config(db_mod.Environment.target)
+    calls: list[object] = []
+
+    class OperatorConnection:
+        def execute(self, query, params):
+            calls.append((str(query), params))
+            return SimpleNamespace(scalar_one=lambda: True)
+
+    connection = OperatorConnection()
+
+    @contextmanager
+    def checked_operator(actual_cfg, *, read_only):
+        assert actual_cfg is cfg
+        assert read_only is True
+        calls.append("operator connection")
+        yield connection
+
+    monkeypatch.setattr(db_mod, "operator_connection", checked_operator)
+    monkeypatch.setattr(
+        db_mod,
+        "assert_operator_role",
+        lambda actual_connection, *, schema_name, operator_user: calls.append(
+            (actual_connection, schema_name, operator_user)
+        ),
+    )
+
+    assert db_mod._seed_operator_schema_exists(cfg) is True
+    assert calls[0] == "operator connection"
+    assert calls[1][1] == {"schema_name": cfg["schema_name"]}
+    assert calls[2] == (connection, cfg["schema_name"], cfg["operator_user"])
+
+
+def test_seed_preflight_transport_failure_is_not_reported_as_missing_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    errors: list[str] = []
+    monkeypatch.setattr(db_mod, "_resolve_seed_config_dirs", lambda path: [tmp_path])
+    monkeypatch.setattr(
+        db_mod,
+        "_seed_operator_schema_exists",
+        lambda cfg: (_ for _ in ()).throw(OSError("transport unavailable")),
+    )
+    monkeypatch.setattr(db_mod.ccyo_out, "error", errors.append)
+
+    with pytest.raises(SystemExit):
+        db_mod.db_seed(tmp_path, False, True, True)
+
+    assert len(errors) == 1
+    assert "Operator seed preflight" in errors[0]
+    assert "OSError" in errors[0]
+    assert "does not exist" not in errors[0]
 
 
 def test_destructive_confirmation_uses_resolved_target_label() -> None:
@@ -521,8 +576,7 @@ def test_seed_loader_failure_propagates_as_process_failure(
     monkeypatch.setattr(
         db_mod, "_resolve_seed_config_dirs", lambda config_path: [tmp_path]
     )
-    monkeypatch.setattr(db_mod, "_check_db_exists", lambda env, database: True)
-    monkeypatch.setattr(db_mod, "_schema_exists", lambda env: True)
+    monkeypatch.setattr(db_mod, "_seed_operator_schema_exists", lambda cfg: True)
     monkeypatch.setattr(
         db_mod,
         "_validate_template_configs",

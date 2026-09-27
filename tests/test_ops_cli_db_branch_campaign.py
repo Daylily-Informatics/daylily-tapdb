@@ -764,8 +764,7 @@ def test_template_validation_seed_and_adapter_helpers(
     monkeypatch.setattr(
         db, "_validate_template_configs", lambda *_args, **_kwargs: ([template], [])
     )
-    monkeypatch.setattr(db, "_check_db_exists", lambda *_args: True)
-    monkeypatch.setattr(db, "_schema_exists", lambda *_args: True)
+    monkeypatch.setattr(db, "_seed_operator_schema_exists", lambda cfg: True)
     monkeypatch.setattr(db, "_find_duplicate_template_keys", lambda *_args: {})
     db.db_seed(tmp_path, include_workflow=False, skip_existing=True, dry_run=True)
 
@@ -969,10 +968,12 @@ def test_remaining_database_refusal_branches(
     monkeypatch.setattr(db, "_schema_exists", lambda *_args: False)
     with pytest.raises(SystemExit):
         db.db_migrate(True, False, tmp_path / "missing-schema.json", None)
+    monkeypatch.setattr(db, "_seed_operator_schema_exists", lambda cfg: False)
     with pytest.raises(SystemExit):
         db.db_seed(tmp_path, False, True, False)
 
     monkeypatch.setattr(db, "_schema_exists", lambda *_args: True)
+    monkeypatch.setattr(db, "_seed_operator_schema_exists", lambda cfg: True)
     monkeypatch.setattr(db, "_resolve_seed_config_dirs", lambda _path: [tmp_path])
     warning = db._ConfigIssue("warning", "warn", "warn.json", "code")
     error = db._ConfigIssue("error", "bad", "bad.json", "code")
