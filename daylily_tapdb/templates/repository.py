@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.templates.loader import find_tapdb_core_config_dir, seed_templates
@@ -514,15 +514,20 @@ def import_repository_pack(
         domain_registry_path=domain_registry_path,
         prefix_registry_path=prefix_registry_path,
     )
-    existing_by_key = {
-        template_key(serialize_template(row)): serialize_template(row)
-        for row in session.execute(
+    requested_keys = [template_key(item) for item in payload["templates"]]
+    existing_by_key = {}
+    for row in session.execute(
             select(generic_template).where(
                 generic_template.domain_code == str(domain_code),
                 generic_template.issuer_app_code == str(owner_repo_name),
+                tuple_(generic_template.category, generic_template.type,
+                       generic_template.subtype, generic_template.version).in_(requested_keys),
             )
-        ).scalars()
-    }
+        ).scalars():
+        # Unrelated templates may have sensitive field names. Validate only the
+        # identities this pack can import, preserving all checks on those rows.
+        current = serialize_template(row)
+        existing_by_key[template_key(current)] = current
     skipped = 0
     pending: list[dict[str, Any]] = []
     for item in payload["templates"]:
