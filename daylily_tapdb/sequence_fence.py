@@ -794,6 +794,11 @@ def build_writer_fence_takeover_plan(
     if control_connection.in_transaction():
         _fail("Takeover planning requires a transaction-free control session")
     exact = validate_target(target, str(target["schema_name"]))
+    inventory_mode = {}
+    if "inventory_mode" in target:
+        from daylily_tapdb.audit_inventory import validate_mode
+
+        inventory_mode = {"inventory_mode": validate_mode(target["inventory_mode"])}
     if "inventory_limits" in target:
         target = dict(
             target,
@@ -863,6 +868,7 @@ def build_writer_fence_takeover_plan(
                     "schema_version": TAKEOVER_VERSION,
                     "phase": "planned",
                     "target": exact,
+                    **inventory_mode,
                     **(
                         {"inventory_limits": target["inventory_limits"]}
                         if "inventory_limits" in target
@@ -919,6 +925,10 @@ def apply_writer_fence_takeover(
             "An unchanged reviewed takeover plan and its exact external journal are required"
         )
     target = dict(plan["target"], sequence_mappings=plan["sequence_mappings"])
+    if "inventory_mode" in plan:
+        from daylily_tapdb.audit_inventory import validate_mode
+
+        target["inventory_mode"] = validate_mode(plan["inventory_mode"])
     if "inventory_limits" in plan:
         target["inventory_limits"] = asdict(
             InventoryLimits.parse(plan["inventory_limits"])
@@ -1064,6 +1074,11 @@ def apply_writer_fence_takeover(
             "schema_version": TAKEOVER_VERSION,
             "phase": "quarantined",
             "target": plan["target"],
+            **(
+                {"inventory_mode": target["inventory_mode"]}
+                if "inventory_mode" in target
+                else {}
+            ),
             "physical_target": plan["physical_target"],
             "sequence_mappings": plan["sequence_mappings"],
             "operator_role": state["operator_role"],
