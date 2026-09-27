@@ -157,6 +157,16 @@ def with_inventory_limits(
     Existing v1 receipts without a limits field have the original v1 constants.
     Limits are resource policy, not part of the physical database identity.
     """
+    from daylily_tapdb.audit_inventory import MODE, VERSION
+    mode = inventory.get("inventory_mode")
+    if mode is not None:
+        if mode != MODE or inventory.get("schema_version") != VERSION:
+            raise IdentityInventoryError("Invalid compact inventory format")
+        if target.get("inventory_mode", mode) != mode:
+            raise IdentityInventoryError("Configured inventory_mode differs from receipt")
+        target = dict(target, inventory_mode=mode)
+    elif "inventory_mode" in target:
+        raise IdentityInventoryError("Inventory mode differs from reviewed receipt")
     expected = InventoryLimits.parse(inventory.get("limits"))
     if (
         "inventory_limits" in target
@@ -474,7 +484,11 @@ def _capture_identity_inventory(
     limits: InventoryLimits | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Capture all physical table rows, identities, and catalog dependencies."""
-    explicit_limits = limits is not None or "inventory_limits" in target
+    from daylily_tapdb import audit_inventory as audit
+    mode = target.get("inventory_mode")
+    if mode is not None:
+        audit.validate_mode(mode)
+    explicit_limits = mode is not None or limits is not None or "inventory_limits" in target
     policy = InventoryLimits.parse(
         limits if limits is not None else target.get("inventory_limits")
     )
@@ -492,6 +506,26 @@ def _capture_identity_inventory(
             )
         name = table["name"]
         entry = _metadata(connection, table)
+        if mode is not None and name == "audit_log":
+            policy_roles = connection.execute(text(
+                "SELECT polname, ARRAY(SELECT CASE WHEN r=0 THEN 'PUBLIC' "
+                "ELSE pg_get_userbyid(r)::text END FROM unnest(polroles) r ORDER BY r) roles "
+                "FROM pg_policy WHERE polrelid=:oid ORDER BY polname"
+            ), {"oid": table["oid"]}).mappings()
+            roles = {row["polname"]: row["roles"] for row in policy_roles}
+            for item in entry["policies"]:
+                item["roles"] = roles[item["name"]]
+            summary = audit.capture(connection, schema=schema_name, entry=entry,
+                                    limits=policy, processed_rows=total_rows,
+                                    receipt_bytes=receipt_bytes)
+            total_rows += summary["row_count"]
+            largest_source_row_bytes = max(largest_source_row_bytes, summary["largest_source_row_bytes"])
+            receipt_bytes += len(canonical_json(summary).encode("utf-8"))
+            if receipt_bytes > policy.max_receipt_bytes:
+                raise IdentityInventoryError("Compact inventory receipt limit exceeded")
+            entry.update(audit_digest=summary, row_count=summary["row_count"], content_sha256=summary["raw_sha256"])
+            tables[name] = entry
+            continue
         rows: dict[str, Any] = {}
         statement = text(
             f"SELECT to_jsonb(t)::text FROM ONLY {quote_identifier(schema_name)}.{quote_identifier(name)} t"
@@ -581,9 +615,12 @@ def _capture_identity_inventory(
             content_sha256=content_hash(rows),
         )
         tables[name] = entry
+    if mode is not None and "audit_log" not in tables:
+        raise IdentityInventoryError("Explicit audit inventory requires audit_log")
     return seal_receipt(
         {
-            "schema_version": INVENTORY_VERSION,
+            "schema_version": audit.VERSION if mode is not None else INVENTORY_VERSION,
+            **({"inventory_mode": mode} if mode is not None else {}),
             "schema_name": schema_name,
             "target": target,
             "physical_target": physical,
@@ -810,8 +847,24 @@ def verify_identity_inventory(
     conversion_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compare exhaustive rows; explicit conversions never waive immutable identity."""
-    validate_receipt(before, INVENTORY_VERSION)
-    validate_receipt(after, INVENTORY_VERSION)
+    from daylily_tapdb import audit_inventory as audit
+    mode = before.get("inventory_mode")
+    if mode is not None:
+        audit.validate_mode(mode)
+    if after.get("inventory_mode") != mode:
+        raise IdentityInventoryError("Identity inventory modes differ")
+    version = audit.VERSION if mode is not None else INVENTORY_VERSION
+    validate_receipt(before, version)
+    validate_receipt(after, version)
+    if mode is not None:
+        for inventory in (before, after):
+            if "limits" not in inventory or "audit_log" not in inventory["tables"]:
+                raise IdentityInventoryError("Compact inventory lacks limits/audit evidence")
+            for name, table in inventory["tables"].items():
+                if name == "audit_log":
+                    audit.validate_summary(table)
+                elif "audit_digest" in table:
+                    raise IdentityInventoryError("Only audit_log supports compact evidence")
     if InventoryLimits.parse(before.get("limits")) != InventoryLimits.parse(
         after.get("limits")
     ):
@@ -825,6 +878,13 @@ def verify_identity_inventory(
         rows = 0
         evidence_bytes = 0
         for table in inventory["tables"].values():
+            if "audit_digest" in table:
+                summary = table["audit_digest"]
+                rows += summary["row_count"]
+                evidence_bytes += len(canonical_json(summary).encode("utf-8"))
+                if summary["largest_source_row_bytes"] > policy.max_row_bytes:
+                    raise IdentityInventoryError("Compact audit row limit exceeded")
+                continue
             for key, row in table["rows"].items():
                 rows += row["count"]
                 evidence_bytes += len(canonical_json(row).encode("utf-8")) + len(key)
@@ -881,6 +941,12 @@ def verify_identity_inventory(
             continue
         current = after["tables"][name]
         contract = declared.get(name, {})
+        if mode is not None and name == "audit_log":
+            if contract not in ({}, {"audit_contract": audit.TRANSFORMATION}):
+                raise IdentityInventoryError("Unsupported compact audit conversion")
+            audit.compare(original, current, schema=before["schema_name"],
+                          transform=bool(contract))
+            continue
         if set(contract) - {
             "added_rows",
             "added_columns",

@@ -411,6 +411,15 @@ def _migration_tables(identity: Mapping[str, Any]) -> dict[str, Any]:
     """Adapt shared evidence for the existing exact transformation validators."""
     tables: dict[str, Any] = {}
     for name, table in identity["tables"].items():
+        if "audit_digest" in table:
+            from daylily_tapdb.audit_inventory import validate_summary
+            validate_summary(table)
+            tables[name] = {"columns": [c["name"] for c in table["columns"]],
+                            "primary_key": table["primary_key"],
+                            "row_count": table["row_count"],
+                            "immutable_columns": table["immutable_columns"],
+                            "audit_digest": table["audit_digest"]}
+            continue
         rows = []
         for key, row in table["rows"].items():
             values = row.get("identity", {})
@@ -452,6 +461,10 @@ def _validate_scope_and_sequences(
     from daylily_tapdb.sequences import verify_sequence_floors
 
     for table_name, table in snapshot["tables"].items():
+        if "audit_digest" in table:
+            if table["audit_digest"]["invalid_scope_rows"]:
+                raise MigrationPreflightError("audit_log has missing domain/owner scope")
+            continue
         for row in table["rows"]:
             for column in ("domain_code", "issuer_app_code"):
                 if (
@@ -529,6 +542,10 @@ def build_migration_preflight(
 
     if source_contract is not None:
         target = with_inventory_limits(target, source_contract["identity_inventory"])
+    if target.get("inventory_mode") is not None:
+        from daylily_tapdb.audit_inventory import validate_mode, validate_pending
+        validate_mode(target["inventory_mode"])
+        validate_pending(pending)
     identity_inventory = capture_identity_inventory(
         connection, schema_name=schema_name, target=target
     )
@@ -760,6 +777,12 @@ def _verify_preservation(
             raise MigrationReceiptMismatchError(
                 f"table disappeared during migration: {table_name}"
             )
+        if "audit_digest" in before:
+            # Complete content and exact catalog transition are checked by the
+            # shared physical verifier below; never fabricate an empty row set.
+            if "audit_digest" not in after:
+                raise MigrationReceiptMismatchError("audit inventory mode changed")
+            continue
         before_rows = {_canonical_json(row["key"]): row for row in before["rows"]}
         after_rows = {_canonical_json(row["key"]): row for row in after["rows"]}
         if table_name not in allowed_new_rows and set(before_rows) != set(after_rows):
@@ -1018,6 +1041,11 @@ def _verify_physical_preservation(
     }
     declarations = {}
     for name, table in before["tables"].items():
+        if "audit_digest" in table:
+            from daylily_tapdb.audit_inventory import TRANSFORMATION, validate_pending
+            transform = validate_pending(preflight["pending_migrations"])
+            declarations[name] = {"audit_contract": TRANSFORMATION} if transform else {}
+            continue
         new_table = after["tables"].get(name, {})
         old_columns = {column["name"] for column in table["columns"]}
         new_columns = {column["name"] for column in new_table.get("columns", [])}

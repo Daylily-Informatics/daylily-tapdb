@@ -52,6 +52,8 @@ def _resolve(
         },
         cfg["schema_name"],
     )
+    if "inventory_mode" in cfg:
+        target["inventory_mode"] = cfg["inventory_mode"]
     if "inventory_limits" in cfg:
         target["inventory_limits"] = cfg["inventory_limits"]
     if sequence_mappings is not None:

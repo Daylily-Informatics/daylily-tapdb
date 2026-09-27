@@ -411,6 +411,9 @@ def _build_db_config_from_section(
         "target_name": target_name,
     }
 
+    if "inventory_mode" in root:
+        from daylily_tapdb.audit_inventory import validate_mode
+        cfg["inventory_mode"] = validate_mode(root["inventory_mode"])
     if "inventory_limits" in root:
         from dataclasses import asdict
 

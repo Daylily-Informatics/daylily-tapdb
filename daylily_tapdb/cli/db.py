@@ -1715,6 +1715,7 @@ def db_migrate(
         "domain_code": cfg["domain_code"],
         "owner_repo_name": cfg["owner_repo_name"],
         **({"server_port": cfg["server_port"]} if "server_port" in cfg else {}),
+        **({"inventory_mode": cfg["inventory_mode"]} if "inventory_mode" in cfg else {}),
         **(
             {"inventory_limits": cfg["inventory_limits"]}
             if "inventory_limits" in cfg
