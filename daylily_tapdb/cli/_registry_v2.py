@@ -9,6 +9,22 @@ from typing import Any
 from cli_core_yo.spec import CommandPolicy
 
 JSON_COMMANDS: set[tuple[str | None, str]] = {
+    ("integrity-adopt", "plan"),
+    ("integrity-adopt", "apply"),
+    ("history", "status"),
+    ("history", "boundary"),
+    ("history", "object-at"),
+    ("history", "graph-at"),
+    ("history", "plan-correction"),
+    ("history", "apply-correction"),
+    ("history", "audit"),
+    ("references", "resolve"),
+    ("references", "register"),
+    ("references", "annotate"),
+    ("references", "attach"),
+    ("references", "detach"),
+    ("references", "reconcile"),
+
     ("db/schema", "drift-check"),
     ("db", "census"),
     ("db/identity", "inventory"),
@@ -47,6 +63,14 @@ JSON_COMMANDS: set[tuple[str | None, str]] = {
 }
 
 MUTATING_COMMANDS = {
+    ("integrity-adopt", "apply"),
+    ("history", "apply-correction"),
+    ("references", "register"),
+    ("references", "annotate"),
+    ("references", "attach"),
+    ("references", "detach"),
+    ("references", "reconcile"),
+
     ("db/sequences", "advance"),
     ("db/sequences", "reconcile"),
     ("db/runtime-principal", "bootstrap"),

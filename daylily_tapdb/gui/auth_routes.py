@@ -209,7 +209,19 @@ def _resolve_oauth_user_profile(
         or claims.get("given_name")
         or ""
     ).strip()
-    return {"email": email, "display_name": display_name}
+    if not claims.get("sub"):
+        raise RuntimeError("Verified Cognito subject is required for attributable user provisioning")
+    return {"email": email, "display_name": display_name, "subject": str(claims["sub"])}
+
+
+def _cognito_attribution(subject: str):
+    from uuid import uuid4
+    from daylily_tapdb.security_context import Attribution
+    from daylily_tapdb.cli.db_config import get_db_config
+    pool=resolve_tapdb_pool_config()
+    cfg=get_db_config()
+    return Attribution("human", f"cognito:{pool.pool_id}", subject,
+        cfg["owner_repo_name"],str(uuid4()),str(uuid4()))
 
 
 def _safe_next_path(request: Request, value: str) -> str:
@@ -296,6 +308,7 @@ def create_tapdb_gui_auth_router(*, templates: Environment) -> APIRouter:
                 profile["email"],
                 display_name=profile["display_name"] or None,
                 role="user",
+                attribution=_cognito_attribution(profile["subject"]),
             )
         except Exception as exc:
             return _render_auth(
@@ -351,7 +364,8 @@ def create_tapdb_gui_auth_router(*, templates: Environment) -> APIRouter:
             )
         if not user:
             try:
-                user = get_or_create_user_from_email(cognito_username)
+                claims=get_cognito_auth().verify_token(auth_result["id_token"])
+                user = get_or_create_user_from_email(cognito_username, attribution=_cognito_attribution(claims["sub"]))
             except Exception as exc:
                 return _render_auth(
                     templates,
@@ -421,10 +435,11 @@ def create_tapdb_gui_auth_router(*, templates: Environment) -> APIRouter:
             )
         try:
             create_cognito_user_account(email, password, display_name=display_name)
-            user = get_or_create_user_from_email(
-                email, display_name=display_name, role="user"
-            )
             auth_result = authenticate_with_cognito(email, password)
+            claims=get_cognito_auth().verify_token(auth_result["id_token"])
+            user = get_or_create_user_from_email(
+                email, display_name=display_name, role="user", attribution=_cognito_attribution(claims["sub"])
+            )
         except Exception as exc:
             return _render_auth(
                 templates,

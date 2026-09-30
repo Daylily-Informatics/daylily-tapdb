@@ -24,6 +24,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
+from daylily_tapdb.audit_storage import audit_writer_role, grant_audit_sequences
 from daylily_tapdb.runtime_catalog_contract import (
     RuntimeCatalogContractError,
     canonical_security_contract,
@@ -39,12 +40,14 @@ _WRITABLE = {
     "generic_template",
     "generic_instance",
     "generic_instance_lineage",
-    "audit_log",
     "outbox_event",
     "outbox_event_attempt",
     "inbox_message",
 }
 _READABLE = {
+    "audit_log",
+    "tapdb_history_epoch",
+    "tapdb_history_baseline",
     "tapdb_identity_prefix_config",
     "tapdb_legacy_outbox_mapping",
     "_tapdb_migrations",
@@ -885,6 +888,7 @@ def _build_runtime_principal_binding_plan(
             functions=functions,
             triggers=triggers,
             managed_tables=expected,
+            audit_writer=audit_writer_role(target["database"], target["schema_name"]),
         )
     except RuntimeCatalogContractError as exc:
         raise RuntimePrincipalError(str(exc)) from exc
@@ -1377,6 +1381,7 @@ def grant_proven_runtime_sequences(
         connection.execute(
             text(f"GRANT USAGE, SELECT ON SEQUENCE {sequence} TO {runtime}")
         )
+    grant_audit_sequences(connection, database=target["database"], schema=target["schema_name"])
     _verify_bound_permissions(connection, target, plan)
     return grants
 

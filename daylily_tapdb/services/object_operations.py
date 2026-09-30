@@ -9,6 +9,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from daylily_tapdb.revisions import lock_records, require_revision, apply_guarded_fields
 from daylily_tapdb.external_references import _is_xrf_coordinates
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
@@ -93,6 +94,7 @@ def object_payload(obj: Any, record_type: str) -> dict[str, Any]:
     payload = {
         "record_type": record_type,
         "uid": getattr(obj, "uid", None),
+        "record_revision": getattr(obj, "record_revision", None),
         "euid": getattr(obj, "euid", None),
         "machine_uuid": (
             str(getattr(obj, "machine_uuid"))
@@ -209,6 +211,7 @@ def _mutation_receipt(
         "record_type": record_type,
         "euid": getattr(obj, "euid", None),
         "actor": str(actor or "").strip(),
+        "record_revision": obj.record_revision,
         "recorded_at": datetime.now(UTC).isoformat(),
         "dry_run": bool(dry_run),
         "applied": not dry_run,
@@ -231,8 +234,12 @@ def update_object(
     *,
     actor: str,
     dry_run: bool = True,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     obj, record_type = resolve_object(session, selector)
+    if not dry_run:
+        lock_records(session, [obj])
+        require_revision(obj, expected_revision)
     if record_type == "template":
         raise PermissionError("templates are read-only through objects")
     _reject_external_reference_mutation(obj, record_type)
@@ -260,9 +267,7 @@ def update_object(
         if getattr(obj, field, None) != value
     }
     if not dry_run:
-        for field, change in delta.items():
-            setattr(obj, field, change["new"])
-        session.flush()
+        apply_guarded_fields(session,obj,{field:change["new"] for field,change in delta.items()},expected_revision=expected_revision)
     return _mutation_receipt(
         operation="update",
         selector=selector,
@@ -323,16 +328,19 @@ def soft_delete_object(
     *,
     actor: str,
     dry_run: bool = True,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     obj, record_type = resolve_object(session, selector)
+    if not dry_run:
+        lock_records(session, [obj])
+        require_revision(obj, expected_revision)
     if record_type == "template":
         raise PermissionError("templates are read-only through objects")
     _reject_external_reference_mutation(obj, record_type)
     if getattr(obj, "is_deleted", False):
         raise ValueError("object is already soft-deleted")
     if not dry_run:
-        obj.is_deleted = True
-        session.flush()
+        apply_guarded_fields(session,obj,{"is_deleted":True},expected_revision=expected_revision)
     return _mutation_receipt(
         operation="soft-delete",
         selector=selector,

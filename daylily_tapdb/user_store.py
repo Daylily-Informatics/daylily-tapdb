@@ -65,6 +65,7 @@ class ActorUser:
     def to_session_user(self) -> dict[str, Any]:
         return {
             "uid": self.uid,
+            "euid": self.euid,
             "username": self.username,
             "email": self.email,
             "display_name": self.display_name,

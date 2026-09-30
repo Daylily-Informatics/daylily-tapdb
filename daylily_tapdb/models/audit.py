@@ -26,6 +26,9 @@ class audit_log(Base):
 
     tenant_id = Column(UUID(as_uuid=True), nullable=True)
 
+    domain_code = Column(Text, nullable=False)
+    issuer_app_code = Column(Text, nullable=False)
+
     rel_table_name = Column(Text, nullable=False)
     column_name = Column(Text, nullable=True)
 

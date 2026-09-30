@@ -57,6 +57,7 @@ from daylily_tapdb.graph_contracts import (
     describe_lineage_contract,
     is_strict_canonical_edge_type,
 )
+from daylily_tapdb.revisions import RevisionConflict, lock_records, require_revision
 from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
@@ -293,6 +294,7 @@ def _render(
 def _record_to_dict(obj: Any, record_type: str) -> dict[str, Any]:
     return {
         "uid": getattr(obj, "uid", None),
+        "record_revision": getattr(obj, "record_revision", None),
         "euid": getattr(obj, "euid", None),
         "record_type": record_type,
         "name": getattr(obj, "name", None),
@@ -836,6 +838,8 @@ def _create_object_repair(
         message = str(exc)
         status = 404 if message.lower().startswith("object not found") else 422
         raise HTTPException(status_code=status, detail=message) from exc
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -849,6 +853,7 @@ def _update_object_name(
     name: str,
     actor: str = "",
     dry_run: bool = False,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     value = str(name or "").strip()
     if not value:
@@ -865,9 +870,12 @@ def _update_object_name(
             {"name": value},
             actor=actor,
             dry_run=dry_run,
+            expected_revision=expected_revision,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -881,6 +889,7 @@ def _update_object_status(
     bstatus: str,
     actor: str = "",
     dry_run: bool = False,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     status = str(bstatus or "").strip()
     if not status:
@@ -897,9 +906,12 @@ def _update_object_status(
             {"bstatus": status},
             actor=actor,
             dry_run=dry_run,
+            expected_revision=expected_revision,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -911,12 +923,22 @@ def _add_object_lineage(
     *,
     euid: str,
     related_euid: str,
+    expected_revision: int,
+    related_expected_revision: int,
     direction: str,
     relationship_type: str,
     v0_edge: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     current = _resolve_instance(session, euid, label="Object")
     related = _resolve_instance(session, related_euid, label="Related object")
+    lock_records(session,[current,related])
+    try:
+        require_revision(current,expected_revision)
+        require_revision(related,related_expected_revision)
+    except RevisionConflict as exc:
+        raise HTTPException(409,str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
     if direction == "child":
         parent, child = current, related
     else:
@@ -1244,10 +1266,14 @@ def _audit_payload(
         raise ValueError("operation_type must be ALL, INSERT, UPDATE, or DELETE")
     with get_db(config_path) as conn:
         conn.app_username = current_identifier
+        from daylily_tapdb.gui.integrity import authenticated_attribution
+        initiator = authenticated_attribution(user, conn) if not is_admin else None
         with conn.session_scope() as session:
             entries = query_audit_trail(
                 session,
-                changed_by=effective_actor or None,
+                changed_by=(effective_actor or None) if is_admin else None,
+                actor_issuer=initiator.actor_issuer if initiator else None,
+                actor_subject=initiator.actor_subject if initiator else None,
                 euid=str(euid or "").strip() or None,
                 operation_type=normalized_operation or None,
                 limit=limit,
@@ -1686,6 +1712,8 @@ def create_tapdb_gui_router(
         apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 try:
                     return asdict(
@@ -1834,6 +1862,8 @@ def create_tapdb_gui_router(
             cfg = get_db_config(config_path=resolved_config_path)
             with get_db(resolved_config_path) as conn:
                 conn.app_username = user.get("username")
+                from daylily_tapdb.gui.integrity import authenticated_attribution
+                conn.attribution = authenticated_attribution(user, conn)
                 with conn.session_scope(commit=True) as session:
                     for template in payload["templates"]:
                         existing = (
@@ -1948,6 +1978,8 @@ def create_tapdb_gui_router(
         try:
             with get_db(resolved_config_path) as conn:
                 conn.app_username = user.get("username")
+                from daylily_tapdb.gui.integrity import authenticated_attribution
+                conn.attribution = authenticated_attribution(user, conn)
                 with conn.session_scope(commit=True) as session:
                     created = _create_instance_from_template(
                         session,
@@ -2017,6 +2049,8 @@ def create_tapdb_gui_router(
         cfg = get_db_config(config_path=resolved_config_path)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn)
             with conn.session_scope(commit=True) as session:
                 return jsonable_encoder(
                     _create_instance_from_template(
@@ -2257,6 +2291,8 @@ def create_tapdb_gui_router(
         apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 try:
                     return update_object(
@@ -2265,9 +2301,12 @@ def create_tapdb_gui_router(
                         changes,
                         actor=str(user.get("username") or ""),
                         dry_run=not apply,
+                        expected_revision=payload.get("expected_revision"),
                     )
                 except LookupError as exc:
                     raise HTTPException(status_code=404, detail=str(exc)) from exc
+                except RevisionConflict as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
                 except PermissionError as exc:
                     raise HTTPException(status_code=403, detail=str(exc)) from exc
                 except Exception as exc:
@@ -2277,10 +2316,13 @@ def create_tapdb_gui_router(
     async def governed_object_delete_api(
         euid: str,
         apply: bool = False,
+        expected_revision: int | None = None,
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 try:
                     return soft_delete_object(
@@ -2288,9 +2330,12 @@ def create_tapdb_gui_router(
                         ObjectSelector(euid=euid),
                         actor=str(user.get("username") or ""),
                         dry_run=not apply,
+                        expected_revision=expected_revision,
                     )
                 except LookupError as exc:
                     raise HTTPException(status_code=404, detail=str(exc)) from exc
+                except RevisionConflict as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
                 except PermissionError as exc:
                     raise HTTPException(status_code=403, detail=str(exc)) from exc
                 except Exception as exc:
@@ -2397,6 +2442,8 @@ def create_tapdb_gui_router(
         cfg = get_db_config(config_path=resolved_config_path)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn)
             with conn.session_scope(commit=True) as session:
                 _create_object_repair(
                     session,
@@ -2431,6 +2478,8 @@ def create_tapdb_gui_router(
         apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 return jsonable_encoder(
                     _create_object_repair(
@@ -2457,6 +2506,8 @@ def create_tapdb_gui_router(
         cfg = get_db_config(config_path=resolved_config_path)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn)
             with conn.session_scope(commit=True) as session:
                 _create_object_repair(
                     session,
@@ -2482,12 +2533,15 @@ def create_tapdb_gui_router(
         name = str(form.get("name") or "")
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn)
             with conn.session_scope(commit=True) as session:
                 _update_object_name(
                     session,
                     euid=euid,
                     name=name,
                     actor=str(user.get("username") or ""),
+                    expected_revision=int(form["expected_revision"]),
                 )
         return RedirectResponse(
             gui_url_with_query(request, f"/object/{euid}", notice="name_updated"),
@@ -2502,10 +2556,12 @@ def create_tapdb_gui_router(
     ):
         payload = await _read_optional_json_object(request)
         _reject_immutable_object_fields(payload)
-        _reject_unknown_payload_fields(payload, allowed={"apply", "name"})
+        _reject_unknown_payload_fields(payload, allowed={"apply", "name", "expected_revision"})
         apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 return jsonable_encoder(
                     _update_object_name(
@@ -2513,6 +2569,7 @@ def create_tapdb_gui_router(
                         euid=euid,
                         name=str(payload.get("name") or ""),
                         actor=str(user.get("username") or ""),
+                    expected_revision=payload.get("expected_revision"),
                         dry_run=not apply,
                     )
                 )
@@ -2537,6 +2594,8 @@ def create_tapdb_gui_router(
         cfg = get_db_config(config_path=resolved_config_path)
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 return jsonable_encoder(
                     _create_object_repair(
@@ -2562,12 +2621,15 @@ def create_tapdb_gui_router(
         bstatus = str(form.get("bstatus") or "")
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn)
             with conn.session_scope(commit=True) as session:
                 _update_object_status(
                     session,
                     euid=euid,
                     bstatus=bstatus,
                     actor=str(user.get("username") or ""),
+                    expected_revision=int(form["expected_revision"]),
                 )
         return RedirectResponse(
             gui_url_with_query(request, f"/object/{euid}", notice="status_updated"),
@@ -2582,10 +2644,12 @@ def create_tapdb_gui_router(
     ):
         payload = await _read_optional_json_object(request)
         _reject_immutable_object_fields(payload)
-        _reject_unknown_payload_fields(payload, allowed={"apply", "bstatus"})
+        _reject_unknown_payload_fields(payload, allowed={"apply", "bstatus", "expected_revision"})
         apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 return jsonable_encoder(
                     _update_object_status(
@@ -2593,6 +2657,7 @@ def create_tapdb_gui_router(
                         euid=euid,
                         bstatus=str(payload.get("bstatus") or ""),
                         actor=str(user.get("username") or ""),
+                    expected_revision=payload.get("expected_revision"),
                         dry_run=not apply,
                     )
                 )
@@ -2622,11 +2687,15 @@ def create_tapdb_gui_router(
             }
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn)
             with conn.session_scope(commit=True) as session:
                 _add_object_lineage(
                     session,
                     euid=euid,
                     related_euid=related_euid,
+                    expected_revision=int(form["expected_revision"]),
+                    related_expected_revision=int(form["related_expected_revision"]),
                     direction=direction,
                     relationship_type=relationship_type,
                     v0_edge=v0_edge,
@@ -2649,12 +2718,16 @@ def create_tapdb_gui_router(
             )
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn)
             with conn.session_scope(commit=True) as session:
                 return jsonable_encoder(
                     _add_object_lineage(
                         session,
                         euid=euid,
                         related_euid=str(payload.get("related_euid") or ""),
+                        expected_revision=payload.get("expected_revision"),
+                        related_expected_revision=payload.get("related_expected_revision"),
                         direction=str(payload.get("direction") or "parent"),
                         relationship_type=str(
                             payload.get("relationship_type") or "generic"
@@ -3424,6 +3497,9 @@ def create_tapdb_gui_router(
             status_code=303,
         )
 
+    from daylily_tapdb.gui.integrity import integrity_router
+    router.include_router(integrity_router(config_path=resolved_config_path,
+        require_user=require_tapdb_gui_user, require_admin=require_tapdb_gui_admin))
     return router
 
 

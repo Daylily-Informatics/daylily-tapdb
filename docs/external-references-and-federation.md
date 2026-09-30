@@ -1,5 +1,9 @@
 # External References, Discoverability, and Federation
 
+TapDB 11: [attribution, revisions, independent registration, annotations, and
+adoption contract](tapdb-11-integrity.md). Existing write signatures require
+explicit revision preconditions; the new contract supersedes older examples.
+
 This guide is the TapDB 10.0 contract for linking a local object to something
 owned elsewhere and for composing discoverable graphs across a known fleet.
 It is written for application developers, visualizer authors, and database
@@ -134,7 +138,10 @@ spec = ExternalLinkSpec(
 
 with connection.session_scope(commit=True) as session:
     source = load_source_in_this_session(session)
-    result = ExternalReferenceService(session).attach(source, spec)
+    result = ExternalReferenceService(session).attach(
+        source, spec, expected_source_revision=source.record_revision,
+        expected_lineage_revision=None,
+    )
     assert result.status in {"created", "existing", "reactivated"}
 ~~~
 

@@ -19,6 +19,7 @@ from daylily_tapdb.cli.db_config import (
     get_db_config,
 )
 from daylily_tapdb.security_context import (
+    Attribution,
     TapdbTransactionContext,
     apply_transaction_context,
     is_postgresql_session,
@@ -123,6 +124,7 @@ class RuntimeDBConnection:
     def __init__(self, bundle: RuntimeBundle):
         self._bundle = bundle
         self.app_username: Optional[str] = None
+        self.attribution: Attribution | None = None
 
     def __enter__(self) -> "RuntimeDBConnection":
         return self
@@ -150,6 +152,7 @@ class RuntimeDBConnection:
                             self._bundle.cfg.get("additional_tenant_ids", ())
                         ),
                         actor=_audit_username_for_session(self.app_username),
+                        attribution=self.attribution,
                         allow_global_rows=bool(
                             self._bundle.cfg.get("allow_global_claims")
                         ),

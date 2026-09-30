@@ -22,6 +22,10 @@ spec = CliSpec(
     context=InvocationContextSpec(
         options=[
             ContextOptionSpec(
+                name="attribution", option_flags=("--attribution",), value_type="str",
+                help="Path to explicit v1 actor/service envelope for native writes.",
+            ),
+            ContextOptionSpec(
                 name="client_id",
                 option_flags=("--client-id",),
                 value_type="str",

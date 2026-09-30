@@ -499,14 +499,14 @@ def _object_addressable_tables() -> set[str]:
 def check_representative_objects(session: Any, manifest: BackupManifest) -> CheckResult:
     """Each sampled object must resolve through the normal lookup path.
 
-    Going through ``find_object_by_euid`` rather than raw SQL is the point: it
-    proves the restored data is reachable the way the application reaches it,
-    including the soft-delete filter and polymorphic dispatch.
+    Use the exact typed native object reader with include_deleted=True.
+    Backups deliberately retain soft-deleted rows: hidden from ordinary search
+    must not be misreported as missing from preserved history.
 
     Only samples from object-addressable tables are required to resolve; the
     rest are counted and reported, not failed.
     """
-    from daylily_tapdb.services.object_lookup import find_object_by_euid
+    from daylily_tapdb.services.object_operations import get_object, ObjectSelector
 
     samples = manifest.representative_objects[:SAMPLE_LIMIT]
     if not samples:
@@ -537,7 +537,8 @@ def check_representative_objects(session: Any, manifest: BackupManifest) -> Chec
             continue
         checked += 1
         try:
-            found, _ = find_object_by_euid(session, euid)
+            kind={'generic_template':'template','generic_instance':'instance','generic_instance_lineage':'lineage'}[sample['table']]
+            found = get_object(session,ObjectSelector(euid=euid,record_type=kind),include_deleted=True)
         except Exception as exc:  # noqa: BLE001 - reported, not swallowed
             found = None
             if first_error is None:

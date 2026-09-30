@@ -19,6 +19,17 @@
   <a href="docs/backup-and-recovery.md">Recover</a>
 </p>
 
+## TapDB 11 write and adoption contract
+
+TapDB 11 requires explicit human/service attribution for every domain write,
+expected revisions for guarded mutations, and reviewed adoption of existing
+databases. Audit history is append-only for constrained runtime roles. It does
+not protect against database owners or superusers.
+
+Read the [TapDB 11 contract and consumer handoff](docs/tapdb-11-integrity.md)
+before changing a service dependency. A package upgrade alone does not adopt
+its database or authenticated writer paths. EUID issuance is unchanged.
+
 ## Why TapDB
 
 TapDB is a reusable persistence substrate for services that need typed,
@@ -190,7 +201,7 @@ and never commits or rolls back its caller's transaction.
 
 ## Canonical external references
 
-TapDB 10 has one external-reference model and one writer. A local source points
+TapDB has one external-reference model and one writer. A local source points
 through persisted lineage to a shared, typed `XRF` object. A federated target
 names an exact TapDB service and an EUID that service actually persisted; an
 opaque target names a non-expandable external identifier such as a DOI or PMID.
@@ -218,7 +229,10 @@ spec = ExternalLinkSpec(
 )
 
 with connection.session_scope(commit=True) as session:
-    outcome = ExternalReferenceService(session).attach(source, spec)
+    outcome = ExternalReferenceService(session).attach(
+        source, spec, expected_source_revision=source.record_revision,
+        expected_lineage_revision=None,  # Expects no existing association.
+    )
 ```
 
 `attach`, `detach`, authority-scoped `reconcile`, `list_for_source`, and

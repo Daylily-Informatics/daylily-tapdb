@@ -47,6 +47,8 @@ from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session, sessionmaker
 
 from daylily_tapdb.security_context import (
+    Attribution,
+    invocation_attribution,
     TapdbTransactionContext,
     apply_transaction_context,
     assert_operator_role,
@@ -96,6 +98,7 @@ class TAPDBConnection:
         sslrootcert: Optional[str] = None,
         server_port: Optional[int] = None,
         additional_tenant_ids: tuple[str, ...] = (),
+        attribution: Attribution | None = None,
     ):
         """
         Initialize database connection.
@@ -145,6 +148,7 @@ class TAPDBConnection:
             raise ValueError("db_user is required")
         if not app_username:
             raise ValueError("app_username is required")
+        self.attribution = attribution
         self.app_username = app_username
         self.domain_code = domain_code
         self.owner_repo_name = owner_repo_name
@@ -348,6 +352,7 @@ class TAPDBConnection:
             tenant_id=self.tenant_id,
             additional_tenant_ids=self.additional_tenant_ids,
             actor=self.app_username,
+            attribution=self.attribution if self.attribution is not None else invocation_attribution(),
             allow_global_rows=self.allow_global_rows,
         )
 

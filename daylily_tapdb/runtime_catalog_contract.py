@@ -96,10 +96,12 @@ def policy_expressions(schema_sql: str) -> dict[str, tuple[str, str]]:
             "generic_instance",
             "generic_instance_lineage",
             "audit_log",
+            "tapdb_history_baseline",
             "outbox_event",
             "inbox_message",
         )
     }
+    result["tapdb_history_epoch"] = ("true", "false")
     result["tapdb_identity_prefix_config"] = (f"({scope})", f"({scope})")
     event_scope = scope.replace("(domain_code", "(event.domain_code").replace(
         "(issuer_app_code", "(event.issuer_app_code"
@@ -129,7 +131,7 @@ _FUNCTION = re.compile(
     re.M | re.S,
 )
 _TRIGGER = re.compile(
-    r"^CREATE TRIGGER (?P<name>\w+)\s+(?P<timing>BEFORE|AFTER)\s+(?P<events>[A-Z\s]+?) ON (?P<relation>\w+)\s+FOR EACH ROW EXECUTE FUNCTION (?P<function>\w+)\(\);",
+    r"^CREATE TRIGGER (?P<name>\w+)\s+(?P<timing>BEFORE|AFTER)\s+(?P<events>[A-Z\s]+?) ON (?P<relation>\w+)\s+FOR EACH (?P<level>ROW|STATEMENT) EXECUTE FUNCTION (?P<function>\w+)\(\);",
     re.M,
 )
 _TYPES = {
@@ -277,16 +279,17 @@ def canonical_security_contract(schema_name: str, schema_sql: str) -> dict[str, 
         for match in trigger_matches:
             values = match.groupdict()
             event_bits = sum(
-                {"INSERT": 4, "DELETE": 8, "UPDATE": 16}[event.strip()]
+                {"INSERT": 4, "DELETE": 8, "UPDATE": 16, "TRUNCATE": 32}[event.strip()]
                 for event in values.pop("events").split("OR")
             )
             timing = values.pop("timing")
+            level = values.pop("level")
             triggers[(values["relation"], values["name"])] = {
                 **values,
                 "function_schema": schema_name,
                 "function_arguments": "",
                 "enabled": "O",
-                "type": 1 + (2 if timing == "BEFORE" else 0) + event_bits,
+                "type": (1 if level == "ROW" else 0) + (2 if timing == "BEFORE" else 0) + event_bits,
                 "when": None,
                 "columns": "",
                 "arguments_hex": "",
@@ -316,6 +319,7 @@ def validate_managed_security(
     functions: list[dict[str, Any]],
     triggers: list[dict[str, Any]],
     managed_tables: set[str],
+    audit_writer: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return only positively identified canonical routines eligible for grants."""
     if any({"name", "arguments"} - set(row) for row in functions) or any(
@@ -369,13 +373,16 @@ def validate_managed_security(
             raise RuntimeCatalogContractError("Canonical identity projection must deny PUBLIC EXECUTE")
         if (
             set(expected) - set(routine_row)
-            or routine_row["owner"] != owner
+            or routine_row["owner"] != (audit_writer if key[0] in {"record_insert", "record_update"} else owner)
             or any(routine_row.get(field) != value for field, value in expected.items())
         ):
             raise RuntimeCatalogContractError(
                 f"Canonical routine body or security metadata differs: {key}"
             )
-        routine_grants.append(routine_row)
+        if key[0] not in {"record_insert", "record_update"}:
+            routine_grants.append(routine_row)
+        elif routine_row.get("public_execute") is not False:
+            raise RuntimeCatalogContractError("Audit append routines must deny PUBLIC EXECUTE")
     actual_triggers = {
         (row["relation"], row["name"]): row
         for row in triggers

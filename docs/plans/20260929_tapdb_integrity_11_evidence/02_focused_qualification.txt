@@ -1,0 +1,24 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.13, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/jmajor/projects/mega_dayhoff/repos_work/tapdb-scoped-template-import-20260927
+configfile: pyproject.toml
+plugins: platformdirs-4.12.2, cov-7.1.0, anyio-4.15.1
+collected 18 items
+
+tests/test_integrity_v11.py ..................                           [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/typer/__init__.py:24
+  /Users/jmajor/projects/mega_dayhoff/repos_work/tapdb-scoped-template-import-20260927/.venv/lib/python3.13/site-packages/typer/__init__.py:24: DeprecationWarning: 'click.utils.get_binary_stream' is deprecated and will be removed in Click 9.0.
+    from click.utils import get_binary_stream as get_binary_stream
+
+.venv/lib/python3.13/site-packages/typer/__init__.py:25
+  /Users/jmajor/projects/mega_dayhoff/repos_work/tapdb-scoped-template-import-20260927/.venv/lib/python3.13/site-packages/typer/__init__.py:25: DeprecationWarning: 'click.utils.get_text_stream' is deprecated and will be removed in Click 9.0.
+    from click.utils import get_text_stream as get_text_stream
+
+tests/test_integrity_v11.py::test_api_cli_python_read_parity
+  /Users/jmajor/projects/mega_dayhoff/repos_work/tapdb-scoped-template-import-20260927/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 18 passed, 3 warnings in 2.11s ========================

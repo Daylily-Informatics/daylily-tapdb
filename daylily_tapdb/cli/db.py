@@ -1213,15 +1213,18 @@ def db_schema_apply(
             "SELECT set_config('session.allow_global_rows', 'true', true);",
         ]
     )
+    from daylily_tapdb.audit_storage import audit_writer_install_sql
     schema_bundle = (
         "BEGIN;\n"
         + operator_context
-        + "\n"
+        + "\nDO $v11_adoption_guard$ BEGIN IF to_regclass('generic_instance') IS NOT NULL AND to_regclass('tapdb_history_epoch') IS NULL THEN RAISE EXCEPTION 'TapDB 11 requires reviewed integrity-adopt; schema apply cannot adopt existing history'; END IF; END $v11_adoption_guard$;\n"
         + schema_file.read_text(encoding="utf-8")
         + "\n"
         + rls_file.read_text(encoding="utf-8")
         + "\n"
         + identity_file.read_text(encoding="utf-8")
+        + "\n"
+        + audit_writer_install_sql(str(cfg["database"]), schema_name, operator_user)
         + "\n"
         + _runtime_scope_binding_sql(schema_name, cfg)
         + ";\n"
@@ -2234,6 +2237,7 @@ def _tapdb_connection_for_env(
     *,
     app_username: str,
     connection_role: str = "runtime",
+    attribution=None,
 ) -> TAPDBConnection:
     cfg = _get_db_config(env)
     engine_type = str(cfg["engine_type"]).strip().lower()
@@ -2250,6 +2254,7 @@ def _tapdb_connection_for_env(
         region=region,
         iam_auth=auth["iam_auth"],
         app_username=app_username,
+        attribution=attribution,
         domain_code=str(cfg["domain_code"]),
         owner_repo_name=str(cfg["owner_repo_name"]),
         schema_name=str(cfg["schema_name"]),
@@ -2460,6 +2465,9 @@ def db_seed(
     ccyo_out.warning("\n► Seeding templates...")
     from daylily_tapdb.runtime_principal import grant_proven_runtime_sequences
 
+    from daylily_tapdb.security_context import Attribution
+    from uuid import uuid4
+
     overwrite = not skip_existing
     failed = 0
     try:
@@ -2467,6 +2475,7 @@ def db_seed(
             env,
             app_username="tapdb_template_seed",
             connection_role="operator",
+            attribution=Attribution("service", "daylily-tapdb", "template-seed", "tapdb-cli", str(uuid4()), "template-seed"),
         ) as conn:
             # Select the snapshot before session_scope installs transaction
             # context with its first query. Do not change isolation mid-flight.

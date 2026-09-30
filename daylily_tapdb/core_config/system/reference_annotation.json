@@ -1,0 +1,20 @@
+{
+  "templates": [
+    {
+      "name": "Annotation",
+      "polymorphic_discriminator": "generic_template",
+      "category": "reference",
+      "type": "annotation",
+      "subtype": "generic",
+      "version": "1.0",
+      "instance_prefix": "XRF",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Metadata about a canonical reference; authoritative link is typed lineage.",
+        "properties": {},
+        "instantiation_layouts": []
+      }
+    }
+  ]
+}

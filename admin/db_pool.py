@@ -102,6 +102,7 @@ class AdminDBConnection:
     def __init__(self, bundle: EngineBundle):
         self._bundle = bundle
         self.app_username: Optional[str] = None
+        self.attribution = None
 
     def __enter__(self) -> "AdminDBConnection":
         return self
@@ -118,8 +119,15 @@ class AdminDBConnection:
         trans = session.begin()
         token = db_username_var.set(_audit_username_for_session(self.app_username))
         try:
-            _set_search_path(session, self._bundle.schema_name)
-            _set_audit_username(session, self.app_username)
+            from daylily_tapdb.security_context import TapdbTransactionContext, apply_transaction_context, invocation_attribution
+            cfg=self._bundle.cfg
+            apply_transaction_context(session, TapdbTransactionContext(
+                config_identity=str(cfg["config_path"]), schema_name=self._bundle.schema_name,
+                domain_code=cfg["domain_code"], owner_repo_name=cfg["owner_repo_name"],
+                tenant_id=cfg.get("tenant_id") or None, actor=_audit_username_for_session(self.app_username),
+                allow_global_rows=bool(cfg.get("allow_global_claims")),
+                additional_tenant_ids=tuple(cfg.get("additional_tenant_ids", ())),
+                attribution=self.attribution if self.attribution is not None else invocation_attribution()))
             yield session
             if commit:
                 trans.commit()

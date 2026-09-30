@@ -969,6 +969,7 @@ def seed_templates(
     owner_repo_name: str,
     domain_registry_path: Path,
     prefix_registry_path: Path,
+    create_governance_objects: bool = True,
 ) -> SeedSummary:
     """Seed validated template definitions into a TapDB session."""
     resolved_domain = _normalize_domain_scope(domain_code)
@@ -1026,7 +1027,7 @@ def seed_templates(
             else:
                 skipped += 1
 
-    if resolved_owner == "daylily-tapdb" and any(
+    if create_governance_objects and resolved_owner == "daylily-tapdb" and any(
         str(template.get("category") or "") == "governance"
         for template in prepared_templates
     ):

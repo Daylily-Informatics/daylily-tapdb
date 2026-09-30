@@ -290,6 +290,8 @@ def build_app():
     @app.callback()
     def _root_callback(
         ctx: typer.Context,
+        attribution: Optional[Path] = typer.Option(None, "--attribution", exists=True, dir_okay=False,
+            help="Explicit v1 actor/service envelope for native writes"),
         client_id: Optional[str] = typer.Option(
             None,
             "--client-id",
@@ -319,6 +321,10 @@ def build_app():
             _reset()
         except Exception:
             pass
+        from daylily_tapdb.security_context import Attribution, set_invocation_attribution, reset_invocation_attribution
+        envelope = Attribution(**json.loads(attribution.read_text())) if attribution else None
+        attribution_token = set_invocation_attribution(envelope)
+        ctx.call_on_close(lambda: reset_invocation_attribution(attribution_token))
         prior_context = active_context_overrides()
         set_cli_context(
             client_id=(
@@ -351,6 +357,10 @@ def build_app():
     app.add_typer(cognito_app, name="cognito")
     app.add_typer(templates_app, name="templates")
     app.add_typer(objects_app, name="objects")
+    from daylily_tapdb.cli.integrity import history_app, references_app, adoption_app
+    app.add_typer(history_app, name="history")
+    app.add_typer(references_app, name="references")
+    app.add_typer(adoption_app, name="integrity-adopt")
 
     # Aurora subcommand — always visible, but requires boto3
     _has_boto3 = False

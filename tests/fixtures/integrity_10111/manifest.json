@@ -1,0 +1,9 @@
+{
+  "release": "10.1.11",
+  "commit": "8fb344ecac341dcf29fc84faf9d1e0bd0af2bd4c",
+  "sha256": {
+    "tapdb_schema.sql": "f174ac8100c84aba3ed29a74b35df36a39b63e0b296271a66aa777194aad1ca8",
+    "rls.sql": "caf2ab4f08d5448762d7e220b03a88343b5c0867bda14bf3f2a701f50f1e0a9d",
+    "runtime_identity_authorization.sql": "4d1c9ee33c1bffdc0be264d1c68a3e60a74799dd17f95ed13c0031d98d3d72f1"
+  }
+}

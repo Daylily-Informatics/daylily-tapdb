@@ -23,7 +23,7 @@ classifiers = [
 keywords = ["database", "orm", "polymorphic", "templates", "sqlalchemy", "lims"]
 
 dependencies = [
-    "sqlalchemy>=2.0",
+    "sqlalchemy>=2.0,<2.1",
     "psycopg2-binary>=2.9",
     "pydantic",
     "jsonschema>=4.0",

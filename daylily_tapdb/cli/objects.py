@@ -5,6 +5,8 @@ from __future__ import annotations
 import getpass
 import json
 from typing import Any
+from pathlib import Path
+from daylily_tapdb.security_context import Attribution, invocation_attribution
 
 import typer
 
@@ -139,13 +141,18 @@ def objects_update(
     machine_uuid: str = typer.Option("", "--machine-uuid"),
     uid: int | None = typer.Option(None, "--uid", min=1),
     record_type: str = typer.Option("", "--record-type"),
+    expected_revision: int | None = typer.Option(None, "--expected-revision", min=0),
+    attribution: Path | None = typer.Option(None, "--attribution", exists=True, dir_okay=False),
     apply: bool = typer.Option(False, "--apply"),
     actor: str = typer.Option("", "--actor"),
 ) -> None:
     effective_apply = apply and not _dry_run_requested()
     selector = _selector_options(euid, machine_uuid, uid, record_type)
     effective_actor = _actor(actor)
-    with _connection(effective_actor) as conn:
+    ctx=Attribution(**json.loads(attribution.read_text())) if attribution else invocation_attribution()
+    if effective_apply and ctx is None:
+        raise typer.BadParameter("--attribution is required for writes")
+    with _tapdb_connection_for_env(Environment.target, app_username=effective_actor, attribution=ctx) as conn:
         with conn.session_scope(commit=effective_apply) as session:
             payload = update_object(
                 session,
@@ -153,6 +160,7 @@ def objects_update(
                 _changes(set_values),
                 actor=effective_actor,
                 dry_run=not effective_apply,
+                expected_revision=expected_revision,
             )
     _emit(payload)
 
@@ -198,19 +206,25 @@ def objects_delete(
     machine_uuid: str = typer.Option("", "--machine-uuid"),
     uid: int | None = typer.Option(None, "--uid", min=1),
     record_type: str = typer.Option("", "--record-type"),
+    expected_revision: int | None = typer.Option(None, "--expected-revision", min=0),
+    attribution: Path | None = typer.Option(None, "--attribution", exists=True, dir_okay=False),
     apply: bool = typer.Option(False, "--apply"),
     actor: str = typer.Option("", "--actor"),
 ) -> None:
     effective_apply = apply and not _dry_run_requested()
     selector = _selector_options(euid, machine_uuid, uid, record_type)
     effective_actor = _actor(actor)
-    with _connection(effective_actor) as conn:
+    ctx=Attribution(**json.loads(attribution.read_text())) if attribution else invocation_attribution()
+    if effective_apply and ctx is None:
+        raise typer.BadParameter("--attribution is required for writes")
+    with _tapdb_connection_for_env(Environment.target, app_username=effective_actor, attribution=ctx) as conn:
         with conn.session_scope(commit=effective_apply) as session:
             payload = soft_delete_object(
                 session,
                 selector,
                 actor=effective_actor,
                 dry_run=not effective_apply,
+                expected_revision=expected_revision,
             )
     _emit(payload)
 

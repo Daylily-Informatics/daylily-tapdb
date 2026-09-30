@@ -118,7 +118,7 @@ def _extract_bloom_user(request: Request) -> Optional[dict]:
     if role not in {"admin", "user"}:
         role = "user"
 
-    return {"email": email, "role": role}
+    return {"email": email, "role": role, "actor_issuer": user_data.get("actor_issuer"), "actor_subject": user_data.get("actor_subject")}
 
 
 def _resolve_shared_auth_user(request: Request) -> Optional[dict]:
@@ -133,10 +133,14 @@ def _resolve_shared_auth_user(request: Request) -> Optional[dict]:
     email = bloom_user["email"]
     user = get_user_by_username(email)
     if not user:
-        try:
-            user = get_or_create_user_from_email(email, role=bloom_user["role"])
-        except Exception:
-            return None
+        from uuid import uuid4
+        from daylily_tapdb.cli.db_config import get_db_config
+        from daylily_tapdb.security_context import Attribution
+        if not bloom_user.get("actor_issuer") or not bloom_user.get("actor_subject"):
+            raise HTTPException(503, "Shared host must supply stable actor_issuer and actor_subject for TapDB 11 user provisioning")
+        user = get_or_create_user_from_email(email, role=bloom_user["role"],
+            attribution=Attribution("human", bloom_user["actor_issuer"], bloom_user["actor_subject"],
+                get_db_config()["owner_repo_name"],str(uuid4()),str(uuid4())))
 
     request.session["user_uid"] = user["uid"]
     request.session["cognito_username"] = email
@@ -183,6 +187,7 @@ def get_or_create_user_from_email(
     *,
     display_name: Optional[str] = None,
     role: str = "user",
+    attribution=None,
 ) -> dict:
     """Ensure an actor-backed TAPDB user row exists for a Cognito identity email."""
     normalized = (email or "").strip().lower()
@@ -191,8 +196,11 @@ def get_or_create_user_from_email(
     if role not in ("admin", "user"):
         raise ValueError(f"invalid role: {role}")
 
+    if attribution is None:
+        raise ValueError("TapDB 11 identity provisioning requires verified initiator attribution")
     with get_db() as conn:
         conn.app_username = normalized
+        conn.attribution = attribution
         with conn.session_scope(commit=True) as session:
             user, _ = create_or_get(
                 session,
@@ -296,6 +304,11 @@ def update_last_login(user_uid: int | str) -> None:
     """Update user's last login timestamp."""
     with get_db() as conn:
         conn.app_username = "system"
+        from daylily_tapdb.gui.integrity import authenticated_attribution
+        user=get_user_by_uid(user_uid)
+        if user is None:
+            raise ValueError("login actor does not exist")
+        conn.attribution=authenticated_attribution(user,conn)
         with conn.session_scope(commit=True) as session:
             set_last_login(session, user_uid)
 
