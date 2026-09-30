@@ -40,19 +40,24 @@ uniqueness guarantee; administrator namespace responsibility retained. No
 independent immutable store, history repair, consumer code changes, deployment,
 production mutation or intermediate image build. Old evidence remains intact.
 
-Next executable action: publish one immutable annotated numeric 11.0.0 package
-release from this branch. Remote tags and PyPI both show 11.0.0 unused at the
-publication preflight. Source implementation commit: `bc4471c2abdd30cab459a7aefaf60c2b9e3a8dcd`.
-No package/tag has yet been published. Consumer adoption requires separate approval.
-Use `[skip ci]` for release documentation commits to respect the approved focused
-qualification scope; no broad GitHub Actions campaign is authorized.
+Published **11.0.0** from immutable annotated tag at
+`6d84bec6c3bb0c728b8c469938e9550f592178b5`; branch pushed. PyPI wheel and source
+archive hashes match local artifacts; existing `twup` public download probe
+succeeded. GitHub release contains both artifacts. Qualified implementation
+files in the wheel match retained source hashes. No package source changes
+followed qualification; release changes were documentation only.
+
+Next action: none within this package release scope. Consumer adoption,
+deployment, owner validators and standalone Cognito repair remain explicit
+separate work. No PR or merge was performed. Release/closure commits use
+`[skip ci]` to preserve the approved focused qualification scope.
 
 Evidence: `20260929_tapdb_integrity_11_evidence/03_final_focused_qualification.txt`
-and `04_qualified_source_manifest.json`; 47-row requirements matrix;
+and `04_qualified_source_manifest.json`; `05_publication_receipt.json`; 47-row requirements matrix;
 `../tapdb-11-integrity.md` and `../tapdb-11-release-notes.md`.
-Ledger counts: **12 SUCCESS, 1 NO_LONGER_NEEDED, 2 OPEN**.
-All rows terminal: **no**. Source implementation and focused qualification:
-**complete within the documented scope**. Release objective complete: **no**.
+Ledger counts: **14 SUCCESS, 1 NO_LONGER_NEEDED, 0 OPEN**.
+All rows terminal: **yes**. Source implementation and focused qualification:
+**complete within the documented scope**. Release objective complete: **yes**, within the approved package scope.
 Production changed: **no**.
 
 ## Approved implementation plan
@@ -101,9 +106,9 @@ G0 baseline/scope; G1 source implementation (approved); G2 isolated qualificatio
 | P09 | XRF-09, CORE-01,03–05 | SUCCESS | active_product_contract | G1 | Lead | shared dispatcher; actual CLI and host-authenticated HTTP qualification | new contracts required thin adapters | Native parity qualified; pre-existing standalone Cognito gap disclosed. |
 | P10 | OPS-02–05 | SUCCESS | config_or_startup_contract | G1 | Lead | native fenced adoption; exact 10.1.11/current restore checks | new contract required explicit adoption | No silent old-schema upgrade; restore epochs/floors/admission preserved. |
 | P11 | Focused acceptance | SUCCESS | contract_test | G2 | Lead | 03_final_focused_qualification.txt; 04 source hashes | G2 approved by user | 38 passed; 3 dependency deprecation warnings; isolated PG16.13 only. |
-| P12 | Major release; OPS-06 | OPEN | plan_amendment | G3 | Lead | tapdb-11-release-notes.md; remote/PyPI 11.0.0 absent | G3 approved; publishing next | No consumer deployment. |
+| P12 | Major release; OPS-06 | SUCCESS | plan_amendment | G3 | Lead | 05_publication_receipt.json; GitHub/PyPI 11.0.0 | G3 approved and fulfilled | Immutable annotated tag, both artifacts published; no consumer deployment. |
 | P13 | Deferred AUD-08 issue | SUCCESS | plan_amendment | G1 | Lead | https://github.com/Daylily-Informatics/daylily-tapdb/issues/117 | excluded privileged-admin infrastructure | Issue filed; no immutable infrastructure implemented. |
-| P14 | Closure matrix/status | OPEN | plan_amendment | G3 | Lead | 47-row matrix and this continuation state | Release gate still pending | Source and qualification complete; final release closure remains. |
+| P14 | Closure matrix/status | SUCCESS | plan_amendment | G3 | Lead | 47-row matrix, source/evidence hashes and this ledger | | All rows terminal; package objective complete; consumer rollout separate. |
 
 The original 47 IDs map to P01–P10/P12/P13. ID-04–06 mean preservation and qualification of existing behavior only, not allocator redesign. AUD-08 means documented trust boundary and separate issue only. Consumer propagation/operations require owning-service evidence; cannot be claimed complete from TapDB fixtures.
 
@@ -147,3 +152,19 @@ the fixture stopped its server at teardown. Prior records, services and AWS
 resources were not touched. No test-generated object identities are claimed as
 production objects. The final source manifest records content hashes for the
 changed/new implementation and focused fixtures, including exact 10.1.11 assets.
+## Publication closure
+
+User reply “approve completing the plan” approved the previously requested G3
+branch push, annotated 11.0.0 tag and package publication. Release commit:
+`6d84bec6c3bb0c728b8c469938e9550f592178b5`. Publication verification is retained
+in evidence file 05; the post-publication ledger commit does not move that tag.
+
+- [GitHub release](https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/11.0.0)
+- [PyPI release](https://pypi.org/project/daylily-tapdb/11.0.0/)
+- Consumer source/dependency adoption: not performed.
+- Service builds/deployments and production validation: not performed.
+- Standalone Cognito import gap: disclosed, outside this release qualification.
+- Independent immutable audit preservation: deferred issue #117.
+
+All rows terminal: **yes**. Approved package objective complete: **yes**.
+Production changed: **no**.

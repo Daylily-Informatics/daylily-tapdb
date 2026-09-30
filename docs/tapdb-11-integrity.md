@@ -1,8 +1,8 @@
 # TapDB 11 integrity and consumer adoption
 
-Status: local implementation and isolated PostgreSQL 16.13 qualification. See the
-[controlling ledger](plans/20260929_tapdb_integrity_11_ledger.md) for publication
-and remaining gates. This document is not production-adoption evidence.
+Status: published in TapDB **11.0.0**, with isolated PostgreSQL 16.13 qualification.
+See the [controlling ledger](plans/20260929_tapdb_integrity_11_ledger.md) for
+publication receipts. This document is not production-adoption evidence.
 
 ## Guarantees and boundaries
 

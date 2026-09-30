@@ -47,10 +47,10 @@ Source: Dayhoff `20260929_tapdb_integrity_external_reference_requirements.md`. U
 | CORE-05 | P09 | PRESERVED — consumer validators/cardinality; cycles permitted; no clinical rules moved into TapDB | Keep business rules such as patient roles, one active tube association, containment semantics, and assay revisions in consuming applications unless already declared generic constraints. Do not enforce that every lineage graph is acyclic; restrict cycle rules to relationships whose declared semantics require it. |
 | OPS-01 | P10/P12 | COMPLETE — exact 10.1.11 baseline, 47-row matrix, source manifest and focused evidence | Reconcile these findings against an exact current revision. Map each requirement to existing support, a proposed change, a consumer dependency, or an unresolved question. Existing qualifying capability should be documented and tested later, not rewritten automatically. |
 | OPS-02 | P10/P12 | IMPLEMENTED / FOCUSED QUALIFIED — see evidence map below; not production acceptance | Plan fresh installation and explicitly approved existing-installation adoption separately. Inventory schema, grants, templates, allocator authorities, and history capabilities read-only before proposing migration. No broad reseeding, silent template overwrite, identity rewrite, or historical data cleanup. |
-| OPS-03 | P10/P12 | SOURCE CONTRACT COMPLETE — versioned envelope/templates/interfaces; publication pending G3 | Publish versioned contracts for any changed templates, attribution envelopes, schemas, or native APIs, with clear consumer adoption steps. Do not overwrite immutable template versions or install compatibility shims/inferred defaults without an explicit proposal. |
+| OPS-03 | P10/P12 | PUBLISHED — versioned envelope/templates/interfaces in 11.0.0; consumer adoption separate | Publish versioned contracts for any changed templates, attribution envelopes, schemas, or native APIs, with clear consumer adoption steps. Do not overwrite immutable template versions or install compatibility shims/inferred defaults without an explicit proposal. |
 | OPS-04 | P10/P12 | IMPLEMENTED / FOCUSED QUALIFIED — see evidence map below; not production acceptance | Backups/restores must preserve objects, lineage history, attribution, external references, audit integrity controls, allocator non-reuse, and reviewed principal scopes. Provide inspectable verification receipts and report excluded external artifacts. Reuse existing native recovery/fence tooling and extend only demonstrated gaps. |
 | OPS-05 | P10/P12 | IMPLEMENTED — native catalog/grant/epoch/completeness diagnostics; no deployed RPO/RTO claim | Provide diagnostics for effective grants, trigger/routine protection, configured issuance authority, history completeness boundaries, and relevant version provenance. Diagnostics cannot claim an operating backup schedule, RPO/RTO, or owner-service recovery succeeded without deployment evidence. |
-| OPS-06 | P10/P12 | PENDING G3 — release notes prepared; no package/tag published or consumer deployed | Release notes must state exact guarantees and residual limits, required consumer changes, applicable PostgreSQL versions, and any breaking changes. Plan one final immutable annotated numeric tag/build after the implementation is ready, rather than repeated exploratory service rebuilds. Consumers and deployment changes require separately approved scopes. Container builds must run on the designated EC2 builder, never the laptop. |
+| OPS-06 | P10/P12 | COMPLETE — annotated 11.0.0 and wheel/sdist published; hash receipt retained; no consumer deployment | Release notes must state exact guarantees and residual limits, required consumer changes, applicable PostgreSQL versions, and any breaking changes. Plan one final immutable annotated numeric tag/build after the implementation is ready, rather than repeated exploratory service rebuilds. Consumers and deployment changes require separately approved scopes. Container builds must run on the designated EC2 builder, never the laptop. |
 
 ## Source and qualification evidence
 
@@ -72,11 +72,11 @@ possible writer or consumer deployment. All 38 checks passed on PostgreSQL 16.13
 Final output: [03_final_focused_qualification.txt](20260929_tapdb_integrity_11_evidence/03_final_focused_qualification.txt).
 Source hashes: [04_qualified_source_manifest.json](20260929_tapdb_integrity_11_evidence/04_qualified_source_manifest.json).
 Public contract: [TapDB 11 adoption](../tapdb-11-integrity.md).
-Release candidate notes: [TapDB 11 release notes](../tapdb-11-release-notes.md).
+Release notes: [TapDB 11 release notes](../tapdb-11-release-notes.md).
 
 Remaining boundaries: standalone Cognito adapter imports do not match its pinned
 SDK; no live login acceptance is established. New authenticated HTTP operations
 were qualified through the supported host-session integration. Consumer identity
 propagation, owner validators, live adoption/rebind, deployment, and capacity
 qualification remain separately owned work. Privileged administrator protection
-is deferred to issue #117. Publication remains behind G3.
+is deferred to issue #117. G3 is complete: 11.0.0 is published with artifact hashes retained in evidence file 05.

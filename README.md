@@ -44,7 +44,9 @@ but never becomes the relationship authority.
 
 ## Install
 
-TapDB **11.0.0** introduces breaking audit, attribution, history and reference
+TapDB **11.0.0** is published on [PyPI](https://pypi.org/project/daylily-tapdb/11.0.0/)
+and [GitHub](https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/11.0.0).
+It introduces breaking audit, attribution, history and reference
 contracts. Read the [release notes](docs/tapdb-11-release-notes.md) and
 [consumer adoption guide](docs/tapdb-11-integrity.md) before upgrading an existing
 service. Publication and qualification receipts are in the
