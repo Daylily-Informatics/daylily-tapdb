@@ -44,18 +44,16 @@ but never becomes the relationship authority.
 
 ## Install
 
-TapDB **10.1.0 is published** on
-[PyPI](https://pypi.org/project/daylily-tapdb/10.1.0/) and
-[GitHub](https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/10.1.0).
-Artifact hashes and fresh public installation are verified. Independent
-acceptance is user-attested; CI and formal GitHub review were explicitly
-waived through an owner-authorized administrative merge, not reported passed.
-See the [release handoff](docs/plans/20260910_tapdb_service_readiness_handoff.md)
-for exact provenance, qualification limitations and service adoption ordering.
+TapDB **11.0.0** introduces breaking audit, attribution, history and reference
+contracts. Read the [release notes](docs/tapdb-11-release-notes.md) and
+[consumer adoption guide](docs/tapdb-11-integrity.md) before upgrading an existing
+service. Publication and qualification receipts are in the
+[release ledger](docs/plans/20260929_tapdb_integrity_11_ledger.md).
 
-The 10.1.0 release requires Python 3.12 or newer. Its database scope targets
-exact community PostgreSQL 16.13 plus isolated Aurora PostgreSQL 16.13
-acceptance. PostgreSQL 17 qualification is deferred to
+Python 3.12 or newer is required. TapDB 11's focused qualification used isolated
+community PostgreSQL 16.13; it is not an Aurora cutover or production acceptance.
+The earlier [10.1.0 handoff](docs/plans/20260910_tapdb_service_readiness_handoff.md)
+retains that release's separate historical evidence. PostgreSQL 17 qualification is deferred to
 [GitHub issue #107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107)
 and has not passed; this is not a declaration that PostgreSQL 17 is
 unsupported.

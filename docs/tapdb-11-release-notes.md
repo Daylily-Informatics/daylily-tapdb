@@ -1,9 +1,10 @@
-# TapDB 11.0.0 release candidate notes
+# TapDB 11.0.0 release notes
 
-Status: source implemented and locally qualified; **not published**. `11.0.0`
-was absent from remote tags on 2026-09-29; recheck before tagging. Baseline:
-10.1.11 at `8fb344ecac341dcf29fc84faf9d1e0bd0af2bd4c`. This is one major
-package release; no consumer deployment follows automatically.
+This document describes the 11.0.0 major package release. Source baseline:
+10.1.11 at `8fb344ecac341dcf29fc84faf9d1e0bd0af2bd4c`; implementation commit:
+`bc4471c2abdd30cab459a7aefaf60c2b9e3a8dcd`. Publication receipts and exact tagged
+revision are recorded in the [controlling ledger](plans/20260929_tapdb_integrity_11_ledger.md).
+No consumer deployment follows automatically.
 
 ## Breaking contracts
 
