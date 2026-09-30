@@ -664,6 +664,35 @@ backup:
 | `backup.provider_snapshots.enabled` / `.cluster_identifier` | `false` / `""` | Aurora only |
 | `backup.rehearsal.database_prefix` | `tapdb_rehearsal` | names the scratch database rehearsals create |
 | `backup.receipt_mirror` | `{}` | a second location for receipts, written after each receipt is published locally. Best-effort and **write-only**: verification always reads the local chain, so the mirror is evidence for a human or an auditor, not a recovery path the code falls back to. A mirror that falls behind is surfaced by `backup health`, not by a failed backup. |
+| `backup.receipts_directory` | omitted: `<config_dir>/backups/receipts` | Since 11.0.1, an explicit absolute canonical path to an existing local journal directory. Blank/null, missing directories, files, relative paths and symlink/path aliases are rejected. The sealed recovery family must include this exact directory. |
+
+### Retained receipt journals (11.0.1)
+
+If an installation already retains its recovery history outside the default
+receipt location, configure that existing directory through the native CLI:
+
+```bash
+tapdb --config /absolute/retained/operator.yaml config update \
+  --backup-receipts-directory /absolute/retained/journal
+```
+
+This writes only the selected configuration. It does not move or rewrite any
+receipt, create a directory, or change the recovery-family descriptor. Use the
+original operator configuration identity and journal path; changing the config
+path is not a way to bypass recovery floors. The directory must be on a local
+filesystem supporting atomic hard links, as required by the receipt writer.
+
+The CLI, management API and embedded GUI use the same server-side setting via
+the native backup services. An API caller cannot choose another directory in
+the request body. Plans and health reads do not create receipts. Backup writes
+append to the retained chain; the existing family, pending-operation, physical
+identity and integrity checks still apply. A mismatched or corrupt journal
+fails rather than causing automatic journal discovery or creation elsewhere.
+
+This patch requires no additional schema adoption beyond TapDB 11.0.0. Services
+moving from 10.x still need the [TapDB 11 consumer adoption](tapdb-11-integrity.md)
+work; changing the package pin does not establish compatibility or migrate a
+database. Operator-only use can precede rebuilding service containers.
 
 To confirm the sanitized target and storage identity that the public CLI
 resolved:

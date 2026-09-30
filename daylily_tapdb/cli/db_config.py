@@ -766,7 +766,7 @@ def get_backup_settings(
 ) -> dict[str, Any]:
     """Resolve normalized backup settings from the active TapDB config.
 
-    Every field has a working default, so a config written before this section
+    Optional fields have working defaults, so a config written before this section
     existed keeps working -- the backup subsystem is additive against consumers
     pinned to older releases.
 
@@ -789,6 +789,13 @@ def get_backup_settings(
         raise RuntimeError(f"No TAPDB config found at {resolved_config_path}.")
 
     backup = _as_mapping(root.get("backup"), field_name="backup")
+    receipt_location = {}
+    if "receipts_directory" in backup:
+        from daylily_tapdb.backup.receipts import validate_receipts_directory
+
+        receipt_location["receipts_directory"] = str(
+            validate_receipts_directory(backup["receipts_directory"])
+        )
     storage = _as_mapping(backup.get("storage"), field_name="backup.storage")
     retention = _as_mapping(backup.get("retention"), field_name="backup.retention")
     encryption = _as_mapping(backup.get("encryption"), field_name="backup.encryption")
@@ -818,6 +825,7 @@ def get_backup_settings(
     return {
         "config_path": str(resolved_config_path),
         "config_dir": str(Path(resolved_config_path).parent),
+        **receipt_location,
         "storage_uri": _credential_free_uri(
             _string(storage.get("uri")),
             field_name="backup.storage.uri",

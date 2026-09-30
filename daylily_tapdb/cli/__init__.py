@@ -1666,6 +1666,11 @@ def build_app():
             "--backup-keep-last",
             help="Backups to retain (recorded in manifests; enforcement is external)",
         ),
+        backup_receipts_directory: Optional[str] = typer.Option(
+            None,
+            "--backup-receipts-directory",
+            help="Existing absolute canonical receipt journal directory",
+        ),
         backup_expected_interval_hours: Optional[float] = typer.Option(
             None,
             "--backup-expected-interval-hours",
@@ -1932,6 +1937,13 @@ def build_app():
         if not isinstance(backup_root, dict):
             backup_root = _default_backup_config()
             root["backup"] = backup_root
+        if backup_receipts_directory is not None:
+            from daylily_tapdb.backup.receipts import validate_receipts_directory
+
+            backup_root["receipts_directory"] = str(
+                validate_receipts_directory(backup_receipts_directory)
+            )
+            backup_changed = True
         if backup_storage_uri is not None:
             storage_section = _required_mapping(backup_root, "storage", "backup")
             # Reject credential-bearing URIs at write time, not just at read

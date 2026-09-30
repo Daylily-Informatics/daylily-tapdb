@@ -1,0 +1,26 @@
+{
+  "scope": "local temporary files and mocked backup capture; no database, AWS or live service calls",
+  "authorization": "User reply: Approve these focused checks",
+  "command": ".venv/bin/python -m pytest -q tests/test_backup_receipt_directory.py",
+  "environment": "macOS; Python 3.13.13; pytest 9.1.1",
+  "final_exit_code": 0,
+  "passed": 19,
+  "elapsed_seconds": 1.16,
+  "warnings": "Two existing Typer/Click deprecation warnings",
+  "earlier_runs": [
+    {"passed": 17, "failed": 1, "cause": "New test passed Path rather than receipt list to chain verifier"},
+    {"passed": 18, "failed": 1, "cause": "New test used dict access rather than ChainVerification.ok"}
+  ],
+  "coverage": [
+    "native config update retains old receipt bytes",
+    "omitted setting preserves default without creating directory",
+    "blank, null, non-string, relative, missing, file, symlink and noncanonical paths rejected",
+    "removed configured directory is not silently recreated",
+    "native plan validates directory before storage without requiring a family",
+    "matching family accepted; mismatched family rejected before storage",
+    "corrupt retained journal rejected",
+    "CLI and API mocked capture failures append to same original chain and preserve head validation"
+  ],
+  "production_changed": false,
+  "broad_suite_or_ci_run": false
+}

@@ -57,6 +57,7 @@ from daylily_tapdb.backup.receipts import (
     STATUS_SUCCEEDED,
     SURFACE_CLI,
     Actor,
+    validate_receipts_directory,
     write_receipt,
 )
 from daylily_tapdb.backup.storage import (
@@ -277,6 +278,8 @@ def storage_for(settings: dict[str, Any]) -> Any:
 
 def receipts_directory(settings: dict[str, Any]) -> Path:
     """Return where receipts live for this target."""
+    if "receipts_directory" in settings:
+        return validate_receipts_directory(settings["receipts_directory"])
     return Path(settings["config_dir"]) / "backups" / "receipts"
 
 
@@ -506,6 +509,7 @@ def _backup_recovery_family(
 ) -> Optional[dict[str, Any]]:
     from daylily_tapdb.backup.recovery import validate_recovery_family
 
+    directory = receipts_directory(dict(settings))
     recorded = source_contract.get("recovery_family") if source_contract else None
     if recorded is not None and recovery_family != recorded:
         raise BackupVerificationError(
@@ -514,7 +518,7 @@ def _backup_recovery_family(
     if recovery_family is None:
         return None
     return validate_recovery_family(
-        recovery_family, required_directory=receipts_directory(dict(settings))
+        recovery_family, required_directory=directory
     )
 
 
