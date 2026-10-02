@@ -82,7 +82,13 @@ adoption_app = typer.Typer(
 
 
 @adoption_app.command("plan")
-def adoption_plan(output: Path = typer.Option(..., "--output")):
+def adoption_plan(
+    output: Path = typer.Option(..., "--output"),
+    receipts_dir: Path = typer.Option(..., "--receipts-dir", exists=True, file_okay=False),
+    recovery_family: Path | None = typer.Option(
+        None, "--recovery-family", exists=True, dir_okay=False
+    ),
+):
     from daylily_tapdb.cli.db_config import get_db_config
     from daylily_tapdb.runtime_principal import operator_session
     from daylily_tapdb.integrity_lifecycle import plan_adoption
@@ -91,7 +97,10 @@ def adoption_plan(output: Path = typer.Option(..., "--output")):
         raise typer.BadParameter("--output must be a new absolute receipt path")
     cfg = get_db_config()
     with operator_session(cfg, isolation_level="REPEATABLE READ") as conn, conn.begin():
-        plan = plan_adoption(conn, cfg)
+        plan = plan_adoption(
+            conn, cfg, receipts_dir=receipts_dir,
+            recovery_family=json.loads(recovery_family.read_text()) if recovery_family else None,
+        )
     with output.open("x") as f:
         json.dump(plan, f, indent=2, sort_keys=True, default=str)
     typer.echo(json.dumps({"plan": str(output), "sha256": plan["sha256"]}))

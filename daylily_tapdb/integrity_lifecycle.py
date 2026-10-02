@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 from sqlalchemy import text
@@ -29,6 +30,11 @@ from daylily_tapdb.security_context import (
     assert_operator_role,
 )
 from daylily_tapdb.sequences import capture_sequence_inventory, validate_writer_fence
+from daylily_tapdb.identity_inventory import seal_receipt, validate_receipt
+from daylily_tapdb.adoption_allocators import (
+    allocation_paths, build_adoption_allocator_inputs, capture_allocation_surface,
+    require_adoption_history, require_bounded_allocation_surface,
+)
 
 _DOMAIN = ("generic_template", "generic_instance", "generic_instance_lineage")
 
@@ -132,7 +138,7 @@ def _integrity_templates():
     return rows
 
 
-def plan_adoption(connection: Any, cfg: Mapping[str, Any]) -> dict[str, Any]:
+def _adoption_snapshot(connection: Any, cfg: Mapping[str, Any]) -> dict[str, Any]:
     _context(connection, cfg, "plan-adoption")
     schema = cfg["schema_name"]
     if (
@@ -148,7 +154,7 @@ def plan_adoption(connection: Any, cfg: Mapping[str, Any]) -> dict[str, Any]:
     assets = security_assets()
     templates = _integrity_templates()
     plan = {
-        "format": "tapdb.integrity-adoption/v1",
+        "format": "tapdb.integrity-adoption/v2",
         "target": _target(cfg),
         "tables": _digest(connection, schema),
         "catalog": _catalog_evidence(connection, schema),
@@ -163,10 +169,25 @@ def plan_adoption(connection: Any, cfg: Mapping[str, Any]) -> dict[str, Any]:
             for item in templates
         ],
     }
-    plan["sha256"] = hashlib.sha256(
-        json.dumps(plan, sort_keys=True, default=str).encode()
-    ).hexdigest()
     return plan
+
+
+def plan_adoption(
+    connection: Any, cfg: Mapping[str, Any], *, receipts_dir: Path,
+    recovery_family: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Seal one complete adoption, prior-floor advance and allocation budget.
+
+    The original canonical journal is explicit even for an empty first journal.
+    Old snapshot-only plans are not executable through the combined lifecycle.
+    """
+    snapshot = _adoption_snapshot(connection, cfg)
+    allocator = build_adoption_allocator_inputs(
+        connection, cfg, snapshot["sequences"], snapshot["new_core_templates"],
+        receipts_dir=receipts_dir, recovery_family=recovery_family,
+    )
+    return seal_receipt({"schema_version": "tapdb.integrity-adoption/v2",
+                         **snapshot, **allocator})
 
 
 def _establish_epoch(connection: Any, cfg: Mapping[str, Any], *, origin: str) -> str:
@@ -213,10 +234,25 @@ def apply_adoption(
     cfg: Mapping[str, Any],
     *,
     plan: dict[str, Any],
-    writer_fence: dict[str, Any],
+    fence_receipt: dict[str, Any],
+    receipts_dir: Path,
 ) -> dict[str, Any]:
+    """Apply the combined native plan in the caller's one transaction."""
+    from daylily_tapdb.sequences import (
+        apply_sequence_advance_plan, build_sequence_advance_plan,
+        build_sequence_allocation_reservation, finalize_sequence_allocation,
+    )
+
+    validate_receipt(plan, "tapdb.integrity-adoption/v2")
+    if plan["history"]["receipts_dir"] != str(receipts_dir):
+        raise ValueError("adoption requires its exact reviewed original journal")
     _context(connection, cfg, "apply-adoption")
     ns = _q(cfg["schema_name"])
+    validate_receipt(fence_receipt, "tapdb-writer-fence/v1")
+    if (fence_receipt["phase"] != "acquired"
+            or fence_receipt.get("recovery_family") != plan["history"]["recovery_family"]):
+        raise ValueError("adoption requires its acquired original-family writer fence")
+    writer_fence = fence_receipt["fence"]
     validate_writer_fence(connection, plan["sequences"], writer_fence)
     connection.execute(
         text(
@@ -225,9 +261,29 @@ def apply_adoption(
             + " IN ACCESS EXCLUSIVE MODE"
         )
     )
-    current = plan_adoption(connection, cfg)
-    if current != plan:
+    current = _adoption_snapshot(connection, cfg)
+    if any(plan.get(key) != value for key, value in current.items()):
         raise ValueError("adoption plan changed; inspect and obtain a fresh plan")
+    validate_receipt(plan["allocation_surface"], "tapdb-adoption-allocation-surface/v1")
+    if capture_allocation_surface(connection, cfg) != plan["allocation_surface"]:
+        raise ValueError("adoption allocation surface changed before advancement")
+    require_adoption_history(plan["history"], current["sequences"], fence_receipt=fence_receipt)
+    advance = build_sequence_advance_plan(
+        current["sequences"], floors=plan["history"]["floors"],
+        recovery_family=plan["history"]["recovery_family"],
+    )
+    paths = allocation_paths(connection, cfg, current["sequences"], current["new_core_templates"])
+    reservation = build_sequence_allocation_reservation(
+        advance, allocation_counts=paths["allocation_counts"])
+    if (advance != plan["allocator_plan"] or paths != plan["allocation_paths"]
+            or reservation != plan["allocation_reservation"]):
+        raise ValueError("adoption allocator/history inputs changed after review")
+    # No adoption schema/template/audit mutation occurs before this exact native
+    # advance. Its intent reserves the permitted allocation window durably.
+    allocated = apply_sequence_advance_plan(
+        connection, advance, writer_fence=writer_fence, receipts_dir=receipts_dir,
+        allocation_reservation=reservation, operation_sha256=plan["sha256"],
+    )
     assets = security_assets()
     for name in ("tapdb_schema.sql", "rls.sql", "runtime_identity_authorization.sql"):
         connection.exec_driver_sql(assets[name].replace("%", "%%"))
@@ -260,19 +316,19 @@ def apply_adoption(
     after = capture_sequence_inventory(
         connection, schema_name=cfg["schema_name"], target=_target(cfg)
     )
-    # This operation creates no domain/audit identities. Preserve native floors.
+    # Schema/baseline establishment must preserve the authorized advanced state.
     before_states = {
         s["name"]: (s["last_value"], s["is_called"])
-        for s in plan["sequences"]["sequences"]
+        for s in allocated["inventory"]["sequences"]
     }
     after_states = {
         s["name"]: (s["last_value"], s["is_called"]) for s in after["sequences"]
     }
     if before_states != after_states:
         raise RuntimeError("adoption unexpectedly changed identity allocation state")
+    catalog_proof = require_bounded_allocation_surface(connection, cfg)
     # Install only these two exact bundled definitions, using the native loader.
     # Their new identities are issued normally; no old identity or floor changes.
-    from pathlib import Path
     from sqlalchemy.orm import Session
     from dataclasses import asdict
     from daylily_tapdb.templates.loader import (
@@ -294,14 +350,25 @@ def apply_adoption(
             create_governance_objects=False,
         )
         session.flush()
+    if (installed.inserted + installed.skipped != 2 or installed.updated != 0
+            or installed.templates_loaded != 2):
+        raise RuntimeError("native adoption exceeded its exact two-template operation")
+    finalized = finalize_sequence_allocation(
+        connection, allocated, writer_fence=writer_fence, receipts_dir=receipts_dir,
+        operation_sha256=plan["sha256"], adoption_epoch=epoch,
+        allocation_counts={name: count // 2 * installed.inserted
+                           for name, count in paths["allocation_counts"].items()},
+    )
     return {
         "templates": asdict(installed),
-        "format": "tapdb.integrity-adoption-receipt/v1",
+        "format": "tapdb.integrity-adoption-receipt/v2",
         "epoch": epoch,
         "plan_sha256": plan["sha256"],
         "history_completeness": "current state observed at adoption; earlier audit retained",
         "runtime_rebind_required": True,
         "consumer_write_context_required": "attribution/v1",
+        "allocation_catalog_sha256": catalog_proof,
+        "allocator_receipt": finalized,
     }
 
 
@@ -322,13 +389,15 @@ def adopt_integrity(
     from daylily_tapdb.sequences import (
         acquire_database_writer_fence,
         release_database_writer_fence,
-        build_sequence_advance_plan,
-        apply_sequence_advance_plan,
         record_sequence_advance_outcome,
     )
 
     if control_cfg["database"] == cfg["database"]:
         raise ValueError("explicit independent control database required")
+    validate_receipt(plan, "tapdb.integrity-adoption/v2")
+    if plan["history"]["receipts_dir"] != str(receipts_dir):
+        raise ValueError("exact reviewed original receipts_dir required")
+    require_adoption_history(plan["history"], plan["sequences"])
     with (
         operator_session(control_cfg, isolation_level="REPEATABLE READ") as control,
         operator_session(cfg, isolation_level="REPEATABLE READ") as conn,
@@ -339,35 +408,14 @@ def adopt_integrity(
             inventory=plan["sequences"],
             receipts_dir=receipts_dir,
             provider_contract=provider_contract,
+            recovery_family=plan["history"]["recovery_family"],
         )
         with conn.begin():
             result = apply_adoption(
-                conn, cfg, plan=plan, writer_fence=acquired["fence"]
-            )
-        with conn.begin():
-            inventory = capture_sequence_inventory(
-                conn, schema_name=cfg["schema_name"], target=_target(cfg)
-            )
-            from daylily_tapdb.backup.recovery import retained_recovery_state
-            from daylily_tapdb.sequences import sequence_next_value
-
-            retained = retained_recovery_state(receipts_dir, target=inventory["target"])
-            proof = build_sequence_advance_plan(inventory, floors=retained["floors"])
-            prior = {
-                item["name"]: sequence_next_value(item)
-                for item in inventory["sequences"]
-            }
-            if any(
-                item["next_value"] != prior[item["name"]] for item in proof["advances"]
-            ):
-                raise RuntimeError(
-                    "adoption requires unexpected allocator advancement; fence retained"
-                )
-            verified = apply_sequence_advance_plan(
-                conn, proof, writer_fence=acquired["fence"], receipts_dir=receipts_dir
+                conn, cfg, plan=plan, fence_receipt=acquired, receipts_dir=Path(receipts_dir)
             )
         committed = record_sequence_advance_outcome(
-            verified,
+            result["allocator_receipt"],
             receipts_dir=receipts_dir,
             outcome="committed",
             actor=cfg["operator_user"],
@@ -379,4 +427,8 @@ def adopt_integrity(
             receipts_dir=receipts_dir,
             control_connection=control,
         )
-        return {**result, "fence_released": True, "allocator_receipt": committed}
+        return seal_receipt({
+            **result, "schema_version": "tapdb.integrity-adoption-receipt/v2",
+            "fence_released": True, "allocator_receipt": committed,
+            "fence_sha256": acquired["sha256"],
+        })

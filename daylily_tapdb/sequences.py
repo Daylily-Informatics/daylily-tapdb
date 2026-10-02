@@ -738,12 +738,156 @@ def _prior_sequence_intent_resolved(history: Sequence[Any], intent: Any) -> bool
     return bool(outcomes)
 
 
+def build_sequence_allocation_reservation(
+    plan: Mapping[str, Any], *, allocation_counts: Mapping[str, int],
+) -> dict[str, Any]:
+    """Reserve a finite native allocation window without consuming any identity.
+
+    Counts are upper bounds on nextval calls, including calls sharing a prefix.
+    Reserve complete cache blocks and the resulting next value before a caller
+    can allocate; those conservative floors survive transaction rollback.
+    """
+    validate_receipt(plan, PLAN_VERSION)
+    states = _validated_inventory(plan["inventory"])
+    if not isinstance(allocation_counts, Mapping) or set(allocation_counts) - set(states):
+        raise SequenceProtectionError("Allocation budget contains an unknown generator")
+    advances = {item["name"]: item for item in plan["advances"]}
+    floors = []
+    for name, count in sorted(allocation_counts.items()):
+        if type(count) is not int or count <= 0:
+            raise SequenceProtectionError("Allocation counts must be explicit positive integers")
+        state = states[name]
+        blocks = (count + state["cache_size"] - 1) // state["cache_size"]
+        ceiling = advances[name]["next_value"] + (
+            blocks * state["cache_size"] * state["increment_by"]
+        )
+        if ceiling > state["max_value"]:
+            raise SequenceProtectionError(f"Insufficient native allocation capacity: {name}")
+        floors.append({"name": name, "value": ceiling, "source": "native_allocation_reservation"})
+    return seal_receipt({
+        "schema_version": "tapdb-sequence-allocation-reservation/v1",
+        "plan_sha256": plan["sha256"],
+        "inventory_sha256": plan["inventory"]["sha256"],
+        "allocation_counts": dict(allocation_counts),
+        "floors": floors,
+    })
+
+
+def finalize_sequence_allocation(
+    connection: Any,
+    result: Mapping[str, Any],
+    *,
+    writer_fence: Mapping[str, Any],
+    receipts_dir: Path,
+    operation_sha256: str,
+    adoption_epoch: str,
+    allocation_counts: Mapping[str, int],
+) -> dict[str, Any]:
+    """Finalize native adoption allocations against their original durable intent.
+
+    Does not commit or release. Keeps the original allocator plan/intent/family
+    linkage for recovery readers while recording the actual final inventory.
+    """
+    from uuid import UUID
+    from daylily_tapdb.backup.receipts import Actor, write_receipt
+    from daylily_tapdb.sequence_fence import read_fence_history
+
+    validate_receipt(result, "tapdb-sequence-apply/v1")
+    if result["phase"] != "applied_pending_commit" or str(UUID(adoption_epoch)) != adoption_epoch:
+        raise SequenceProtectionError("Pending native allocation and exact adoption epoch required")
+    history, _ = read_fence_history(Path(receipts_dir))
+    intent = next((row for row in history if row.receipt_id == result["intent_receipt_id"]), None)
+    if (
+        intent is None or intent.operation != "sequence_advance"
+        or intent.detail.get("phase") != "intent"
+        or intent.detail["plan"]["sha256"] != result["plan_sha256"]
+        or intent.detail.get("operation_sha256") != operation_sha256
+        or result.get("operation_sha256") != operation_sha256
+        or intent.detail.get("allocation_reservation") != result.get("allocation_reservation")
+        or not any(row.detail.get("result") == result for row in history)
+        or any(row.detail.get("result", {}).get("intent_receipt_id") == result["intent_receipt_id"]
+               and row.detail.get("result", {}).get("allocation_finalized") is True for row in history)
+        or _prior_sequence_intent_resolved(history, intent)
+    ):
+        raise SequenceProtectionError("Native allocation finalization lacks its exact pending intent")
+    reservation = result["allocation_reservation"]
+    if reservation != build_sequence_allocation_reservation(
+        intent.detail["plan"], allocation_counts=reservation["allocation_counts"],
+    ):
+        raise SequenceProtectionError("Native allocation reservation changed")
+    if (set(allocation_counts) != set(reservation["allocation_counts"])
+            or any(type(count) is not int or not 0 <= count <= reservation["allocation_counts"][name]
+                   for name, count in allocation_counts.items())):
+        raise SequenceProtectionError("Actual allocation counts exceed the reviewed native operation")
+    before = result["inventory"]
+    fence = validate_writer_fence(connection, before, writer_fence)
+    after = capture_sequence_inventory(
+        connection, schema_name=before["schema_name"],
+        target=dict(before["target"], sequence_mappings=before["sequence_mappings"]),
+    )
+    previous, current = _validated_inventory(before), _validated_inventory(after)
+    if (
+        set(previous) != set(current)
+        or before["target"] != after["target"]
+        or before["physical_target"] != after["physical_target"]
+        or before["sequence_mappings"] != after["sequence_mappings"]
+    ):
+        raise SequenceProtectionError("Native allocation changed generator or physical identity")
+    ceilings = {item["name"]: item["value"] for item in reservation["floors"]}
+    for name, old in previous.items():
+        new = current[name]
+        old_mapping, new_mapping = old["mapping"], new["mapping"]
+        identity_fields = ("kind", "prefix") if old_mapping["kind"] == "prefix" else ("kind", "columns")
+        if (sequence_definition(old) != sequence_definition(new)
+                or old["owner"] != new["owner"] or old["dependencies"] != new["dependencies"] or any(
+            old_mapping.get(key) != new_mapping.get(key) for key in identity_fields
+        )):
+            raise SequenceProtectionError(f"Native allocation changed generator definition/mapping: {name}")
+        low, high = sequence_next_value(old), sequence_next_value(new)
+        if not low <= high <= ceilings.get(name, low):
+            raise SequenceProtectionError(f"Native allocation exceeded its durable reservation: {name}")
+        count = allocation_counts.get(name, 0)
+        if count:
+            blocks = (count + old["cache_size"] - 1) // old["cache_size"]
+            expected_last = low + (blocks * old["cache_size"] - 1) * old["increment_by"]
+            if (new["last_value"], new["is_called"]) != (expected_last, True):
+                raise SequenceProtectionError(f"Final inventory differs from actual native allocation count: {name}")
+            if new["assigned_floor"] != low + (count - 1) * old["increment_by"]:
+                raise SequenceProtectionError(f"Final assigned identity differs from native allocation count: {name}")
+        elif (old["last_value"], old["is_called"]) != (new["last_value"], new["is_called"]):
+            raise SequenceProtectionError(f"Unexpected allocation on skipped native path: {name}")
+        if not count and (old["last_value"], old["is_called"], old["assigned_floor"]) != (
+            new["last_value"], new["is_called"], new["assigned_floor"]
+        ):
+            raise SequenceProtectionError(f"Unplanned native identity allocation: {name}")
+    verified = verify_sequence_floors(after, floors=result["verification"]["floors"])
+    if not verified["ok"]:
+        raise SequenceProtectionError("Final native allocations do not dominate prior floors")
+    final = seal_receipt({
+        **result,
+        "inventory": after,
+        "verification": verified,
+        "preallocation_result_sha256": result["sha256"],
+        "adoption_epoch": adoption_epoch,
+        "allocation_finalized": True,
+        "allocation_counts": dict(allocation_counts),
+    })
+    write_receipt(Path(receipts_dir), operation="sequence_advance", status="pending_commit",
+                  actor=Actor(surface="cli", username=fence["operator_role"]),
+                  detail={"phase": "applied_pending_commit", "result": final,
+                          "floors": final["floors"],
+                          **({"recovery_family": final["recovery_family"]} if "recovery_family" in final else {})})
+    return final
+
+
 def apply_sequence_advance_plan(
     connection: Any,
     plan: Mapping[str, Any],
     *,
     writer_fence: Mapping[str, Any],
     receipts_dir: Path,
+    allocation_reservation: Mapping[str, Any] | None = None,
+    operation_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Apply an unchanged reviewed plan inside the caller's transaction.
 
@@ -776,6 +920,21 @@ def apply_sequence_advance_plan(
         raise SequenceProtectionError(
             "Reviewed advance plan is inconsistent with its inventory/floors"
         )
+    reservation_fields: dict[str, Any] = {}
+    if allocation_reservation is not None:
+        expected_reservation = build_sequence_allocation_reservation(
+            plan, allocation_counts=allocation_reservation["allocation_counts"],
+        )
+        if dict(allocation_reservation) != expected_reservation or not re.fullmatch(
+            r"[0-9a-f]{64}", operation_sha256 or ""
+        ):
+            raise SequenceProtectionError("Exact sealed allocation reservation/operation required")
+        reservation_fields = {
+            "allocation_reservation": dict(allocation_reservation),
+            "operation_sha256": operation_sha256,
+        }
+    elif operation_sha256 is not None:
+        raise SequenceProtectionError("Operation linkage requires an allocation reservation")
     directory = Path(receipts_dir)
     if not directory.is_absolute():
         raise SequenceProtectionError(
@@ -845,6 +1004,8 @@ def apply_sequence_advance_plan(
         }
         for item in plan["advances"]
     ]
+    if allocation_reservation is not None:
+        retained += allocation_reservation["floors"]
     intent = write_receipt(
         directory,
         operation="sequence_advance",
@@ -856,6 +1017,7 @@ def apply_sequence_advance_plan(
             "writer_fence": fence,
             "floors": retained,
             **family_detail,
+            **reservation_fields,
         },
     )
     savepoint = connection.begin_nested()
@@ -896,6 +1058,7 @@ def apply_sequence_advance_plan(
                 "verification": verified,
                 "floors": retained,
                 **family_detail,
+                **reservation_fields,
             }
         )
         write_receipt(
@@ -942,6 +1105,9 @@ def record_sequence_advance_outcome(
         "ambiguous",
     }:
         raise SequenceProtectionError("Explicit transaction outcome is required")
+    if (outcome == "committed" and "allocation_reservation" in result
+            and result.get("allocation_finalized") is not True):
+        raise SequenceProtectionError("Native allocations require actual final inventory before commit acknowledgement")
     if not actor or not Path(receipts_dir).is_absolute():
         raise SequenceProtectionError(
             "Explicit actor and absolute receipts_dir are required"

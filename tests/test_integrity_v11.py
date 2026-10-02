@@ -343,7 +343,7 @@ def test_api_cli_python_read_parity(db):
     assert __import__("json").loads(result.output)["reference"]["euid"] == identity
 
 
-def test_repeated_adoption_is_rejected(db):
+def test_repeated_adoption_is_rejected(db, tmp_path):
     from daylily_tapdb.cli.db_config import get_db_config
     from daylily_tapdb.runtime_principal import operator_session
     from daylily_tapdb.integrity_lifecycle import plan_adoption
@@ -352,7 +352,7 @@ def test_repeated_adoption_is_rejected(db):
     with operator_session(cfg) as conn:
         with pytest.raises(ValueError, match="repeated adoption"):
             with conn.begin():
-                plan_adoption(conn, cfg)
+                plan_adoption(conn, cfg, receipts_dir=tmp_path)
 
 
 def test_reference_claims_serialize_and_edges_reject_stale(db):
@@ -674,10 +674,20 @@ def test_exact_10111_adoption_preserves_original_evidence(db, tmp_path):
         for c in restored.checks
     )
 
+    journal = tmp_path / "legacy-adoption"
+    journal.mkdir()
     with operator_session(cfg, isolation_level="REPEATABLE READ") as conn, conn.begin():
-        plan = plan_adoption(conn, cfg)
+        # This bounded adoption path requires its bundled prefix generators to
+        # exist. The source fixture predates them; provision through the native
+        # existing-generator control, not an adoption fallback.
+        from daylily_tapdb.sequences import ensure_instance_prefix_sequence
+        _context(conn, cfg, "legacy-fixture-prefixes")
+        for prefix in ("WX", "WSX", "XX", "AY", "MSG", "GVR", "XRF"):
+            ensure_instance_prefix_sequence(conn, prefix)
+    with operator_session(cfg, isolation_level="REPEATABLE READ") as conn, conn.begin():
+        plan = plan_adoption(conn, cfg, receipts_dir=journal)
     result = adopt_integrity(
-        cfg, control, plan=plan, receipts_dir=tmp_path / "legacy-adoption"
+        cfg, control, plan=plan, receipts_dir=journal
     )
     assert result["fence_released"]
     with operator_session(cfg) as conn, conn.begin():

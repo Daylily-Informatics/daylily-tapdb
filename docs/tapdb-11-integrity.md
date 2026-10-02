@@ -216,18 +216,25 @@ bundled core templates. The two additions are:
 Existing installations require explicit, reviewed adoption. Installing the
 Python package or invoking ordinary schema apply does not silently adopt them.
 
-1. Back up the selected installation through its approved native lifecycle.
-   Inventory consumer writers and prepare explicit attribution/revision changes.
-2. Run `tapdb --config /absolute/target.yaml integrity-adopt plan --output
-   /absolute/adoption-plan.json`. This fingerprints existing rows/audit, schema
-   and security catalogs, allocators, exact SQL assets and the two new templates.
+1. Confirm the installation's approved recovery protection. Inventory consumer
+   writers and prepare explicit attribution/revision changes. Adoption itself
+   does not require creating a new backup.
+2. Run `tapdb --config /absolute/target.yaml integrity-adopt plan --receipts-dir
+   /absolute/original-journal --output /absolute/adoption-plan.json`, supplying
+   `--recovery-family /absolute/original-family.json` when applicable. This seals
+   existing rows/audit, catalogs, allocators, exact SQL assets/templates, original
+   history and the minimal retained-floor advance plus bounded allocation budget.
 3. Review the target, preserved evidence, operator authority and required runtime
    rebind. Apply with `integrity-adopt apply --plan ... --control-config ...
    --receipts-dir ... --receipt ... --apply`. The independent control database is
    mandatory; provider-backed fences additionally take `--provider-contract`.
-4. The operation uses native writer fencing. It verifies old records/audit and
-   allocator state before installing the two exact new templates through the
-   native loader. Those new template/audit identities are issued normally. No
+4. The operation uses native writer fencing. It revalidates old records/audit,
+   original history and allocation paths, then advances above prior reservations
+   **before** installing the two exact new templates through the native loader.
+   Adoption and native allocation finalization share one transaction. Existing
+   bundled-prefix generators and the supported native allocation surface are
+   required; missing generators or custom allocation hooks fail explicitly.
+   Those new template/audit identities are issued normally. No
    unrelated template pack or governance object set is reseeded.
 5. A baseline records current state, observer attribution and governing template
    identity. It is explicitly state observed at adoption, not recreated history.
