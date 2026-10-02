@@ -484,6 +484,13 @@ class CatalogConnection(Connection):
 def catalog(cfg, monkeypatch):
     from daylily_tapdb import sequences
 
+    # This catalog double isolates the existing binding contract. The dedicated
+    # audit UID denial checks exercise actual plan/apply catalog behavior.
+    denial = {"sequence": {"oid": 201, "name": "audit_log_uid_seq"}, "revokes": []}
+    monkeypatch.setattr(rp, "plan_audit_uid_sequence_denial", lambda *_, **__: denial)
+    monkeypatch.setattr(rp, "apply_audit_uid_sequence_denial", lambda *_, **__: {
+        "effective_runtime_privileges_absent": True})
+
     monkeypatch.setattr(
         sequences,
         "capture_runtime_sequence_bindings",

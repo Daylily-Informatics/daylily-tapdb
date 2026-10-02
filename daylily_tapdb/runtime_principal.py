@@ -25,6 +25,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from daylily_tapdb.audit_storage import audit_writer_role, grant_audit_sequences
+from daylily_tapdb.audit_uid_sequence_denial import (
+    apply_audit_uid_sequence_denial, plan_audit_uid_sequence_denial,
+)
 from daylily_tapdb.runtime_catalog_contract import (
     RuntimeCatalogContractError,
     canonical_security_contract,
@@ -994,8 +997,11 @@ def _build_runtime_principal_binding_plan(
         "existing_scope": dict(existing) if existing else None,
         "scope": scope,
         "grants": grants,
+        "audit_uid_sequence_denial": plan_audit_uid_sequence_denial(
+            connection, cfg, roles=[target["user"]]),
     }
-    _verify_bound_permissions(connection, target, plan, unmanaged_only=True)
+    _verify_bound_permissions(connection, target, plan, unmanaged_only=True,
+                              planned_audit_uid_denial=True)
     return _seal(plan)
 
 
@@ -1014,15 +1020,23 @@ def _verify_bound_permissions(
     plan: Mapping[str, Any],
     *,
     unmanaged_only: bool = False,
+    planned_audit_uid_denial: bool = False,
 ) -> None:
     """Reject effective relation, column, routine and grant-option leaks.
 
-    Preserved objects are never repaired by a core bind. Their effective
-    runtime DENY must already hold, even before schema USAGE is granted.
+    Preserved objects require effective DENY before binding. The sole planned
+    exception is a separately proven direct grant on the owned audit UID
+    allocator, revoked with RESTRICT before the unchanged final verification.
     PostgreSQL's privilege predicates include PUBLIC and inherited authority.
     """
     grants = {grant["name"]: grant for grant in plan["grants"]}
     for obj in plan["objects"]:
+        if planned_audit_uid_denial:
+            denial = plan["audit_uid_sequence_denial"]
+            if (obj["kind"] == "S" and obj["oid"] == denial["sequence"]["oid"]
+                    and obj["name"] == denial["sequence"]["name"]
+                    and any(row["role"] == target["user"] for row in denial["revokes"])):
+                continue
         managed = obj["name"] in grants or obj["name"] in _PRIVATE
         if unmanaged_only and managed:
             continue
@@ -1147,6 +1161,8 @@ def bind_runtime_principal(
             raise RuntimePrincipalError(
                 "Runtime binding receipt is stale: role, scope, ownership, privileges, or schema changed"
             )
+        audit_uid_denial = apply_audit_uid_sequence_denial(
+            connection, cfg, plan=plan["audit_uid_sequence_denial"])
         schema = _ident(target["schema_name"])
         role = _ident(target["user"])
         connection.execute(
@@ -1238,6 +1254,7 @@ def bind_runtime_principal(
             "runtime_temp_denied": True,
             "runtime_session_requirement": plan["runtime_session_requirement"],
             "privileges_verified": True,
+            "audit_uid_sequence_denial": audit_uid_denial,
             "default_privileges": plan["planned_default_privileges"],
         }
     )
@@ -1372,6 +1389,8 @@ def grant_proven_runtime_sequences(
         else connection_or_session
     )
     plan = build_runtime_principal_binding_plan(connection, cfg)
+    if plan["audit_uid_sequence_denial"]["revokes"]:
+        raise RuntimePrincipalError("Audit UID sequence denial requires receipt-bound runtime binding")
     target = plan["target"]
     schema, runtime = _ident(target["schema_name"]), _ident(target["user"])
     grants = [grant for grant in plan["grants"] if grant["kind"] == "SEQUENCE"]

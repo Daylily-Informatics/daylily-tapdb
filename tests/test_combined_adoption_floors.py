@@ -219,7 +219,7 @@ def test_real_apply_checks_surface_then_advances_before_any_asset(monkeypatch, t
     surface = seal_receipt({"schema_version": "tapdb-adoption-allocation-surface/v1", "relations": []})
     paths = {"allocation_counts": {"template_uid_seq": 2}}
     snapshot = {"format": "tapdb.integrity-adoption/v2", "sequences": advance["inventory"],
-                "new_core_templates": [{}, {}]}
+                "new_core_templates": [{}, {}], "audit_uid_sequence_denial": {}}
     plan = seal_receipt({"schema_version": "tapdb.integrity-adoption/v2", **snapshot,
                         "history": {"receipts_dir": str(tmp_path), "recovery_family": None,
                                     "floors": advance["floors"]},
@@ -237,6 +237,8 @@ def test_real_apply_checks_surface_then_advances_before_any_asset(monkeypatch, t
     monkeypatch.setattr(integrity_lifecycle, "capture_allocation_surface", lambda *_, **__: {} if surface_drift else surface)
     monkeypatch.setattr(integrity_lifecycle, "require_adoption_history", lambda *_, **__: events.append("history"))
     monkeypatch.setattr(integrity_lifecycle, "allocation_paths", lambda *_, **__: paths)
+    monkeypatch.setattr(integrity_lifecycle, "apply_audit_uid_sequence_denial",
+                        lambda *_, **__: events.append("audit-uid-denial"))
 
     def advance_stops(*_, **__):
         events.append("advance")
@@ -247,6 +249,8 @@ def test_real_apply_checks_surface_then_advances_before_any_asset(monkeypatch, t
         integrity_lifecycle.apply_adoption(conn, {"schema_name": "objects"}, plan=plan,
                                            fence_receipt=fence, receipts_dir=tmp_path)
     assert ("advance" in events) is not surface_drift
+    if not surface_drift:
+        assert events.index("history") < events.index("audit-uid-denial") < events.index("advance")
 
 
 @pytest.mark.parametrize("failure", ["apply", "commit", "outcome", None])

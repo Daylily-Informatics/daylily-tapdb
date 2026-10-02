@@ -18,6 +18,9 @@ from daylily_tapdb.audit_storage import (
     grant_audit_sequences,
     enforce_audit_read_grants,
 )
+from daylily_tapdb.audit_uid_sequence_denial import (
+    apply_audit_uid_sequence_denial, plan_audit_uid_sequence_denial,
+)
 from daylily_tapdb.runtime_catalog_contract import security_assets
 from daylily_tapdb.runtime_principal import (
     runtime_schema_grants_sql,
@@ -156,6 +159,7 @@ def _adoption_snapshot(connection: Any, cfg: Mapping[str, Any]) -> dict[str, Any
     plan = {
         "format": "tapdb.integrity-adoption/v2",
         "target": _target(cfg),
+        "audit_uid_sequence_denial": plan_audit_uid_sequence_denial(connection, cfg),
         "tables": _digest(connection, schema),
         "catalog": _catalog_evidence(connection, schema),
         "sequences": capture_sequence_inventory(
@@ -278,6 +282,10 @@ def apply_adoption(
     if (advance != plan["allocator_plan"] or paths != plan["allocation_paths"]
             or reservation != plan["allocation_reservation"]):
         raise ValueError("adoption allocator/history inputs changed after review")
+    # Deny only the reviewed direct audit UID grants before allocator advancement
+    # and before DDL legitimately grants the dedicated audit writer access.
+    audit_uid_denial = apply_audit_uid_sequence_denial(
+        connection, cfg, plan=plan["audit_uid_sequence_denial"])
     # No adoption schema/template/audit mutation occurs before this exact native
     # advance. Its intent reserves the permitted allocation window durably.
     allocated = apply_sequence_advance_plan(
@@ -369,6 +377,7 @@ def apply_adoption(
         "consumer_write_context_required": "attribution/v1",
         "allocation_catalog_sha256": catalog_proof,
         "allocator_receipt": finalized,
+        "audit_uid_sequence_denial": audit_uid_denial,
     }
 
 

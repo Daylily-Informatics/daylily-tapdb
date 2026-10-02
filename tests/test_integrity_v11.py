@@ -773,6 +773,35 @@ def test_inherited_audit_privileges_and_role_assumption_are_rejected(db):
         ).scalar_one()
 
 
+def test_receipt_bound_legacy_audit_uid_revoke_preserves_trigger_audit(db, tmp_path):
+    """Authored only: isolated fixture, no production or execution authorization."""
+    from daylily_tapdb.cli.db_config import get_db_config
+    from daylily_tapdb.runtime_principal import bind_runtime_principal, operator_session
+
+    cfg = get_db_config(config_path=str(db["config_path"]))
+    schema, runtime = cfg["schema_name"], cfg["user"]
+    with operator_session(cfg) as conn, conn.begin():
+        conn.exec_driver_sql(f'GRANT USAGE, SELECT ON SEQUENCE "{schema}".audit_log_uid_seq TO "{runtime}"')
+    receipt = tmp_path / 'audit-uid-denial-bind.json'
+    plan = bind_runtime_principal(cfg, receipt_path=receipt)
+    assert plan['audit_uid_sequence_denial']['revokes'] == [{
+        'role': runtime, 'role_oid': plan['principal']['oid'],
+        'privileges': ['SELECT', 'USAGE'], 'behavior': 'RESTRICT'}]
+    with operator_session(cfg) as conn, conn.begin():
+        assert conn.execute(text("SELECT has_sequence_privilege(:role,:seq,'USAGE')"),
+                            {'role': runtime, 'seq': f'{schema}.audit_log_uid_seq'}).scalar_one()
+    result = bind_runtime_principal(cfg, apply=True, receipt_path=receipt)
+    assert result['audit_uid_sequence_denial']['effective_runtime_privileges_absent']
+    with connection(db) as conn:
+        with pytest.raises(DBAPIError):
+            with conn.session_scope() as session:
+                session.execute(text(f'SELECT nextval(\'"{schema}".audit_log_uid_seq\')'))
+        with conn.session_scope(commit=True) as session:
+            item = create(session, name='audit writer remains authoritative')
+            session.flush()
+            assert len(query_audit_trail(session, euid=item.euid)) == 1
+
+
 def test_mandatory_audit_failure_rolls_back_domain_change(db):
     from daylily_tapdb.cli.db_config import get_db_config
     from daylily_tapdb.runtime_principal import operator_session
