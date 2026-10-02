@@ -938,6 +938,49 @@ def test_drift_requires_a_measured_source_contract_not_a_bypass(env, drifted):
     assert "tapdb_hand_made" in result.manifest.row_counts
 
 
+def test_full_plan_and_create_preserve_explicit_compact_source_mode(env):
+    """Plan/create must recapture the reviewed compact source without converting it."""
+    from daylily_tapdb import audit_inventory
+    from daylily_tapdb.backup.source_contract import capture_source_contract
+    from daylily_tapdb.identity_inventory import IdentityInventoryError
+
+    cfg, settings = env
+    limits = {
+        "max_rows": 3_000_000,
+        "max_row_bytes": 8 * 1024 * 1024,
+        "max_receipt_bytes": 128 * 1024 * 1024,
+    }
+    cfg = dict(cfg, inventory_mode=audit_inventory.MODE, inventory_limits=limits)
+    with operator_connection(
+        cfg, isolation_level="REPEATABLE READ", read_only=True
+    ) as connection:
+        source = capture_source_contract(
+            connection,
+            schema_name=cfg["schema_name"],
+            target=service.inventory_target(cfg),
+            source_version="0.0.0-fixture",
+        )
+
+    assert source["identity_inventory"]["inventory_mode"] == audit_inventory.MODE
+    assert source["identity_inventory"]["limits"] == limits
+    plan = service.plan_backup(cfg, settings, source_contract=source)
+    assert plan.ok
+    backup = service.create_backup(cfg, settings, source_contract=source)
+    assert backup.manifest.source_contract["sha256"] == source["sha256"]
+    assert backup.manifest.source_contract["identity_inventory_sha256"] == (
+        source["identity_inventory"]["sha256"]
+    )
+
+    with pytest.raises(IdentityInventoryError, match="inventory_mode"):
+        service.plan_backup(dict(cfg, inventory_mode="unsupported"), settings, source_contract=source)
+    with pytest.raises(IdentityInventoryError, match="inventory_limits"):
+        service.create_backup(
+            dict(cfg, inventory_limits=dict(limits, max_rows=limits["max_rows"] + 1)),
+            settings,
+            source_contract=source,
+        )
+
+
 def test_plan_reports_drift_without_blocking_and_strict_makes_it_blocking(env, drifted):
     """`plan` is advisory by default and blocking under `--strict`."""
     cfg, settings = env

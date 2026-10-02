@@ -14,10 +14,11 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from sqlalchemy import select, tuple_
 
+from daylily_tapdb.governance import GovernanceAuthorization, assert_registered_domain
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.templates.loader import find_tapdb_core_config_dir, seed_templates
 
@@ -459,10 +460,17 @@ def _validate_import_claims(
     owner_repo_name: str,
     domain_registry_path: str | Path,
     prefix_registry_path: str | Path,
+    governance_authorization: GovernanceAuthorization | Mapping[str, object] | None = None,
 ) -> tuple[str, ...]:
     domain_payload = json.loads(Path(domain_registry_path).expanduser().read_text())
     if str(domain_code) not in (domain_payload.get("domains") or {}):
         raise ValueError(f"domain registry has no domain {domain_code!r}")
+    assert_registered_domain(
+        domain_code,
+        registry_metadata=domain_payload["domains"],
+        path=domain_registry_path,
+        governance_authorization=governance_authorization,
+    )
     prefixes = tuple(
         sorted(
             {
@@ -496,6 +504,7 @@ def import_repository_pack(
     owner_repo_name: str,
     domain_registry_path: str | Path,
     prefix_registry_path: str | Path,
+    governance_authorization: GovernanceAuthorization | Mapping[str, object] | None = None,
     dry_run: bool = True,
 ) -> RepositoryImportResult:
     """Validate or import a pack through the supported governed seed loader."""
@@ -513,6 +522,7 @@ def import_repository_pack(
         owner_repo_name=owner_repo_name,
         domain_registry_path=domain_registry_path,
         prefix_registry_path=prefix_registry_path,
+        governance_authorization=governance_authorization,
     )
     requested_keys = [template_key(item) for item in payload["templates"]]
     existing_by_key = {}
@@ -552,6 +562,7 @@ def import_repository_pack(
             owner_repo_name=str(owner_repo_name),
             domain_registry_path=Path(domain_registry_path),
             prefix_registry_path=Path(prefix_registry_path),
+            governance_authorization=governance_authorization,
         )
         inserted = summary.inserted
         skipped += summary.skipped

@@ -83,6 +83,7 @@ MUTATING_COMMANDS = {
     ("ui", "restart"),
     ("db-config", "init"),
     ("db-config", "update"),
+    ("db-config", "set-governance-authorization"),
     ("db", "create"),
     ("db", "delete"),
     ("db", "setup"),

@@ -150,6 +150,7 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
         owner_repo_name=_TAPDB_CORE_OWNER,
         domain_registry_path=str(cfg["domain_registry_path"]),
         prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
+        governance_authorization=cfg.get("governance_authorization"),
     )
     for prefix in prefixes.values():
         core_governance.require_prefix(prefix)
@@ -2494,6 +2495,7 @@ def db_seed(
                     prefix_registry_path=str(
                         _get_db_config(env)["prefix_ownership_registry_path"]
                     ),
+                    governance_authorization=cfg.get("governance_authorization"),
                 )
                 grant_proven_runtime_sequences(session, cfg)
     except Exception as exc:

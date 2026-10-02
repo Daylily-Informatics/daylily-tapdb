@@ -29,7 +29,7 @@ from daylily_tapdb.cli.context import (
 from daylily_tapdb.cli.db_config import validate_postgres_identifier_component
 from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.cli.spec import spec
-from daylily_tapdb.governance import normalize_owner_repo_name
+from daylily_tapdb.governance import GovernanceAuthorization, normalize_owner_repo_name
 
 DEFAULT_UI_PORT = 8911
 DEFAULT_UI_HOST = "localhost"
@@ -893,6 +893,7 @@ def build_app():
             owner_repo_name=None,
             domain_registry_path=None,
             prefix_ownership_registry_path=None,
+            governance_authorization_json=None,
             support_email=None,
             admin_repo_url=None,
             admin_session_secret=None,
@@ -1055,6 +1056,7 @@ def build_app():
         domain_code: str,
         domain_registry_path: str,
         prefix_ownership_registry_path: str,
+        governance_authorization_json: str | None,
         engine_type: str,
         host: str,
         hostaddr: str | None,
@@ -1144,6 +1146,21 @@ def build_app():
                 Path(prefix_ownership_registry_path).expanduser()
             ),
         }
+        authorization_value = (
+            json.loads(governance_authorization_json)
+            if governance_authorization_json is not None
+            else (
+                existing_meta.get("governance_authorization")
+                if isinstance(existing_meta, dict) else None
+            )
+        )
+        if governance_authorization_json is not None and not isinstance(
+            authorization_value, dict
+        ):
+            raise ValueError("--governance-authorization-json must contain a JSON object")
+        authorization = GovernanceAuthorization.from_value(authorization_value)
+        if authorization is not None:
+            root["meta"]["governance_authorization"] = authorization.to_dict()
         admin_root = root.get("admin")
         if not isinstance(admin_root, dict) or force:
             root["admin"] = _default_admin_config()
@@ -1267,6 +1284,11 @@ def build_app():
             "--prefix-ownership-registry-path",
             help="Path to the shared Meridian prefix ownership registry JSON",
         ),
+        governance_authorization_json: Optional[str] = typer.Option(
+            None,
+            "--governance-authorization-json",
+            help="Explicit Meridian authorization object: reserved_for, deployment_environment, approval_tokens",
+        ),
         engine_type: str = typer.Option(
             ...,
             "--engine-type",
@@ -1389,6 +1411,7 @@ def build_app():
             domain_code=domain_code,
             domain_registry_path=domain_registry_path,
             prefix_ownership_registry_path=prefix_ownership_registry_path,
+            governance_authorization_json=governance_authorization_json,
             engine_type=engine_type,
             host=host,
             hostaddr=hostaddr,
@@ -1426,6 +1449,22 @@ def build_app():
             f"  target:    engine={target_cfg['engine_type']} "
             f"database={target_cfg['database']} schema={target_cfg['schema_name']}"
         )
+
+    @config_root_app.command("set-governance-authorization")
+    def config_set_governance_authorization(
+        authorization_json: str = typer.Option(
+            ..., "--authorization-json",
+            help="Complete explicit reserved_for/deployment_environment/approval_tokens object",
+        ),
+    ) -> None:
+        """Set only governance metadata after validating the resulting target."""
+        from daylily_tapdb.cli.governance_config import set_governance_authorization
+
+        config_path = set_governance_authorization(
+            _require_explicit_config_flag(), json.loads(authorization_json)
+        )
+        ccyo_out.success("TAPDB explicit governance authorization updated")
+        ccyo_out.print_text(f"  Path:      [dim]{config_path}[/dim]")
 
     @config_root_app.command("update")
     def config_update(
@@ -1577,6 +1616,11 @@ def build_app():
             None,
             "--prefix-ownership-registry-path",
             help="Shared Meridian prefix ownership registry path",
+        ),
+        governance_authorization_json: Optional[str] = typer.Option(
+            None,
+            "--governance-authorization-json",
+            help="Replace the complete explicit Meridian authorization JSON object",
         ),
         support_email: Optional[str] = typer.Option(
             None, "--support-email", help="Support email address"
@@ -1853,6 +1897,12 @@ def build_app():
             meta["prefix_ownership_registry_path"] = str(
                 Path(prefix_ownership_registry_path).expanduser()
             )
+        if governance_authorization_json is not None:
+            authorization_value = json.loads(governance_authorization_json)
+            if not isinstance(authorization_value, dict):
+                raise ValueError("--governance-authorization-json must contain a JSON object")
+            authorization = GovernanceAuthorization.from_value(authorization_value)
+            meta["governance_authorization"] = authorization.to_dict()
 
         operator_changed = any(
             value is not None

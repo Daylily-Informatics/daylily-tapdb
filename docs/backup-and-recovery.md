@@ -290,6 +290,12 @@ tapdb --dry-run backup create
 database inside a `REPEATABLE READ` snapshot, so the dump is internally
 consistent even under concurrent writes.
 
+For a reviewed historical source contract captured with explicit
+`audit_log_ordered_digest/v1` inventory mode, full backup plan and create retain
+that mode when they recapture the source. The native capture still validates the
+mode, enforces the contract's finite inventory limits, and requires exact source
+equality. This does not convert a per-row contract or widen its resource policy.
+
 **Schema drift.** `create` compares the live schema against the expected
 inventory. If it finds TapDB-namespaced objects that should not be there, it
 refuses, because a backup of an unexplained schema is a backup you cannot

@@ -290,6 +290,7 @@ def apply_adoption(
             owner_repo_name=cfg["owner_repo_name"],
             domain_registry_path=Path(cfg["domain_registry_path"]),
             prefix_registry_path=Path(cfg["prefix_ownership_registry_path"]),
+            governance_authorization=cfg.get("governance_authorization"),
             create_governance_objects=False,
         )
         session.flush()

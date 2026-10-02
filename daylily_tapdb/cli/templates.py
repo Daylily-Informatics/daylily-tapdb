@@ -86,6 +86,7 @@ def templates_import(
                 owner_repo_name=cfg["owner_repo_name"],
                 domain_registry_path=cfg["domain_registry_path"],
                 prefix_registry_path=cfg["prefix_ownership_registry_path"],
+                governance_authorization=cfg.get("governance_authorization"),
                 dry_run=not effective_apply,
             )
     _emit(asdict(result))

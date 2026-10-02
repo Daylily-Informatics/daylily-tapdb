@@ -14,6 +14,11 @@ The practical rule is simple:
 TapDB ships only a minimal built-in operational core pack. Domain or product
 templates live outside this repository and are seeded explicitly.
 
+Reserved domains also require explicit [governance authorization](governance-authorization.md)
+from the canonical config or direct SDK caller. Template seed/import evaluates
+the existing Meridian policy before using the database session; prefix ownership
+alone does not authorize a reserved domain.
+
 Current built-in core templates are exactly:
 
 - `actor/user/system/1.0`

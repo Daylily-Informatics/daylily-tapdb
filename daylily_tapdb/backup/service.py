@@ -474,6 +474,10 @@ def inventory_target(cfg: Mapping[str, Any]) -> dict[str, Any]:
         result["sequence_mappings"] = cfg["sequence_mappings"]
     if "inventory_limits" in cfg:
         result["inventory_limits"] = cfg["inventory_limits"]
+    if "inventory_mode" in cfg:
+        from daylily_tapdb.audit_inventory import validate_mode
+
+        result["inventory_mode"] = validate_mode(cfg["inventory_mode"])
     return result
 
 

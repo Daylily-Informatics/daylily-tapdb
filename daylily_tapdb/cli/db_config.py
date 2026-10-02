@@ -26,6 +26,7 @@ from daylily_tapdb.euid import (
     SYSTEM_USER_PREFIX,
 )
 from daylily_tapdb.governance import (
+    GovernanceAuthorization,
     GovernanceContext,
     normalize_owner_repo_name,
 )
@@ -566,13 +567,20 @@ def _build_db_config_from_section(
                 "supported for aurora explicit targets."
             )
 
+    authorization = GovernanceAuthorization.from_value(
+        meta.get("governance_authorization")
+    )
     governance = GovernanceContext.load(
         domain_code=str(cfg["domain_code"]),
         owner_repo_name=owner_repo_name,
         domain_registry_path=domain_registry_path,
         prefix_ownership_registry_path=prefix_ownership_registry_path,
+        governance_authorization=authorization,
     )
     cfg["domain_code"] = governance.domain_code
+    cfg["governance_authorization"] = (
+        authorization.to_dict() if authorization is not None else None
+    )
 
     return cfg
 

@@ -1010,6 +1010,7 @@ def _meridian_validation_payload(
         owner_repo_name=str(cfg["owner_repo_name"]),
         domain_registry_path=str(cfg["domain_registry_path"]),
         prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
+        governance_authorization=cfg.get("governance_authorization"),
     )
     euid_valid = None
     if euid:
@@ -1052,6 +1053,7 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
         owner_repo_name=str(cfg["owner_repo_name"]),
         domain_registry_path=str(cfg["domain_registry_path"]),
         prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
+        governance_authorization=cfg.get("governance_authorization"),
     )
     checks.append(
         {
@@ -1726,6 +1728,7 @@ def create_tapdb_gui_router(
                             prefix_registry_path=str(
                                 cfg["prefix_ownership_registry_path"]
                             ),
+                            governance_authorization=cfg.get("governance_authorization"),
                             dry_run=not apply,
                         )
                     )
@@ -1897,6 +1900,7 @@ def create_tapdb_gui_router(
                         prefix_registry_path=Path(
                             str(cfg["prefix_ownership_registry_path"])
                         ),
+                        governance_authorization=cfg.get("governance_authorization"),
                     )
         except HTTPException:
             raise

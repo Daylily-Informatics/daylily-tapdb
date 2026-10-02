@@ -6,13 +6,14 @@ import importlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from daylily_tapdb.euid import EUIDConfig, normalize_domain_code
+from daylily_tapdb.governance import GovernanceAuthorization, assert_registered_domain
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.sequences import (
     _normalize_instance_prefix,
@@ -117,11 +118,21 @@ def _load_prefix_ownership_registry(path: Path) -> dict[str, Any]:
 
 
 def _assert_registered_domain(
-    domain_code: str, domain_registry: dict[str, Any], *, source: str
+    domain_code: str,
+    domain_registry: dict[str, Any],
+    *,
+    source: str,
+    governance_authorization: GovernanceAuthorization | Mapping[str, object] | None = None,
 ) -> None:
     domains = domain_registry.get("domains", {})
     if domain_code not in domains:
         raise ValueError(f"Domain {domain_code!r} is not registered in {source}")
+    assert_registered_domain(
+        domain_code,
+        registry_metadata=domains,
+        path=source,
+        governance_authorization=governance_authorization,
+    )
 
 
 def _assert_prefix_claimed(
@@ -931,12 +942,16 @@ def _validate_seed_ownership(
     core_config_dir: Path,
     domain_registry_path: Path,
     prefix_registry_path: Path,
+    governance_authorization: GovernanceAuthorization | Mapping[str, object] | None = None,
 ) -> None:
     domain_registry = _load_domain_registry(domain_registry_path)
     prefix_registry = _load_prefix_ownership_registry(prefix_registry_path)
 
     _assert_registered_domain(
-        domain_code, domain_registry, source=str(domain_registry_path)
+        domain_code,
+        domain_registry,
+        source=str(domain_registry_path),
+        governance_authorization=governance_authorization,
     )
 
     for template in templates:
@@ -969,6 +984,7 @@ def seed_templates(
     owner_repo_name: str,
     domain_registry_path: Path,
     prefix_registry_path: Path,
+    governance_authorization: GovernanceAuthorization | Mapping[str, object] | None = None,
     create_governance_objects: bool = True,
 ) -> SeedSummary:
     """Seed validated template definitions into a TapDB session."""
@@ -990,6 +1006,7 @@ def seed_templates(
         core_config_dir=core_config_dir,
         domain_registry_path=domain_registry,
         prefix_registry_path=prefix_registry,
+        governance_authorization=governance_authorization,
     )
     prefixes = sorted(
         {
