@@ -16,6 +16,8 @@ from daylily_tapdb.models.lineage import generic_instance_lineage
 
 from daylily_tapdb.external_references import (
     ExternalReferenceContractError,
+    OPAQUE_IDENTIFIER_TEMPLATE_CODE,
+    TAPDB_OBJECT_TEMPLATE_CODE,
     _is_xrf_coordinates,
     _project_outbound_external_references,
     _target_from_reference,
@@ -29,6 +31,35 @@ def _isoformat_attr(obj: Any, attr: str) -> str | None:
 
 class DagV2GraphContractError(ValueError):
     """Raised when persisted lineage cannot be represented as a safe DAG v2."""
+
+
+def _unsupported_reference_boundary(obj: Any) -> dict[str, str] | None:
+    """Recognize a typed reference family without interpreting its old payload."""
+    coordinates = tuple(str(getattr(obj, field, "") or "") for field in (
+        "category", "type", "subtype", "version",
+    ))
+    for code in (TAPDB_OBJECT_TEMPLATE_CODE, OPAQUE_IDENTIFIER_TEMPLATE_CODE):
+        current = tuple(code.rstrip("/").split("/"))
+        if coordinates[:3] == current[:3] and coordinates[3] != current[3]:
+            return {
+                "code": "unsupported_external_reference",
+                "status": "not_traversed",
+                "reference_version": coordinates[3],
+                "supported_version": current[3],
+                "message": (
+                    f"External reference version {coordinates[3]} is unsupported; "
+                    f"not traversed. Canonical version {current[3]} is required."
+                ),
+            }
+    return None
+
+
+def _boundary_warnings(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {"service_id": node["data"]["service_id"], "euid": node["data"]["euid"],
+         **node["data"]["traversal_boundary"]}
+        for node in nodes if node["data"].get("traversal_boundary")
+    ]
 
 
 class GraphLineageReader:
@@ -93,7 +124,7 @@ class GraphLineageReader:
         selected_nodes = {int(node.uid): node for node in nodes}
         selected_edges = {int(edge.uid): edge for edge in edges}
         for node in nodes:
-            for edge in self.outgoing[int(node.uid)]:
+            for edge in self.outgoing.get(int(node.uid), []):
                 reference = edge.child_instance
                 if reference is not None and _is_xrf_coordinates(reference):
                     selected_nodes[int(reference.uid)] = reference
@@ -230,10 +261,14 @@ def _v2_node(
     obj: Any, *, record_type: str, service_id: str,
     outbound_lineages: list[Any] | None = None,
 ) -> dict[str, Any]:
-    try:
-        external = _project_outbound_external_references(obj, lineages=outbound_lineages)
-    except ExternalReferenceContractError as exc:
-        raise DagV2GraphContractError(str(exc)) from exc
+    boundary = _unsupported_reference_boundary(obj) if record_type == "instance" else None
+    if boundary:
+        external = {"external_refs": [], "external_identifiers": []}
+    else:
+        try:
+            external = _project_outbound_external_references(obj, lineages=outbound_lineages)
+        except ExternalReferenceContractError as exc:
+            raise DagV2GraphContractError(str(exc)) from exc
     euid = getattr(obj, "euid", None)
     data = {
         "id": euid,
@@ -248,11 +283,14 @@ def _v2_node(
         "tenant_id": str(getattr(obj, "tenant_id", "") or "") or None,
         "created_dt": _isoformat_attr(obj, "created_dt"),
         "modified_dt": _isoformat_attr(obj, "modified_dt"),
-        "properties": _clean_public_properties(obj),
+        "properties": {} if boundary else _clean_public_properties(obj),
         "external_refs": external["external_refs"],
         "external_identifiers": external["external_identifiers"],
     }
-    data["presentation"] = _v2_node_presentation(obj)
+    data["presentation"] = {} if boundary else _v2_node_presentation(obj)
+    if boundary:
+        data["traversal_boundary"] = boundary
+        data["expandable"] = False
     return {"data": data}
 
 
@@ -454,11 +492,16 @@ def build_graph_v2_payload(
                     "Cross-domain or cross-owner graph node is forbidden"
                 )
             visited[current_euid] = current
+            # Retain this exact persisted record as a visible leaf. Never read
+            # its old target fields or use it to reach another local/remote node.
+            if _unsupported_reference_boundary(current):
+                continue
             relations: list[tuple[Any, Any]] = []
             if lineage_reader is not None:
                 lineage_reader.prefetch([
                     current,
-                    *(queued for queued, _ in list(queue)[:lineage_reader.batch_size - 1]),
+                    *(queued for queued, _ in list(queue)[:lineage_reader.batch_size - 1]
+                      if not _unsupported_reference_boundary(queued)),
                 ])
                 outgoing = lineage_reader.outgoing[int(current.uid)]
                 incoming = lineage_reader.incoming[int(current.uid)]
@@ -480,6 +523,8 @@ def build_graph_v2_payload(
                 if bool(getattr(neighbor, "is_deleted", False)):
                     continue
                 _validate_lineage_scope(obj, lineage, neighbor, tenant_scope)
+                if _unsupported_reference_boundary(lineage.parent_instance):
+                    continue
                 if current_depth >= depth:
                     neighbor_euid = str(getattr(neighbor, "euid", "") or "")
                     if neighbor_euid not in visited:
@@ -515,7 +560,7 @@ def build_graph_v2_payload(
         nodes = [
             _v2_node(
                 node, record_type="instance", service_id=service_id,
-                outbound_lineages=(lineage_reader.outgoing[int(node.uid)]
+                outbound_lineages=(lineage_reader.outgoing.get(int(node.uid), [])
                                    if lineage_reader is not None else None),
             )
             for _euid, node in sorted(visited.items())
@@ -529,6 +574,7 @@ def build_graph_v2_payload(
         _assert_acyclic(nodes, edges)
         truncation_reason = "+".join(sorted(reasons)) if reasons else None
 
+    boundary_warnings = _boundary_warnings(nodes)
     revision_input = {"nodes": nodes, "edges": edges}
     graph_revision = hashlib.sha256(
         json.dumps(
@@ -537,8 +583,11 @@ def build_graph_v2_payload(
     ).hexdigest()
     return {
         "elements": {"nodes": nodes, "edges": edges},
+        "warnings": boundary_warnings,
         "meta": {
             "contract": "dag:v2",
+            **({"partial": True, "unsupported_external_references": len(boundary_warnings)}
+               if boundary_warnings else {}),
             "service_id": service_id,
             "graph_revision": graph_revision,
             "snapshot_at": snapshot.astimezone(timezone.utc).isoformat(),
@@ -615,6 +664,8 @@ def build_visible_graph_v2_payload(
         if parent_euid not in visible or child_euid not in visible:
             continue
         _validate_lineage_scope(parent, lineage, child, tenant_scope)
+        if _unsupported_reference_boundary(parent):
+            continue
         if len(included_lineages) >= max_edges:
             truncated_reasons.add("max_edges")
             break
@@ -626,6 +677,7 @@ def build_visible_graph_v2_payload(
     ]
     edges = [_v2_edge(lineage, service_id=service_id) for lineage in included_lineages]
     _assert_acyclic(nodes, edges)
+    boundary_warnings = _boundary_warnings(nodes)
     revision_input = {"nodes": nodes, "edges": edges}
     graph_revision = hashlib.sha256(
         json.dumps(
@@ -634,8 +686,11 @@ def build_visible_graph_v2_payload(
     ).hexdigest()
     return {
         "elements": {"nodes": nodes, "edges": edges},
+        "warnings": boundary_warnings,
         "meta": {
             "contract": "dag:v2",
+            **({"partial": True, "unsupported_external_references": len(boundary_warnings)}
+               if boundary_warnings else {}),
             "service_id": service_id,
             "query_mode": "visible_scope",
             "graph_revision": graph_revision,

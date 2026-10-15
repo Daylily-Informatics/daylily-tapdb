@@ -450,3 +450,88 @@ def test_v2_routes_are_authenticated_and_dispatch_exact_external_search(
     assert exact.status_code == 200
     assert external_calls[-1]["external_service_id"] == "remote"
     assert external_calls[-1]["external_object_euid"] == "persisted-by-owner"
+
+
+@pytest.mark.parametrize("version", ["1.0", "0.9"])
+@pytest.mark.parametrize("service", ["ursa", "dewey", "bloom"])
+def test_unsupported_reference_is_a_leaf_and_valid_branches_continue(version, service):
+    from daylily_tapdb.services.graph_payloads import build_object_detail_v2_payload
+
+    root = _instance(1, "root-label")
+    valid = _instance(2, "valid-label")
+    descendant = _instance(3, "descendant-label")
+    old = _instance(4, "old-reference-label", properties={
+        "target_object_euid": "foreign-label", "auth": "must-not-be-projected",
+        "graph_presentation": "unsupported-old-presentation",
+    })
+    old.category, old.type, old.subtype, old.version = (
+        "reference", "external_identifier", "tapdb_object", version,
+    )
+    other_parent = _instance(5, "unreachable-parent-label")
+    other_child = _instance(6, "unreachable-child-label")
+    _lineage(11, "root-valid-edge", root, valid)
+    _lineage(12, "valid-descendant-edge", valid, descendant)
+    _lineage(13, "root-old-edge", root, old)
+    _lineage(14, "other-parent-edge", other_parent, old)
+    _lineage(15, "old-child-edge", old, other_child)
+    payload = build_graph_v2_payload(root, record_type="instance", service_id=service,
+                                   depth=4, max_nodes=20)
+    nodes = {n["data"]["euid"]: n["data"] for n in payload["elements"]["nodes"]}
+    assert set(nodes) == {root.euid, valid.euid, descendant.euid, old.euid}
+    assert len(payload["elements"]["edges"]) == 3
+    boundary = nodes[old.euid]
+    assert boundary["traversal_boundary"]["status"] == "not_traversed"
+    assert boundary["traversal_boundary"]["reference_version"] == version
+    assert boundary["properties"] == {}
+    assert boundary["external_refs"] == boundary["external_identifiers"] == []
+    assert boundary["expandable"] is False
+    assert payload["meta"]["partial"] is True
+    assert payload["meta"]["truncated"] is False
+    assert payload["warnings"][0]["euid"] == old.euid
+    assert old.json_addl["properties"]["target_object_euid"] == "foreign-label"
+    detail = build_object_detail_v2_payload(old, record_type="instance", service_id=service)
+    assert detail == boundary
+
+
+def test_unsupported_reference_root_does_not_read_adjacency():
+    old = _instance(1, "old-root-label", properties={"target_object_euid": "remote-label"})
+    old.category, old.type, old.subtype = "reference", "external_identifier", "tapdb_object"
+
+    class NoAdjacency:
+        outgoing = {}
+        def prefetch(self, _objects):
+            pytest.fail("Unsupported reference adjacency must not be traversed")
+        def materialize(self, nodes, edges):
+            assert nodes == [old] and edges == []
+
+    result = build_graph_v2_payload(old, record_type="instance", service_id="ursa",
+                                   depth=4, max_nodes=20, lineage_reader=NoAdjacency())
+    assert len(result["elements"]["nodes"]) == 1
+    assert result["elements"]["edges"] == []
+
+
+def test_boundary_handling_does_not_suppress_untyped_pseudo_edges_or_scope_errors():
+    root = _instance(1, "root-label", properties={"target_object_euid": "remote-label"})
+    with pytest.raises(DagV2GraphContractError, match="non-authoritative"):
+        build_graph_v2_payload(root, record_type="instance", service_id="ursa", depth=4, max_nodes=20)
+    root.json_addl = {"properties": {}}
+    old = _instance(2, "wrong-owner-reference")
+    old.category, old.type, old.subtype = "reference", "external_identifier", "tapdb_object"
+    old.issuer_app_code = "another-owner"
+    _lineage(3, "wrong-owner-edge", root, old)
+    with pytest.raises(DagV2GraphContractError):
+        build_graph_v2_payload(root, record_type="instance", service_id="ursa", depth=4, max_nodes=20)
+
+
+def test_visible_graph_preserves_old_reference_but_omits_its_outgoing_assertion():
+    from daylily_tapdb.services.graph_payloads import build_visible_graph_v2_payload
+    root, old, valid = (_instance(i, label) for i, label in enumerate(
+        ("root-label", "old-label", "valid-label"), 1))
+    old.category, old.type, old.subtype = "reference", "external_identifier", "tapdb_object"
+    incoming = _lineage(4, "incoming-label", root, old)
+    outgoing = _lineage(5, "outgoing-label", old, valid)
+    result = build_visible_graph_v2_payload([root, old, valid], [incoming, outgoing],
+        service_id="dewey", max_nodes=20, max_edges=20)
+    assert len(result["elements"]["nodes"]) == 3
+    assert [e["data"]["euid"] for e in result["elements"]["edges"]] == [incoming.euid]
+    assert result["meta"]["unsupported_external_references"] == 1

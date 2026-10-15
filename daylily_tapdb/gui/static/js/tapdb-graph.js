@@ -75,6 +75,16 @@ const cytoscapeStyle = [
         }
     },
     {
+        selector: 'node[traversal_boundary]',
+        style: {
+            'label': 'data(boundary_label)',
+            'background-color': '#53606b',
+            'border-color': '#e8ba6c',
+            'border-style': 'dashed',
+            'text-wrap': 'wrap',
+        }
+    },
+    {
         selector: 'node:selected',
         style: {
             'border-width': '4px',
@@ -1594,6 +1604,9 @@ async function loadGraph() {
             const data = { ...(node.data || {}) };
             data.id = String(data.id || data.euid || '');
             data.display_label = data.display_label || data.name || data.euid || data.id;
+            if (data.traversal_boundary) {
+                data.boundary_label = `${data.id}\nUnsupported reference\nNot traversed`;
+            }
             data.color = data.color || colorForCategory(data.category || data.type || 'unknown');
             return { data };
         }).filter((node) => node.data.id) : [];
@@ -1629,7 +1642,14 @@ async function loadGraph() {
 
         updateHistoryState();
         const meta = data.meta || {};
-        if (meta.truncated) {
+        if (meta.unsupported_external_references) {
+            setStatus(
+                `Loaded ${nodes.length} nodes and ${edges.length} edges; ` +
+                `${meta.unsupported_external_references} unsupported references not traversed` +
+                (meta.truncated ? ' (truncated).' : '.'),
+                'warn'
+            );
+        } else if (meta.truncated) {
             setStatus(
                 `Loaded ${meta.node_count || nodes.length} nodes and ${meta.edge_count || edges.length} edges (truncated).`,
                 'warn'

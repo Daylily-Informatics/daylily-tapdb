@@ -679,3 +679,30 @@ async def test_graph_input_start_failure_local_edges_and_hard_bounds():
     )
     with pytest.raises(FederationContractError, match="projection must be an object"):
         await malformed_ref_client.graph(FederatedObjectKey("atlas", root))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("service", ["ursa", "bloom", "dewey"])
+async def test_unsupported_reference_is_reported_while_valid_external_jump_continues(service):
+    client, transport = _client(service, "atlas")
+    boundary = _node(service, "old-reference-label")
+    boundary["data"].update(category="reference", type="external_identifier", subtype="tapdb_object",
+        version="1.0", properties={}, expandable=False, traversal_boundary={
+            "code": "unsupported_external_reference", "status": "not_traversed",
+            "reference_version": "1.0", "supported_version": "2.0",
+            "message": "External reference version 1.0 is unsupported; not traversed.",
+        })
+    root = _node(service, "root-label", refs=[_ref("atlas", "valid-remote-label", "valid-edge-label")])
+    transport.graphs[(service, "root-label")] = _graph(service, [root, boundary])
+    transport.graphs[("atlas", "valid-remote-label")] = _graph("atlas", [_node("atlas", "valid-remote-label")])
+    result = await client.graph(FederatedObjectKey(service, "root-label"))
+    assert result["meta"]["external_jumps"] == 1
+    assert result["meta"]["unsupported_external_references"] == 1
+    assert result["meta"]["partial"] is True
+    assert result["warnings"][0]["euid"] == "old-reference-label"
+    assert len([c for c in transport.calls if c[0] == "graph"]) == 2
+
+    boundary["data"]["external_refs"] = [_ref("atlas", "forbidden-target-label", "forbidden-edge-label")]
+    transport.graphs[(service, "root-label")] = _graph(service, [root, boundary])
+    with pytest.raises(FederationOperationError, match="invalid unsupported-reference boundary"):
+        await client.graph(FederatedObjectKey(service, "root-label"))

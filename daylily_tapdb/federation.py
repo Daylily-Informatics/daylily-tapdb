@@ -449,10 +449,36 @@ class DagV2FederationClient:
         return winners[0]
 
     @staticmethod
+    def _validate_boundary(data: Mapping[str, Any]) -> None:
+        boundary = data.get("traversal_boundary")
+        if boundary is None:
+            return
+        if (
+            not isinstance(boundary, Mapping)
+            or set(boundary) != {"code", "status", "reference_version", "supported_version", "message"}
+            or boundary.get("code") != "unsupported_external_reference"
+            or boundary.get("status") != "not_traversed"
+            or boundary.get("reference_version") != data.get("version")
+            or boundary.get("reference_version") == boundary.get("supported_version")
+            or not all(isinstance(boundary.get(field), str) and 0 < len(boundary[field]) <= 512
+                       for field in ("reference_version", "supported_version", "message"))
+            or data.get("record_type") != "instance"
+            or (data.get("category"), data.get("type"), data.get("subtype"))
+               not in {("reference", "external_identifier", "tapdb_object"),
+                       ("reference", "external_identifier", "opaque")}
+            or data.get("expandable") is not False
+            or data.get("external_refs") != []
+            or data.get("external_identifiers") != []
+            or data.get("properties") != {}
+        ):
+            raise FederationContractError("invalid unsupported-reference boundary")
+
+    @staticmethod
     def _validate_object(
         payload: Mapping[str, Any], service_id: str, euid: str
     ) -> dict[str, Any]:
         item = dict(payload)
+        DagV2FederationClient._validate_boundary(item)
         if item.get("service_id") != service_id or item.get("euid") != euid:
             raise FederationContractError(
                 "exact object identity does not match request"
@@ -483,6 +509,7 @@ class DagV2FederationClient:
             if not isinstance(raw, Mapping) or not isinstance(raw.get("data"), Mapping):
                 raise FederationContractError("graph node must contain data")
             data = dict(raw["data"])
+            DagV2FederationClient._validate_boundary(data)
             if data.get("service_id") != service_id:
                 raise FederationContractError("graph node service_id mismatch")
             euid = _persisted_euid(data.get("euid"))
@@ -496,6 +523,8 @@ class DagV2FederationClient:
                 )
             nodes.append({"data": data})
         node_ids = {node["data"]["euid"] for node in nodes}
+        boundary_ids = {node["data"]["euid"] for node in nodes
+                        if node["data"].get("traversal_boundary")}
         edges: list[dict[str, Any]] = []
         for raw in elements["edges"]:
             if not isinstance(raw, Mapping) or not isinstance(raw.get("data"), Mapping):
@@ -505,6 +534,7 @@ class DagV2FederationClient:
                 data.get("service_id") != service_id
                 or data.get("source") not in node_ids
                 or data.get("target") not in node_ids
+                or data.get("source") in boundary_ids
             ):
                 raise FederationContractError(
                     "graph edge has invalid service or endpoint"
@@ -678,6 +708,16 @@ class DagV2FederationClient:
                                 truncated_reasons.add("max_nodes")
                                 continue
                             nodes[global_id] = namespaced
+                            if prior is None and data.get("traversal_boundary"):
+                                boundary = data["traversal_boundary"]
+                                warnings.append({
+                                    "service_id": key.service_id,
+                                    "operation": "graph",
+                                    "status": "not_traversed",
+                                    "euid": data["euid"],
+                                    "reason": boundary["code"],
+                                    "message": f"{data['euid']}: {boundary['message']}",
+                                })
                             visited.add(FederatedObjectKey(key.service_id, str(data['euid'])))
 
                         for remote in remote_edges:
@@ -701,6 +741,8 @@ class DagV2FederationClient:
 
                         for remote in remote_nodes:
                             data = remote["data"]
+                            if data.get("traversal_boundary"):
+                                continue
                             source_global_id = f"{key.service_id}::{data['euid']}"
                             for identifier in data.get("external_identifiers", []):
                                 if not isinstance(identifier, Mapping):
@@ -913,6 +955,10 @@ class DagV2FederationClient:
                 "start": start.global_id,
                 "external_jumps": jumps,
                 "cycle_blocks": cycle_blocks,
+                "unsupported_external_references": sum(
+                    bool(node["data"].get("traversal_boundary")) for node in nodes.values()
+                ),
+                "partial": bool(warnings),
                 "truncated": bool(truncated_reasons),
                 "truncation_reason": "+".join(sorted(truncated_reasons)) or None,
                 "limits": asdict(self.limits),
