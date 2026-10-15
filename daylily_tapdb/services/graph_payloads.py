@@ -13,6 +13,10 @@ from sqlalchemy.orm import joinedload, load_only, selectinload
 
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
+from daylily_tapdb.services.graph_errors import (
+    add_issue, prune_stopped_branches, relationship_error,
+    retain_acyclic_edges, stop_node,
+)
 
 from daylily_tapdb.external_references import (
     ExternalReferenceContractError,
@@ -59,7 +63,20 @@ def _boundary_warnings(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         {"service_id": node["data"]["service_id"], "euid": node["data"]["euid"],
          **node["data"]["traversal_boundary"]}
         for node in nodes if node["data"].get("traversal_boundary")
+    ] + [
+        {"service_id": node["data"]["service_id"], "euid": node["data"]["euid"], **issue}
+        for node in nodes for issue in node["data"].get("graph_issues", [])
     ]
+
+
+def _boundary_meta(nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    codes = [n["data"]["traversal_boundary"]["code"] for n in nodes
+             if n["data"].get("traversal_boundary")]
+    issues = sum(len(n["data"].get("graph_issues", [])) for n in nodes)
+    return {"partial": bool(codes or issues),
+            "unsupported_external_references": codes.count("unsupported_external_reference"),
+            "node_errors": sum(code != "unsupported_external_reference" for code in codes),
+            "blocked_relationships": issues}
 
 
 class GraphLineageReader:
@@ -262,13 +279,6 @@ def _v2_node(
     outbound_lineages: list[Any] | None = None,
 ) -> dict[str, Any]:
     boundary = _unsupported_reference_boundary(obj) if record_type == "instance" else None
-    if boundary:
-        external = {"external_refs": [], "external_identifiers": []}
-    else:
-        try:
-            external = _project_outbound_external_references(obj, lineages=outbound_lineages)
-        except ExternalReferenceContractError as exc:
-            raise DagV2GraphContractError(str(exc)) from exc
     euid = getattr(obj, "euid", None)
     data = {
         "id": euid,
@@ -283,14 +293,46 @@ def _v2_node(
         "tenant_id": str(getattr(obj, "tenant_id", "") or "") or None,
         "created_dt": _isoformat_attr(obj, "created_dt"),
         "modified_dt": _isoformat_attr(obj, "modified_dt"),
-        "properties": {} if boundary else _clean_public_properties(obj),
-        "external_refs": external["external_refs"],
-        "external_identifiers": external["external_identifiers"],
+        "properties": {}, "presentation": {},
+        "external_refs": [], "external_identifiers": [],
     }
-    data["presentation"] = {} if boundary else _v2_node_presentation(obj)
     if boundary:
         data["traversal_boundary"] = boundary
         data["expandable"] = False
+        return {"data": data}
+    # Only documented, attributable data errors become a boundary. Database,
+    # authorization and programming failures are not caught here.
+    raw = getattr(obj, "json_addl", None)
+    if raw is not None and (not isinstance(raw, dict) or
+            (raw.get("properties") is not None and not isinstance(raw["properties"], dict))):
+        return {"data": stop_node(data, "invalid_node_contract")}
+    try:
+        if record_type == "instance" and _is_xrf_coordinates(obj):
+            _target_from_reference(obj)
+        _project_outbound_external_references(obj, lineages=[])
+    except ExternalReferenceContractError:
+        return {"data": stop_node(data, "invalid_external_reference")}
+    try:
+        data["presentation"] = _v2_node_presentation(obj)
+    except DagV2GraphContractError:
+        return {"data": stop_node(data, "invalid_node_presentation")}
+    data["properties"] = _clean_public_properties(obj)
+    lineages = outbound_lineages if outbound_lineages is not None else _active_related(
+        getattr(obj, "parent_of_lineages", None))
+    for lineage in lineages:
+        reference = getattr(lineage, "child_instance", None)
+        if reference is None or not _is_xrf_coordinates(reference):
+            continue
+        try:
+            # A malformed reference is isolated at its own node; it must not
+            # suppress the source's other canonical reference assertions.
+            _target_from_reference(reference)
+            external = _project_outbound_external_references(obj, lineages=[lineage])
+        except ExternalReferenceContractError:
+            add_issue(data, relationship_error("invalid_relationship", lineage.euid))
+            continue
+        data["external_refs"].extend(external["external_refs"])
+        data["external_identifiers"].extend(external["external_identifiers"])
     return {"data": data}
 
 
@@ -359,6 +401,9 @@ def _validate_lineage_scope(
 
 
 def _v2_edge(lineage: Any, *, service_id: str) -> dict[str, Any]:
+    lineage_euid = getattr(lineage, "euid", None)
+    if not isinstance(lineage_euid, str) or not lineage_euid:
+        raise DagV2GraphContractError("Lineage must have a persisted EUID")
     parent = getattr(lineage, "parent_instance", None)
     child = getattr(lineage, "child_instance", None)
     if parent is None or child is None:
@@ -436,6 +481,33 @@ def _assert_acyclic(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) ->
         visit(node_id)
 
 
+def _project_graph_edges(nodes, lineages, service_id):
+    by_id = {node["data"]["euid"]: node["data"] for node in nodes}
+    edges = []
+    for lineage in sorted(lineages, key=lambda row: str(row.euid)):
+        parent, child = getattr(lineage, "parent_instance", None), getattr(lineage, "child_instance", None)
+        source = by_id.get(str(getattr(parent, "euid", "") or ""))
+        target = by_id.get(str(getattr(child, "euid", "") or ""))
+        if parent is None or child is None:
+            visible = source if source is not None else target
+            if visible is not None:
+                add_issue(visible, relationship_error("unavailable_endpoint", lineage.euid))
+            continue
+        if source is None or target is None or source.get("traversal_boundary"):
+            continue
+        # A valid local edge may still display an invalid reference as a leaf.
+        if not target.get("traversal_boundary") and any(
+            issue.get("lineage_euid") == str(lineage.euid) and issue["code"] == "invalid_relationship"
+            for issue in source.get("graph_issues", [])
+        ):
+            continue
+        try:
+            edges.append(_v2_edge(lineage, service_id=service_id))
+        except DagV2GraphContractError:
+            add_issue(source, relationship_error("invalid_relationship", lineage.euid))
+    return edges
+
+
 def build_graph_v2_payload(
     obj: Any,
     *,
@@ -475,6 +547,7 @@ def build_graph_v2_payload(
         queued = {str(getattr(obj, "euid", "") or "")}
         visited: dict[str, Any] = {}
         included_edges: dict[str, Any] = {}
+        traversal_issues: dict[str, list[dict[str, str]]] = {}
         truncated = False
         reasons: set[str] = set()
         while queue:
@@ -517,9 +590,10 @@ def build_graph_v2_payload(
                 key=lambda pair: str(getattr(pair[0], "euid", "") or ""),
             ):
                 if neighbor is None:
-                    raise DagV2GraphContractError(
-                        "Lineage endpoint could not be resolved"
-                    )
+                    # Do not expose the identity of an inaccessible endpoint.
+                    traversal_issues.setdefault(current_euid, []).append(
+                        relationship_error("unavailable_endpoint", lineage.euid))
+                    continue
                 if bool(getattr(neighbor, "is_deleted", False)):
                     continue
                 _validate_lineage_scope(obj, lineage, neighbor, tenant_scope)
@@ -541,6 +615,10 @@ def build_graph_v2_payload(
                     reasons.add("max_nodes")
                     continue
                 edge_euid = str(getattr(lineage, "euid", "") or "")
+                if not edge_euid:
+                    traversal_issues.setdefault(current_euid, []).append(
+                        relationship_error("invalid_relationship"))
+                    continue
                 if (
                     edge_euid
                     and edge_euid not in included_edges
@@ -565,12 +643,13 @@ def build_graph_v2_payload(
             )
             for _euid, node in sorted(visited.items())
         ]
-        edges = [
-            _v2_edge(lineage, service_id=service_id)
-            for _euid, lineage in sorted(included_edges.items())
-            if str(getattr(lineage.parent_instance, "euid", "") or "") in visited
-            and str(getattr(lineage.child_instance, "euid", "") or "") in visited
-        ]
+        by_id = {node["data"]["euid"]: node["data"] for node in nodes}
+        for euid, issues in traversal_issues.items():
+            for issue in issues:
+                add_issue(by_id[euid], issue)
+        edges = _project_graph_edges(nodes, list(included_edges.values()), service_id)
+        nodes, edges = prune_stopped_branches(nodes, edges, str(obj.euid))
+        edges = retain_acyclic_edges(nodes, edges)
         _assert_acyclic(nodes, edges)
         truncation_reason = "+".join(sorted(reasons)) if reasons else None
 
@@ -586,8 +665,7 @@ def build_graph_v2_payload(
         "warnings": boundary_warnings,
         "meta": {
             "contract": "dag:v2",
-            **({"partial": True, "unsupported_external_references": len(boundary_warnings)}
-               if boundary_warnings else {}),
+            **_boundary_meta(nodes),
             "service_id": service_id,
             "graph_revision": graph_revision,
             "snapshot_at": snapshot.astimezone(timezone.utc).isoformat(),
@@ -658,7 +736,11 @@ def build_visible_graph_v2_payload(
         parent = getattr(lineage, "parent_instance", None)
         child = getattr(lineage, "child_instance", None)
         if parent is None or child is None:
-            raise DagV2GraphContractError("Lineage endpoint could not be resolved")
+            if len(included_lineages) >= max_edges:
+                truncated_reasons.add("max_edges")
+                break
+            included_lineages.append(lineage)
+            continue
         parent_euid = str(getattr(parent, "euid", "") or "")
         child_euid = str(getattr(child, "euid", "") or "")
         if parent_euid not in visible or child_euid not in visible:
@@ -675,7 +757,8 @@ def build_visible_graph_v2_payload(
         _v2_node(instance, record_type="instance", service_id=service_id)
         for _euid, instance in sorted(visible.items())
     ]
-    edges = [_v2_edge(lineage, service_id=service_id) for lineage in included_lineages]
+    edges = _project_graph_edges(nodes, included_lineages, service_id)
+    edges = retain_acyclic_edges(nodes, edges)
     _assert_acyclic(nodes, edges)
     boundary_warnings = _boundary_warnings(nodes)
     revision_input = {"nodes": nodes, "edges": edges}
@@ -689,8 +772,7 @@ def build_visible_graph_v2_payload(
         "warnings": boundary_warnings,
         "meta": {
             "contract": "dag:v2",
-            **({"partial": True, "unsupported_external_references": len(boundary_warnings)}
-               if boundary_warnings else {}),
+            **_boundary_meta(nodes),
             "service_id": service_id,
             "query_mode": "visible_scope",
             "graph_revision": graph_revision,

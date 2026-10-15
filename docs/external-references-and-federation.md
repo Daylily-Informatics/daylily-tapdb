@@ -480,3 +480,28 @@ TapDB 10 has no:
 
 A missing configuration, target, manifest, auth context, or canonical
 relationship fails clearly. Do not rebuild a removed path in an application.
+## Partial graphs and node diagnostics
+
+Native DAG-v2 projection and federation isolate attributable data failures at
+the smallest trustworthy boundary. A node with malformed properties,
+presentation or external-reference data remains visible with an explicit
+`traversal_boundary`, `status: not_traversed`, and `expandable: false`. Its
+properties, presentation and external projections are withheld. No descendant
+is included solely through that node, and no reference from it is followed.
+Other valid branches continue. This also applies to conflicting responses for
+the same established node identity.
+
+Invalid, inaccessible, conflicting or cyclic lineage is omitted and reported
+in `graph_issues` on an already visible endpoint. Diagnostics use fixed public
+messages; they do not serialize exception bodies or hidden endpoint identities.
+Local cycles and cross-service reciprocal references are not accepted as DAG
+edges. These are read-time boundaries, not record repairs or compatibility
+interpretation of older external-reference formats.
+
+Responses retain HTTP success when a trustworthy partial graph is available,
+set `meta.partial`, and expose `warnings`, `node_errors`,
+`unsupported_external_references` and `blocked_relationships`. A federation
+deadline after the root has loaded preserves the accumulated graph and marks
+unfinished branches unavailable. Root authentication, service/envelope identity,
+domain/tenant/owner isolation and unavailable databases remain explicit errors;
+they are never bypassed to produce a graph.

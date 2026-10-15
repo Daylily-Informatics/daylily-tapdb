@@ -289,8 +289,10 @@ async def test_graph_rejects_reserved_fields_in_remote_opaque_projection():
         ],
     )
 
-    with pytest.raises(FederationContractError, match="unsupported field.*id"):
-        await client.graph(FederatedObjectKey("atlas", root))
+    result = await client.graph(FederatedObjectKey("atlas", root))
+    assert result["meta"]["node_errors"] == 1
+    assert result["elements"]["nodes"][0]["data"]["id"] == f"atlas::{root}"
+    assert "attacker-controlled-node-id" not in repr(result)
 
 
 @pytest.mark.anyio
@@ -324,7 +326,7 @@ async def test_graph_surfaces_failed_and_unadmitted_branches_as_boundaries():
 
 
 @pytest.mark.anyio
-async def test_graph_bounds_external_cycles_and_payload_collisions_fail_safely():
+async def test_graph_bounds_external_cycles_without_losing_valid_nodes():
     client, transport = _client("atlas", "bloom")
     atlas_euid = "persisted-atlas"
     bloom_euid = "persisted-bloom"
@@ -348,8 +350,9 @@ async def test_graph_bounds_external_cycles_and_payload_collisions_fail_safely()
             )
         ],
     )
-    with pytest.raises(FederationContractError, match="cycle detected"):
-        await client.graph(FederatedObjectKey("atlas", atlas_euid))
+    result = await client.graph(FederatedObjectKey("atlas", atlas_euid))
+    assert result["meta"]["cycle_blocks"] == 1
+    assert result["meta"]["partial"] is True
 
     bounded, bounded_transport = _client(
         "atlas",
@@ -530,47 +533,11 @@ def test_object_graph_and_cycle_payload_validation_is_strict():
             {
                 "meta": valid_meta,
                 "elements": {
-                    "nodes": [
-                        {
-                            "data": {
-                                **_node("atlas", "persisted-object")["data"],
-                                "external_refs": {},
-                            }
-                        }
-                    ],
-                    "edges": [],
-                },
-            },
-            "projections must be lists",
-        ),
-        (
-            {
-                "meta": valid_meta,
-                "elements": {
                     "nodes": [_node("atlas", "persisted-object")],
                     "edges": ["bad"],
                 },
             },
             "edge must contain data",
-        ),
-        (
-            {
-                "meta": valid_meta,
-                "elements": {
-                    "nodes": [_node("atlas", "persisted-object")],
-                    "edges": [
-                        {
-                            "data": {
-                                "service_id": "atlas",
-                                "euid": "persisted-edge",
-                                "source": "missing",
-                                "target": "persisted-object",
-                            }
-                        }
-                    ],
-                },
-            },
-            "invalid service or endpoint",
         ),
     ):
         with pytest.raises(FederationContractError, match=message):
@@ -638,8 +605,9 @@ async def test_graph_input_start_failure_local_edges_and_hard_bounds():
             )
         ],
     )
-    with pytest.raises(FederationContractError, match="opaque identifier"):
-        await bounded.graph(FederatedObjectKey("atlas", root))
+    result = await bounded.graph(FederatedObjectKey("atlas", root))
+    assert result["meta"]["node_errors"] == 1
+    assert result["meta"]["external_jumps"] == 0
 
     bounded_transport.graphs[("atlas", root)]["elements"]["nodes"][0]["data"][
         "external_identifiers"
@@ -677,8 +645,9 @@ async def test_graph_input_start_failure_local_edges_and_hard_bounds():
     malformed_ref_transport.graphs[("atlas", root)] = _graph(
         "atlas", [_node("atlas", root, refs=["malformed"])]
     )
-    with pytest.raises(FederationContractError, match="projection must be an object"):
-        await malformed_ref_client.graph(FederatedObjectKey("atlas", root))
+    result = await malformed_ref_client.graph(FederatedObjectKey("atlas", root))
+    assert result["meta"]["node_errors"] == 1
+    assert result["elements"]["nodes"][0]["data"]["external_refs"] == []
 
 
 @pytest.mark.anyio
@@ -693,7 +662,9 @@ async def test_unsupported_reference_is_reported_while_valid_external_jump_conti
             "message": "External reference version 1.0 is unsupported; not traversed.",
         })
     root = _node(service, "root-label", refs=[_ref("atlas", "valid-remote-label", "valid-edge-label")])
-    transport.graphs[(service, "root-label")] = _graph(service, [root, boundary])
+    local_edge = {"data": {"id": "old-reference-edge-label", "euid": "old-reference-edge-label",
+        "service_id": service, "source": "root-label", "target": "old-reference-label"}}
+    transport.graphs[(service, "root-label")] = _graph(service, [root, boundary], [local_edge])
     transport.graphs[("atlas", "valid-remote-label")] = _graph("atlas", [_node("atlas", "valid-remote-label")])
     result = await client.graph(FederatedObjectKey(service, "root-label"))
     assert result["meta"]["external_jumps"] == 1
@@ -703,6 +674,87 @@ async def test_unsupported_reference_is_reported_while_valid_external_jump_conti
     assert len([c for c in transport.calls if c[0] == "graph"]) == 2
 
     boundary["data"]["external_refs"] = [_ref("atlas", "forbidden-target-label", "forbidden-edge-label")]
-    transport.graphs[(service, "root-label")] = _graph(service, [root, boundary])
-    with pytest.raises(FederationOperationError, match="invalid unsupported-reference boundary"):
-        await client.graph(FederatedObjectKey(service, "root-label"))
+    transport.graphs[(service, "root-label")] = _graph(service, [root, boundary], [local_edge])
+    result = await client.graph(FederatedObjectKey(service, "root-label"))
+    assert result["meta"]["node_errors"] == 1
+    assert result["meta"]["external_jumps"] == 1
+    assert not any(c[0] == "graph" and c[2] == "forbidden-target-label" for c in transport.calls)
+
+
+def _local_edge(service, label, source, target):
+    return {"data": {"id": label, "euid": label, "service_id": service,
+                     "source": source, "target": target}}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("malformed", [
+    {"external_refs": {}},
+    {"external_refs": ["private-malformed-value"]},
+    {"external_refs": [{"target_service_id": [], "target_object_euid": "private-target"}]},
+    {"properties": "private-malformed-value"},
+    {"presentation": []},
+    {"graph_issues": [{"code": []}]},
+    {"traversal_boundary": {"code": []}},
+])
+async def test_malformed_node_stops_only_its_branch(malformed):
+    client, transport = _client("ursa", "dewey")
+    root = _node("ursa", "root-label", refs=[_ref("dewey", "valid-remote-label", "remote-link-label")])
+    bad = _node("ursa", "bad-label")
+    bad["data"].update(malformed)
+    transport.graphs[("ursa", "root-label")] = _graph("ursa", [root, bad, _node("ursa", "hidden-label")], [
+        _local_edge("ursa", "root-bad-label", "root-label", "bad-label"),
+        _local_edge("ursa", "bad-hidden-label", "bad-label", "hidden-label"),
+    ])
+    transport.graphs[("dewey", "valid-remote-label")] = _graph("dewey", [_node("dewey", "valid-remote-label")])
+    result = await client.graph(FederatedObjectKey("ursa", "root-label"))
+    nodes = {n["data"]["id"]: n["data"] for n in result["elements"]["nodes"]}
+    assert set(nodes) == {"ursa::root-label", "ursa::bad-label", "dewey::valid-remote-label"}
+    assert nodes["ursa::bad-label"]["traversal_boundary"]["status"] == "not_traversed"
+    assert nodes["ursa::bad-label"]["properties"] == {}
+    assert result["meta"]["node_errors"] == 1
+    assert result["meta"]["partial"] is True
+    assert "private-malformed-value" not in repr(result)
+    assert "private-target" not in repr(result)
+
+
+@pytest.mark.parametrize("source,target", [
+    ("missing-label", "root-label"), ([], "root-label"), ("root-label", {}),
+])
+def test_invalid_edge_endpoint_is_omitted_without_losing_known_nodes(source, target):
+    nodes, edges = DagV2FederationClient._validate_graph(_graph("ursa", [_node("ursa", "root-label")],
+        [_local_edge("ursa", "bad-edge-label", source, target)]), service_id="ursa")
+    assert edges == []
+    assert nodes[0]["data"]["graph_issues"][0]["code"] == "unavailable_endpoint"
+
+
+@pytest.mark.anyio
+async def test_conflicting_duplicate_node_is_a_boundary_not_an_arbitrary_winner():
+    client, transport = _client("ursa")
+    first, second = _node("ursa", "root-label"), _node("ursa", "root-label")
+    second["data"]["display_label"] = "conflicting-private-data"
+    transport.graphs[("ursa", "root-label")] = _graph("ursa", [first, second])
+    result = await client.graph(FederatedObjectKey("ursa", "root-label"))
+    assert result["meta"]["node_errors"] == 1
+    assert result["elements"]["nodes"][0]["data"]["traversal_boundary"]["code"] == "conflicting_node_response"
+    assert "conflicting-private-data" not in repr(result)
+
+
+@pytest.mark.anyio
+async def test_deadline_retains_root_and_marks_unavailable_remote_branch():
+    import asyncio
+    client, transport = _client("ursa", "dewey", limits=FederationLimits(deadline_seconds=0.02))
+    root = _node("ursa", "root-label", refs=[_ref("dewey", "remote-label", "remote-link-label")])
+    transport.graphs[("ursa", "root-label")] = _graph("ursa", [root])
+    original = transport.graph
+
+    async def graph(target, **kwargs):
+        if target.service_id == "dewey":
+            await asyncio.sleep(1)
+        return await original(target, **kwargs)
+
+    transport.graph = graph
+    result = await client.graph(FederatedObjectKey("ursa", "root-label"))
+    assert result["meta"]["truncation_reason"] == "deadline"
+    assert result["meta"]["partial"] is True
+    assert any(n["data"]["id"] == "ursa::root-label" for n in result["elements"]["nodes"])
+    assert any(n["data"].get("reason") == "graph_deadline_exceeded" for n in result["elements"]["nodes"])

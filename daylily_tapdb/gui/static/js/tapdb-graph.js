@@ -75,7 +75,7 @@ const cytoscapeStyle = [
         }
     },
     {
-        selector: 'node[traversal_boundary]',
+        selector: 'node[boundary_label]',
         style: {
             'label': 'data(boundary_label)',
             'background-color': '#53606b',
@@ -1406,6 +1406,11 @@ function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
     const externalRefSection = isNode ? renderExternalRefs(externalRefs) : '';
     const externalIdentifierSection = isNode ? renderExternalIdentifiers(externalIdentifiers) : '';
     const graphNodeId = graphData && graphData.id ? graphData.id : euid;
+    const diagnostics = [graphData?.traversal_boundary, ...(graphData?.graph_issues || [])].filter(Boolean);
+    const diagnosticSection = diagnostics.length ?
+        `<div class="details-section-title">Not traversed</div>` + diagnostics.map((issue) =>
+            `<div>${escapeHtml(issue.message)}${issue.lineage_euid ? ` (${escapeHtml(issue.lineage_euid)})` : ''}</div>`
+        ).join('') : '';
 
     const actions = `
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem;">
@@ -1420,6 +1425,7 @@ function renderDetailsPanel({ euid, objectData, graphData, isNode }) {
 
     content.innerHTML = `
         ${actions}
+        ${diagnosticSection}
         <div class="details-section-title">Top-Level Properties</div>
         <div class="details-grid">${topLevelRows || '<span style="color: var(--text-muted);">No properties.</span>'}</div>
         <div class="details-section-title">Raw Object JSON</div>
@@ -1605,7 +1611,11 @@ async function loadGraph() {
             data.id = String(data.id || data.euid || '');
             data.display_label = data.display_label || data.name || data.euid || data.id;
             if (data.traversal_boundary) {
-                data.boundary_label = `${data.id}\nUnsupported reference\nNot traversed`;
+                const reason = data.traversal_boundary.code === 'unsupported_external_reference'
+                    ? 'Unsupported reference' : 'Node error';
+                data.boundary_label = `${data.id}\n${reason}\nNot traversed`;
+            } else if (data.graph_issues?.length) {
+                data.boundary_label = `${data.id}\nSome links not traversed`;
             }
             data.color = data.color || colorForCategory(data.category || data.type || 'unknown');
             return { data };
@@ -1642,10 +1652,12 @@ async function loadGraph() {
 
         updateHistoryState();
         const meta = data.meta || {};
-        if (meta.unsupported_external_references) {
+        if (meta.partial) {
             setStatus(
-                `Loaded ${nodes.length} nodes and ${edges.length} edges; ` +
-                `${meta.unsupported_external_references} unsupported references not traversed` +
+                `Loaded ${nodes.length} nodes and ${edges.length} edges (partial); ` +
+                `${meta.unsupported_external_references || 0} unsupported references, ` +
+                `${meta.node_errors || 0} node errors, ` +
+                `${meta.blocked_relationships || 0} relationships not traversed` +
                 (meta.truncated ? ' (truncated).' : '.'),
                 'warn'
             );
