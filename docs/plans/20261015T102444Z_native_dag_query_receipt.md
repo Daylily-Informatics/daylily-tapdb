@@ -16,3 +16,5 @@ Source changes:
 Existing production observations: Ursa search9.369seconds; execution graph at depth4/max500 exceeded35seconds. After-release measurements remain pending. QEO's credential is application-owned and repaired separately in Kahlo configuration.
 
 Python AST parsing and diff whitespace review performed. Tests and lint have not run; the supplied policy requires a second explicit request for execution. No synthetic production objects, schema migration, destructive operation, or fleet-wide deployment is part of this change. Consumers selected for this release are Kahlo and the Ursa API; their other processes remain pinned.
+
+Release correction:11.0.5 was published but never built into a consumer. Source review found two reader arguments attached to the GUI wrapper instead of its direct object builders;11.0.6 corrects these call sites before consumer adoption. No production change occurred from11.0.5.

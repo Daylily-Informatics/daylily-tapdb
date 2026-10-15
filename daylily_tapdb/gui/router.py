@@ -2148,7 +2148,6 @@ def create_tapdb_gui_router(
                     max_nodes=max_nodes,
                     max_edges=max_edges,
                     tenant_scope=configured_graph_tenant_scope(cfg),
-                    lineage_reader=GraphLineageReader(session),
                 )
         return _render(
             templates,
@@ -2182,7 +2181,6 @@ def create_tapdb_gui_router(
                     max_nodes=max_nodes,
                     max_edges=max_edges,
                     tenant_scope=configured_graph_tenant_scope(cfg),
-                    lineage_reader=GraphLineageReader(session),
                 )
 
     @router.get("/object/{euid}/graph", response_class=HTMLResponse)
@@ -2209,6 +2207,7 @@ def create_tapdb_gui_router(
                     max_nodes=1_000,
                     max_edges=500,
                     tenant_scope=configured_graph_tenant_scope(cfg),
+                    lineage_reader=GraphLineageReader(session),
                 )
         return _render(
             templates,
@@ -2245,6 +2244,7 @@ def create_tapdb_gui_router(
                     max_nodes=1_000,
                     max_edges=500,
                     tenant_scope=configured_graph_tenant_scope(cfg),
+                    lineage_reader=GraphLineageReader(session),
                 )
 
     @router.get("/object/{euid}", response_class=HTMLResponse)
