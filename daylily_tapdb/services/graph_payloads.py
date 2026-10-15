@@ -8,6 +8,11 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import or_
+from sqlalchemy.orm import joinedload
+
+from daylily_tapdb.models.lineage import generic_instance_lineage
+
 from daylily_tapdb.external_references import (
     ExternalReferenceContractError,
     _is_xrf_coordinates,
@@ -23,6 +28,46 @@ def _isoformat_attr(obj: Any, attr: str) -> str | None:
 
 class DagV2GraphContractError(ValueError):
     """Raised when persisted lineage cannot be represented as a safe DAG v2."""
+
+
+class GraphLineageReader:
+    """Request-local adjacency batches through the caller's scoped ORM session.
+
+    Both endpoints are eagerly loaded under the same RLS context. No graph or
+    authorization data survives the request, and no inferred edges are added.
+    """
+
+    batch_size = 128
+
+    def __init__(self, session: Any):
+        self.session = session
+        self.outgoing: dict[int, list[Any]] = {}
+        self.incoming: dict[int, list[Any]] = {}
+
+    def prefetch(self, objects: list[Any]) -> None:
+        pending = sorted({int(obj.uid) for obj in objects} - self.outgoing.keys())
+        for offset in range(0, len(pending), self.batch_size):
+            uids = pending[offset:offset + self.batch_size]
+            for uid in uids:
+                self.outgoing[uid] = []
+                self.incoming[uid] = []
+            model = generic_instance_lineage
+            rows = (
+                self.session.query(model)
+                .filter(model.is_deleted.is_(False), or_(
+                    model.parent_instance_uid.in_(uids),
+                    model.child_instance_uid.in_(uids),
+                ))
+                .options(joinedload(model.parent_instance), joinedload(model.child_instance))
+                .order_by(model.euid)
+                .all()
+            )
+            selected = set(uids)
+            for row in rows:
+                if row.parent_instance_uid in selected:
+                    self.outgoing[row.parent_instance_uid].append(row)
+                if row.child_instance_uid in selected:
+                    self.incoming[row.child_instance_uid].append(row)
 
 
 def _dict_attr(obj: Any, attr: str) -> dict[str, Any]:
@@ -134,9 +179,12 @@ def _v2_node_presentation(obj: Any) -> dict[str, Any]:
     return presentation
 
 
-def _v2_node(obj: Any, *, record_type: str, service_id: str) -> dict[str, Any]:
+def _v2_node(
+    obj: Any, *, record_type: str, service_id: str,
+    outbound_lineages: list[Any] | None = None,
+) -> dict[str, Any]:
     try:
-        external = _project_outbound_external_references(obj)
+        external = _project_outbound_external_references(obj, lineages=outbound_lineages)
     except ExternalReferenceContractError as exc:
         raise DagV2GraphContractError(str(exc)) from exc
     euid = getattr(obj, "euid", None)
@@ -166,10 +214,12 @@ def build_object_detail_v2_payload(
     *,
     record_type: str,
     service_id: str,
+    outbound_lineages: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Return safe v2 object detail without legacy routing metadata."""
 
-    return dict(_v2_node(obj, record_type=record_type, service_id=service_id)["data"])
+    return dict(_v2_node(obj, record_type=record_type, service_id=service_id,
+                         outbound_lineages=outbound_lineages)["data"])
 
 
 def _scope_tuple(obj: Any) -> tuple[str, str, str | None]:
@@ -311,6 +361,7 @@ def build_graph_v2_payload(
     max_edges: int | None = None,
     snapshot_at: datetime | None = None,
     tenant_scope: frozenset[str | None] | None = None,
+    lineage_reader: GraphLineageReader | None = None,
 ) -> dict[str, Any]:
     """Build one bounded, validated, lineage-only DAG v2 snapshot."""
 
@@ -336,6 +387,7 @@ def build_graph_v2_payload(
         edges = []
         root_scope = _scope_tuple(obj)
         queue: deque[tuple[Any, int]] = deque([(obj, 0)])
+        queued = {str(getattr(obj, "euid", "") or "")}
         visited: dict[str, Any] = {}
         included_edges: dict[str, Any] = {}
         truncated = False
@@ -343,6 +395,7 @@ def build_graph_v2_payload(
         while queue:
             current, current_depth = queue.popleft()
             current_euid = str(getattr(current, "euid", "") or "")
+            queued.discard(current_euid)
             if not current_euid or current_euid in visited:
                 continue
             if len(visited) >= max_nodes:
@@ -355,11 +408,19 @@ def build_graph_v2_payload(
                 )
             visited[current_euid] = current
             relations: list[tuple[Any, Any]] = []
-            for lineage in _active_related(
-                getattr(current, "parent_of_lineages", None)
-            ):
+            if lineage_reader is not None:
+                lineage_reader.prefetch([
+                    current,
+                    *(queued for queued, _ in list(queue)[:lineage_reader.batch_size - 1]),
+                ])
+                outgoing = lineage_reader.outgoing[int(current.uid)]
+                incoming = lineage_reader.incoming[int(current.uid)]
+            else:
+                outgoing = _active_related(getattr(current, "parent_of_lineages", None))
+                incoming = _active_related(getattr(current, "child_of_lineages", None))
+            for lineage in outgoing:
                 relations.append((lineage, getattr(lineage, "child_instance", None)))
-            for lineage in _active_related(getattr(current, "child_of_lineages", None)):
+            for lineage in incoming:
                 relations.append((lineage, getattr(lineage, "parent_instance", None)))
             for lineage, neighbor in sorted(
                 relations,
@@ -381,6 +442,7 @@ def build_graph_v2_payload(
                 neighbor_euid = str(getattr(neighbor, "euid", "") or "")
                 if (
                     neighbor_euid not in visited
+                    and neighbor_euid not in queued
                     and len(visited) + len(queue) >= max_nodes
                 ):
                     truncated = True
@@ -398,10 +460,15 @@ def build_graph_v2_payload(
                     continue
                 if edge_euid:
                     included_edges[edge_euid] = lineage
-                if neighbor_euid not in visited:
+                if neighbor_euid not in visited and neighbor_euid not in queued:
                     queue.append((neighbor, current_depth + 1))
+                    queued.add(neighbor_euid)
         nodes = [
-            _v2_node(node, record_type="instance", service_id=service_id)
+            _v2_node(
+                node, record_type="instance", service_id=service_id,
+                outbound_lineages=(lineage_reader.outgoing[int(node.uid)]
+                                   if lineage_reader is not None else None),
+            )
             for _euid, node in sorted(visited.items())
         ]
         edges = [

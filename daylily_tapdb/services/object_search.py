@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from sqlalchemy import String, cast, or_
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, load_only
 
 from daylily_tapdb.external_references import (
     ExternalIdentifierTarget,
@@ -205,8 +205,16 @@ def search_objects(
         if decoded and kind_index < cursor_kind_index:
             continue
         model = _MODELS[kind]
+        # Search returns only this projection; avoid reading potentially large
+        # operational JSON payloads that are neither searched nor returned.
+        columns = [getattr(model, name) for name in (
+            "uid", "euid", "name", "category", "type", "subtype", "version",
+            "bstatus", "tenant_id", "created_dt", "modified_dt",
+        )]
+        if model is generic_instance_lineage:
+            columns.append(model.relationship_type)
         query = _apply_filters(
-            session.query(model),
+            session.query(model).options(load_only(*columns)),
             model,
             q=filters["q"],
             euid=filters["euid"],

@@ -192,7 +192,7 @@ def _failure(service_id: str, operation: str, exc: BaseException) -> dict[str, A
         "operation": operation,
         "status": "failed",
         "error_type": type(exc).__name__,
-        "message": str(exc)[:512],
+        "message": (str(exc) or type(exc).__name__)[:512],
     }
 
 
@@ -541,6 +541,7 @@ class DagV2FederationClient:
             FederatedObjectKey, list[tuple[str, Mapping[str, Any]]]
         ] = {}
         visited: set[FederatedObjectKey] = set()
+        failed: dict[FederatedObjectKey, str] = {}
         jumps = 0
         truncated_reasons: set[str] = set()
 
@@ -626,6 +627,7 @@ class DagV2FederationClient:
                     pending = []
                     if not batch:
                         break
+                    visited.update(batch)
                     outcomes = await asyncio.gather(
                         *(fetch(key) for key in batch), return_exceptions=True
                     )
@@ -638,6 +640,7 @@ class DagV2FederationClient:
                                     f"starting service failed: {receipt['message']}"
                                 ) from outcome
                             warnings.append(receipt)
+                            failed[key] = receipt['message']
                             for source_global_id, ref in pending_context.get(key, []):
                                 unresolved(
                                     source_global_id,
@@ -675,6 +678,7 @@ class DagV2FederationClient:
                                 truncated_reasons.add("max_nodes")
                                 continue
                             nodes[global_id] = namespaced
+                            visited.add(FederatedObjectKey(key.service_id, str(data['euid'])))
 
                         for remote in remote_edges:
                             data = dict(remote["data"])
@@ -792,6 +796,10 @@ class DagV2FederationClient:
                                     )
                                     continue
                                 target_global_id = target_key.global_id
+                                if target_key in failed:
+                                    unresolved(source_global_id, ref,
+                                               reason=f"remote branch failed: {failed[target_key]}")
+                                    continue
                                 edge_id = f"bridge::{source_global_id}::{ref.get('lineage_euid')}"
                                 edges[edge_id] = {
                                     "data": {
@@ -839,6 +847,52 @@ class DagV2FederationClient:
         except TimeoutError as exc:
             raise FederationOperationError("federated graph deadline exceeded") from exc
 
+        # Each owner must still publish acyclic lineage. Cross-service reference
+        # assertions can legitimately be reciprocal, so retain their evidence as
+        # a non-expanding boundary when the bridge would close a directed cycle.
+        local_edges = {key: edge for key, edge in edges.items()
+                       if edge['data'].get('edge_kind') != 'external_reference'}
+        _assert_global_acyclic(nodes, local_edges)
+        adjacency: dict[str, set[str]] = {key: set() for key in nodes}
+        for edge in local_edges.values():
+            data = edge['data']
+            if data['source'] in nodes and data['target'] in nodes:
+                adjacency[data['source']].add(data['target'])
+
+        def reaches(start_id: str, target_id: str) -> bool:
+            pending_ids = [start_id]
+            seen: set[str] = set()
+            while pending_ids:
+                node_id = pending_ids.pop()
+                if node_id == target_id:
+                    return True
+                if node_id not in seen:
+                    seen.add(node_id)
+                    pending_ids.extend(adjacency.get(node_id, ()))
+            return False
+
+        cycle_blocks = 0
+        for edge_id, edge in sorted(list(edges.items())):
+            data = edge['data']
+            if data.get('edge_kind') != 'external_reference':
+                continue
+            source_id, target_id = data['source'], data['target']
+            if source_id not in nodes or target_id not in nodes:
+                continue
+            if reaches(target_id, source_id):
+                del edges[edge_id]
+                cycle_blocks += 1
+                unresolved(source_id, data, reason='external_reference_cycle_blocked')
+                warnings.append({
+                    'service_id': data['target_service_id'],
+                    'operation': 'external_jump', 'status': 'cycle_blocked',
+                    'message': 'Return reference retained without cyclic expansion',
+                    'source': source_id, 'target': target_id,
+                    'lineage_euid': data.get('lineage_euid'),
+                })
+            else:
+                adjacency[source_id].add(target_id)
+
         complete_edges = {
             edge_id: edge
             for edge_id, edge in edges.items()
@@ -858,6 +912,7 @@ class DagV2FederationClient:
                 "contract": "tapdb.federation:v1",
                 "start": start.global_id,
                 "external_jumps": jumps,
+                "cycle_blocks": cycle_blocks,
                 "truncated": bool(truncated_reasons),
                 "truncation_reason": "+".join(sorted(truncated_reasons)) or None,
                 "limits": asdict(self.limits),

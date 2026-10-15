@@ -585,21 +585,24 @@ def _projection(
     return "opaque", item
 
 
-def _project_outbound_external_references(obj: Any) -> dict[str, list[dict[str, Any]]]:
+def _project_outbound_external_references(
+    obj: Any, *, lineages: list[Any] | None = None
+) -> dict[str, list[dict[str, Any]]]:
     """Internal DAG/UI projection from authoritative active lineage only."""
 
     _reject_metadata_pseudo_edges(obj)
     refs: list[dict[str, Any]] = []
     identifiers: list[dict[str, Any]] = []
-    relation = getattr(obj, "parent_of_lineages", None)
-    if relation is None:
-        return {"external_refs": refs, "external_identifiers": identifiers}
-    query = (
-        relation.filter_by(is_deleted=False)
-        if hasattr(relation, "filter_by")
-        else relation
-    )
-    lineages = list(query.all() if hasattr(query, "all") else query)
+    if lineages is None:
+        relation = getattr(obj, "parent_of_lineages", None)
+        if relation is None:
+            return {"external_refs": refs, "external_identifiers": identifiers}
+        query = (
+            relation.filter_by(is_deleted=False)
+            if hasattr(relation, "filter_by")
+            else relation
+        )
+        lineages = list(query.all() if hasattr(query, "all") else query)
     for lineage in lineages:
         reference = getattr(lineage, "child_instance", None)
         if reference is None or not _is_xrf_coordinates(reference):

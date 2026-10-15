@@ -64,6 +64,7 @@ from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.security_context import configured_graph_tenant_scope
 from daylily_tapdb.services.graph_payloads import (
+    GraphLineageReader,
     build_graph_v2_payload,
     build_visible_graph_v2_payload,
 )
@@ -2092,6 +2093,7 @@ def create_tapdb_gui_router(
                 max_nodes=max_nodes,
                 max_edges=max_edges,
                 tenant_scope=tenant_scope,
+                lineage_reader=GraphLineageReader(session),
             )
 
         instances = (
@@ -2146,6 +2148,7 @@ def create_tapdb_gui_router(
                     max_nodes=max_nodes,
                     max_edges=max_edges,
                     tenant_scope=configured_graph_tenant_scope(cfg),
+                    lineage_reader=GraphLineageReader(session),
                 )
         return _render(
             templates,
@@ -2179,6 +2182,7 @@ def create_tapdb_gui_router(
                     max_nodes=max_nodes,
                     max_edges=max_edges,
                     tenant_scope=configured_graph_tenant_scope(cfg),
+                    lineage_reader=GraphLineageReader(session),
                 )
 
     @router.get("/object/{euid}/graph", response_class=HTMLResponse)
