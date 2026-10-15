@@ -9,8 +9,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import or_
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, load_only, selectinload
 
+from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 
 from daylily_tapdb.external_references import (
@@ -33,8 +34,9 @@ class DagV2GraphContractError(ValueError):
 class GraphLineageReader:
     """Request-local adjacency batches through the caller's scoped ORM session.
 
-    Both endpoints are eagerly loaded under the same RLS context. No graph or
-    authorization data survives the request, and no inferred edges are added.
+    Endpoint identity and scope are loaded under the same RLS context. Large
+    properties are loaded only for the retained graph and its typed references.
+    No graph or authorization data survives the request.
     """
 
     batch_size = 128
@@ -52,13 +54,24 @@ class GraphLineageReader:
                 self.outgoing[uid] = []
                 self.incoming[uid] = []
             model = generic_instance_lineage
+            endpoint = generic_instance
+            endpoint_fields = [getattr(endpoint, name) for name in (
+                "uid", "euid", "domain_code", "issuer_app_code", "tenant_id",
+                "is_deleted", "category", "type", "subtype", "version",
+            )]
             rows = (
                 self.session.query(model)
                 .filter(model.is_deleted.is_(False), or_(
                     model.parent_instance_uid.in_(uids),
                     model.child_instance_uid.in_(uids),
                 ))
-                .options(joinedload(model.parent_instance), joinedload(model.child_instance))
+                .options(
+                    load_only(model.uid, model.euid, model.parent_instance_uid,
+                              model.child_instance_uid, model.domain_code,
+                              model.issuer_app_code, model.tenant_id, model.is_deleted),
+                    joinedload(model.parent_instance).load_only(*endpoint_fields),
+                    joinedload(model.child_instance).load_only(*endpoint_fields),
+                )
                 .order_by(model.euid)
                 .all()
             )
@@ -68,6 +81,40 @@ class GraphLineageReader:
                     self.outgoing[row.parent_instance_uid].append(row)
                 if row.child_instance_uid in selected:
                     self.incoming[row.child_instance_uid].append(row)
+
+    def materialize(self, nodes: list[Any], edges: list[Any]) -> None:
+        """Hydrate retained payloads without decoding every boundary neighbor.
+
+        Outbound typed references remain part of each node's native contract,
+        including those beyond the requested traversal depth. Their canonical
+        templates and assertion payloads must therefore also be materialized.
+        Every batch uses the caller's RLS session and fails on missing rows.
+        """
+        selected_nodes = {int(node.uid): node for node in nodes}
+        selected_edges = {int(edge.uid): edge for edge in edges}
+        for node in nodes:
+            for edge in self.outgoing[int(node.uid)]:
+                reference = edge.child_instance
+                if reference is not None and _is_xrf_coordinates(reference):
+                    selected_nodes[int(reference.uid)] = reference
+                    selected_edges[int(edge.uid)] = edge
+        for model, selected in (
+            (generic_instance, selected_nodes),
+            (generic_instance_lineage, selected_edges),
+        ):
+            uids = sorted(selected)
+            for offset in range(0, len(uids), self.batch_size):
+                batch = uids[offset:offset + self.batch_size]
+                query = self.session.query(model).filter(
+                    model.uid.in_(batch), model.is_deleted.is_(False)
+                )
+                if model is generic_instance:
+                    query = query.options(selectinload(model.parent_template))
+                rows = query.all()
+                if {int(row.uid) for row in rows} != set(batch):
+                    raise DagV2GraphContractError(
+                        "Graph payload rows changed or became inaccessible during projection"
+                    )
 
 
 def _dict_attr(obj: Any, attr: str) -> dict[str, Any]:
@@ -463,6 +510,8 @@ def build_graph_v2_payload(
                 if neighbor_euid not in visited and neighbor_euid not in queued:
                     queue.append((neighbor, current_depth + 1))
                     queued.add(neighbor_euid)
+        if lineage_reader is not None:
+            lineage_reader.materialize(list(visited.values()), list(included_edges.values()))
         nodes = [
             _v2_node(
                 node, record_type="instance", service_id=service_id,

@@ -548,6 +548,8 @@ CREATE POLICY generic_template_scope_isolation ON generic_template
         )
     );
 
+-- Resolve immutable domain/owner bindings once per statement, not per row.
+-- Tenant checks and write authority remain unchanged.
 ALTER TABLE generic_instance ENABLE ROW LEVEL SECURITY;
 ALTER TABLE generic_instance FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS generic_instance_tenant_isolation ON generic_instance;
@@ -555,8 +557,8 @@ DROP POLICY IF EXISTS generic_instance_domain_isolation ON generic_instance;
 DROP POLICY IF EXISTS generic_instance_scope_isolation ON generic_instance;
 CREATE POLICY generic_instance_scope_isolation ON generic_instance
     USING (
-        domain_code = tapdb_current_domain_code()
-        AND issuer_app_code = tapdb_current_owner_repo_name()
+        domain_code = (SELECT tapdb_current_domain_code())
+        AND issuer_app_code = (SELECT tapdb_current_owner_repo_name())
         AND (tenant_id IS NULL OR tenant_id = ANY(tapdb_allowed_tenant_ids()))
     )
     WITH CHECK (
@@ -577,8 +579,8 @@ DROP POLICY IF EXISTS generic_instance_lineage_domain_isolation ON generic_insta
 DROP POLICY IF EXISTS generic_instance_lineage_scope_isolation ON generic_instance_lineage;
 CREATE POLICY generic_instance_lineage_scope_isolation ON generic_instance_lineage
     USING (
-        domain_code = tapdb_current_domain_code()
-        AND issuer_app_code = tapdb_current_owner_repo_name()
+        domain_code = (SELECT tapdb_current_domain_code())
+        AND issuer_app_code = (SELECT tapdb_current_owner_repo_name())
         AND (tenant_id IS NULL OR tenant_id = ANY(tapdb_allowed_tenant_ids()))
     )
     WITH CHECK (

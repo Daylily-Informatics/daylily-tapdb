@@ -101,6 +101,15 @@ def policy_expressions(schema_sql: str) -> dict[str, tuple[str, str]]:
             "inbox_message",
         )
     }
+    # Uncorrelated scalar subqueries become statement-local InitPlans. These
+    # SECURITY DEFINER resolvers still read the immutable principal binding;
+    # tenant visibility and all write policies retain their exact authority.
+    read_scope = (
+        f"(domain_code = ( SELECT {s}.tapdb_current_domain_code() AS tapdb_current_domain_code))"
+        f" AND (issuer_app_code = ( SELECT {s}.tapdb_current_owner_repo_name() AS tapdb_current_owner_repo_name))"
+    )
+    for name in ("generic_instance", "generic_instance_lineage"):
+        result[name] = (f"({read_scope} AND {read_tenant})", result[name][1])
     result["tapdb_history_epoch"] = ("true", "false")
     result["tapdb_identity_prefix_config"] = (f"({scope})", f"({scope})")
     event_scope = scope.replace("(domain_code", "(event.domain_code").replace(

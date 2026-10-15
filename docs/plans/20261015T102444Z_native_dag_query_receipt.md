@@ -18,3 +18,13 @@ Existing production observations: Ursa search9.369seconds; execution graph at de
 Python AST parsing and diff whitespace review performed. Tests and lint have not run; the supplied policy requires a second explicit request for execution. No synthetic production objects, schema migration, destructive operation, or fleet-wide deployment is part of this change. Consumers selected for this release are Kahlo and the Ursa API; their other processes remain pinned.
 
 Release correction:11.0.5 was published but never built into a consumer. Source review found two reader arguments attached to the GUI wrapper instead of its direct object builders;11.0.6 corrects these call sites before consumer adoption. No production change occurred from11.0.5.
+
+## Performance follow-up: 11.0.7
+
+After11.0.6, Ursa graph improved from >35s to8.2-8.4s; search remained9.0-9.45s. User now targets>=50% improvement/Ursa<=4s, prioritizing Dewey and Kahlo. QEO performance is excluded.
+
+Native read-only profiling found63,831 JSON decodes for~215 retained graph nodes and4.5s scans of each~78k-row search table. The EC2 host has spare CPU/memory. Narrow adjacency reads retain endpoint identity/scope, then load full payloads only for retained nodes/edges and outbound canonical XRF assertions/templates. Every read remains in the requesting RLS session; no persistent graph/authorization cache.
+
+The two instance/lineage read policies now resolve immutable domain/owner scope with uncorrelated scalar subqueries. Tenant checks, all WITH CHECK expressions, role resolution, and policy roles remain unchanged. The exact packaged security-catalog contract changes with the SQL asset. Native `tapdb db schema apply` is required for each selected existing service schema; no raw database edits, new privileges, synthetic records or blanket fleet rollout. Packaged schema assets are otherwise identical between11.0.2 and11.0.6. Consumers: Dewey, Ursa API and Kahlo; other workers/images stay pinned.
+
+AST syntax and diff whitespace review completed. Tests remain unexecuted under the supplied twice-requested policy. Runtime before/after observation and user acceptance remain separate gates in the controlling Kahlo ledger.

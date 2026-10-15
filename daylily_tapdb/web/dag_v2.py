@@ -324,6 +324,7 @@ def _build_router(
                     if record_type == "instance":
                         reader = GraphLineageReader(session)
                         reader.prefetch([obj])
+                        reader.materialize([obj], [])
                         outbound = reader.outgoing[int(obj.uid)]
                     return build_object_detail_v2_payload(
                         obj,
