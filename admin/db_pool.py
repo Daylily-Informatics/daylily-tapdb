@@ -226,7 +226,9 @@ def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
             or (os.environ.get("AWS_PROFILE") or "").strip()
             or None
         )
-        ca_path = AuroraConnectionBuilder.ensure_ca_bundle()
+        ca_path = str(cfg.get("sslrootcert") or "").strip()
+        if not ca_path:
+            raise RuntimeError("TapDB Aurora target requires an explicit sslrootcert path")
         url = URL.create(
             "postgresql+psycopg2",
             username=user,
