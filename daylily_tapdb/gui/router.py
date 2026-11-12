@@ -1867,7 +1867,10 @@ def create_tapdb_gui_router(
                 conn.app_username = user.get("username")
                 from daylily_tapdb.gui.integrity import authenticated_attribution
                 conn.attribution = authenticated_attribution(user, conn)
-                with conn.session_scope(commit=True) as session:
+                # Identity inventory capture needs one stable transaction snapshot.
+                with conn.session_scope(
+                    commit=True, isolation_level="REPEATABLE READ"
+                ) as session:
                     for template in payload["templates"]:
                         existing = (
                             session.query(generic_template)

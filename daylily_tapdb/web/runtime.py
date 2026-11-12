@@ -133,10 +133,16 @@ class RuntimeDBConnection:
         return False
 
     @contextmanager
-    def session_scope(self, commit: bool = False) -> Generator[Session, None, None]:
+    def session_scope(
+        self, commit: bool = False, *, isolation_level: str | None = None
+    ) -> Generator[Session, None, None]:
         session = self._bundle.SessionFactory()
         trans = session.begin()
         try:
+            if isolation_level is not None:
+                # Acquire this transaction's connection before the context queries.
+                # Do not change defaults on the shared engine or session factory.
+                session.connection(execution_options={"isolation_level": isolation_level})
             if is_postgresql_session(session):
                 apply_transaction_context(
                     session,
