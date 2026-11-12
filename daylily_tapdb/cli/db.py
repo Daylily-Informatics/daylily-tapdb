@@ -866,7 +866,7 @@ def _schema_exists(env: Environment) -> bool:
 
 
 def _seed_operator_schema_exists(cfg: Mapping[str, Any]) -> bool:
-    """Verify the exact seed target and schema with the authenticated operator."""
+    """Verify the configured target/schema with the authenticated operator."""
     schema_name = str(cfg["schema_name"])
     with operator_connection(cfg, read_only=True) as connection:
         exists = connection.execute(
@@ -1157,10 +1157,17 @@ def db_schema_apply(
     ccyo_out.print_text(f"  User:     {cfg['user']}")
     ccyo_out.print_text("")
 
-    if not _check_db_exists(env, cfg["database"]):
-        ccyo_out.error(f"Database '{cfg['database']}' does not exist")
-        ccyo_out.print_text("  Create with: [cyan]tapdb db create[/cyan]")
-        raise typer.Exit(1)
+    # Schema application is an operator operation. Authenticate against the
+    # configured database, not the control database using the runtime login.
+    # A connection/authority failure must not be reported as database absence.
+    try:
+        schema_preexisted = _seed_operator_schema_exists(cfg)
+    except Exception as exc:
+        ccyo_out.error(
+            "Operator schema-apply preflight could not verify the configured "
+            f"database and schema ({type(exc).__name__})"
+        )
+        raise typer.Exit(1) from exc
 
     try:
         schema_file = _find_schema_file()
@@ -1175,7 +1182,6 @@ def db_schema_apply(
         ccyo_out.error(f"{e}")
         raise typer.Exit(1)
 
-    schema_preexisted = _schema_exists(env)
     if schema_preexisted:
         if reinitialize:
             ccyo_out.warning("► Reapplying schema to refresh existing TAPDB objects...")
