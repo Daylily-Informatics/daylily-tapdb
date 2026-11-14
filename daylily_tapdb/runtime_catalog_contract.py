@@ -146,6 +146,7 @@ _TRIGGER = re.compile(
 )
 _TYPES = {
     "TEXT": (25, "text"),
+    "TEXT[]": (1009, "text[]"),
     "BIGINT": (20, "bigint"),
     "JSONB": (3802, "jsonb"),
     "BOOLEAN": (16, "boolean"),
