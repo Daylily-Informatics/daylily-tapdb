@@ -197,6 +197,11 @@ CREATE TABLE IF NOT EXISTS tapdb_issuance_profile (
 );
 
 -- Prefix configuration for TapDB-managed identity tables.
+-- Optional future-template issuance does not rewrite retained template EUIDs.
+ALTER TABLE tapdb_issuance_profile ADD COLUMN IF NOT EXISTS template_prefix TEXT
+    CHECK (template_prefix IS NULL OR
+        (mode = 'canonical' AND template_prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'));
+
 -- Scoped by domain_code + owner repo name for shared-DB safety.
 CREATE TABLE IF NOT EXISTS tapdb_identity_prefix_config (
     entity TEXT NOT NULL,

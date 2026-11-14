@@ -119,3 +119,34 @@ POST mutation routes were removed; the HTML GET pages remain views.
 `QueryExecutor` definitions. The mapping is passed to the canonical saved-query
 router; hosts do not mount a second saved-query API. See
 [saved queries](saved_queries.md) for definition ownership and execution contracts.
+
+## Dedicated template identifiers
+
+Canonical issuance can explicitly select a repository-owned `template_prefix`:
+
+```yaml
+meta:
+  issuance_profile:
+    version: 1
+    mode: canonical
+    template_prefix: RGT
+```
+
+This changes the EUID allocator for future templates in the configured
+owner/domain. It does not change a template's `instance_prefix`, stored EUIDs,
+relationships, audit identifiers or core-instance semantics. Application
+instance prefixes remain declared by their native templates.
+
+Use native `db-config update --issuance-profile-json` to author the profile.
+For an existing target, `db schema apply --adopt-template-prefix-from TPX
+--claim-template-prefix` explicitly replaces only the matching template
+allocator binding and registers the selected prefix to the configured owner.
+Use the actual prior allocator prefix. Conflicting ownership or a different
+existing binding fails; existing identities and the old allocator are retained.
+Omit adoption for a fresh target. Omitting both options never changes an
+existing differing identity binding or creates a registry claim implicitly.
+
+The operator must have write access to the configured registry during the
+explicit claim. Runtime services retain their normal read-only registry mount.
+The template prefix is unavailable in `single_prefix` mode, which deliberately
+selects one prefix for all identity roles.

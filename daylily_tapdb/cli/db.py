@@ -132,7 +132,7 @@ def _required_identity_prefixes(env: "Environment") -> dict[str, str]:
     return profile_from_config(_get_db_config(env)).identity_prefixes()
 
 
-def _sync_identity_prefix_config(env: "Environment") -> None:
+def _sync_identity_prefix_config(env: "Environment", *, adopt_template_prefix_from: str | None = None) -> None:
     """Persist required identity prefix config and ensure backing sequences."""
     from daylily_tapdb.runtime_principal import grant_proven_runtime_sequences
     from daylily_tapdb.issuance import issuance_profile_binding_sql, profile_from_config
@@ -140,16 +140,16 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
     cfg = _get_db_config(env)
     profile = profile_from_config(cfg)
     prefixes = _required_identity_prefixes(env)
-    core_governance = GovernanceContext.load(
-        domain_code=str(cfg["domain_code"]),
-        owner_repo_name=profile.core_prefix_owner(str(cfg["owner_repo_name"])),
-        domain_registry_path=str(cfg["domain_registry_path"]),
-        prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
-        governance_authorization=cfg.get("governance_authorization"),
-    )
-    for prefix in prefixes.values():
-        core_governance.require_prefix(prefix)
-    domain_code = core_governance.domain_code
+    for entity, prefix in prefixes.items():
+        governance = GovernanceContext.load(
+            domain_code=str(cfg["domain_code"]),
+            owner_repo_name=profile.identity_prefix_owner(entity, str(cfg["owner_repo_name"])),
+            domain_registry_path=str(cfg["domain_registry_path"]),
+            prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
+            governance_authorization=cfg.get("governance_authorization"),
+        )
+        governance.require_prefix(prefix)
+    domain_code = str(cfg["domain_code"])
     owner_repo_name = str(cfg["owner_repo_name"]).strip()
     if not owner_repo_name:
         raise ValueError("owner_repo_name is required for identity prefix sync")
@@ -166,7 +166,23 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
         f'CREATE SEQUENCE IF NOT EXISTS "{_shared_sequence_name(prefix)}";'
         for prefix in sorted(set(prefixes.values()))
     )
+    adoption_sql = ""
+    if adopt_template_prefix_from is not None:
+        from daylily_tapdb.euid import normalize_prefix
+
+        previous = normalize_prefix(adopt_template_prefix_from)
+        if previous != adopt_template_prefix_from or profile.mode != "canonical" or not profile.template_prefix:
+            raise ValueError("Adoption requires an exact previous prefix and explicit canonical template_prefix")
+        adoption_sql = f"""
+        UPDATE tapdb_identity_prefix_config
+        SET prefix = {_quoted_sql_literal(profile.template_prefix)}, updated_dt = CURRENT_TIMESTAMP
+        WHERE entity = 'generic_template'
+          AND domain_code = {_quoted_sql_literal(domain_code)}
+          AND issuer_app_code = {_quoted_sql_literal(owner_repo_name)}
+          AND prefix = {_quoted_sql_literal(previous)};
+        """
     sql = f"""
+    {adoption_sql}
     DO $tapdb$
     BEGIN
       IF EXISTS (
@@ -195,7 +211,9 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
             connection.execute(
                 text(_set_operator_context_sql(str(cfg["schema_name"]), cfg))
             )
-            connection.execute(text(issuance_profile_binding_sql(cfg)))
+            connection.execute(text(issuance_profile_binding_sql(
+                cfg, adopt_template_prefix=adopt_template_prefix_from is not None
+            )))
             connection.execute(text(sql))
             grant_proven_runtime_sequences(connection, cfg)
     except DBAPIError as exc:
@@ -1139,6 +1157,13 @@ def db_schema_apply(
         "-r",
         help="Re-apply idempotent schema operations and refresh existing objects.",
     ),
+    adopt_template_prefix_from: Annotated[str | None, typer.Option(
+        "--adopt-template-prefix-from",
+        help="Explicit previous template allocator prefix; changes future issuance only to configured template_prefix",
+    )] = None,
+    claim_template_prefix: Annotated[bool, typer.Option(
+        "--claim-template-prefix", help="Register the configured template prefix to this explicit owner",
+    )] = False,
 ):
     """Apply TAPDB schema to an existing database."""
     env = Environment.target
@@ -1165,6 +1190,11 @@ def db_schema_apply(
             f"database and schema ({type(exc).__name__})"
         )
         raise typer.Exit(1) from exc
+
+    if claim_template_prefix:
+        from daylily_tapdb.issuance import claim_configured_template_prefix
+
+        claim_configured_template_prefix(cfg)
 
     try:
         schema_file = _find_schema_file()
@@ -1252,7 +1282,7 @@ def db_schema_apply(
     ccyo_out.success("Schema applied successfully")
     ccyo_out.warning("► Syncing required identity prefixes...")
     try:
-        _sync_identity_prefix_config(env)
+        _sync_identity_prefix_config(env, adopt_template_prefix_from=adopt_template_prefix_from)
         ccyo_out.success("Identity prefixes synced")
     except (ValueError, RuntimeError) as e:
         ccyo_out.error(f"{e}")
