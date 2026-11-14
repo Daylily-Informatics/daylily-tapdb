@@ -112,6 +112,7 @@ def policy_expressions(schema_sql: str) -> dict[str, tuple[str, str]]:
         result[name] = (f"({read_scope} AND {read_tenant})", result[name][1])
     result["tapdb_history_epoch"] = ("true", "false")
     result["tapdb_identity_prefix_config"] = (f"({scope})", f"({scope})")
+    result["tapdb_issuance_profile"] = (f"({scope})", f"({scope})")
     event_scope = scope.replace("(domain_code", "(event.domain_code").replace(
         "(issuer_app_code", "(event.issuer_app_code"
     )
@@ -168,6 +169,8 @@ def _validate_allocator_copies(assets: dict[str, str]) -> None:
             "Canonical allocator asset differs from its exact inline base-schema copy"
         )
     signatures = {
+        "tapdb_resolve_issuance_prefix": "declared_prefix TEXT",
+        "tapdb_require_instance_prefix": "declared_prefix TEXT",
         "tapdb_get_identity_prefix": "entity_name TEXT",
         "set_generic_template_euid": "",
         "set_generic_instance_euid": "",

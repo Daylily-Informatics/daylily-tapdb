@@ -7,6 +7,8 @@ They do not allocate business IDs or alter identity generator state.
 
 from __future__ import annotations
 
+from daylily_tapdb.issuance import issuance_profile_binding_sql, profile_from_config
+
 import hashlib
 import json
 from pathlib import Path
@@ -295,6 +297,7 @@ def apply_adoption(
     assets = security_assets()
     for name in ("tapdb_schema.sql", "rls.sql", "runtime_identity_authorization.sql"):
         connection.exec_driver_sql(assets[name].replace("%", "%%"))
+    connection.execute(text(issuance_profile_binding_sql(cfg)))
     connection.exec_driver_sql(
         audit_writer_install_sql(
             cfg["database"], cfg["schema_name"], cfg["operator_user"]
@@ -348,6 +351,7 @@ def apply_adoption(
         installed = seed_templates(
             session,
             _integrity_templates(),
+            issuance_profile=profile_from_config(cfg),
             overwrite=False,
             core_config_dir=find_tapdb_core_config_dir(),
             domain_code=cfg["domain_code"],

@@ -27,11 +27,6 @@ from daylily_tapdb.cli.db_config import get_config_path, get_db_config
 from daylily_tapdb.cli.identity import identity_app
 from daylily_tapdb.cli.runtime_principal import runtime_principal_app
 from daylily_tapdb.cli.sequences import sequences_app
-from daylily_tapdb.euid import (
-    AUDIT_LOG_PREFIX,
-    GENERIC_INSTANCE_LINEAGE_PREFIX,
-    GENERIC_TEMPLATE_PREFIX,
-)
 from daylily_tapdb.governance import GovernanceContext
 from daylily_tapdb.migration_identity import (
     MigrationPreflightError,
@@ -132,22 +127,22 @@ def _shared_sequence_name(prefix: str) -> str:
 
 def _required_identity_prefixes(env: "Environment") -> dict[str, str]:
     """Return validated TapDB-managed identity prefixes for the namespace."""
-    return {
-        "generic_template": GENERIC_TEMPLATE_PREFIX,
-        "generic_instance_lineage": GENERIC_INSTANCE_LINEAGE_PREFIX,
-        "audit_log": AUDIT_LOG_PREFIX,
-    }
+    from daylily_tapdb.issuance import profile_from_config
+
+    return profile_from_config(_get_db_config(env)).identity_prefixes()
 
 
 def _sync_identity_prefix_config(env: "Environment") -> None:
     """Persist required identity prefix config and ensure backing sequences."""
     from daylily_tapdb.runtime_principal import grant_proven_runtime_sequences
+    from daylily_tapdb.issuance import issuance_profile_binding_sql, profile_from_config
 
     cfg = _get_db_config(env)
+    profile = profile_from_config(cfg)
     prefixes = _required_identity_prefixes(env)
     core_governance = GovernanceContext.load(
         domain_code=str(cfg["domain_code"]),
-        owner_repo_name=_TAPDB_CORE_OWNER,
+        owner_repo_name=profile.core_prefix_owner(str(cfg["owner_repo_name"])),
         domain_registry_path=str(cfg["domain_registry_path"]),
         prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
         governance_authorization=cfg.get("governance_authorization"),
@@ -200,6 +195,7 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
             connection.execute(
                 text(_set_operator_context_sql(str(cfg["schema_name"]), cfg))
             )
+            connection.execute(text(issuance_profile_binding_sql(cfg)))
             connection.execute(text(sql))
             grant_proven_runtime_sequences(connection, cfg)
     except DBAPIError as exc:
@@ -207,7 +203,8 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
         conflict = "Existing TapDB identity prefix configuration conflicts with the required registry"
         # Only this exact operator-authored SQL error is safe to render. Other
         # driver messages may contain row values or connection details.
-        message = conflict if primary == conflict else "Database transaction failed"
+        profile_conflict = "Existing native issuance profile conflicts with explicit configuration"
+        message = primary if primary in {conflict, profile_conflict} else "Database transaction failed"
         raise RuntimeError(f"Failed to sync identity prefix config: {message}") from exc
 
 
@@ -2264,6 +2261,7 @@ def _tapdb_connection_for_env(
         attribution=attribution,
         domain_code=str(cfg["domain_code"]),
         owner_repo_name=str(cfg["owner_repo_name"]),
+        issuance_profile=cfg["issuance_profile"],
         schema_name=str(cfg["schema_name"]),
         tenant_id=str(cfg.get("tenant_id") or "") or None,
         additional_tenant_ids=tuple(cfg.get("additional_tenant_ids", ())),
@@ -2311,6 +2309,7 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
             app_username="tapdb_admin",
             domain_code=str(cfg["domain_code"]),
             owner_repo_name=str(cfg["owner_repo_name"]),
+            issuance_profile=cfg["issuance_profile"],
             schema_name=str(cfg["schema_name"]),
             config_identity=str(cfg["config_path"]),
             echo_sql=False,
@@ -2491,6 +2490,7 @@ def db_seed(
                 summary = _loader_seed_templates(
                     session,
                     templates,
+                    issuance_profile=conn.issuance_profile,
                     overwrite=overwrite,
                     core_config_dir=_loader_find_tapdb_core_config_dir(),
                     domain_code=str(_get_db_config(env)["domain_code"]),

@@ -60,6 +60,86 @@ Important rules:
 - Do not handcraft EUIDs.
 - Do not substitute UUIDs for EUIDs.
 
+## Explicit issuance profiles
+
+Every config must declare `meta.issuance_profile`. There is no omitted-profile
+default. Select canonical allocation explicitly to retain TapDB's canonical
+core prefixes and each application template's declared prefix:
+
+```yaml
+meta:
+  issuance_profile:
+    version: 1
+    mode: canonical
+```
+
+A deployment can instead select one registry-owned prefix for all of its new
+identities. For the fresh Bloom deployment the identity settings are:
+
+```yaml
+meta:
+  client_id: bloom
+  database_name: vlfg-7
+  owner_repo_name: bloom-vlfg-7
+  issuance_profile:
+    version: 1
+    mode: single_prefix
+    prefix: BG
+target:
+  domain_code: M
+```
+
+These are identity fragments, not complete connection configurations. The
+producer application is the explicit `client_id`; the registry/RLS owner is
+`owner_repo_name`. A deployment owner is not a service routing identifier.
+The registry must grant the exact domain/prefix to that owner before bootstrap.
+Neither a new database name nor a new owner creates another sequence space in
+the externally visible EUID. Prefix availability and ownership must therefore
+be established before a second database starts issuing identities.
+
+`config init` requires `--issuance-profile-json`; `config update` accepts the
+same flag to replace the complete requested profile. The values are
+`{"version":1,"mode":"canonical"}` or, for this deployment,
+`{"version":1,"mode":"single_prefix","prefix":"BG"}`. Changing a config
+does not rewrite a persisted database profile. Native schema bootstrap binds
+the profile to `(domain_code, issuer_app_code)` and rejects a conflicting
+existing binding. Upgrading a package/config alone does not install this schema
+contract on an existing database.
+
+All Bloom-owned templates, material/container instances, lineage edges, audit
+records, actors, messages, external references, sets, saved queries, DAG views,
+and governance objects then use the native `bg_instance_seq`. Internal SQL
+primary-key sequences remain unchanged. Bundled core definitions are
+authenticated against the installed package before their allocation prefix is
+projected; their coordinates, schemas, mapped classes and reference semantics
+remain canonical. New application templates must explicitly declare `BG`.
+The runtime template-authoring API requires an already provisioned allocator
+and does not create sequences or request operator privileges.
+
+```mermaid
+flowchart LR
+    PROFILE["Explicit profile\ndomain M / owner bloom-vlfg-7 / prefix BG"]
+    TYPE["Native template coordinates\nand SQLAlchemy mapped class"]
+    TRIGGERS["Native template, instance,\nlineage and audit triggers"]
+    SEQ["One native BG sequence"]
+    PROFILE --> TRIGGERS
+    TYPE --> TRIGGERS
+    TRIGGERS --> SEQ
+```
+
+Python consumers pass the explicit resolved profile to
+`TAPDBConnection(issuance_profile=cfg["issuance_profile"], ...)`. The native
+engine carries that profile into SQLAlchemy sessions, including an
+application's own sessionmaker bound to that engine. Prefixes never select an
+ORM class or substitute for native four-part template resolution. A core XRF
+still uses its exact external-reference template even when its prefix is
+shared with other objects.
+
+Persisted EUIDs and existing template definitions remain immutable. Future
+granular prefixes require a separately authorized native profile change and
+new template versions/objects; they must never rewrite historical EUIDs or
+reassign an active prefix to another allocator.
+
 ## Runtime Context
 
 TapDB has two relevant runtime layers:
@@ -80,6 +160,7 @@ The config metadata must include:
 - `meta.client_id`
 - `meta.database_name`
 - `meta.owner_repo_name`
+- `meta.issuance_profile`
 - `meta.domain_registry_path`
 - `meta.prefix_ownership_registry_path`
 - `target.domain_code`

@@ -1,49 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Review restore{% endblock %}
 {% block content %}
-
 <section class="band">
   <h1>Review restore</h1>
   <p><strong>Backup:</strong> <code>{{ review.backup_id }}</code></p>
-
-  {# A GET form, deliberately -- switching mode must *re-stage*, not edit a
-     field in the apply form. The plan fingerprint covers the mode, so a mode
-     changed after staging would be refused as stale; worse, a hidden field an
-     operator could flip would mean applying an operation whose warnings and
-     step list they were never shown. Reloading re-runs preflight and re-renders
-     the whole page for the mode actually chosen.
-
-     Without this the destructive mode was reachable only by hand-editing the
-     query string -- see plan section 4.3, which specified a mode select. #}
   <form method="get" action="{{ review_url }}" class="inline">
     <label>Mode
       <select name="mode" onchange="this.form.submit()">
-        <option value="isolated" {% if review.mode != "in_place" %}selected{% endif %}>
-          isolated - restore into a separate database
-        </option>
-        <option value="in-place" {% if review.mode == "in_place" %}selected{% endif %}>
-          in-place - REPLACE the live schema
-        </option>
+        <option value="isolated" {% if review.mode != "in_place" %}selected{% endif %}>isolated - restore into a separate database</option>
+        <option value="in-place" {% if review.mode == "in_place" %}selected{% endif %}>in-place - REPLACE the live schema</option>
       </select>
     </label>
     <noscript><button type="submit">Change mode</button></noscript>
   </form>
-
   {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
-
-  {% if review.mode == "in_place" %}
-  <div class="notice error">
-    <strong>This replaces live data in {{ review.target_schema }}.</strong>
-    A safety backup and explicit writer fencing are required. Interrupted
-    operations retain their recovery evidence and may leave access closed;
-    reconcile the outcome before retrying. This is a destructive operation.
-  </div>
-  {% else %}
-  <div class="notice">
-    This restores into <code>{{ review.target_database }}</code>, a separate
-    database. Live data is not touched.
-  </div>
-  {% endif %}
+  <div id="restore-mode-notice" class="notice"></div>
+  <div id="restore-api-result" role="status" hidden></div>
+  <div id="restore-api-receipt"></div>
 </section>
 
 {% set evidence = review.get('recovery', {}) %}
@@ -51,7 +24,7 @@
   <h2>Stage recovery evidence</h2>
   <p>A database dump does not cover later allocations, runtime configuration,
      files, or principal artifacts. Restored runtime access requires explicit rebinding.</p>
-  <form method="post" action="{{ review_url }}/stage" id="stage-evidence-form">
+  <form method="post" action="{{ stage_url }}" id="stage-evidence-form">
     <input type="hidden" name="mode" value="{{ review.mode }}">
     <label>Explicit target database
       <input name="target_database" value="{{ review.options.target_database or '' }}"
@@ -77,117 +50,154 @@
     <button type="submit">Stage and review evidence</button>
   </form>
 </section>
-
 <section class="band">
   <h2>What will happen</h2>
-  <ol>
-    {% for step in review.steps %}<li>{{ step }}</li>{% endfor %}
-  </ol>
+  <ol id="restore-steps"></ol>
 </section>
-
 <section class="band">
   <h2>Preflight</h2>
-  {% if review.blocking %}
-  <div class="notice error">
-    This restore cannot proceed until the following are resolved.
-  </div>
-  {% endif %}
+  <div id="restore-blocked" class="notice error" hidden>This restore cannot proceed until the following are resolved.</div>
   <table>
     <thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead>
-    <tbody>
-      {% for check in review.checks %}
-      <tr>
-        <td>{{ check.id }}</td>
-        <td>{{ check.status }}</td>
-        <td>{{ check.detail }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
+    <tbody id="restore-checks"></tbody>
   </table>
 </section>
-
 <section class="band">
   <h2>Confirm</h2>
-  {% if review.blocking %}
-    <p>Apply is unavailable while preflight is failing.</p>
-  {% elif not evidence.get('recovery_source') %}
-    <p>Stage explicit recovery evidence before applying a restore.</p>
-  {% else %}
-  {# Only ask for the typed label when apply will actually check it. Asking
-     otherwise would assert a control the service does not enforce -- the
-     operator would reasonably infer their typing is what authorises this. #}
-  {% if review.confirmation_required %}
-  <p>
-    To proceed, type the target label exactly:
-    <br><code id="required-label">{{ review.required_confirm_target }}</code>
-  </p>
-  {% else %}
-  <p>
-    This restore does not touch live data, so no typed confirmation is
-    required.
-  </p>
-  {% endif %}
-  <form method="post" action="{{ apply_url }}" id="apply-form">
-    {# The fingerprint pins this exact plan. Apply re-stages and compares, so a
-       change between rendering and submitting is refused rather than silently
-       applying something the operator never saw. #}
-    <input type="hidden" name="plan_fingerprint" value="{{ review.plan_fingerprint }}">
-    <input type="hidden" name="mode" value="{{ review.mode }}">
-    <input type="hidden" name="recovery_source" value="{{ evidence.recovery_source | tojson | forceescape }}">
-    {% if evidence.get('writer_fence') %}
-    <input type="hidden" name="writer_fence" value="{{ evidence.writer_fence | tojson | forceescape }}">
-    {% endif %}
-    {% if evidence.get('control_target') %}
-    <input type="hidden" name="control_config" value="{{ evidence.control_target.config_identity }}">
-    {% endif %}
-    {% for field in ('provider_contract', 'quarantine_receipt') %}
-    {% if evidence.get(field) %}
-    <input type="hidden" name="{{ field }}" value="{{ evidence[field] | tojson | forceescape }}">
-    {% endif %}
-    {% endfor %}
-    {% if review.options.target_database %}
-      <input type="hidden" name="target_database"
-             value="{{ review.options.target_database }}">
-    {% endif %}
-    {% if review.confirmation_required %}
-    <label>Target label
-      <input type="text" name="confirm_target" id="confirm-target"
-             autocomplete="off" required>
+  <p id="restore-apply-explanation"></p>
+  <form method="post" action="{{ apply_url }}" id="apply-form" hidden>
+    <p id="restore-confirm-instruction" hidden>To proceed, type the target label exactly:<br><code id="required-label"></code></p>
+    <label id="restore-confirm-label" hidden>Target label
+      <input type="text" name="confirm_target" id="confirm-target" autocomplete="off">
     </label>
-    {% endif %}
-    {% if review.mode == "in_place" %}
-    <label>
-      <input type="checkbox" name="keep_superseded" value="1">
-      Keep the replaced schema for inspection
+    <label id="restore-keep-label" hidden>
+      <input type="checkbox" name="keep_superseded"> Keep the replaced schema for inspection
     </label>
-    {% endif %}
-    <button type="submit" id="apply-button"
-            {% if review.confirmation_required %}disabled{% endif %}>
-      Apply restore
-    </button>
+    <button type="submit" id="apply-button">Apply restore</button>
   </form>
-
-  {% if review.confirmation_required %}
-  {# Progressive enhancement only. The server re-checks the typed label and the
-     fingerprint regardless, so disabling the button is a courtesy, not the
-     control. #}
-  <script>
-    (function () {
-      var input = document.getElementById("confirm-target");
-      var button = document.getElementById("apply-button");
-      var required = document.getElementById("required-label").textContent.trim();
-      function sync() { button.disabled = input.value.trim() !== required; }
-      input.addEventListener("input", sync);
-      sync();
-    })();
-  </script>
-  {% endif %}
-  {% endif %}
 </section>
-
 <section class="band">
   <p><a href="{{ backups_url }}">Back to backups</a></p>
-  <p class="detail">Plan fingerprint: <code>{{ review.plan_fingerprint }}</code></p>
+  <p class="detail">Plan fingerprint: <code id="restore-fingerprint"></code></p>
+  <noscript>JavaScript is required to stage and apply through the native restore APIs.</noscript>
 </section>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const byId = id => document.getElementById(id);
+  const stage = byId("stage-evidence-form");
+  const apply = byId("apply-form");
+  const result = byId("restore-api-result");
+  let currentReview = {{ review | tojson }};
+  let stagedPayload = null;
+  let applying = false;
 
+  function drawReview(review, payload) {
+    currentReview = review;
+    stagedPayload = payload;
+    const inPlace = review.mode === "in_place";
+    const modeNotice = byId("restore-mode-notice");
+    modeNotice.className = inPlace ? "notice error" : "notice";
+    modeNotice.textContent = inPlace
+      ? `This replaces live data in ${review.target_schema}. A safety backup and explicit writer fencing are required. Interrupted operations retain their recovery evidence and may leave access closed; reconcile the outcome before retrying. This is a destructive operation.`
+      : `This restores into ${review.target_database}, a separate database. Live data is not touched.`;
+    byId("restore-steps").replaceChildren(...review.steps.map(text => {
+      const item = document.createElement("li"); item.textContent = text; return item;
+    }));
+    byId("restore-checks").replaceChildren(...review.checks.map(check => {
+      const row = document.createElement("tr");
+      for (const value of [check.id, check.status, check.detail]) {
+        const cell = document.createElement("td");
+        cell.textContent = typeof value === "string" ? value : JSON.stringify(value);
+        row.append(cell);
+      }
+      return row;
+    }));
+    byId("restore-blocked").hidden = !review.blocking;
+    byId("restore-fingerprint").textContent = review.plan_fingerprint;
+    const ready = !review.blocking && Boolean(payload?.recovery_source);
+    apply.hidden = !ready;
+    byId("restore-apply-explanation").textContent = review.blocking
+      ? "Apply is unavailable while preflight is failing."
+      : !payload?.recovery_source ? "Stage explicit recovery evidence before applying a restore."
+      : review.confirmation_required ? "Review the staged plan before confirming."
+      : "This restore does not touch live data, so no typed confirmation is required.";
+    byId("restore-confirm-instruction").hidden = !review.confirmation_required;
+    byId("restore-confirm-label").hidden = !review.confirmation_required;
+    byId("required-label").textContent = review.required_confirm_target;
+    byId("confirm-target").value = "";
+    byId("confirm-target").required = review.confirmation_required;
+    byId("restore-keep-label").hidden = !inPlace;
+    apply.elements.keep_superseded.checked = Boolean(review.options.keep_superseded);
+    syncApply();
+  }
+
+  function syncApply() {
+    byId("apply-button").disabled = applying || (currentReview.confirmation_required
+      && byId("confirm-target").value.trim() !== currentReview.required_confirm_target);
+  }
+  byId("confirm-target").addEventListener("input", syncApply);
+
+  stage.addEventListener("submit", async event => {
+    event.preventDefault();
+    const button = stage.querySelector("button[type=submit]");
+    button.disabled = true;
+    apply.hidden = true;
+    stagedPayload = null;
+    try {
+      const values = new FormData(stage);
+      const payload = {mode: values.get("mode")};
+      for (const key of ["target_database", "control_config"]) {
+        const value = String(values.get(key) ?? "").trim();
+        if (value) payload[key] = value;
+      }
+      for (const key of ["recovery_source", "writer_fence", "provider_contract", "quarantine_receipt"]) {
+        const raw = String(values.get(key) ?? "").trim();
+        if (raw) payload[key] = JSON.parse(raw);
+      }
+      const review = await window.TapdbApi.request(stage.action, payload);
+      drawReview(review, payload);
+      window.TapdbApi.notice(result, "Recovery evidence staged. Review the plan and confirmation below.");
+    } catch (error) {
+      window.TapdbApi.notice(result, error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  apply.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!stagedPayload) return;
+    applying = true;
+    stage.querySelector("button[type=submit]").disabled = true;
+    syncApply();
+    try {
+      const payload = {...stagedPayload,
+        plan_fingerprint: currentReview.plan_fingerprint,
+        confirm_target: byId("confirm-target").value,
+        keep_superseded: apply.elements.keep_superseded.checked};
+      const response = await window.TapdbApi.request(apply.action, payload);
+      window.TapdbApi.notice(result, JSON.stringify(response, null, 2));
+      const receipt = byId("restore-api-receipt");
+      receipt.replaceChildren();
+      if (response.receipt_id) {
+        const link = document.createElement("a");
+        link.href = {{ tapdb_gui_url(request, '/admin/backups/receipts/') | tojson }}
+          + encodeURIComponent(response.receipt_id);
+        link.textContent = "View restore receipt";
+        receipt.append(link);
+      }
+    } catch (error) {
+      window.TapdbApi.notice(result, `${error.message} Review the failure before staging another attempt.`, true);
+    } finally {
+      applying = false;
+      stage.querySelector("button[type=submit]").disabled = false;
+      stagedPayload = null;
+      apply.hidden = true;
+    }
+  });
+  drawReview(currentReview, null);
+})();
+</script>
 {% endblock %}

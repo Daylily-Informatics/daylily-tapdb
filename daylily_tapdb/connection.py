@@ -16,6 +16,7 @@ Recommended usage:
         app_username="catalog-api",
         domain_code="Z",
         owner_repo_name="catalog-service",
+        issuance_profile={"version": 1, "mode": "canonical"},
         schema_name="catalog",
         config_identity="/abs/path/to/tapdb-config.yaml",
     ) as conn:
@@ -31,6 +32,7 @@ For write operations:
         app_username="catalog-api",
         domain_code="Z",
         owner_repo_name="catalog-service",
+        issuance_profile={"version": 1, "mode": "canonical"},
         schema_name="catalog",
         config_identity="/abs/path/to/tapdb-config.yaml",
     ) as conn:
@@ -45,6 +47,8 @@ from typing import Generator, Optional
 from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session, sessionmaker
+
+from daylily_tapdb.issuance import IssuanceProfile, install_engine_profile
 
 from daylily_tapdb.security_context import (
     Attribution,
@@ -99,6 +103,7 @@ class TAPDBConnection:
         server_port: Optional[int] = None,
         additional_tenant_ids: tuple[str, ...] = (),
         attribution: Attribution | None = None,
+        issuance_profile: IssuanceProfile | dict | None = None,
     ):
         """
         Initialize database connection.
@@ -126,6 +131,8 @@ class TAPDBConnection:
             secret_arn: Secrets Manager ARN for Aurora password retrieval.
             domain_code: Domain code for session scoping (1-4 chars). Required.
             owner_repo_name: Repo-name for session ownership scoping. Required.
+            issuance_profile: Explicit native profile from the selected config.
+                Required; canonical and single_prefix are separate policies.
             schema_name: PostgreSQL schema to use as this session's search_path.
             tenant_id: Fixed tenant UUID for this runtime principal, or ``None``
                 for a deliberately global principal.
@@ -143,6 +150,11 @@ class TAPDBConnection:
                 connection port is a forward. Does not alter the socket port.
         """
         self.logger = logging.getLogger(__name__ + ".TAPDBConnection")
+
+        self.issuance_profile = (
+            issuance_profile if isinstance(issuance_profile, IssuanceProfile)
+            else IssuanceProfile.from_mapping(issuance_profile)
+        )
 
         if not db_user:
             raise ValueError("db_user is required")
@@ -237,6 +249,9 @@ class TAPDBConnection:
             pool_timeout=pool_timeout,
             pool_recycle=pool_recycle,
             pool_pre_ping=True,
+        )
+        install_engine_profile(
+            self.engine, self.issuance_profile, owner_repo_name=self.owner_repo_name
         )
 
         # Create session factory

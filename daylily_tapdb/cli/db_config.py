@@ -18,13 +18,7 @@ from daylily_tapdb.cli.context import (
     active_config_path,
     resolve_context,
 )
-from daylily_tapdb.euid import (
-    AUDIT_LOG_PREFIX,
-    GENERIC_INSTANCE_LINEAGE_PREFIX,
-    GENERIC_TEMPLATE_PREFIX,
-    SYSTEM_MESSAGE_PREFIX,
-    SYSTEM_USER_PREFIX,
-)
+from daylily_tapdb.issuance import IssuanceProfile
 from daylily_tapdb.governance import (
     GovernanceAuthorization,
     GovernanceContext,
@@ -305,6 +299,10 @@ def _build_db_config_from_section(
     if not isinstance(meta, dict):
         raise RuntimeError(f"Config metadata is required in {resolved_config_path}.")
     try:
+        issuance_profile = IssuanceProfile.from_mapping(meta.get("issuance_profile"))
+    except ValueError as exc:
+        raise RuntimeError(f"Config {resolved_config_path}: {exc}") from exc
+    try:
         owner_repo_name = normalize_owner_repo_name(
             str(meta.get("owner_repo_name") or "")
         )
@@ -346,7 +344,7 @@ def _build_db_config_from_section(
 
     safety_tier, destructive_operations = _read_safety(root, resolved_config_path)
 
-    cfg: dict[str, str] = {
+    cfg: dict[str, Any] = {
         "engine_type": engine_type,
         "host": _require_section_str(
             file_cfg,
@@ -500,11 +498,12 @@ def _build_db_config_from_section(
     cfg["owner_repo_name"] = owner_repo_name
     cfg["domain_registry_path"] = str(domain_registry_path)
     cfg["prefix_ownership_registry_path"] = str(prefix_ownership_registry_path)
-    cfg["generic_template_euid_prefix"] = GENERIC_TEMPLATE_PREFIX
-    cfg["generic_instance_lineage_euid_prefix"] = GENERIC_INSTANCE_LINEAGE_PREFIX
-    cfg["audit_log_euid_prefix"] = AUDIT_LOG_PREFIX
-    cfg["system_user_euid_prefix"] = SYSTEM_USER_PREFIX
-    cfg["system_message_euid_prefix"] = SYSTEM_MESSAGE_PREFIX
+    cfg["issuance_profile"] = issuance_profile.to_dict()
+    cfg["generic_template_euid_prefix"] = issuance_profile.identity_prefix("generic_template")
+    cfg["generic_instance_lineage_euid_prefix"] = issuance_profile.identity_prefix("generic_instance_lineage")
+    cfg["audit_log_euid_prefix"] = issuance_profile.identity_prefix("audit_log")
+    cfg["system_user_euid_prefix"] = issuance_profile.identity_prefix("system_user_instance")
+    cfg["system_message_euid_prefix"] = issuance_profile.identity_prefix("system_message_instance")
     cfg["config_path"] = str(resolved_config_path)
 
     if engine_type == "aurora":

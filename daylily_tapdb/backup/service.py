@@ -342,6 +342,7 @@ def open_session(
         app_username=app_username,
         domain_code=str(connection_cfg["domain_code"]),
         owner_repo_name=str(connection_cfg["owner_repo_name"]),
+        issuance_profile=connection_cfg["issuance_profile"],
         schema_name=str(connection_cfg["schema_name"]),
         tenant_id=connection_cfg.get("tenant_id") or None,
         allow_global_rows=bool(connection_cfg.get("allow_global_claims")),
@@ -544,7 +545,7 @@ def _schema_drift(session: Any, cfg: dict[str, Any]) -> dict[str, Any]:
     same files a new object is added to -- so this needs no maintenance when
     the schema grows.
     """
-    from daylily_tapdb.euid import GENERIC_TEMPLATE_PREFIX
+    from daylily_tapdb.issuance import profile_from_config
     from daylily_tapdb.schema_inventory import (
         diff_schema_inventory,
         drift_entry_counts,
@@ -560,7 +561,7 @@ def _schema_drift(session: Any, cfg: dict[str, Any]) -> dict[str, Any]:
     # identity prefix, not the domain code -- matching the drift check in
     # cli/db.py. Deriving it any other way reports phantom drift on every
     # target.
-    dynamic_sequence = f"{GENERIC_TEMPLATE_PREFIX.lower()}_instance_seq"
+    dynamic_sequence = f"{profile_from_config(cfg).identity_prefix('generic_template').lower()}_instance_seq"
 
     expected = load_expected_schema_inventory(
         asset_paths, dynamic_sequence_name=dynamic_sequence

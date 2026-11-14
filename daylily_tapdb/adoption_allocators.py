@@ -8,6 +8,7 @@ import re
 from typing import Any, Mapping
 
 from sqlalchemy import text
+from daylily_tapdb.issuance import profile_from_config
 
 from daylily_tapdb.backup.receipts import validate_receipts_directory
 from daylily_tapdb.backup.recovery import (
@@ -142,7 +143,10 @@ def allocation_paths(connection, cfg, inventory, templates):
     # These five literal prefixes are the unchanged packaged schema's
     # CREATE SEQUENCE IF NOT EXISTS statements. Together with the two bundled
     # template prefixes, require them before any fenced DDL could create one.
-    prefixes = ["WX", "WSX", "XX", "AY", "MSG"] + [item["instance_prefix"] for item in templates]
+    profile = profile_from_config(cfg)
+    prefixes = ["WX", "WSX", "XX", "AY", "MSG"] + [
+        profile.instance_prefix(item["instance_prefix"]) for item in templates
+    ]
     for prefix in prefixes:
         name = prefix.lower() + "_instance_seq"
         if not any(s["name"] == name for s in states):

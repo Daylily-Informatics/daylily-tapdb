@@ -74,8 +74,9 @@ def _template_state(session: Any) -> tuple[list[dict[str, Any]], int]:
             )
             if fields != expected_fields or additional is not False:
                 diagnostics.append("template schema is not the exact canonical shape")
-            if row.instance_prefix != "XRF":
-                diagnostics.append("template instance_prefix is not XRF")
+            from daylily_tapdb.issuance import profile_for_session
+            if row.instance_prefix != profile_for_session(session).identity_prefix("external_reference_instance"):
+                diagnostics.append("template instance_prefix does not match the explicit issuance profile")
             if row.is_deleted or row.bstatus != "active":
                 diagnostics.append("template is not active")
             valid = not diagnostics

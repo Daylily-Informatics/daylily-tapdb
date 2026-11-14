@@ -10,13 +10,42 @@
   {% if error %}
   <div class="notice bad">{{ error }}</div>
   {% endif %}
-  <form method="post" action="{{ tapdb_gui_url(request, '/create/' ~ template.euid) }}" class="stack">
-    <label>Name <input name="name" value="{{ form.get('name', '') }}"></label>
+  <form id="instance-api-form" method="post" action="{{ tapdb_gui_url(request, '/api/create/' ~ template.euid) }}" class="stack">
+    <label>Name <input name="name" value="{{ form.get('name', '') }}" required></label>
     <label>Create children <input type="checkbox" name="create_children" value="true" {% if form.get('create_children', 'true') in ['true', '1', 'on'] %}checked{% endif %}></label>
     <label>Properties JSON
       <textarea name="properties_json" spellcheck="false" data-tapdb-json-editor data-json-editor-label="Instance properties JSON">{{ form.get('properties_json', '{}') }}</textarea>
     </label>
     <button type="submit">Create</button>
+    <div id="instance-api-result" role="status" hidden></div>
+    <noscript>JavaScript is required to submit this editor to the JSON API.</noscript>
   </form>
 </section>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const form = document.getElementById("instance-api-form");
+  const result = document.getElementById("instance-api-result");
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const data = new FormData(form);
+      const response = await window.TapdbApi.request(form.action, {
+        name: data.get("name"), properties: JSON.parse(data.get("properties_json")),
+        create_children: form.elements.create_children.checked,
+      });
+      window.TapdbApi.notice(result, `Created ${response.instance_euid}.`);
+      window.location.assign({{ tapdb_gui_url(request, '/object/') | tojson }}
+        + encodeURIComponent(response.instance_euid));
+    } catch (error) {
+      window.TapdbApi.notice(result, error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
+})();
+</script>
 {% endblock %}

@@ -88,6 +88,16 @@ def _fail(exc: Exception) -> None:
 
 @identity_app.command("inventory")
 def inventory(
+    prefix: str | None = typer.Option(
+        None, "--prefix", help="Read one exact Meridian prefix only; not a full preservation inventory"
+    ),
+    allocation_receipts_dirs: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--allocation-receipts-dir",
+            help="Explicit native allocation journal directory for --prefix; repeat for each known journal",
+        ),
+    ] = None,
     receipt: Path | None = typer.Option(
         None, "--receipt", help="New absolute JSON receipt path"
     ),
@@ -132,6 +142,16 @@ def inventory(
     try:
         if receipt is not None and (not receipt.is_absolute() or receipt.exists()):
             raise ValueError("--receipt must name an absolute new file")
+        if allocation_receipts_dirs is not None and prefix is None:
+            raise ValueError("--allocation-receipts-dir requires --prefix")
+        if prefix is not None and any(
+            value is not None
+            for value in (
+                source_version, sequence_mappings, recovery_family,
+                new_recovery_family_id, family_receipts_dir, family_receipt,
+            )
+        ):
+            raise ValueError("--prefix is scoped discovery and cannot be combined with preservation/recovery flags")
         creating_family = any(
             value is not None
             for value in (new_recovery_family_id, family_receipts_dir, family_receipt)
@@ -168,7 +188,14 @@ def inventory(
         with operator_connection(
             cfg, isolation_level="REPEATABLE READ", read_only=True
         ) as connection:
-            if source_version is not None:
+            if prefix is not None:
+                from daylily_tapdb.identity_prefix_inventory import capture_prefix_usage
+
+                payload = capture_prefix_usage(
+                    connection, schema_name=target["schema_name"], target=target, prefix=prefix,
+                    allocation_receipts_dirs=allocation_receipts_dirs or (),
+                )
+            elif source_version is not None:
                 from daylily_tapdb.backup.source_contract import (
                     capture_source_contract,
                     contract_hash,

@@ -319,7 +319,11 @@ def _canonical_template_definition(subtype: str) -> dict[str, Any]:
 
 
 def _is_exact_xrf_template(template: Any, subtype: str) -> bool:
-    canonical = _canonical_template_definition(subtype)
+    from sqlalchemy.orm import object_session
+    from daylily_tapdb.issuance import profile_for_session
+
+    profile = profile_for_session(object_session(template))
+    canonical = profile.project_core_template(_canonical_template_definition(subtype))
     for field in (
         "name",
         "polymorphic_discriminator",

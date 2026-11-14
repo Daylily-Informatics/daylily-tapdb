@@ -159,7 +159,7 @@ def _get_system_user_template_uid(session: Session) -> int:
               AND version = :version
               AND domain_code = tapdb_current_domain_code()
               AND issuer_app_code = tapdb_current_owner_repo_name()
-              AND upper(NULLIF(instance_prefix, '')) = 'SYS'
+              AND upper(NULLIF(instance_prefix, '')) = tapdb_resolve_issuance_prefix('SYS')
             ORDER BY
               CASE WHEN bstatus = 'active' THEN 0 ELSE 1 END,
               uid DESC

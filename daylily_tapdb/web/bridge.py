@@ -81,6 +81,7 @@ def normalize_host_user(payload: Mapping[str, Any] | None) -> dict[str, Any] | N
         "actor_kind": payload.get("actor_kind", "human"),
         "actor_issuer": payload.get("actor_issuer"),
         "actor_subject": payload.get("actor_subject"),
+        "tenant_id": payload.get("tenant_id"),
         "email": email or username,
         "display_name": display_name,
         "role": role,

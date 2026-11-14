@@ -6,6 +6,8 @@ no commit, identity allocation repair, scope inference, or application fallback 
 
 from __future__ import annotations
 
+from daylily_tapdb.issuance import profile_for_session
+
 import hashlib
 import json
 import os
@@ -161,7 +163,8 @@ def _inventory(session: Any, request: dict[str, Any]) -> dict[str, Any]:
         generic_template.subtype == "scope_assignment", generic_template.version == "1.0",
     )).one_or_none()
     if (receipt_template is None or receipt_template.is_deleted
-        or receipt_template.tenant_id is not None or receipt_template.instance_prefix != "GVR"
+        or receipt_template.tenant_id is not None
+        or receipt_template.instance_prefix != profile_for_session(session).identity_prefix("governance_instance")
         or receipt_template.instance_polymorphic_identity != "generic_instance"):
         raise RuntimeError("exact native scope-assignment evidence template must be provisioned first")
     template_ids = sorted({row["template_uid"] for row in sources} | {receipt_template.uid})

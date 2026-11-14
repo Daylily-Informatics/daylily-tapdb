@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from daylily_tapdb.euid import EUIDConfig, normalize_domain_code
 from daylily_tapdb.governance import GovernanceAuthorization, assert_registered_domain
+from daylily_tapdb.issuance import IssuanceProfile
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.sequences import (
     _normalize_instance_prefix,
@@ -58,12 +59,7 @@ class SeedSummary:
     prefixes_ensured: int
 
 
-TEMPLATE_MODEL_BY_DISCRIMINATOR = {
-    "generic_template": generic_template,
-}
-
 _CORE_TEMPLATE_PREFIXES = frozenset(EUIDConfig().CORE_PREFIXES.values())
-_TAPDB_CORE_OWNER = "daylily-tapdb"
 
 
 def _normalize_domain_scope(domain_code: str | None) -> str:
@@ -791,7 +787,10 @@ def validate_template_configs(
 
 
 def _template_model_for_discriminator(discriminator: str):
-    return TEMPLATE_MODEL_BY_DISCRIMINATOR.get(discriminator, generic_template)
+    mapper = generic_template.__mapper__.polymorphic_map.get(discriminator)
+    if mapper is None or not issubclass(mapper.class_, generic_template):
+        raise ValueError(f"Unknown native template polymorphic identity: {discriminator!r}")
+    return mapper.class_
 
 
 def _upsert_template(
@@ -888,6 +887,7 @@ def _prepare_seed_templates(
     templates: list[dict[str, Any]],
     *,
     core_config_dir: Path,
+    issuance_profile: IssuanceProfile,
 ) -> list[dict[str, Any]]:
     prepared: list[dict[str, Any]] = []
 
@@ -929,6 +929,12 @@ def _prepare_seed_templates(
                 f"TapDB operational prefix {normalized_instance_prefix!r}."
             )
 
+        if not is_core_template and not issuance_profile.accepts_template_prefix(normalized_instance_prefix):
+            raise ValueError(
+                f"Client template {_template_code(item)!r} must explicitly declare "
+                f"the configured issuance prefix {issuance_profile.prefix!r}."
+            )
+
         prepared.append(item)
 
     return prepared
@@ -942,6 +948,7 @@ def _validate_seed_ownership(
     core_config_dir: Path,
     domain_registry_path: Path,
     prefix_registry_path: Path,
+    issuance_profile: IssuanceProfile,
     governance_authorization: GovernanceAuthorization | Mapping[str, object] | None = None,
 ) -> None:
     domain_registry = _load_domain_registry(domain_registry_path)
@@ -965,9 +972,10 @@ def _validate_seed_ownership(
         )
         _assert_prefix_claimed(
             domain_code=domain_code,
-            prefix=prefix,
+            prefix=issuance_profile.instance_prefix(prefix),
             owner_repo_name=(
-                _TAPDB_CORE_OWNER if uses_bundled_reserved_prefix else owner_repo_name
+                issuance_profile.core_prefix_owner(owner_repo_name)
+                if uses_bundled_reserved_prefix else owner_repo_name
             ),
             prefix_registry=prefix_registry,
             source=str(prefix_registry_path),
@@ -984,10 +992,13 @@ def seed_templates(
     owner_repo_name: str,
     domain_registry_path: Path,
     prefix_registry_path: Path,
+    issuance_profile: IssuanceProfile,
     governance_authorization: GovernanceAuthorization | Mapping[str, object] | None = None,
     create_governance_objects: bool = True,
 ) -> SeedSummary:
     """Seed validated template definitions into a TapDB session."""
+    if not isinstance(issuance_profile, IssuanceProfile):
+        raise ValueError("Explicit native IssuanceProfile is required for template seeding")
     resolved_domain = _normalize_domain_scope(domain_code)
     resolved_owner = str(owner_repo_name or "").strip()
     if not resolved_owner:
@@ -998,6 +1009,7 @@ def seed_templates(
     prepared_templates = _prepare_seed_templates(
         templates,
         core_config_dir=core_config_dir,
+        issuance_profile=issuance_profile,
     )
     _validate_seed_ownership(
         prepared_templates,
@@ -1006,8 +1018,16 @@ def seed_templates(
         core_config_dir=core_config_dir,
         domain_registry_path=domain_registry,
         prefix_registry_path=prefix_registry,
+        issuance_profile=issuance_profile,
         governance_authorization=governance_authorization,
     )
+    # Authenticate bundled source and prefix ownership before projection. A
+    # shared prefix never grants an application definition native core status.
+    prepared_templates = [
+        issuance_profile.project_core_template(template)
+        if _is_exact_bundled_core_template(template, core_config_dir) else template
+        for template in prepared_templates
+    ]
     prefixes = sorted(
         {
             str(template.get("instance_prefix") or "").strip().upper()
@@ -1044,11 +1064,16 @@ def seed_templates(
             else:
                 skipped += 1
 
-    if create_governance_objects and resolved_owner == "daylily-tapdb" and any(
+    if create_governance_objects and (
+        resolved_owner == "daylily-tapdb" or issuance_profile.mode == "single_prefix"
+    ) and any(
         str(template.get("category") or "") == "governance"
         for template in prepared_templates
     ):
-        ensure_core_governance_objects(session, domain_code=resolved_domain)
+        ensure_core_governance_objects(
+            session, domain_code=resolved_domain, owner_repo_name=resolved_owner,
+            issuance_profile=issuance_profile,
+        )
 
     return SeedSummary(
         templates_loaded=len(prepared_templates),

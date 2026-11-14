@@ -6,6 +6,8 @@
    attempt succeed, and is the receipt chain intact. #}
 <section class="band">
   <h1>Backups</h1>
+  <div id="backup-api-result" role="status" hidden></div>
+  <div id="backup-api-receipt"></div>
   <p><strong>Target:</strong> {{ backups.status.target_label }}</p>
 
   {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
@@ -61,7 +63,7 @@
 <section class="band">
   <h2>Create a backup</h2>
   <p class="detail">Reads the database only; nothing is modified.</p>
-  <form method="post" action="{{ create_url }}">
+  <form method="post" action="{{ create_url }}" data-backup-api="create">
     <label>Class
       <select name="backup_class">
         <option value="full">full (logical dump)</option>
@@ -108,11 +110,11 @@
         <td>{{ entry.bytes }}</td>
         <td>
           <form method="post" action="{{ verify_url_for(entry.backup_id) }}"
-                style="display:inline">
+                data-backup-api="verify" style="display:inline">
             <button type="submit">Verify</button>
           </form>
           <form method="post" action="{{ rehearse_url_for(entry.backup_id) }}"
-                style="display:inline">
+                data-backup-api="rehearse" style="display:inline">
             <button type="submit">Rehearse</button>
           </form>
           <a href="{{ restore_url_for(entry.backup_id) }}">Stage restore</a>
@@ -161,4 +163,52 @@
   {% endif %}
 </section>
 
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const result = document.getElementById("backup-api-result");
+  const receipt = document.getElementById("backup-api-receipt");
+  const showReceipt = payload => {
+    receipt.replaceChildren();
+    if (!payload?.receipt_id) return;
+    const link = document.createElement("a");
+    link.href = {{ tapdb_gui_url(request, '/admin/backups/receipts/') | tojson }}
+      + encodeURIComponent(payload.receipt_id);
+    link.textContent = "View operation receipt";
+    receipt.append(link);
+  };
+  document.querySelectorAll("form[data-backup-api]").forEach(form => {
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const button = form.querySelector("button[type=submit]");
+      button.disabled = true;
+      receipt.replaceChildren();
+      try {
+        const values = new FormData(form);
+        let payload = {};
+        if (form.dataset.backupApi === "create") {
+          payload = {backup_class: values.get("backup_class"), note: values.get("note"),
+            allow_drift: form.elements.allow_drift.checked};
+          for (const key of ["source_contract", "recovery_family"]) {
+            const raw = String(values.get(key) ?? "").trim();
+            if (raw) payload[key] = JSON.parse(raw);
+          }
+        } else if (form.dataset.backupApi === "verify") {
+          payload = {level: "deep"};
+        }
+        const response = await window.TapdbApi.request(form.action, payload);
+        window.TapdbApi.notice(result, JSON.stringify(response, null, 2));
+        showReceipt(response);
+      } catch (error) {
+        window.TapdbApi.notice(result, error.message, true);
+        showReceipt(error.detail?.report);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+})();
+</script>
+<noscript>JavaScript is required to submit backup actions to their JSON APIs.</noscript>
 {% endblock %}

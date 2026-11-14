@@ -219,11 +219,27 @@ def _mutation_receipt(
     }
 
 
-def _reject_external_reference_mutation(obj: Any, record_type: str) -> None:
+def _reject_service_owned_mutation(obj: Any, record_type: str) -> None:
     if record_type == "instance" and _is_xrf_coordinates(obj):
         raise PermissionError(
             "core external references are writable only through "
             "daylily_tapdb.external_references.ExternalReferenceService"
+        )
+    _reject_saved_definition_mutation(obj, record_type)
+
+
+def _reject_saved_definition_mutation(obj: Any, record_type: str) -> None:
+    from daylily_tapdb.services.saved_queries import is_saved_definition
+
+    if is_saved_definition(obj) or (
+        record_type == "lineage" and (
+            is_saved_definition(obj.parent_instance)
+            or is_saved_definition(obj.child_instance)
+        )
+    ):
+        raise PermissionError(
+            "saved queries, DAG views, and their lineage are writable only through "
+            "daylily_tapdb.services.saved_queries.SavedQueryService"
         )
 
 
@@ -242,7 +258,7 @@ def update_object(
         require_revision(obj, expected_revision)
     if record_type == "template":
         raise PermissionError("templates are read-only through objects")
-    _reject_external_reference_mutation(obj, record_type)
+    _reject_service_owned_mutation(obj, record_type)
     if getattr(obj, "is_deleted", False):
         raise ValueError("cannot update a soft-deleted object")
     if not isinstance(changes, Mapping) or not changes:
@@ -292,6 +308,7 @@ def repair_object(
     obj, record_type = resolve_object(session, selector)
     if record_type == "template":
         raise PermissionError("templates are read-only through objects")
+    _reject_saved_definition_mutation(obj, record_type)
     if not str(reason or "").strip():
         raise ValueError("reason is required")
     if not isinstance(repair_payload, dict):
@@ -336,7 +353,7 @@ def soft_delete_object(
         require_revision(obj, expected_revision)
     if record_type == "template":
         raise PermissionError("templates are read-only through objects")
-    _reject_external_reference_mutation(obj, record_type)
+    _reject_service_owned_mutation(obj, record_type)
     if getattr(obj, "is_deleted", False):
         raise ValueError("object is already soft-deleted")
     if not dry_run:

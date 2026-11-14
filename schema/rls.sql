@@ -54,7 +54,7 @@ BEGIN
           AND c.relname IN (
               'generic_template', 'generic_instance', 'generic_instance_lineage',
               'audit_log', 'outbox_event', 'outbox_event_attempt', 'inbox_message',
-              'tapdb_identity_prefix_config', 'tapdb_legacy_outbox_mapping',
+              'tapdb_identity_prefix_config', 'tapdb_issuance_profile', 'tapdb_legacy_outbox_mapping',
               'tapdb_runtime_principal_scope', 'tapdb_history_epoch', 'tapdb_history_baseline'
           )
     LOOP
@@ -863,6 +863,15 @@ CREATE POLICY inbox_message_scope_isolation ON inbox_message
             ))
         )
     );
+
+ALTER TABLE tapdb_issuance_profile ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tapdb_issuance_profile FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tapdb_issuance_profile_scope_isolation ON tapdb_issuance_profile;
+CREATE POLICY tapdb_issuance_profile_scope_isolation ON tapdb_issuance_profile
+    USING (domain_code = tapdb_current_domain_code()
+        AND issuer_app_code = tapdb_current_owner_repo_name())
+    WITH CHECK (domain_code = tapdb_current_domain_code()
+        AND issuer_app_code = tapdb_current_owner_repo_name());
 
 ALTER TABLE tapdb_identity_prefix_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tapdb_identity_prefix_config FORCE ROW LEVEL SECURITY;

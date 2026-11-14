@@ -1155,6 +1155,39 @@ def _build_ensure_instance_prefix_sequence_sql(
     )
 
 
+def require_instance_prefix_sequence(session: Any, prefix: str) -> None:
+    """Require an operator-provisioned allocator without advancing or creating it.
+
+    Runtime template authoring needs this prerequisite before publishing a new
+    definition. The registry owns prefix authority; this native read establishes
+    only the schema's existing binding and the principal's allocation privilege.
+    """
+    normalized = _normalize_instance_prefix(prefix)
+    available = session.execute(text("""
+        SELECT c.oid
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = pg_catalog.current_schema()
+          AND c.relname = pg_catalog.lower(tapdb_require_instance_prefix(:prefix)) || '_instance_seq'
+          AND c.relkind = 'S'
+          AND pg_catalog.has_sequence_privilege(c.oid, 'USAGE')
+          AND (
+            pg_catalog.obj_description(c.oid, 'pg_class') = 'tapdb-prefix-binding/v1:' || :prefix
+            OR EXISTS (
+              SELECT 1 FROM tapdb_identity_prefix_config p
+              WHERE p.domain_code = tapdb_current_domain_code()
+                AND p.issuer_app_code = tapdb_current_owner_repo_name()
+                AND p.prefix = :prefix
+            )
+          )
+    """), {"prefix": normalized}).scalar_one_or_none()
+    if available is None:
+        raise SequenceProtectionError(
+            f"Instance prefix {normalized!r} requires an operator-provisioned native "
+            "allocator and runtime USAGE grant before template authoring"
+        )
+
+
 def ensure_instance_prefix_sequence(session: Any, prefix: str) -> None:
     """Provision/annotate an owned prefix generator, or verify an exact no-op.
 

@@ -34,6 +34,22 @@ _EXTERNAL_REFERENCE_WRITER_TOKEN = object()
 _IDENTITY_NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9._/-]*$")
 
 
+def _instance_model_for_template(template: generic_template) -> type[generic_instance]:
+    """Resolve the native mapped class, preserving the optional template hint.
+
+    The existing native contract derives the instance identity from the exact
+    template class when the hint is absent. Unknown declared identities never
+    become a generic instance.
+    """
+    discriminator = template.instance_polymorphic_identity
+    if discriminator is None:
+        discriminator = template.polymorphic_discriminator.replace("_template", "_instance")
+    mapper = generic_instance.__mapper__.polymorphic_map.get(discriminator)
+    if mapper is None:
+        raise ValueError(f"Unknown native instance polymorphic identity: {discriminator!r}")
+    return mapper.class_
+
+
 class IdentityClaimOutcome(str, Enum):
     """Outcome of an exact natural-identity claim."""
 
@@ -306,11 +322,10 @@ class InstanceFactory:
         self._normalize_system_user_json_addl(template, json_addl)
 
         # Create instance
-        instance = generic_instance(
+        instance_model = _instance_model_for_template(template)
+        instance = instance_model(
             name=name,
             tenant_id=tenant_id,
-            polymorphic_discriminator=template.instance_polymorphic_identity
-            or template.polymorphic_discriminator.replace("_template", "_instance"),
             category=template.category,
             type=template.type,
             subtype=template.subtype,
@@ -392,10 +407,7 @@ class InstanceFactory:
             "command_evidence": copy.deepcopy(command_evidence or {}),
             "create_children": bool(create_children),
         }
-        discriminator = (
-            template.instance_polymorphic_identity
-            or template.polymorphic_discriminator.replace("_template", "_instance")
-        )
+        discriminator = _instance_model_for_template(template).__mapper__.polymorphic_identity
         expected = {
             "name": name,
             "tenant_id": persisted_tenant_id,

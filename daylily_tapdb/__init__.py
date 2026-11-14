@@ -24,6 +24,7 @@ Example:
         schema_name=cfg["schema_name"],
         domain_code=cfg["domain_code"],
         owner_repo_name=cfg["owner_repo_name"],
+        issuance_profile=cfg["issuance_profile"],
         app_username="my_app",
         config_identity=str(config_path),
         attribution=Attribution("service", "my_app", "operator-import",

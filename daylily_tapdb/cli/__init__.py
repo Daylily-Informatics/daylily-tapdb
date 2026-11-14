@@ -30,6 +30,7 @@ from daylily_tapdb.cli.db_config import validate_postgres_identifier_component
 from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.cli.spec import spec
 from daylily_tapdb.governance import GovernanceAuthorization, normalize_owner_repo_name
+from daylily_tapdb.issuance import IssuanceProfile
 
 DEFAULT_UI_PORT = 8911
 DEFAULT_UI_HOST = "localhost"
@@ -894,6 +895,7 @@ def build_app():
             domain_registry_path=None,
             prefix_ownership_registry_path=None,
             governance_authorization_json=None,
+            issuance_profile_json=None,
             support_email=None,
             admin_repo_url=None,
             admin_session_secret=None,
@@ -1057,6 +1059,7 @@ def build_app():
         domain_registry_path: str,
         prefix_ownership_registry_path: str,
         governance_authorization_json: str | None,
+        issuance_profile_json: str,
         engine_type: str,
         host: str,
         hostaddr: str | None,
@@ -1086,6 +1089,7 @@ def build_app():
         config_path = _require_explicit_config_flag()
 
         normalized_owner_repo_name = normalize_owner_repo_name(owner_repo_name)
+        issuance_profile = IssuanceProfile.from_mapping(json.loads(issuance_profile_json))
 
         existing = _read_yaml_or_json_file(config_path, allow_create=True)
         existing_meta = existing.get("meta") if isinstance(existing, dict) else None
@@ -1141,6 +1145,7 @@ def build_app():
             "client_id": client_id,
             "database_name": database_name,
             "owner_repo_name": normalized_owner_repo_name,
+            "issuance_profile": issuance_profile.to_dict(),
             "domain_registry_path": str(Path(domain_registry_path).expanduser()),
             "prefix_ownership_registry_path": str(
                 Path(prefix_ownership_registry_path).expanduser()
@@ -1268,6 +1273,11 @@ def build_app():
             ...,
             "--owner-repo-name",
             help="Repo-name token used for Meridian prefix ownership validation",
+        ),
+        issuance_profile_json: str = typer.Option(
+            ...,
+            "--issuance-profile-json",
+            help="Required explicit JSON profile: version 1, canonical or single_prefix with prefix",
         ),
         domain_code: str = typer.Option(
             ...,
@@ -1408,6 +1418,7 @@ def build_app():
             client_id=client_id,
             database_name=database_name,
             owner_repo_name=owner_repo_name,
+            issuance_profile_json=issuance_profile_json,
             domain_code=domain_code,
             domain_registry_path=domain_registry_path,
             prefix_ownership_registry_path=prefix_ownership_registry_path,
@@ -1621,6 +1632,11 @@ def build_app():
             None,
             "--governance-authorization-json",
             help="Replace the complete explicit Meridian authorization JSON object",
+        ),
+        issuance_profile_json: Optional[str] = typer.Option(
+            None,
+            "--issuance-profile-json",
+            help="Replace explicit issuance profile JSON; does not change a persisted database binding",
         ),
         support_email: Optional[str] = typer.Option(
             None, "--support-email", help="Support email address"
@@ -1891,6 +1907,10 @@ def build_app():
             updates["support_email"] = str(support_email).strip()
         if owner_repo_name is not None:
             meta["owner_repo_name"] = normalize_owner_repo_name(owner_repo_name)
+        if issuance_profile_json is not None:
+            meta["issuance_profile"] = IssuanceProfile.from_mapping(
+                json.loads(issuance_profile_json)
+            ).to_dict()
         if domain_registry_path is not None:
             meta["domain_registry_path"] = str(Path(domain_registry_path).expanduser())
         if prefix_ownership_registry_path is not None:

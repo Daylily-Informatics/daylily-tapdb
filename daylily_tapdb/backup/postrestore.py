@@ -423,7 +423,7 @@ def check_schema_drift(session: Any, cfg: dict[str, Any], schema: str) -> CheckR
     """The restored schema must match the schema assets."""
     from pathlib import Path
 
-    from daylily_tapdb.euid import GENERIC_TEMPLATE_PREFIX
+    from daylily_tapdb.issuance import profile_from_config
     from daylily_tapdb.schema_inventory import (
         diff_schema_inventory,
         drift_entry_counts,
@@ -441,7 +441,7 @@ def check_schema_drift(session: Any, cfg: dict[str, Any], schema: str) -> CheckR
     asset_paths = schema_asset_files(schema_root)
     expected = load_expected_schema_inventory(
         asset_paths,
-        dynamic_sequence_name=f"{GENERIC_TEMPLATE_PREFIX.lower()}_instance_seq",
+        dynamic_sequence_name=f"{profile_from_config(cfg).identity_prefix('generic_template').lower()}_instance_seq",
     )
     live = load_live_schema_inventory(session, schema_name=schema)
     report = diff_schema_inventory(

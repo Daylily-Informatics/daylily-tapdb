@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, text
+from daylily_tapdb.issuance import install_engine_profile, profile_from_config
 from sqlalchemy.engine import URL, Connection, Engine
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
@@ -52,6 +53,7 @@ _READABLE = {
     "tapdb_history_epoch",
     "tapdb_history_baseline",
     "tapdb_identity_prefix_config",
+    "tapdb_issuance_profile",
     "tapdb_legacy_outbox_mapping",
     "_tapdb_migrations",
 }
@@ -124,6 +126,7 @@ def _target(cfg: Mapping[str, Any]) -> dict[str, Any]:
         "owner_repo_name",
     )
     target: dict[str, Any] = {k: _exact(cfg.get(k), k) for k in fields}
+    target["issuance_profile"] = profile_from_config(cfg).to_dict()
     if not Path(target["config_path"]).is_absolute():
         raise RuntimePrincipalError("config_path must be an explicit absolute path")
     if target["engine_type"] not in {"local", "compose", "aurora"}:
@@ -284,7 +287,11 @@ def _operator_engine(
     options: dict[str, Any] = {"poolclass": NullPool, "hide_parameters": True}
     if isolation_level is not None:
         options["isolation_level"] = isolation_level
-    return create_engine(url, **options)
+    engine = create_engine(url, **options)
+    install_engine_profile(
+        engine, profile_from_config(cfg), owner_repo_name=str(cfg["owner_repo_name"])
+    )
+    return engine
 
 
 @contextmanager
@@ -667,12 +674,15 @@ def _managed_sequence_bindings(
                 }
                 for evidence in mapping["evidence"]
             ) or (
-                mapping["prefix"] in {"WX", "WSX", "XX", "AY", "MSG"}
+                target["issuance_profile"]["mode"] == "canonical"
+                and mapping["prefix"] in {"WX", "WSX", "XX", "AY", "MSG"}
                 and any(
                     evidence["source"] == "catalog_annotation"
                     for evidence in mapping["evidence"]
                 )
             )
+            if target["issuance_profile"]["mode"] == "single_prefix":
+                allowed = allowed and mapping["prefix"] == target["issuance_profile"]["prefix"]
         else:
             allowed = False
         if not allowed:
@@ -1309,7 +1319,7 @@ def set_runtime_identity_access(
             FROM {schema}.generic_instance actor
             JOIN {schema}.generic_template template ON template.uid = actor.template_uid
             WHERE actor.uid = :uid AND actor.euid = :euid
-              AND actor.domain_code = :domain AND actor.issuer_app_code = 'daylily-tapdb'
+              AND actor.domain_code = :domain AND actor.issuer_app_code = :actor_owner
               AND actor.tenant_id IS NULL
               AND actor.polymorphic_discriminator = 'actor_instance'
               AND actor.category = 'actor' AND actor.type = 'user' AND actor.subtype = 'system'
@@ -1322,7 +1332,8 @@ def set_runtime_identity_access(
               -- The persisted actor type is authoritative, not a factory hint.
               AND lower(COALESCE(template.bstatus::text, '')) = 'active'
               AND NOT template.is_deleted
-        """), {"uid": user_uid, "euid": user_euid, "domain": target["domain_code"]}).mappings().one_or_none()
+        """), {"uid": user_uid, "euid": user_euid, "domain": target["domain_code"],
+                "actor_owner": profile_from_config(cfg).core_prefix_owner(target["owner_repo_name"])}).mappings().one_or_none()
         if actor is None:
             raise RuntimePrincipalError("Exact canonical global identity is unavailable")
         if enabled and (not actor["is_active"] or not actor["role"]):

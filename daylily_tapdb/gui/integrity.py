@@ -48,7 +48,7 @@ def authenticated_attribution(
         user.get("actor_kind", "human"),
         issuer,
         subject,
-        str(cfg["owner_repo_name"]),
+        str(cfg["client_id"]),
         str(uuid4()),
         operation_id or str(uuid4()),
         reason,

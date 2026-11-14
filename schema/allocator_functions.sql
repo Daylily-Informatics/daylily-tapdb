@@ -1,4 +1,46 @@
 -- tapdb-managed-allocator-functions:start
+-- Profiles are explicitly installed by the native operator bootstrap. Prefix
+-- projection never changes template type or the session's producer attribution.
+CREATE OR REPLACE FUNCTION tapdb_resolve_issuance_prefix(declared_prefix TEXT)
+RETURNS TEXT LANGUAGE plpgsql STABLE STRICT AS $$
+DECLARE
+    profile RECORD;
+BEGIN
+    EXECUTE pg_catalog.format(
+        'SELECT version, mode, prefix FROM %I.tapdb_issuance_profile '
+        'WHERE domain_code = $1 AND issuer_app_code = $2', pg_catalog.current_schema()
+    ) INTO profile USING tapdb_current_domain_code(), tapdb_current_owner_repo_name();
+    IF profile.version IS NULL THEN
+        RAISE EXCEPTION 'Missing explicit native issuance profile for domain %, owner %',
+            tapdb_current_domain_code(), tapdb_current_owner_repo_name();
+    END IF;
+    IF profile.version <> 1 THEN
+        RAISE EXCEPTION 'Unsupported native issuance profile version %', profile.version;
+    END IF;
+    IF profile.mode = 'canonical' AND profile.prefix IS NULL THEN
+        RETURN tapdb_validate_meridian_prefix(declared_prefix);
+    ELSIF profile.mode = 'single_prefix' AND profile.prefix IS NOT NULL THEN
+        RETURN tapdb_validate_meridian_prefix(profile.prefix);
+    END IF;
+    RAISE EXCEPTION 'Malformed explicit native issuance profile';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION tapdb_require_instance_prefix(declared_prefix TEXT)
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    normalized TEXT := tapdb_validate_meridian_prefix(declared_prefix);
+    effective TEXT;
+BEGIN
+    effective := tapdb_resolve_issuance_prefix(normalized);
+    IF normalized IS DISTINCT FROM effective THEN
+        RAISE EXCEPTION 'Declared prefix % conflicts with explicit issuance prefix %',
+            normalized, effective;
+    END IF;
+    RETURN effective;
+END;
+$$;
+
 -- Resolve configured EUID prefix for TapDB-owned identity tables.
 CREATE OR REPLACE FUNCTION tapdb_get_identity_prefix(entity_name TEXT)
 RETURNS TEXT LANGUAGE plpgsql STABLE STRICT AS $$
@@ -22,7 +64,7 @@ BEGIN
             entity_name, dc, owner_repo_name;
     END IF;
 
-    prefix := tapdb_validate_meridian_prefix(prefix);
+    prefix := tapdb_require_instance_prefix(prefix);
     IF prefix IN ('GX', 'TGX') THEN
         RAISE EXCEPTION
             'Identity entity "%" is configured with unresolved/reserved prefix "%"',
@@ -46,6 +88,7 @@ BEGIN
     -- Populate domain_code and issuer_app_code from session context
     NEW.domain_code := tapdb_current_domain_code();
     NEW.issuer_app_code := tapdb_current_owner_repo_name();
+    NEW.instance_prefix := tapdb_require_instance_prefix(NEW.instance_prefix);
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('generic_template');
@@ -66,7 +109,7 @@ BEGIN
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
-        prefix := tapdb_validate_meridian_prefix(prefix);
+        prefix := tapdb_require_instance_prefix(prefix);
         IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
@@ -105,7 +148,7 @@ BEGIN
                 NEW.template_uid, NEW.domain_code, NEW.issuer_app_code;
         END IF;
 
-        prefix := tapdb_validate_meridian_prefix(prefix);
+        prefix := tapdb_require_instance_prefix(prefix);
         seq_name := pg_catalog.format(
             '%I.%I', TG_TABLE_SCHEMA, pg_catalog.lower(prefix) || '_instance_seq'
         );
@@ -125,7 +168,7 @@ BEGIN
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
-        prefix := tapdb_validate_meridian_prefix(prefix);
+        prefix := tapdb_require_instance_prefix(prefix);
         IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
@@ -169,7 +212,7 @@ BEGIN
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
-        prefix := tapdb_validate_meridian_prefix(prefix);
+        prefix := tapdb_require_instance_prefix(prefix);
         IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
@@ -214,7 +257,7 @@ BEGIN
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
-        prefix := tapdb_validate_meridian_prefix(prefix);
+        prefix := tapdb_require_instance_prefix(prefix);
         IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
@@ -235,6 +278,8 @@ DECLARE
     function_name TEXT;
 BEGIN
     FOREACH function_name IN ARRAY ARRAY[
+        'tapdb_resolve_issuance_prefix',
+        'tapdb_require_instance_prefix',
         'tapdb_get_identity_prefix',
         'set_generic_template_euid',
         'set_generic_instance_euid',
@@ -245,7 +290,7 @@ BEGIN
             'ALTER FUNCTION %I.%I(%s) SET search_path TO %I, pg_catalog, pg_temp',
             scope_schema,
             function_name,
-            CASE WHEN function_name = 'tapdb_get_identity_prefix' THEN 'pg_catalog.text' ELSE '' END,
+            CASE WHEN function_name IN ('tapdb_get_identity_prefix', 'tapdb_resolve_issuance_prefix', 'tapdb_require_instance_prefix') THEN 'pg_catalog.text' ELSE '' END,
             scope_schema
         );
     END LOOP;

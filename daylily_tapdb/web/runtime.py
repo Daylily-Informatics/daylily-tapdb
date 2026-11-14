@@ -12,6 +12,7 @@ from typing import Generator, Optional
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import Session, sessionmaker
+from daylily_tapdb.issuance import IssuanceProfile, install_engine_profile, profile_from_config
 
 from daylily_tapdb.aurora.connection import AuroraConnectionBuilder
 from daylily_tapdb.cli.db_config import (
@@ -134,15 +135,21 @@ class RuntimeDBConnection:
 
     @contextmanager
     def session_scope(
-        self, commit: bool = False, *, isolation_level: str | None = None
+        self, commit: bool = False, *, isolation_level: str | None = None,
+        read_only: bool = False,
     ) -> Generator[Session, None, None]:
         session = self._bundle.SessionFactory()
         trans = session.begin()
         try:
+            execution_options = {}
             if isolation_level is not None:
+                execution_options["isolation_level"] = isolation_level
+            if read_only:
+                execution_options["postgresql_readonly"] = True
+            if execution_options:
                 # Acquire this transaction's connection before the context queries.
                 # Do not change defaults on the shared engine or session factory.
-                session.connection(execution_options={"isolation_level": isolation_level})
+                session.connection(execution_options=execution_options)
             if is_postgresql_session(session):
                 apply_transaction_context(
                     session,
@@ -185,6 +192,8 @@ def _create_engine(
     *,
     config_path: str,
     echo_sql: bool,
+    issuance_profile: IssuanceProfile,
+    owner_repo_name: str,
 ) -> Engine:
     settings = get_admin_settings(config_path=config_path)
     pool_size = int(settings.get("db_pool_size") or 5)
@@ -201,6 +210,7 @@ def _create_engine(
         pool_recycle=pool_recycle,
         pool_pre_ping=True,
     )
+    install_engine_profile(engine, issuance_profile, owner_repo_name=owner_repo_name)
     # The canonical GUI and DAG-v2 routes use this explicit-target pool. Keep
     # their queries visible in the canonical operator metrics page.
     from admin.db_metrics import maybe_install_engine_metrics
@@ -288,6 +298,8 @@ def _build_engine_for_cfg(
             url,
             config_path=config_path,
             echo_sql=echo_sql,
+            issuance_profile=profile_from_config(cfg),
+            owner_repo_name=str(cfg["owner_repo_name"]),
         )
         _attach_aurora_password_provider(
             engine,
@@ -314,6 +326,8 @@ def _build_engine_for_cfg(
         url,
         config_path=config_path,
         echo_sql=echo_sql,
+        issuance_profile=profile_from_config(cfg),
+        owner_repo_name=str(cfg["owner_repo_name"]),
     )
 
 

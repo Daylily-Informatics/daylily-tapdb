@@ -6,6 +6,7 @@
     <div>
       <h1>Templates</h1>
       <p>Loaded templates are read-only.</p>
+      {% if user.role == "admin" %}<a class="button" href="{{ tapdb_gui_url(request, '/templates/new') }}">New Template</a>{% endif %}
     </div>
   </div>
   <form method="get" action="{{ tapdb_gui_url(request, '/templates') }}" class="toolbar">
@@ -22,10 +23,11 @@
     <input name="repository_pack" value="{{ repository_pack }}" placeholder="/absolute/path/to/template-pack.json" required>
     <button type="submit">Inventory Repository Pack</button>
   </form>
-  <form method="post" action="{{ tapdb_gui_url(request, '/templates/repository/export') }}" class="toolbar">
+  <form id="repository-export-form" method="post" action="{{ tapdb_gui_url(request, '/api/templates/repository/export') }}" class="toolbar">
     <input name="repository_pack" value="{{ repository_pack }}" placeholder="/absolute/path/to/template-pack.json" required>
     <button type="submit">Export New Repository Pack</button>
   </form>
+  <div id="repository-export-result" role="status" hidden></div>
   <p>Server-side repository export requires an explicit absolute path and writes both the pack and its immutable provenance receipt. Existing files are never overwritten.</p>
   {% if repository_error %}<p class="error">{{ repository_error }}</p>{% endif %}
   {% if repository_inventory %}
@@ -45,11 +47,34 @@
         <td>{{ item.instance_prefix }}</td>
         <td><code>{{ item.validator_ref }}</code></td>
         <td>{{ item.repository_status }}</td>
-        <td>{% if user.role == "admin" %}<a href="{{ tapdb_gui_url(request, '/create/' ~ item.euid) }}">Create</a>{% endif %}</td>
+        <td>{% if user.role == "admin" and item.manual_create_allowed %}<a href="{{ tapdb_gui_url(request, '/create/' ~ item.euid) }}">Create</a>{% endif %}</td>
         <td>{% if user.role == "admin" %}<a href="{{ tapdb_gui_url(request, '/templates/new') }}?seed_euid={{ item.euid }}">Build New Template</a>{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
 </section>
+{% endblock %}
+{% block scripts %}
+{% if user.role == "admin" %}
+<script>
+document.getElementById("repository-export-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button");
+  const result = document.getElementById("repository-export-result");
+  button.disabled = true;
+  try {
+    const receipt = await window.TapdbApi.request(form.action, {
+      repository_pack: form.elements.repository_pack.value,
+    });
+    window.TapdbApi.notice(result, `Exported ${receipt.template_count} template(s) with their repository receipt.`);
+  } catch (error) {
+    window.TapdbApi.notice(result, error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+{% endif %}
 {% endblock %}

@@ -19,7 +19,29 @@
   <a href="docs/backup-and-recovery.md">Recover</a>
 </p>
 
-## TapDB 11 write and adoption contract
+## TapDB 12 identity and authoring contract
+
+TapDB 12 requires an explicit issuance profile for every configured connection.
+`canonical` retains the established per-kind prefixes; `single_prefix` issues
+templates, instances, lineage, audit and core records through one governed
+prefix. Existing EUIDs do not change. Object meaning comes from its native
+template and mapped class, rather than from its allocation prefix.
+
+The native Admin GUI authors templates and instances through the same published
+runtime APIs available to clients. Template authoring uses the constrained
+runtime account and preprovisioned allocation rights; it does not acquire an
+operator account. Typed saved queries and independent DAG views use native
+properties, lineage, permissions and revision history.
+
+Read the [breaking release contract](docs/tapdb-12-release-notes.md),
+[issuance configuration](docs/identity-and-scoping.md),
+[runtime authoring API](docs/runtime_template_authoring.md),
+[prefix discovery](docs/identity-prefix-discovery.md) and
+[saved-query/view API](docs/saved_queries.md) before adopting this release.
+Publication, deployment and live workflow acceptance are distinct outcomes;
+source changes alone do not establish a successful service rollout.
+
+## Retained TapDB 11 write and adoption contract
 
 TapDB 11 requires explicit human/service attribution for every domain write,
 expected revisions for guarded mutations, and reviewed adoption of existing

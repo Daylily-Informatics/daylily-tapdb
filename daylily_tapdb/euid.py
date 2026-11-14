@@ -191,7 +191,11 @@ _CANONICAL_CORE_PREFIXES = MappingProxyType(
 
 @dataclass(frozen=True)
 class EUIDConfig:
-    """Read-only catalog of TapDB-managed prefixes."""
+    """Read-only canonical prefix catalog, not a runtime type discriminator.
+
+    Explicit issuance profiles may project several canonical roles to one
+    prefix. Resolve object types through persisted templates/mapped classes.
+    """
 
     CORE_PREFIXES: Mapping[str, str] = field(
         default_factory=lambda: _CANONICAL_CORE_PREFIXES

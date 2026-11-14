@@ -47,7 +47,7 @@ GRANT {role} TO {admin};
 GRANT USAGE, CREATE ON SCHEMA {ns} TO {role};
 REVOKE ALL ON TABLE {ns}.audit_log FROM PUBLIC;
 GRANT INSERT ON TABLE {ns}.audit_log TO {role};
-GRANT SELECT ON TABLE {ns}.generic_template, {ns}.tapdb_history_epoch, {ns}.tapdb_identity_prefix_config TO {role};
+GRANT SELECT ON TABLE {ns}.generic_template, {ns}.tapdb_history_epoch, {ns}.tapdb_identity_prefix_config, {ns}.tapdb_issuance_profile TO {role};
 ALTER FUNCTION {ns}.record_insert() OWNER TO {role};
 ALTER FUNCTION {ns}.record_update() OWNER TO {role};
 REVOKE ALL ON FUNCTION {ns}.record_insert(), {ns}.record_update() FROM PUBLIC;
