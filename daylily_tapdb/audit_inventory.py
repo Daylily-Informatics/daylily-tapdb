@@ -227,8 +227,10 @@ REVIEWED_ASSETS = {
 }
 
 
-# This exact migration replaces EUID functions and leaves every audit row intact.
+# These exact migrations modify issuance-profile metadata or functions only.
 UNCHANGED_AUDIT_ASSETS = {
+    '20261114_150000_template_issuance_prefix.sql': '74fa76e3b5fc5a3eed8990858d42dd81545e0240a2c57e01077089c923325bcc',
+    '20261114_160000_reconcile_template_issuance.sql': '3dc5b498f5bb055c93c00694620692a7ccdebee7d5509186ac65c952dceffb5c',
     '20261114_180000_meridian_separated_checksum.sql': 'f432a71df4844eadadc6e5f31ae03d7129928413806e8f659033757ef24e2ebc',
 }
 
@@ -240,7 +242,7 @@ def validate_pending(pending: list[dict]) -> bool:
     for name, expected in UNCHANGED_AUDIT_ASSETS.items():
         if name in observed:
             if observed.pop(name) != expected:
-                fail("Function-only migration differs from its exact reviewed source")
+                fail("Audit-preserving migration differs from its exact reviewed source")
     if observed not in ({}, REVIEWED_ASSETS):
         fail("Compact audit mode requires an exact reviewed migration closure")
     return bool(observed)

@@ -1494,6 +1494,10 @@ def build_app():
                 help="Remove the complete target.operator mapping while preserving runtime identity and config path",
             ),
         ] = False,
+        inventory_mode: Annotated[
+            Optional[str],
+            typer.Option("--inventory-mode", help="Select full or audit_log_ordered_digest/v1 inventory"),
+        ] = None,
         inventory_max_rows: Annotated[
             Optional[int],
             typer.Option(
@@ -1863,6 +1867,14 @@ def build_app():
                 InventoryLimits.parse(current_limits | inventory_changes)
             )
 
+        if inventory_mode is not None:
+            from daylily_tapdb.audit_inventory import validate_mode
+
+            if inventory_mode == "full":
+                root.pop("inventory_mode", None)
+            else:
+                root["inventory_mode"] = validate_mode(inventory_mode)
+
         updates = _explicit_aurora_config_fields(
             region=region,
             aws_profile=aws_profile,
@@ -2137,6 +2149,7 @@ def build_app():
             and not backup_changed
             and not operator_changed
             and not inventory_changes
+            and inventory_mode is None
             and not metadata_changed
         ):
             raise RuntimeError("No config changes requested.")
