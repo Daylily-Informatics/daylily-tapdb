@@ -1811,6 +1811,7 @@ def db_migrate(
             raise MigrationPreflightError(
                 "Source contract differs from approved preflight"
             )
+        del historical
         fence = _load_evidence_object(writer_fence) if writer_fence else None
         gate = None
         gate_release = None
@@ -1888,6 +1889,8 @@ def db_migrate(
                     )
                 # Commit exceptions are ambiguous, never labelled aborted.
                 raise
+            # Recovery uses the apply result and its postflight evidence.
+            del approved
             progress("Finalizing native committed recovery evidence")
             with connection.begin():
                 completion = finalize_migration_recovery(
