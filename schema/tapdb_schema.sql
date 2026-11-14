@@ -797,55 +797,52 @@ BEGIN
 END;
 $$;
 
--- Extract domain code from canonical EUID string (e.g. Z-AGX-1AB -> Z).
+-- Meridian 1.0.0: structural parsing selects v2 or v3 without rewriting IDs.
+CREATE OR REPLACE FUNCTION meridian_euid_parts(euid TEXT)
+RETURNS TEXT[] LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    parts TEXT[] := string_to_array(euid, '-');
+BEGIN
+    IF array_length(parts, 1) = 3 AND length(parts[3]) >= 2 THEN
+        parts := ARRAY[parts[1], parts[2], left(parts[3], -1), right(parts[3], 1)];
+    ELSIF array_length(parts, 1) = 4 THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'Invalid Meridian EUID structure: %', euid;
+    END IF;
+    IF parts[1] !~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+       OR parts[2] !~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+       OR parts[3] !~ '^[1-9A-HJ-KMNP-TV-Z][0-9A-HJ-KMNP-TV-Z]*$'
+       OR parts[4] !~ '^[0-9A-HJ-KMNP-TV-Z]$' THEN
+        RAISE EXCEPTION 'Invalid Meridian EUID components: %', euid;
+    END IF;
+    RETURN parts;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION meridian_euid_domain_code(euid TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
-DECLARE
-    code TEXT;
 BEGIN
-    IF position('-' IN euid) = 0 THEN
-        RAISE EXCEPTION 'Invalid EUID format (missing domain code): %', euid;
-    END IF;
-    code := split_part(euid, '-', 1);
-    RETURN tapdb_validate_domain_code(code);
+    RETURN (meridian_euid_parts(euid))[1];
 END;
 $$;
 
--- Extract prefix token from canonical EUID string (e.g. Z-AGX-1AB -> AGX).
 CREATE OR REPLACE FUNCTION meridian_euid_prefix(euid TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
-DECLARE
-    prefix TEXT;
 BEGIN
-    IF length(euid) - length(replace(euid, '-', '')) <> 2 THEN
-        RAISE EXCEPTION 'Invalid EUID format (missing prefix): %', euid;
-    END IF;
-    prefix := split_part(euid, '-', 2);
-    RETURN tapdb_validate_meridian_prefix(prefix);
+    RETURN (meridian_euid_parts(euid))[2];
 END;
 $$;
 
--- Extract numeric sequence from EUID body (no checksum)
 CREATE OR REPLACE FUNCTION meridian_euid_seq_from_euid(euid TEXT)
 RETURNS BIGINT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
-DECLARE
-    body_plus_check TEXT;
-    body TEXT;
 BEGIN
-    IF length(euid) - length(replace(euid, '-', '')) <> 2 THEN
-        RAISE EXCEPTION 'Invalid EUID format: %', euid;
-    END IF;
-    body_plus_check := split_part(euid, '-', 3);
-    IF length(body_plus_check) < 2 THEN
-        RAISE EXCEPTION 'Invalid EUID body/checksum segment: %', euid;
-    END IF;
-
-    body := substr(body_plus_check, 1, length(body_plus_check) - 1);
-    RETURN crockford_base32_decode(body);
+    RETURN crockford_base32_decode((meridian_euid_parts(euid))[3]);
 END;
 $$;
 
--- Meridian EUID: Luhn-style MOD 32 check character (SPEC.md §7.5)
+-- Original arithmetic is unchanged for v2's separator-free payload.
+-- For v3, each separator is zero-valued and consumes a weight position.
 CREATE OR REPLACE FUNCTION meridian_luhn_mod32_check(payload TEXT)
 RETURNS CHAR LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
@@ -854,9 +851,12 @@ DECLARE
     total INT := 0; payload_len INT; check_value INT;
 BEGIN
     payload_len := length(payload);
+    IF payload_len = 0 THEN
+        RAISE EXCEPTION 'Meridian checksum payload must be nonempty';
+    END IF;
     FOR i IN REVERSE payload_len..1 LOOP
         ch := substr(payload, i, 1);
-        v := position(ch IN alphabet) - 1;
+        v := CASE WHEN ch = '-' THEN 0 ELSE position(ch IN alphabet) - 1 END;
         IF v < 0 THEN
             RAISE EXCEPTION 'Invalid character "%" in EUID payload', ch;
         END IF;
@@ -869,26 +869,42 @@ BEGIN
 END;
 $$;
 
--- Meridian EUID: Generate canonical DOMAIN-PREFIX-BODYCHECK string.
+-- Preserve supplied identifiers: compare their own format/checksum and allocation.
+CREATE OR REPLACE FUNCTION meridian_euid_matches(euid TEXT, prefix TEXT, seq_val BIGINT, domain_code TEXT)
+RETURNS BOOLEAN LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    parts TEXT[] := meridian_euid_parts(euid);
+    payload TEXT;
+BEGIN
+    IF parts[1] <> domain_code OR parts[2] <> prefix
+       OR crockford_base32_decode(parts[3]) <> seq_val THEN
+        RETURN FALSE;
+    END IF;
+    IF length(euid) - length(replace(euid, '-', '')) = 2 THEN
+        payload := parts[1] || parts[2] || parts[3];
+    ELSE
+        payload := parts[1] || '-' || parts[2] || '-' || parts[3] || '-';
+    END IF;
+    RETURN parts[4] = meridian_luhn_mod32_check(payload);
+END;
+$$;
+
+-- New issuance always uses DOMAIN-PREFIX-BODY-CHECK.
 CREATE OR REPLACE FUNCTION meridian_generate_euid(prefix TEXT, seq_val BIGINT, domain_code TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
     normalized_prefix TEXT;
     normalized_dc TEXT;
-    body TEXT;
     payload TEXT;
-    check_char CHAR;
 BEGIN
     normalized_prefix := tapdb_validate_meridian_prefix(prefix);
     IF domain_code IS NULL OR trim(domain_code) = '' THEN
-        RAISE EXCEPTION 'domain_code is required for Meridian v0.4.1 EUID generation';
+        RAISE EXCEPTION 'domain_code is required for Meridian EUID generation';
     END IF;
     normalized_dc := tapdb_validate_domain_code(domain_code);
-
-    body := crockford_base32_encode(seq_val);
-    payload := normalized_dc || normalized_prefix || body;
-    check_char := meridian_luhn_mod32_check(payload);
-    RETURN normalized_dc || '-' || normalized_prefix || '-' || body || check_char;
+    payload := normalized_dc || '-' || normalized_prefix || '-'
+        || crockford_base32_encode(seq_val) || '-';
+    RETURN payload || meridian_luhn_mod32_check(payload);
 END;
 $$;
 
@@ -1046,7 +1062,7 @@ BEGIN
         ELSE
             prefix := tapdb_require_instance_prefix(prefix);
         END IF;
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -1105,7 +1121,7 @@ BEGIN
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
         prefix := tapdb_require_instance_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -1149,7 +1165,7 @@ BEGIN
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
         prefix := tapdb_require_instance_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -1194,7 +1210,7 @@ BEGIN
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
         prefix := tapdb_require_instance_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;

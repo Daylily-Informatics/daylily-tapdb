@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -489,6 +490,7 @@ def build_migration_preflight(
     receipts_dir: Path | None = None,
     recovery_family: Mapping[str, Any] | None = None,
     _reviewed_recovery: Mapping[str, Any] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Capture deterministic, sanitized preflight evidence without mutation."""
     from daylily_tapdb.backup.recovery import validate_recovery_family
@@ -522,6 +524,8 @@ def build_migration_preflight(
         raise MigrationPreflightError(
             f"current schema {live_schema!r} does not match configured {schema_name!r}"
         )
+    if progress is not None:
+        progress("Loading migration assets and applied migration history")
     assets = _migration_assets(migrations_dir)
     tracking = _tracking_rows(connection)
     applied_names = {str(row["filename"]) for row in tracking}
@@ -547,8 +551,10 @@ def build_migration_preflight(
         validate_mode(target["inventory_mode"])
         validate_pending(pending)
     identity_inventory = capture_identity_inventory(
-        connection, schema_name=schema_name, target=target
+        connection, schema_name=schema_name, target=target, progress=progress
     )
+    if progress is not None:
+        progress("Capturing allocator inventory and retained recovery floors")
     sequence_inventory = capture_sequence_inventory(
         connection, schema_name=schema_name, target=target
     )
@@ -601,17 +607,18 @@ def build_migration_preflight(
         }
     if source_contract is not None:
         from daylily_tapdb.backup.source_contract import (
-            capture_source_contract,
+            source_contract_from_capture,
             verify_source_contract,
         )
 
-        actual = capture_source_contract(
-            connection,
-            schema_name=schema_name,
-            target=target,
+        actual = source_contract_from_capture(
+            identity_inventory=identity_inventory,
+            sequence_inventory=sequence_inventory,
             source_version=str(source_contract["source_version"]),
             recovery_family=recovery_family,
         )
+        if progress is not None:
+            progress("Comparing source contract using this snapshot's captured inventory")
         verify_source_contract(source_contract, actual)
     tables = _migration_tables(identity_inventory)
 
@@ -661,6 +668,8 @@ def build_migration_preflight(
         history, head = read_fence_history(Path(root))
         if head != start_head or [item.receipt_id for item in history] != start_ids:
             raise MigrationPreflightError("recovery journal changed during migration preflight")
+    if progress is not None:
+        progress("Serializing migration preflight evidence")
     snapshot["evidence_sha256"] = _sha256(snapshot)
     return snapshot
 
@@ -1208,6 +1217,7 @@ def apply_migration_preflight(
     target: Mapping[str, Any],
     writer_fence: Mapping[str, Any] | None = None,
     receipts_dir: Path | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> MigrationResult:
     """Apply exactly the receipt-bound migration set in the current transaction."""
     if not connection.in_transaction():
@@ -1219,6 +1229,8 @@ def apply_migration_preflight(
     lock_key = derive_advisory_lock_key(
         "tapdb.schema.migrate", target.get("database"), schema_name
     )
+    if progress is not None:
+        progress("Acquiring native migration lock and checking the writer fence")
     connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
     from daylily_tapdb.backup.receipts import SURFACE_CLI, Actor
     from daylily_tapdb.backup.recovery import begin_recovery, observe_recovery
@@ -1250,6 +1262,7 @@ def apply_migration_preflight(
         source_contract=preflight.get("source_contract"),
         receipts_dir=receipts_dir,
         recovery_family=preflight.get("recovery_family"),
+        progress=progress,
     )
     if _receipt_comparable(current) != _receipt_comparable(preflight):
         raise MigrationReceiptMismatchError(
@@ -1282,6 +1295,8 @@ def apply_migration_preflight(
         }
         for item in preflight["pending_migrations"]:
             filename = str(item["filename"])
+            if progress is not None:
+                progress(f"Applying SQL migration: {filename}")
             asset = asset_by_name.get(filename)
             if asset is None or asset["sha256"] != item["sha256"]:
                 raise MigrationReceiptMismatchError(
@@ -1304,8 +1319,13 @@ def apply_migration_preflight(
             _validate_generators=False,
             _reviewed_recovery=preflight["allocator_recovery"],
             recovery_family=preflight.get("recovery_family"),
+            progress=progress,
         )
+        if progress is not None:
+            progress("Comparing preserved identity before allocator advancement")
         _verify_preservation(preflight, interim, allow_declared_sequence_advances=False)
+        if progress is not None:
+            progress("Advancing only native reviewed allocator floors")
         sequence_result = _advance_permitted_identity_sequences(
             connection,
             preflight=preflight,
@@ -1321,6 +1341,7 @@ def apply_migration_preflight(
             target=target,
             _reviewed_recovery=preflight["allocator_recovery"],
             recovery_family=preflight.get("recovery_family"),
+            progress=progress,
         )
         from daylily_tapdb.sequences import sequence_next_value
 
@@ -1330,6 +1351,8 @@ def apply_migration_preflight(
             for item in preflight["allocator_recovery"]["plan"]["advances"]
             if item["next_value"] > sequence_next_value(original_states[item["name"]])
         }
+        if progress is not None:
+            progress("Comparing final preserved identity and allocator state")
         _verify_preservation(
             preflight, postflight, recovery_sequence_advances=reviewed_advances
         )

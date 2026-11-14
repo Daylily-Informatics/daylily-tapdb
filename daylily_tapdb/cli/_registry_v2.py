@@ -9,6 +9,12 @@ from typing import Any
 from cli_core_yo.spec import CommandPolicy
 
 JSON_COMMANDS: set[tuple[str | None, str]] = {
+    ("db/migration-run", "prepare"),
+    ("db/migration-run", "resume"),
+    ("db/migration-run", "reconcile"),
+    ("db/archive", "retain"),
+    ("db/archive", "fence"),
+    ("db/archive", "restore-plan"),
     ("integrity-adopt", "plan"),
     ("integrity-adopt", "apply"),
     ("history", "status"),
@@ -65,6 +71,10 @@ JSON_COMMANDS: set[tuple[str | None, str]] = {
 }
 
 MUTATING_COMMANDS = {
+    ("db/archive", "fence"),
+    ("db/migration-run", "resume"),
+    ("db/migration-run", "reconcile"),
+    ("db/archive", "retain"),
     ("integrity-adopt", "apply"),
     ("history", "apply-correction"),
     ("references", "register"),
@@ -157,6 +167,8 @@ INTERACTIVE_COMMANDS = {
 #: commands (plan, restore-plan, verify, list) have nothing to simulate and
 #: must never appear here.
 DRY_RUN_COMMANDS = {
+    ("db/archive", "fence"),
+    ("db/migration-run", "resume"),
     ("db/sequences", "advance"),
     ("db/sequences", "reconcile"),
     ("db/runtime-principal", "bootstrap"),
@@ -173,6 +185,7 @@ DRY_RUN_COMMANDS = {
 }
 
 LONG_RUNNING_COMMANDS = {
+    ("db/migration-run", "resume"),
     ("bootstrap", "local"),
     ("bootstrap", "aurora"),
     ("ui", "start"),

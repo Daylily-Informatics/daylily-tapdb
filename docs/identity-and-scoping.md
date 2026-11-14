@@ -36,12 +36,16 @@ These layers are used together:
 
 ## Meridian EUIDs
 
-TapDB uses `meridian-euid==0.4.8` for canonical Meridian formatting and
-checksum validation:
+TapDB uses `meridian-euid==1.0.0` for canonical Meridian formatting and
+checksum validation. New issuance uses the abstract grammar
+`DOMAIN-PREFIX-BODY-CHECKSUM` (three hyphens). Existing
+`DOMAIN-PREFIX-BODYCHECKSUM` (two hyphens) uses its original checksum and stays
+unchanged. Single-hyphen legacy strings and empty components fail.
 
-```text
-DOMAIN-PREFIX-BODYCHECKSUM
-```
+The three-hyphen payload is `DOMAIN-PREFIX-BODY-`: each hyphen contributes zero
+and advances the MOD 32 weight. Syntax selects one algorithm; no retry with the
+other checksum occurs. The new SQL migration changes functions only, preserving
+stored identity and sequence positions. See [operator migrations](operator-migrations.md).
 
 When documentation needs an example, capture the value returned after the
 owning service persists the object:
@@ -249,7 +253,7 @@ and no compatibility path for missing governance metadata.
 
 The public Meridian domain-code authority is
 [`lsmc-bio/meridian-registry`](https://github.com/lsmc-bio/meridian-registry).
-TapDB consumes it through `meridian-euid==0.4.8`, which pins public registry
+TapDB consumes it through `meridian-euid==1.0.0`, which pins public registry
 version `0.1.1` and exposes `meridian-euid domain-check ... --registry-index`.
 The configured `meta.domain_registry_path` is still a local runtime fixture used
 to assert that the selected deployment domain is registered for that runtime.

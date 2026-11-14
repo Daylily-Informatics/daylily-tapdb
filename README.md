@@ -94,11 +94,25 @@ claim that existing temporary objects were removed. The qualified
 managed-allocator resolution remains required defense in depth.
 
 ```bash
-python -m pip install "daylily-tapdb[aurora,gui]==13.2.0"
+python -m pip install "daylily-tapdb[aurora,gui]==14.0.0"
 ```
 
-TapDB pins `meridian-euid==0.4.8`. Consumers must not replace that pin with an
+TapDB pins `meridian-euid==1.0.0`. Consumers must not replace that pin with an
 unverified range or synthesize strings that resemble Meridian EUIDs.
+
+## 14.0.0: Meridian and native migration operations
+
+New EUIDs use `DOMAIN-PREFIX-BODY-CHECKSUM`. Existing two-hyphen IDs retain
+their exact strings and original checksum. The packaged SQL migration updates
+native issuance and parsing without rewriting objects, lineage, or counters.
+Upgrade consumers before enabling new-format issuance.
+
+The release adds an explicit migration-stage runner, native progress events,
+an archived-and-retained disposition, and a pinned PostgreSQL 16 operator image.
+See [the operator and migration guide](docs/operator-migrations.md) for preparation,
+resume, selected stop boundaries, archival, and recovery across generations.
+Package publication does not migrate or activate a service. No tests were run
+for this release.
 
 ## Quick start
 

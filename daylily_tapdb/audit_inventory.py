@@ -227,8 +227,20 @@ REVIEWED_ASSETS = {
 }
 
 
+# This exact migration replaces EUID functions and leaves every audit row intact.
+UNCHANGED_AUDIT_ASSETS = {
+    '20261114_180000_meridian_separated_checksum.sql': 'f432a71df4844eadadc6e5f31ae03d7129928413806e8f659033757ef24e2ebc',
+}
+
+
 def validate_pending(pending: list[dict]) -> bool:
     observed = {item["filename"]: item["sha256"] for item in pending}
-    if observed not in ({}, REVIEWED_ASSETS) or len(observed) != len(pending):
-        fail("Compact audit mode requires the exact reviewed migration closure or no pending migrations")
+    if len(observed) != len(pending):
+        fail("Duplicate pending migration")
+    for name, expected in UNCHANGED_AUDIT_ASSETS.items():
+        if name in observed:
+            if observed.pop(name) != expected:
+                fail("Function-only migration differs from its exact reviewed source")
+    if observed not in ({}, REVIEWED_ASSETS):
+        fail("Compact audit mode requires an exact reviewed migration closure")
     return bool(observed)

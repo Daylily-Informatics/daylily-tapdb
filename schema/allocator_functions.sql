@@ -145,7 +145,7 @@ BEGIN
         ELSE
             prefix := tapdb_require_instance_prefix(prefix);
         END IF;
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -204,7 +204,7 @@ BEGIN
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
         prefix := tapdb_require_instance_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -248,7 +248,7 @@ BEGIN
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
         prefix := tapdb_require_instance_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -293,7 +293,7 @@ BEGIN
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
         prefix := tapdb_require_instance_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;

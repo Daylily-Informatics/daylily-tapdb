@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -482,6 +482,7 @@ def _capture_identity_inventory(
     schema_name: str,
     target: Mapping[str, Any],
     limits: InventoryLimits | Mapping[str, Any] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Capture all physical table rows, identities, and catalog dependencies."""
     from daylily_tapdb import audit_inventory as audit
@@ -505,6 +506,8 @@ def _capture_identity_inventory(
                 "Foreign tables cannot provide a local consistent snapshot"
             )
         name = table["name"]
+        if progress is not None:
+            progress(f"Capturing identity inventory: {schema_name}.{name}")
         entry = _metadata(connection, table)
         if mode is not None and name == "audit_log":
             policy_roles = connection.execute(text(
@@ -647,11 +650,12 @@ def capture_identity_inventory(
     schema_name: str,
     target: Mapping[str, Any],
     limits: InventoryLimits | Mapping[str, Any] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Capture all physical tables in a stable read-only catalog context."""
     with catalog_capture_context(connection, schema_name=schema_name):
         return _capture_identity_inventory(
-            connection, schema_name=schema_name, target=target, limits=limits
+            connection, schema_name=schema_name, target=target, limits=limits, progress=progress
         )
 
 

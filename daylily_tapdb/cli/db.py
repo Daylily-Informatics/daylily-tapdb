@@ -26,6 +26,7 @@ from daylily_tapdb.cli.census import census
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config
 from daylily_tapdb.cli.identity import identity_app
 from daylily_tapdb.cli.issuance import issuance_app
+from daylily_tapdb.cli.migration_run import archive_app, migration_run_app
 from daylily_tapdb.cli.runtime_principal import runtime_principal_app
 from daylily_tapdb.cli.sequences import sequences_app
 from daylily_tapdb.governance import GovernanceContext
@@ -960,6 +961,8 @@ db_app.add_typer(identity_app, name="identity")
 db_app.add_typer(sequences_app, name="sequences")
 db_app.add_typer(runtime_principal_app, name="runtime-principal")
 db_app.add_typer(issuance_app, name="issuance-profile")
+db_app.add_typer(migration_run_app, name="migration-run")
+db_app.add_typer(archive_app, name="archive")
 
 db_app.command("census")(census)
 
@@ -1573,6 +1576,8 @@ def db_nuke(
     DROP FUNCTION IF EXISTS meridian_euid_sandbox_prefix(TEXT);
     DROP FUNCTION IF EXISTS meridian_euid_prefix(TEXT);
     DROP FUNCTION IF EXISTS meridian_euid_seq_from_euid(TEXT);
+    DROP FUNCTION IF EXISTS meridian_euid_matches(TEXT, TEXT, BIGINT, TEXT);
+    DROP FUNCTION IF EXISTS meridian_euid_parts(TEXT);
     DROP FUNCTION IF EXISTS crockford_base32_decode(TEXT);
     DROP FUNCTION IF EXISTS soft_delete_row();
     DROP FUNCTION IF EXISTS record_update();
@@ -1681,6 +1686,8 @@ def db_migrate(
     ] = None,
 ):
     """Preflight or transactionally apply identity-preserving migrations."""
+    def progress(message: str) -> None:
+        typer.echo(f"Migration: {message}", err=True)
     env = Environment.target
     cfg = _get_db_config(env)
 
@@ -1783,7 +1790,9 @@ def db_migrate(
                     source_contract=historical,
                     receipts_dir=receipts_dir,
                     recovery_family=family,
+                    progress=progress,
                 )
+            progress("Writing preflight receipt")
             write_json_receipt(receipt, payload)
             ccyo_out.success(
                 f"Preflight captured: {len(payload['pending_migrations'])} pending"
@@ -1824,6 +1833,7 @@ def db_migrate(
                 control_connection = session_stack.enter_context(
                     operator_session(control_cfg, isolation_level="REPEATABLE READ")
                 )
+                progress("Acquiring the native database writer fence")
                 gate = acquire_database_writer_fence(
                     connection,
                     control_connection=control_connection,
@@ -1850,7 +1860,9 @@ def db_migrate(
                         target=target,
                         writer_fence=fence,
                         receipts_dir=receipts_dir,
+                        progress=progress,
                     )
+                    progress("Committing migration transaction")
                     apply_returned = True
             except Exception as apply_error:
                 intent = getattr(apply_error, "recovery_intent", None)
@@ -1876,6 +1888,7 @@ def db_migrate(
                     )
                 # Commit exceptions are ambiguous, never labelled aborted.
                 raise
+            progress("Finalizing native committed recovery evidence")
             with connection.begin():
                 completion = finalize_migration_recovery(
                     connection,
@@ -1884,6 +1897,7 @@ def db_migrate(
                     writer_fence=fence,
                 )
             if gate is not None:
+                progress("Releasing the native writer fence")
                 gate_release = release_database_writer_fence(
                     connection,
                     gate,
@@ -1891,6 +1905,7 @@ def db_migrate(
                     receipts_dir=receipts_dir,
                     control_connection=control_connection,
                 )
+        progress("Writing committed migration receipt")
         write_json_receipt(
             receipt,
             {

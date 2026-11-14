@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Dict, Mapping, Optional
 
-from meridian_euid import compute_check_character
+from meridian_euid import EUIDError, encode, parse
 
 from daylily_tapdb.governance import normalize_owner_repo_name
 
@@ -24,15 +24,7 @@ EXTERNAL_REFERENCE_PREFIX = "XRF"
 GOVERNANCE_INSTANCE_PREFIX = "GVR"
 GENERIC_SET_PREFIX = "GSE"
 
-_ALPHABET_32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-_VALUE_32 = {char: index for index, char in enumerate(_ALPHABET_32)}
 _TOKEN_RE = re.compile(r"^[0-9A-HJ-KMNP-TV-Z]{1,4}$")
-_BODY_RE = re.compile(r"^[1-9A-HJ-KMNP-TV-Z][0-9A-HJ-KMNP-TV-Z]*$")
-_CANONICAL_EUID_RE = re.compile(
-    r"^(?P<domain>[0-9A-HJ-KMNP-TV-Z]{1,4})-"
-    r"(?P<prefix>[0-9A-HJ-KMNP-TV-Z]{1,4})-"
-    r"(?P<body>[1-9A-HJ-KMNP-TV-Z][0-9A-HJ-KMNP-TV-Z]*)(?P<checksum>[0-9A-HJ-KMNP-TV-Z])$"
-)
 
 
 def _normalize_token(value: str | None, *, field_name: str) -> str | None:
@@ -44,32 +36,6 @@ def _normalize_token(value: str | None, *, field_name: str) -> str | None:
     if not _TOKEN_RE.fullmatch(normalized):
         raise ValueError(f"Invalid Meridian {field_name}: {value!r}")
     return normalized
-
-
-def _int_to_base32(integer: int) -> str:
-    if not isinstance(integer, int) or isinstance(integer, bool) or integer <= 0:
-        raise ValueError("seq_val must be a positive int")
-
-    encoded: list[str] = []
-    remaining = integer
-    while remaining > 0:
-        encoded.append(_ALPHABET_32[remaining % 32])
-        remaining //= 32
-    return "".join(reversed(encoded))
-
-
-def _canonical_euid_parts(euid: str) -> tuple[str, str, str, str] | None:
-    if not isinstance(euid, str):
-        return None
-    match = _CANONICAL_EUID_RE.fullmatch(euid)
-    if match is None:
-        return None
-    return (
-        match.group("domain"),
-        match.group("prefix"),
-        match.group("body"),
-        match.group("checksum"),
-    )
 
 
 def normalize_domain_code(code: str | None) -> str | None:
@@ -135,18 +101,14 @@ def format_euid(
     *,
     domain_code: str | None = None,
 ) -> str:
-    """Build a canonical Meridian EUID."""
+    """Format a native allocation as a three-hyphen Meridian v3 EUID."""
     normalized_domain_code = normalize_domain_code(domain_code)
     if normalized_domain_code is None:
         raise ValueError("domain_code is required for canonical Meridian EUIDs")
     normalized_prefix = normalize_prefix(prefix)
     if normalized_prefix is None:
         raise ValueError("prefix is required for canonical Meridian EUIDs")
-    body = _int_to_base32(seq_val)
-    checksum = compute_check_character(
-        f"{normalized_domain_code}{normalized_prefix}{body}"
-    )
-    return f"{normalized_domain_code}-{normalized_prefix}-{body}{checksum}"
+    return encode(seq_val, normalized_prefix, domain_code=normalized_domain_code)
 
 
 def validate_euid(
@@ -158,13 +120,11 @@ def validate_euid(
     """Return True when *euid* is a valid canonical Meridian EUID."""
     if environment not in {"canonical", "production", "domain"}:
         raise ValueError(f"Unsupported EUID validation environment: {environment!r}")
-    parsed = _canonical_euid_parts(euid)
-    if parsed is None:
+    try:
+        parsed = parse(euid)
+    except EUIDError:
         return False
-    domain_code, prefix, body, checksum = parsed
-    expected = compute_check_character(f"{domain_code}{prefix}{body}")
-    if checksum != expected:
-        return False
+    domain_code = parsed["domain_code"]
     if allowed_domain_codes:
         allowed = {
             normalized

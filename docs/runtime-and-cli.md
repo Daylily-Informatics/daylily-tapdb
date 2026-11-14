@@ -177,7 +177,7 @@ examples, tests, and isolated TapDB-only bootstrap flows.
 
 Public Meridian domain-code allocation now lives in
 [`lsmc-bio/meridian-registry`](https://github.com/lsmc-bio/meridian-registry).
-TapDB depends on `meridian-euid==0.4.8`, which pins `meridian-registry` at
+TapDB depends on `meridian-euid==1.0.0`, which pins `meridian-registry` at
 `0.1.1` and provides the explicit checker:
 
 ```bash
@@ -185,8 +185,9 @@ meridian-euid domain-check <DOMAIN> \
   --registry-index /abs/path/to/meridian-registry/registry/generated/domains.json
 ```
 
-Do not use that public registry as a prefix registry. Prefix claims remain
-domain-holder governed and are still supplied to TapDB through the explicit
+Domain and prefix requests, including reserved namespaces, require authorized
+PRs to `main` in the public registry. Hosted prefix grants remain holder-governed
+and are supplied to TapDB through the explicit
 `meta.prefix_ownership_registry_path` config key.
 
 ### Schema and Seed Flow
@@ -307,3 +308,6 @@ credential updates do not require a standalone GUI `admin` section in an
 embedded service configuration. Unrelated GUI, backup and safety sections are
 left unchanged; no missing sections or defaults are generated. Editing a
 missing section fails explicitly.
+
+For the pinned operator image, native migration stages, progress, and preserved
+versus fresh upgrade flows, see [operator migrations](operator-migrations.md).

@@ -138,6 +138,9 @@ def inventory(
     receipt: Path | None = typer.Option(
         None, "--receipt", help="New absolute JSON receipt path"
     ),
+    receipt_only: bool = typer.Option(
+        False, "--receipt-only", help="Write the complete receipt and print only its descriptor"
+    ),
     source_version: str | None = typer.Option(
         None,
         "--source-version",
@@ -177,6 +180,8 @@ def inventory(
 ) -> None:
     """Read all physical tables without runtime schema initialization."""
     try:
+        if receipt_only and receipt is None:
+            raise ValueError("--receipt-only requires --receipt")
         if receipt is not None and (not receipt.is_absolute() or receipt.exists()):
             raise ValueError("--receipt must name an absolute new file")
         if allocation_receipts_dirs is not None and prefix is None:
@@ -272,7 +277,11 @@ def inventory(
     except Exception as exc:
         _fail(exc)
         return
-    ccyo_out.emit_json(payload)
+    ccyo_out.emit_json(
+        {"receipt": str(receipt), "schema_version": payload["schema_version"],
+         "sha256": payload["sha256"]}
+        if receipt_only else payload
+    )
 
 
 @identity_app.command("verify")

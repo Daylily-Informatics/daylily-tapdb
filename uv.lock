@@ -588,7 +588,7 @@ requires-dist = [
     { name = "itsdangerous", marker = "extra == 'gui'" },
     { name = "jinja2", marker = "extra == 'gui'" },
     { name = "jsonschema", specifier = ">=4.0" },
-    { name = "meridian-euid", specifier = "==0.4.8" },
+    { name = "meridian-euid", specifier = "==1.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "passlib", extras = ["bcrypt"], marker = "extra == 'gui'" },
     { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.45" },
@@ -1003,11 +1003,11 @@ wheels = [
 
 [[package]]
 name = "meridian-euid"
-version = "0.4.8"
+version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/34/33/599f4ce7a6d018ac307cadc604cdb32f02c5b4678fb9503b7216fd8a8d91/meridian_euid-0.4.8.tar.gz", hash = "sha256:54a67bf831088f52c395119d2cacac9354a60c3a1b084817d9b1d90f718a4b3d", size = 19365, upload-time = "2026-09-01T11:01:03.802Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/64/da/e0013a9ca854d1433304768d123c7969fb715b48a3367c892e7a9d6867d1/meridian_euid-1.0.0.tar.gz", hash = "sha256:e873e31d8ab85e04a5e63271024314e8bf2776dc01b410a06081614fc0f87245", size = 21457, upload-time = "2026-11-14T17:15:12.65Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f0/67/c6a33b4af287d8b9951f1d69ce7d62bf73cc83541272f7728c2118c14dfc/meridian_euid-0.4.8-py3-none-any.whl", hash = "sha256:c36e96b36c78da427b200bda7f76c23bd7db74dbe32b54a473134e2f1f61b946", size = 15352, upload-time = "2026-09-01T11:01:02.79Z" },
+    { url = "https://files.pythonhosted.org/packages/14/c8/8d4a7b18d327c9e8210aaaadd3582ed965bcd4efcff66735ce726bffed4e/meridian_euid-1.0.0-py3-none-any.whl", hash = "sha256:3669fba604b8b170a73aedc0733f731e372b942049040b7fec148ae15f1624be", size = 16626, upload-time = "2026-11-14T17:15:11.749Z" },
 ]
 
 [[package]]

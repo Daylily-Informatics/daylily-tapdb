@@ -38,6 +38,35 @@ def capture_source_contract(
     if not re.fullmatch(
         r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+|[.-][A-Za-z0-9.-]+)?", source_version
     ):
+        raise BackupVerificationError("source_version must be an explicit exact version")
+    return source_contract_from_capture(
+        identity_inventory=capture_identity_inventory(
+            connection, schema_name=schema_name, target=target
+        ),
+        sequence_inventory=capture_sequence_inventory(
+            connection, schema_name=schema_name, target=target
+        ),
+        source_version=source_version,
+        recovery_family=recovery_family,
+    )
+
+
+def source_contract_from_capture(
+    *,
+    identity_inventory: dict[str, Any],
+    sequence_inventory: dict[str, Any],
+    source_version: str,
+    recovery_family: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compose inventories just captured by the caller in the same snapshot.
+
+    This does not cache across transactions or accept a prior receipt as live
+    evidence. The migration caller already owns both captures and subsequently
+    runs the existing source-contract comparison.
+    """
+    if not re.fullmatch(
+        r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+|[.-][A-Za-z0-9.-]+)?", source_version
+    ):
         raise BackupVerificationError(
             "source_version must be an explicit exact version"
         )
@@ -45,12 +74,8 @@ def capture_source_contract(
         "schema_version": SOURCE_CONTRACT_VERSION,
         "source_version": source_version,
         "source_version_evidence": "operator_declared",
-        "identity_inventory": capture_identity_inventory(
-            connection, schema_name=schema_name, target=target
-        ),
-        "sequence_inventory": capture_sequence_inventory(
-            connection, schema_name=schema_name, target=target
-        ),
+        "identity_inventory": identity_inventory,
+        "sequence_inventory": sequence_inventory,
     }
     if recovery_family is not None:
         from daylily_tapdb.backup.recovery import (
