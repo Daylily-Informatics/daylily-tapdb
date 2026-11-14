@@ -333,7 +333,7 @@ def client_env(cfg: Mapping[str, Any]) -> dict[str, str]:
             hostaddr=cfg.get("hostaddr") or None,
             profile=cfg.get("aws_profile") or None,
             sslrootcert=cfg.get("sslrootcert") or None,
-            server_port=cfg.get("server_port"),
+            server_port=int(cfg["server_port"]) if "server_port" in cfg else None,
         )
         env_vars = sanitized_libpq_environment()
         for key in ("PGPASSWORD", "PGSSLMODE", "PGSSLROOTCERT"):
