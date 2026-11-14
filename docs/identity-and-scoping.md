@@ -106,6 +106,19 @@ the profile to `(domain_code, issuer_app_code)` and rejects a conflicting
 existing binding. Upgrading a package/config alone does not install this schema
 contract on an existing database.
 
+`config update --additional-tenant-ids-json` replaces the complete additional
+tenant allowlist using native UUID validation. Use an explicit JSON array,
+including `[]` when no additional tenants are authorized. Set this list before
+binding the runtime principal; changing the config alone cannot change an
+existing immutable database scope binding.
+
+After provisioning and native binding, `config update --remove-operator`
+removes the complete `target.operator` mapping without changing the runtime
+identity or the canonical config path. It cannot be combined with operator
+credential options. This produces a runtime-only config; future operator work
+requires explicitly supplying operator credentials through the native config
+interface again.
+
 All Bloom-owned templates, material/container instances, lineage edges, audit
 records, actors, messages, external references, sets, saved queries, DAG views,
 and governance objects then use the native `bg_instance_seq`. Internal SQL

@@ -1479,6 +1479,20 @@ def build_app():
 
     @config_root_app.command("update")
     def config_update(
+        additional_tenant_ids_json: Annotated[
+            Optional[str],
+            typer.Option(
+                "--additional-tenant-ids-json",
+                help="Replace the complete additional tenant UUID allowlist as an explicit JSON array",
+            ),
+        ] = None,
+        remove_operator: Annotated[
+            bool,
+            typer.Option(
+                "--remove-operator",
+                help="Remove the complete target.operator mapping while preserving runtime identity and config path",
+            ),
+        ] = False,
         inventory_max_rows: Annotated[
             Optional[int],
             typer.Option(
@@ -1878,6 +1892,12 @@ def build_app():
             updates["tenant_id"] = normalized_tenant_id
         if allow_global_claims is not None:
             target_cfg["allow_global_claims"] = bool(allow_global_claims)
+        if additional_tenant_ids_json is not None:
+            from daylily_tapdb.security_context import canonical_additional_tenant_ids
+
+            updates["additional_tenant_ids"] = list(canonical_additional_tenant_ids(
+                json.loads(additional_tenant_ids_json)
+            ))
         if database is not None:
             updates["database"] = str(database).strip()
         if schema_name is not None:
@@ -1924,7 +1944,15 @@ def build_app():
             authorization = GovernanceAuthorization.from_value(authorization_value)
             meta["governance_authorization"] = authorization.to_dict()
 
-        operator_changed = any(
+        metadata_changed = any(value is not None for value in (
+            owner_repo_name,
+            domain_registry_path,
+            prefix_ownership_registry_path,
+            governance_authorization_json,
+            issuance_profile_json,
+        ))
+
+        operator_updates = any(
             value is not None
             for value in (
                 operator_user,
@@ -1933,8 +1961,13 @@ def build_app():
                 operator_iam_auth,
             )
         )
+        if remove_operator and operator_updates:
+            raise RuntimeError("--remove-operator cannot be combined with operator credential options")
+        if remove_operator:
+            target_cfg.pop("operator", None)
+        operator_changed = remove_operator or operator_updates
         operator_cfg = target_cfg.get("operator")
-        if operator_changed and not isinstance(operator_cfg, dict):
+        if operator_updates and not isinstance(operator_cfg, dict):
             operator_cfg = {}
             target_cfg["operator"] = operator_cfg
         if isinstance(operator_cfg, dict):
@@ -2099,6 +2132,7 @@ def build_app():
             and not backup_changed
             and not operator_changed
             and not inventory_changes
+            and not metadata_changed
         ):
             raise RuntimeError("No config changes requested.")
 
@@ -2124,6 +2158,8 @@ def build_app():
         ccyo_out.success("TAPDB explicit-target config updated")
         ccyo_out.print_text(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
         ccyo_out.print_text(f"  Path:      [dim]{config_path}[/dim]")
+        if remove_operator:
+            ccyo_out.print_text("  removed:   target.operator")
         for field_name in sorted(clear_fields):
             ccyo_out.print_text(f"  cleared:   {field_name}")
         for field_name in sorted(updates.keys()):
