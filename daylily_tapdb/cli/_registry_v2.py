@@ -28,6 +28,7 @@ JSON_COMMANDS: set[tuple[str | None, str]] = {
     ("db/schema", "drift-check"),
     ("db", "census"),
     ("db/identity", "inventory"),
+    ("db/identity", "prefix-from-evidence"),
     ("db/identity", "verify"),
     ("db/sequences", "advance"),
     ("db/sequences", "reconcile"),

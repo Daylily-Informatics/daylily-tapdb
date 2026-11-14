@@ -192,13 +192,13 @@ Native GUI users carry their persisted actor EUID. Auth-disabled placeholders
 cannot make attributable writes. Shared-host provisioning without stable host
 identity fails explicitly.
 
-Current standalone Cognito adapter inspection found a preexisting dependency
-mismatch: `admin/cognito.py` imports `daylily_cognito.CognitoAuth`, whereas the
-pinned `daylily-auth-cognito==2.1.5` exposes `daylily_auth_cognito`. No live Cognito
-verification or provider configuration was exercised in this qualification.
-Embedded authenticated API tests establish adapter behavior, not successful
-standalone Cognito login. This remains an explicit integration gap; do not
-interpret a passing API fixture as proof of that login path.
+The original standalone adapter qualification found a dependency mismatch:
+it imported the removed `daylily_cognito.CognitoAuth`. The current adapter uses
+the pinned `daylily_auth_cognito` native admin/password functions and access-token
+verifier; its CLI selects the current flat auth-config format. See
+[native Admin authentication](cognito-native-admin.md). This source correction
+does not establish a successful live login. Embedded authenticated API evidence
+must not be interpreted as proof of standalone Cognito login.
 
 GUI object forms carry current revisions. Existing generic lineage creation
 protects both endpoints and requires both observed revisions. New history and

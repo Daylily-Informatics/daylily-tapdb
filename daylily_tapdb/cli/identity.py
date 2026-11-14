@@ -86,6 +86,43 @@ def _fail(exc: Exception) -> None:
     raise SystemExit(2)
 
 
+@identity_app.command("prefix-from-evidence")
+def prefix_from_evidence(
+    evidence_kind: str = typer.Option(
+        ..., "--evidence-kind", help="Explicit archived_source_contract or catalog_schema_absent evidence"
+    ),
+    evidence: Path = typer.Option(..., "--evidence", help="Absolute existing native source-contract or census JSON"),
+    prefix: str = typer.Option(..., "--prefix", help="Exact Meridian prefix to project"),
+    archive_result: Path | None = typer.Option(
+        None, "--archive-result", help="Archive mode: absolute successful copy-SOP result JSON"
+    ),
+    recovery_family: Path | None = typer.Option(
+        None, "--recovery-family", help="Archive mode: absolute existing family descriptor naming native journal roots"
+    ),
+    receipt: Path | None = typer.Option(None, "--receipt", help="New absolute projected-evidence JSON path"),
+) -> None:
+    """Consume existing evidence explicitly; never open or modify a database."""
+    try:
+        if receipt is not None and (not receipt.is_absolute() or receipt.exists()):
+            raise ValueError("--receipt must name an absolute new file")
+        from daylily_tapdb.identity_prefix_inventory import project_prefix_from_evidence
+
+        payload = project_prefix_from_evidence(
+            evidence_kind=evidence_kind, evidence=_read(evidence), evidence_path=evidence,
+            prefix=prefix,
+            archive_result=_read(archive_result) if archive_result is not None else None,
+            archive_result_path=archive_result,
+            recovery_family=_read(recovery_family) if recovery_family is not None else None,
+            recovery_family_path=recovery_family,
+        )
+        if receipt is not None:
+            write_json_receipt(receipt, payload)
+    except Exception as exc:
+        _fail(exc)
+        return
+    ccyo_out.emit_json(payload)
+
+
 @identity_app.command("inventory")
 def inventory(
     prefix: str | None = typer.Option(

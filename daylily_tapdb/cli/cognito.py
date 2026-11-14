@@ -1,13 +1,12 @@
 """TAPDB Cognito integration commands.
 
 Operational lifecycle is delegated to the daylily-auth-cognito CLI (`daycog`).
-TAPDB stores only Cognito pool ID in tapdb config.
+TAPDB binds one explicitly selected flat auth-config file and its pool/client identities.
 """
 
 from __future__ import annotations
 
 import os
-import re
 import stat
 import subprocess
 from pathlib import Path
@@ -26,339 +25,95 @@ from daylily_tapdb.user_store import create_or_get
 
 console = Console()
 cognito_app = typer.Typer(help="Cognito auth integration commands (via daycog)")
-config_app = typer.Typer(help="Daycog context utilities")
+config_app = typer.Typer(help="Explicit daycog flat auth-config utilities")
 cognito_app.add_typer(config_app, name="config")
-DEFAULT_COGNITO_CALLBACK_PORT = 8911
 REQUIRED_COGNITO_CLIENT_NAME = "tapdb"
 
 
-def _ui_pid_file() -> Path:
-    from daylily_tapdb.cli.context import resolve_context
-
-    ctx = resolve_context(require_keys=True)
-    return ctx.ui_dir() / "ui.pid"
-
-
-def _split_uri_values(raw: str) -> list[str]:
-    return [v for v in re.split(r"[,\s]+", raw.strip()) if v]
-
-
-def _iter_cognito_uri_values(values: dict[str, str]) -> list[tuple[str, str]]:
-    uri_keys = [
-        "COGNITO_CALLBACK_URL",
-        "COGNITO_LOGOUT_URL",
-        "COGNITO_CALLBACK_URLS",
-        "COGNITO_LOGOUT_URLS",
-        "COGNITO_REDIRECT_URI",
-        "COGNITO_REDIRECT_URIS",
-        "COGNITO_POST_LOGOUT_REDIRECT_URI",
-        "COGNITO_POST_LOGOUT_REDIRECT_URIS",
-    ]
-
-    pairs: list[tuple[str, str]] = []
-    for key in uri_keys:
-        raw = (values.get(key) or "").strip()
-        if not raw:
-            continue
-        for uri in _split_uri_values(raw):
-            pairs.append((key, uri))
-    return pairs
-
-
-def _detect_running_ui_port() -> tuple[Optional[int], str]:
-    """Best-effort detection of current TAPDB UI port from PID command line."""
-    ui_pid_file = _ui_pid_file()
-    if not ui_pid_file.exists():
-        return None, "ui not running"
-    try:
-        pid = int(ui_pid_file.read_text(encoding="utf-8").strip())
-        os.kill(pid, 0)
-    except Exception:
-        return None, "ui pid missing/stale"
-
-    try:
-        proc = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-    except Exception:
-        return None, "could not inspect ui process"
-    if proc.returncode != 0:
-        return None, "could not inspect ui process"
-
-    cmd = (proc.stdout or "").strip()
-    m = re.search(r"--port\s+(\d+)", cmd)
-    if not m:
-        return None, "ui process port not detected"
-    return int(m.group(1)), "running ui process"
-
-
-def _resolve_expected_ui_port() -> tuple[int, str]:
-    cfg = get_db_config()
-    configured = (cfg.get("ui_port") or "").strip()
-    if configured.isdigit():
-        return int(configured), "config target.ui_port"
-
-    running_port, source = _detect_running_ui_port()
-    if running_port is not None:
-        return running_port, source
-
-    return DEFAULT_COGNITO_CALLBACK_PORT, f"default ({source})"
-
-
-def _validate_bound_cognito_uris(
-    values: dict[str, str],
-) -> tuple[int, str, list[str], list[str]]:
-    """Validate Cognito URI fields against TAPDB UI HTTPS + local port rules."""
-    expected_port, port_source = _resolve_expected_ui_port()
-    uri_pairs = _iter_cognito_uri_values(values)
-    if not uri_pairs:
-        return expected_port, port_source, [], []
-
-    local_hosts = {"localhost", "127.0.0.1", "::1"}
-    errors: list[str] = []
-    notices: list[str] = []
-
-    for key, uri in uri_pairs:
-        parsed = urlparse(uri)
-        if not parsed.scheme or not parsed.netloc:
-            errors.append(f"{key}: invalid URI: {uri}")
-            continue
-
-        scheme = parsed.scheme.lower()
-        host = (parsed.hostname or "").lower()
-        port = parsed.port
-        if port is None:
-            port = 443 if scheme == "https" else 80
-
-        if scheme != "https":
-            errors.append(f"{key}: must use https (got {scheme}): {uri}")
-            continue
-
-        # Enforce local callback/logout URI ports to match active TAPDB UI port.
-        if host in local_hosts and port != expected_port:
-            errors.append(
-                f"{key}: port {port} does not match TAPDB UI port "
-                f"{expected_port}: {uri}"
-            )
-            continue
-
-        notices.append(f"{key}: {uri}")
-
-    return expected_port, port_source, errors, notices
-
-
 def _daycog_config_path() -> Path:
-    return Path.home() / ".config" / "daycog" / "config.yaml"
-
-
-def _sanitize_filename_part(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-") or "app"
-
-
-def _default_pool_name() -> str:
+    """Use the selected current-format auth file; never infer a home context."""
     cfg = get_db_config()
-    db_name = (cfg.get("database") or "").strip()
-    if not db_name:
-        raise RuntimeError("TapDB target.database is required for Cognito pool naming")
-    raw = f"tapdb-{db_name}-users"
-    name = re.sub(r"[^a-zA-Z0-9-]+", "-", raw).strip("-").lower()
-    return re.sub(r"-{2,}", "-", name)
-
-
-def _parse_daycog_context_name(name: str) -> tuple[str, str, str]:
-    match = re.match(
-        r"^(?P<pool>.+)\.(?P<region>[a-z]{2}(?:-[a-z0-9]+)+-\d+)(?:\.(?P<app>.+))?$",
-        name,
-    )
-    if not match:
-        return "", "", ""
-    return (
-        (match.group("pool") or "").strip(),
-        (match.group("region") or "").strip(),
-        (match.group("app") or "").strip(),
-    )
-
-
-def _load_daycog_contexts() -> tuple[str, dict[str, dict[str, str]]]:
-    path = _daycog_config_path()
-    if not path.exists():
-        raise RuntimeError(f"daycog config store not found: {path}")
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise RuntimeError(f"invalid daycog config store: {path}")
-    active_name = str(raw.get("active_context") or "").strip()
-    raw_contexts = raw.get("contexts") if isinstance(raw.get("contexts"), dict) else {}
-    contexts: dict[str, dict[str, str]] = {}
-    if isinstance(raw_contexts, dict):
-        for name, values in raw_contexts.items():
-            if not isinstance(values, dict):
-                continue
-            contexts[str(name)] = {
-                str(key): str(value)
-                for key, value in values.items()
-                if value is not None
-            }
-    return active_name, contexts
-
-
-def _score_daycog_context_match(
-    name: str,
-    values: dict[str, str],
-    *,
-    active_name: str = "",
-    prefer_region: Optional[str] = None,
-    prefer_client_name: Optional[str] = None,
-) -> tuple[int, str]:
-    """Return sort key for Daycog stored-context preference (higher score is better)."""
-    score = 0
-    region = (values.get("COGNITO_REGION") or values.get("AWS_REGION") or "").strip()
-    client_name = (values.get("COGNITO_CLIENT_NAME") or "").strip()
-
-    if name == active_name:
-        score += 10
-
-    pool_name, context_region, context_app = _parse_daycog_context_name(name)
-    if pool_name and context_region and not context_app:
-        score += 70
-    elif pool_name and context_region and context_app:
-        safe_client = _sanitize_filename_part(client_name)
-        if context_app == safe_client:
-            score += 60
-
-    if prefer_region and region == prefer_region:
-        score += 25
-    if prefer_client_name and client_name == prefer_client_name:
-        score += 15
-
-    return (score, name)
-
-
-def _find_pool_context_by_id(
-    pool_id: str,
-    *,
-    prefer_region: Optional[str] = None,
-    prefer_client_name: Optional[str] = None,
-) -> tuple[str, dict[str, str]]:
-    active_name, contexts = _load_daycog_contexts()
-    matches: list[tuple[str, dict[str, str]]] = []
-    for context_name, values in contexts.items():
-        if (values.get("COGNITO_USER_POOL_ID") or "").strip() == pool_id:
-            matches.append((context_name, values))
-
-    if matches:
-        matches.sort(
-            key=lambda item: _score_daycog_context_match(
-                item[0],
-                item[1],
-                active_name=active_name,
-                prefer_region=prefer_region,
-                prefer_client_name=prefer_client_name,
-            ),
-            reverse=True,
+    raw = str(cfg.get("cognito_auth_config_path") or "").strip()
+    if not raw or not Path(raw).is_absolute():
+        raise RuntimeError(
+            "target.cognito_auth_config_path must name an explicit absolute "
+            "daycog flat auth-config file. Set it with "
+            "tapdb db-config update --cognito-auth-config-path."
         )
-        return matches[0]
-
-    raise RuntimeError(
-        f"No Daycog stored context maps to pool ID {pool_id}. "
-        "Expected a Daycog context in "
-        f"{_daycog_config_path()} with "
-        f"COGNITO_USER_POOL_ID={pool_id}."
-    )
+    return Path(raw)
 
 
-def _validate_required_client_name(
-    values: dict[str, str],
-    *,
-    context_label: str,
-) -> str:
-    actual = (values.get("COGNITO_CLIENT_NAME") or "").strip()
+def _load_daycog_config() -> dict[str, str]:
+    from daylily_auth_cognito.cli.config import load_config_file
+
+    return load_config_file(_daycog_config_path(), require_required_keys=True)
+
+
+def _validate_required_client_name(values: dict[str, str], *, context_label: str) -> str:
+    actual = str(values.get("COGNITO_CLIENT_NAME") or "").strip()
     if actual != REQUIRED_COGNITO_CLIENT_NAME:
-        display = actual or "(missing)"
         raise RuntimeError(
             f"{context_label} must select Cognito app client name "
-            f"'{REQUIRED_COGNITO_CLIENT_NAME}' (got: {display})."
+            f"{REQUIRED_COGNITO_CLIENT_NAME!r} (got {actual!r})."
         )
     return actual
 
 
-def _resolve_daycog_pool_id_after_setup(
-    *,
-    pool_name: str,
-    region: str,
-    client_name: str,
-) -> tuple[str, str]:
-    """Resolve pool ID from the canonical Daycog YAML context store."""
-    active_name, contexts = _load_daycog_contexts()
-    pool_context_name = f"{pool_name}.{region}"
-    app_context_name = f"{pool_name}.{region}.{_sanitize_filename_part(client_name)}"
+def _resolve_expected_ui_port() -> tuple[int, str]:
+    cfg = get_db_config()
+    raw = str(cfg.get("ui_port") or "").strip()
+    if not raw.isdigit():
+        raise RuntimeError("target.ui_port is required for Cognito callback configuration")
+    return int(raw), "config target.ui_port"
 
-    for context_name in [pool_context_name, app_context_name, active_name]:
-        if not context_name:
+
+def _validate_bound_cognito_uris(values: dict[str, str]) -> tuple[int, str, list[str], list[str]]:
+    expected_port, source = _resolve_expected_ui_port()
+    errors: list[str] = []
+    notices: list[str] = []
+    for key in ("COGNITO_CALLBACK_URL", "COGNITO_LOGOUT_URL"):
+        uri = str(values.get(key) or "").strip()
+        if not uri:
             continue
-        values = contexts.get(context_name) or {}
-        pool_id = (values.get("COGNITO_USER_POOL_ID") or "").strip()
-        if pool_id:
-            return pool_id, context_name
-
-    for context_name, values in sorted(contexts.items()):
-        candidate_pool, candidate_region, _candidate_app = _parse_daycog_context_name(
-            context_name
-        )
-        if candidate_pool != pool_name or candidate_region != region:
+        parsed = urlparse(uri)
+        if parsed.scheme != "https" or not parsed.netloc:
+            errors.append(f"{key}: must be an absolute HTTPS URI: {uri}")
             continue
-        pool_id = (values.get("COGNITO_USER_POOL_ID") or "").strip()
-        if pool_id:
-            return pool_id, context_name
-
-    raise RuntimeError(
-        "daycog setup completed but pool ID was not found in "
-        f"{_daycog_config_path()} for pool {pool_name} ({region})."
-    )
+        port = parsed.port if parsed.port is not None else 443
+        if parsed.hostname in {"localhost", "127.0.0.1", "::1"} and port != expected_port:
+            errors.append(f"{key}: port {port} does not match target.ui_port {expected_port}")
+            continue
+        notices.append(f"{key}: {uri}")
+    return expected_port, source, errors, notices
 
 
-def _write_pool_id_to_tapdb_config(pool_id: str) -> Path:
+def _write_auth_binding_to_tapdb_config(values: dict[str, str]) -> Path:
+    """Bind the native selected file's pool/client identities to the GUI target."""
+    _validate_required_client_name(values, context_label="selected daycog auth config")
+    for key in ("COGNITO_USER_POOL_ID", "COGNITO_APP_CLIENT_ID", "COGNITO_REGION"):
+        if not str(values.get(key) or "").strip():
+            raise RuntimeError(f"Selected auth config is missing {key}")
+    _, _, errors, _ = _validate_bound_cognito_uris(values)
+    if errors:
+        raise RuntimeError("; ".join(errors))
     config_path = get_config_path()
-    if not config_path.exists():
-        raise RuntimeError(f"TapDB explicit target config is required: {config_path}")
-    raw = config_path.read_text(encoding="utf-8")
-    import yaml  # type: ignore
-
-    existing = yaml.safe_load(raw)
-
-    if not isinstance(existing, dict):
-        raise RuntimeError(f"invalid TapDB config: {config_path}")
-    target = existing.get("target")
-    if not isinstance(target, dict):
-        raise RuntimeError(f"TapDB explicit target config is required: {config_path}")
-    target["cognito_user_pool_id"] = pool_id
-    meta = existing.get("meta")
-    if not isinstance(meta, dict):
-        raise RuntimeError(
-            f"TapDB explicit target config is missing meta mapping: {config_path}"
-        )
-    meta["config_version"] = 4
-    existing["meta"] = meta
-
-    config_path.write_text(
-        yaml.dump(existing, default_flow_style=False, sort_keys=False),
-        encoding="utf-8",
-    )
-
-    os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+    existing = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(existing, dict) or not isinstance(existing.get("target"), dict):
+        raise RuntimeError(f"Invalid explicit TapDB target config: {config_path}")
+    target = existing["target"]
+    for key in (
+        "COGNITO_USER_POOL_ID", "COGNITO_APP_CLIENT_ID", "COGNITO_CLIENT_NAME",
+        "COGNITO_REGION", "COGNITO_DOMAIN", "COGNITO_CALLBACK_URL", "COGNITO_LOGOUT_URL",
+    ):
+        target[key.lower()] = str(values.get(key) or "")
+    config_path.write_text(yaml.safe_dump(existing, sort_keys=False), encoding="utf-8")
+    os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)
     return config_path
 
 
 def _run_daycog(args: list[str], env: Optional[dict[str, str]] = None) -> str:
-    cmd = ["daycog", *args]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    cmd = ["daycog", "--config", str(_daycog_config_path()), *args]
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if result.returncode != 0:
         msg = (result.stdout + "\n" + result.stderr).strip()
         raise RuntimeError(msg or f"daycog failed ({result.returncode})")
@@ -461,65 +216,29 @@ def _build_daycog_setup_args(
     return args
 
 
-def _finalize_setup_binding(
-    *,
-    selected_pool_name: str,
-    selected_client_name: str,
-    region: str,
-) -> None:
-    try:
-        pool_id, context_name = _resolve_daycog_pool_id_after_setup(
-            pool_name=selected_pool_name,
-            region=region,
-            client_name=selected_client_name,
-        )
-    except RuntimeError as e:
-        ccyo_out.error(f"{e}")
-        raise typer.Exit(1)
-
-    # Ensure the selected daycog context is bound to the required TAPDB app client.
-    try:
-        _context_name, values = _find_pool_context_by_id(
-            pool_id,
-            prefer_region=region,
-            prefer_client_name=REQUIRED_COGNITO_CLIENT_NAME,
-        )
-        _validate_required_client_name(
-            values,
-            context_label="daycog bound context",
-        )
-    except RuntimeError as e:
-        ccyo_out.error(f"{e}")
-        raise typer.Exit(1)
-
-    cfg_path = _write_pool_id_to_tapdb_config(pool_id)
-    ccyo_out.success(f"Bound pool ID to tapdb config: {pool_id}")
-    ccyo_out.print_text(f"  TAPDB config: [dim]{cfg_path}[/dim]")
-    ccyo_out.print_text(
-        f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]"
-    )
+def _finalize_setup_binding(*, selected_client_name: str, region: str) -> None:
+    values = _load_daycog_config()
+    if values.get("COGNITO_CLIENT_NAME") != selected_client_name:
+        raise RuntimeError("Native setup result selects a different Cognito client")
+    if values.get("COGNITO_REGION") != region:
+        raise RuntimeError("Native setup result selects a different Cognito region")
+    cfg_path = _write_auth_binding_to_tapdb_config(values)
+    ccyo_out.success(f"Bound native Cognito auth config to explicit TapDB target: {cfg_path}")
+    ccyo_out.print_text(f"Auth config: {_daycog_config_path()}")
 
 
-def _resolve_bound_daycog_context(
+def _resolve_bound_daycog_config(
     env: Environment,
-) -> tuple[str, str, dict[str, str], dict[str, str]]:
+) -> tuple[str, Path, dict[str, str], dict[str, str]]:
     _ = env
     cfg = get_db_config()
-    pool_id = (cfg.get("cognito_user_pool_id") or "").strip()
-    if not pool_id:
-        raise RuntimeError(
-            "No cognito_user_pool_id set for the explicit TapDB target. "
-            "Run: tapdb cognito setup"
-        )
-
-    context_name, values = _find_pool_context_by_id(
-        pool_id,
-        prefer_client_name=REQUIRED_COGNITO_CLIENT_NAME,
-    )
-    _validate_required_client_name(values, context_label="explicit TapDB target")
-    proc_env = os.environ.copy()
-    proc_env.update(values)
-    return pool_id, context_name, values, proc_env
+    values = _load_daycog_config()
+    _validate_required_client_name(values, context_label="selected daycog auth config")
+    for key in ("cognito_user_pool_id", "cognito_app_client_id", "cognito_client_name", "cognito_region"):
+        configured = str(cfg.get(key) or "").strip()
+        if not configured or configured != str(values.get(key.upper()) or "").strip():
+            raise RuntimeError(f"TapDB target.{key} must match the selected daycog auth config; use cognito bind")
+    return values["COGNITO_USER_POOL_ID"], _daycog_config_path(), values, os.environ.copy()
 
 
 def _resolve_pool_command_context(
@@ -528,28 +247,16 @@ def _resolve_pool_command_context(
     pool_name: Optional[str] = None,
     region: Optional[str] = None,
     profile: Optional[str] = None,
-) -> tuple[str, Optional[dict[str, str]], str, Optional[str]]:
+) -> tuple[str, Optional[dict[str, str]], str, str]:
     _ = env
-    selected_pool = pool_name or _default_pool_name()
-    selected_region = region
-    selected_profile = profile
-    proc_env: Optional[dict[str, str]] = None
-
-    if selected_region is None or selected_profile is None:
-        _, _, values, bound_proc_env = _resolve_bound_daycog_context(env)
-        proc_env = bound_proc_env
-        if selected_region is None:
-            selected_region = (
-                values.get("COGNITO_REGION") or values.get("AWS_REGION") or None
-            )
-        if selected_profile is None:
-            selected_profile = values.get("AWS_PROFILE") or None
+    values = _load_daycog_config() if region is None or profile is None else {}
+    selected_region = region if region is not None else values.get("COGNITO_REGION")
+    selected_profile = profile if profile is not None else values.get("AWS_PROFILE")
     if not selected_region:
-        raise RuntimeError("AWS region is required for TAPDB Cognito commands.")
+        raise RuntimeError("Explicit --region or selected auth-config COGNITO_REGION is required")
     if not selected_profile:
-        raise RuntimeError("AWS profile is required for TAPDB Cognito commands.")
-
-    return selected_pool, proc_env, selected_region, selected_profile
+        raise RuntimeError("Explicit --profile or selected auth-config AWS_PROFILE is required")
+    return pool_name or "", None, selected_region, selected_profile
 
 
 def _ensure_actor_user_row(
@@ -595,6 +302,9 @@ def _ensure_actor_user_row(
         additional_tenant_ids=tuple(cfg.get("additional_tenant_ids", ())),
         allow_global_rows=bool(cfg.get("allow_global_claims")),
         config_identity=str(cfg["config_path"]),
+        aws_profile=str(cfg.get("aws_profile") or "") or None,
+        sslrootcert=str(cfg.get("sslrootcert") or "") or None,
+        server_port=int(cfg["server_port"]) if cfg.get("server_port") else None,
     ) as conn:
         with conn.session_scope(commit=True) as session:
             user, _ = create_or_get(
@@ -614,9 +324,7 @@ def _ensure_actor_user_row(
 
 @cognito_app.command("setup")
 def cognito_setup(
-    pool_name: Optional[str] = typer.Option(
-        None, "--pool-name", "-n", help="Cognito pool name (defaults from DB name)"
-    ),
+    pool_name: str = typer.Option(..., "--pool-name", "-n", help="Explicit Cognito pool name"),
     client_name: Optional[str] = typer.Option(
         None,
         "--client-name",
@@ -625,7 +333,7 @@ def cognito_setup(
     profile: Optional[str] = typer.Option(
         None,
         "--profile",
-        help="AWS profile (required unless configured on the explicit TAPDB target)",
+        help="AWS profile (required unless present in the selected native auth config)",
     ),
     region: Optional[str] = typer.Option(None, "--region", "-r", help="AWS region"),
     domain_prefix: Optional[str] = typer.Option(
@@ -704,9 +412,9 @@ def cognito_setup(
 ) -> None:
     """Create/reuse Cognito pool via daycog and bind pool ID into tapdb config."""
     cfg = get_db_config()
-    if not region:
-        raise RuntimeError("--region is required for TAPDB Cognito setup")
-    configured_port = int(str(cfg.get("ui_port") or DEFAULT_COGNITO_CALLBACK_PORT))
+    if not region or not profile:
+        raise RuntimeError("--region and --profile are required for TAPDB Cognito setup")
+    configured_port, _ = _resolve_expected_ui_port()
     if port is None:
         selected_port = configured_port
     elif port != configured_port:
@@ -718,7 +426,7 @@ def cognito_setup(
     else:
         selected_port = port
 
-    selected_pool_name = pool_name or _default_pool_name()
+    selected_pool_name = pool_name
     selected_client_name = client_name or REQUIRED_COGNITO_CLIENT_NAME
     if selected_client_name != REQUIRED_COGNITO_CLIENT_NAME:
         ccyo_out.error(
@@ -758,7 +466,6 @@ def cognito_setup(
 
     _run_daycog(args)
     _finalize_setup_binding(
-        selected_pool_name=selected_pool_name,
         selected_client_name=selected_client_name,
         region=region,
     )
@@ -766,9 +473,7 @@ def cognito_setup(
 
 @cognito_app.command("setup-with-google")
 def cognito_setup_with_google(
-    pool_name: Optional[str] = typer.Option(
-        None, "--pool-name", "-n", help="Cognito pool name (defaults from DB name)"
-    ),
+    pool_name: str = typer.Option(..., "--pool-name", "-n", help="Explicit Cognito pool name"),
     client_name: Optional[str] = typer.Option(
         None,
         "--client-name",
@@ -777,7 +482,7 @@ def cognito_setup_with_google(
     profile: Optional[str] = typer.Option(
         None,
         "--profile",
-        help="AWS profile (required unless configured on the explicit TAPDB target)",
+        help="AWS profile (required unless present in the selected native auth config)",
     ),
     region: Optional[str] = typer.Option(None, "--region", "-r", help="AWS region"),
     domain_prefix: Optional[str] = typer.Option(
@@ -868,9 +573,9 @@ def cognito_setup_with_google(
 ) -> None:
     """Create/reuse Cognito pool+app and configure Google IdP; bind pool ID."""
     cfg = get_db_config()
-    if not region:
-        raise RuntimeError("--region is required for TAPDB Cognito setup")
-    configured_port = int(str(cfg.get("ui_port") or DEFAULT_COGNITO_CALLBACK_PORT))
+    if not region or not profile:
+        raise RuntimeError("--region and --profile are required for TAPDB Cognito setup")
+    configured_port, _ = _resolve_expected_ui_port()
     if port is None:
         selected_port = configured_port
     elif port != configured_port:
@@ -882,7 +587,7 @@ def cognito_setup_with_google(
     else:
         selected_port = port
 
-    selected_pool_name = pool_name or _default_pool_name()
+    selected_pool_name = pool_name
     selected_client_name = client_name or REQUIRED_COGNITO_CLIENT_NAME
     if selected_client_name != REQUIRED_COGNITO_CLIENT_NAME:
         ccyo_out.error(
@@ -930,7 +635,6 @@ def cognito_setup_with_google(
 
     _run_daycog(args)
     _finalize_setup_binding(
-        selected_pool_name=selected_pool_name,
         selected_client_name=selected_client_name,
         region=region,
     )
@@ -938,64 +642,39 @@ def cognito_setup_with_google(
 
 @cognito_app.command("bind")
 def cognito_bind(
-    pool_id: str = typer.Option(..., "--pool-id", help="Cognito user pool ID"),
+    pool_id: str = typer.Option(..., "--pool-id", help="Exact selected Cognito pool ID"),
+    client_id: str = typer.Option(..., "--client-id", help="Exact selected Cognito app client ID"),
 ) -> None:
-    """Bind an existing Cognito pool ID into tapdb config."""
-    cfg_path = _write_pool_id_to_tapdb_config(pool_id.strip())
-    ccyo_out.success(f"Bound {pool_id.strip()} to explicit TapDB target")
-    ccyo_out.print_text(f"  TAPDB config: [dim]{cfg_path}[/dim]")
+    """Bind the selected native flat auth config to the explicit TapDB target."""
+    values = _load_daycog_config()
+    if values.get("COGNITO_USER_POOL_ID") != pool_id.strip():
+        raise RuntimeError("--pool-id does not match the selected native auth config")
+    if values.get("COGNITO_APP_CLIENT_ID") != client_id.strip():
+        raise RuntimeError("--client-id does not match the selected native auth config")
+    cfg_path = _write_auth_binding_to_tapdb_config(values)
+    ccyo_out.success(f"Bound pool {pool_id} and client {client_id} to {cfg_path}")
 
 
 @cognito_app.command("status")
 def cognito_status() -> None:
-    """Show TAPDB Cognito binding and the mapped Daycog context."""
-    cfg = get_db_config()
-    pool_id = (cfg.get("cognito_user_pool_id") or "").strip()
-    if not pool_id:
-        ccyo_out.warning("No cognito_user_pool_id set for explicit TapDB target")
-        raise typer.Exit(1)
-
-    context_name, values = _find_pool_context_by_id(
-        pool_id,
-        prefer_client_name=REQUIRED_COGNITO_CLIENT_NAME,
-    )
-    try:
-        _validate_required_client_name(values, context_label="explicit TapDB target")
-    except RuntimeError as e:
-        ccyo_out.error(f"{e}")
-        raise typer.Exit(1)
-    region = values.get("COGNITO_REGION") or values.get("AWS_REGION") or "(missing)"
-    client_id = values.get("COGNITO_APP_CLIENT_ID") or "(missing)"
-    client_name = values.get("COGNITO_CLIENT_NAME") or "(missing)"
-    domain = values.get("COGNITO_DOMAIN") or "(not set)"
-    callback_url = values.get("COGNITO_CALLBACK_URL") or "(missing)"
-    logout_url = values.get("COGNITO_LOGOUT_URL") or "(not set)"
-    profile = values.get("AWS_PROFILE") or "(missing)"
-    ui_pid_file = _ui_pid_file()
-    ccyo_out.success("Target:     explicit")
-    ccyo_out.success(f"Pool ID:    {pool_id}")
-    ccyo_out.success(f"Daycog context: {_daycog_config_path()} :: {context_name}")
-    ccyo_out.success(f"Region:     {region}")
-    ccyo_out.success(f"Client ID:  {client_id}")
-    ccyo_out.success(f"Client:     {client_name}")
-    ccyo_out.success(f"Domain:     {domain}")
-    ccyo_out.success(f"Callback:   {callback_url}")
-    ccyo_out.success(f"Logout:     {logout_url}")
-    ccyo_out.success(f"Profile:    {profile}")
-    ccyo_out.success(f"UI PID:     {ui_pid_file}")
-
-    expected_port, port_source, errors, notices = _validate_bound_cognito_uris(
-        values,
-    )
-    ccyo_out.success(f"TAPDB UI port expectation: {expected_port} ({port_source})")
-    if notices:
-        ccyo_out.success(f"URI checks inspected: {len(notices)}")
+    """Show the exact target and its selected native flat auth config."""
+    pool_id, path, values, _ = _resolve_bound_daycog_config(Environment.target)
+    for label, value in (
+        ("Pool ID", pool_id),
+        ("Auth config", str(path)),
+        ("Region", values["COGNITO_REGION"]),
+        ("Client ID", values["COGNITO_APP_CLIENT_ID"]),
+        ("Client", values["COGNITO_CLIENT_NAME"]),
+        ("Domain", values.get("COGNITO_DOMAIN", "(not set)")),
+        ("Callback", values.get("COGNITO_CALLBACK_URL", "(not set)")),
+        ("Logout", values.get("COGNITO_LOGOUT_URL", "(not set)")),
+        ("AWS profile", values.get("AWS_PROFILE", "(not set)")),
+    ):
+        ccyo_out.print_text(f"{label}: {value}")
+    expected_port, source, errors, _ = _validate_bound_cognito_uris(values)
     if errors:
-        ccyo_out.error("Cognito URI validation failed:")
-        for msg in errors:
-            ccyo_out.print_text(f"  - {msg}")
-        raise typer.Exit(1)
-    ccyo_out.success("Cognito URI validation passed")
+        raise RuntimeError("; ".join(errors))
+    ccyo_out.print_text(f"TapDB UI port: {expected_port} ({source})")
 
 
 @cognito_app.command("list-pools")
@@ -1003,13 +682,13 @@ def cognito_list_pools(
     profile: Optional[str] = typer.Option(
         None,
         "--profile",
-        help="AWS profile (required unless configured on the explicit TAPDB target)",
+        help="AWS profile (required unless present in the selected native auth config)",
     ),
     region: Optional[str] = typer.Option(
         None,
         "--region",
         "-r",
-        help="AWS region (required unless configured on the explicit TAPDB target)",
+        help="AWS region (required unless present in the selected native auth config)",
     ),
 ) -> None:
     """List Cognito pools in the selected region via daycog."""
@@ -1027,19 +706,17 @@ def cognito_list_pools(
 
 @cognito_app.command("list-apps")
 def cognito_list_apps(
-    pool_name: Optional[str] = typer.Option(
-        None, "--pool-name", help="Cognito pool name (default from target DB name)"
-    ),
+    pool_name: str = typer.Option(..., "--pool-name", help="Explicit Cognito pool name"),
     profile: Optional[str] = typer.Option(
         None,
         "--profile",
-        help="AWS profile (required unless configured on the explicit TAPDB target)",
+        help="AWS profile (required unless present in the selected native auth config)",
     ),
     region: Optional[str] = typer.Option(
         None,
         "--region",
         "-r",
-        help="AWS region (required unless configured on the explicit TAPDB target)",
+        help="AWS region (required unless present in the selected native auth config)",
     ),
 ) -> None:
     """List app clients for a Cognito pool via daycog."""
@@ -1062,19 +739,17 @@ def cognito_list_apps(
 def cognito_add_app(
     app_name: str = typer.Option(..., "--app-name", help="New app client name"),
     callback_url: str = typer.Option(..., "--callback-url", help="OAuth callback URL"),
-    pool_name: Optional[str] = typer.Option(
-        None, "--pool-name", help="Cognito pool name (default from target DB name)"
-    ),
+    pool_name: str = typer.Option(..., "--pool-name", help="Explicit Cognito pool name"),
     profile: Optional[str] = typer.Option(
         None,
         "--profile",
-        help="AWS profile (required unless configured on the explicit TAPDB target)",
+        help="AWS profile (required unless present in the selected native auth config)",
     ),
     region: Optional[str] = typer.Option(
         None,
         "--region",
         "-r",
-        help="AWS region (required unless configured on the explicit TAPDB target)",
+        help="AWS region (required unless present in the selected native auth config)",
     ),
     logout_url: Optional[str] = typer.Option(
         None, "--logout-url", help="Optional logout URL"
@@ -1090,7 +765,7 @@ def cognito_add_app(
     set_default: bool = typer.Option(
         False,
         "--set-default",
-        help="Update the pool context and active Daycog context to this app",
+        help="Print the native reminder to update the selected auth-config file",
     ),
 ) -> None:
     """Create a new app client in the pool via daycog."""
@@ -1156,21 +831,19 @@ def cognito_edit_app(
     set_default: bool = typer.Option(
         False,
         "--set-default",
-        help="Update the pool context and active Daycog context to this app",
+        help="Print the native reminder to update the selected auth-config file",
     ),
-    pool_name: Optional[str] = typer.Option(
-        None, "--pool-name", help="Cognito pool name (default from target DB name)"
-    ),
+    pool_name: str = typer.Option(..., "--pool-name", help="Explicit Cognito pool name"),
     profile: Optional[str] = typer.Option(
         None,
         "--profile",
-        help="AWS profile (required unless configured on the explicit TAPDB target)",
+        help="AWS profile (required unless present in the selected native auth config)",
     ),
     region: Optional[str] = typer.Option(
         None,
         "--region",
         "-r",
-        help="AWS region (required unless configured on the explicit TAPDB target)",
+        help="AWS region (required unless present in the selected native auth config)",
     ),
 ) -> None:
     """Edit an existing app client in the pool via daycog."""
@@ -1215,25 +888,23 @@ def cognito_edit_app(
 def cognito_remove_app(
     app_name: Optional[str] = typer.Option(None, "--app-name", help="App client name"),
     client_id: Optional[str] = typer.Option(None, "--client-id", help="App client ID"),
-    pool_name: Optional[str] = typer.Option(
-        None, "--pool-name", help="Cognito pool name (default from target DB name)"
-    ),
+    pool_name: str = typer.Option(..., "--pool-name", help="Explicit Cognito pool name"),
     profile: Optional[str] = typer.Option(
         None,
         "--profile",
-        help="AWS profile (required unless configured on the explicit TAPDB target)",
+        help="AWS profile (required unless present in the selected native auth config)",
     ),
     region: Optional[str] = typer.Option(
         None,
         "--region",
         "-r",
-        help="AWS region (required unless configured on the explicit TAPDB target)",
+        help="AWS region (required unless present in the selected native auth config)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
     delete_config: bool = typer.Option(
         True,
         "--delete-config/--keep-config",
-        help="Delete the app-scoped Daycog context (default: true)",
+        help="Native daycog compatibility flag; no config deletion in 2.1.5",
     ),
 ) -> None:
     """Remove an app client from the pool via daycog."""
@@ -1268,19 +939,17 @@ def cognito_remove_app(
 def cognito_add_google_idp(
     app_name: Optional[str] = typer.Option(None, "--app-name", help="App client name"),
     client_id: Optional[str] = typer.Option(None, "--client-id", help="App client ID"),
-    pool_name: Optional[str] = typer.Option(
-        None, "--pool-name", help="Cognito pool name (default from target DB name)"
-    ),
+    pool_name: str = typer.Option(..., "--pool-name", help="Explicit Cognito pool name"),
     profile: Optional[str] = typer.Option(
         None,
         "--profile",
-        help="AWS profile (required unless configured on the explicit TAPDB target)",
+        help="AWS profile (required unless present in the selected native auth config)",
     ),
     region: Optional[str] = typer.Option(
         None,
         "--region",
         "-r",
-        help="AWS region (required unless configured on the explicit TAPDB target)",
+        help="AWS region (required unless present in the selected native auth config)",
     ),
     google_client_id: Optional[str] = typer.Option(
         None, "--google-client-id", help="Google OAuth client ID"
@@ -1338,7 +1007,7 @@ def cognito_fix_auth_flows() -> None:
     """Enable required auth flows on the active daycog app client."""
     env = Environment.target
     try:
-        _, _, _, proc_env = _resolve_bound_daycog_context(env)
+        _, _, _, proc_env = _resolve_bound_daycog_config(env)
     except RuntimeError as e:
         ccyo_out.error(f"{e}")
         raise typer.Exit(1)
@@ -1346,114 +1015,63 @@ def cognito_fix_auth_flows() -> None:
 
 
 @config_app.command("print")
-def cognito_config_print(
-    pool_name: Optional[str] = typer.Option(
-        None, "--pool-name", help="Cognito pool name (default from target DB name)"
-    ),
-    region: Optional[str] = typer.Option(
-        None,
-        "--region",
-        "-r",
-        help="AWS region (required unless configured on the explicit TAPDB target)",
-    ),
+def cognito_config_print() -> None:
+    """Print the explicitly selected native daycog auth config."""
+    _run_daycog_printing(["auth-config", "print"])
+
+
+def _auth_config_command(
+    operation: str,
+    *,
+    pool_name: Optional[str],
+    pool_id: Optional[str],
+    client_name: Optional[str],
+    client_id: Optional[str],
+    profile: str,
+    region: str,
 ) -> None:
-    """Print the Daycog context entry for the target pool."""
-    env = Environment.target
-    selected_pool, proc_env, selected_region, _ = _resolve_pool_command_context(
-        env,
-        pool_name=pool_name,
-        region=region,
-        profile=None,
-    )
-    args = [
-        "config",
-        "print",
-        "--pool-name",
-        selected_pool,
-        "--region",
-        selected_region,
-    ]
-    _run_daycog_printing(args, env=proc_env)
+    if bool(pool_name) == bool(pool_id):
+        raise RuntimeError("Select exactly one explicit --pool-name or --pool-id")
+    if bool(client_name) == bool(client_id):
+        raise RuntimeError("Select exactly one explicit --client-name or --client-id")
+    args = ["auth-config", operation, "--profile", profile, "--region", region]
+    for flag, value in (
+        ("--pool-name", pool_name), ("--pool-id", pool_id),
+        ("--client-name", client_name), ("--client-id", client_id),
+    ):
+        if value:
+            args.extend([flag, value])
+    _run_daycog_printing(args)
 
 
 @config_app.command("create")
 def cognito_config_create(
-    pool_name: Optional[str] = typer.Option(
-        None, "--pool-name", help="Cognito pool name (default from target DB name)"
-    ),
-    profile: Optional[str] = typer.Option(
-        None,
-        "--profile",
-        help="AWS profile (required unless configured on the explicit TAPDB target)",
-    ),
-    region: Optional[str] = typer.Option(
-        None,
-        "--region",
-        "-r",
-        help="AWS region (required unless configured on the explicit TAPDB target)",
-    ),
+    pool_name: Optional[str] = typer.Option(None, "--pool-name", help="Exact existing pool name"),
+    pool_id: Optional[str] = typer.Option(None, "--pool-id", help="Exact existing pool ID"),
+    client_name: Optional[str] = typer.Option(None, "--client-name", help="Exact existing app client name"),
+    client_id: Optional[str] = typer.Option(None, "--client-id", help="Exact existing app client ID"),
+    profile: str = typer.Option(..., "--profile", help="Explicit existing AWS profile"),
+    region: str = typer.Option(..., "--region", "-r", help="Explicit AWS region"),
 ) -> None:
-    """Create a Daycog pool context from AWS and update the active context."""
-    env = Environment.target
-    selected_pool, proc_env, selected_region, selected_profile = (
-        _resolve_pool_command_context(
-            env,
-            pool_name=pool_name,
-            region=region,
-            profile=profile,
-        )
-    )
-    args = [
-        "config",
-        "create",
-        "--pool-name",
-        selected_pool,
-        "--region",
-        selected_region,
-    ]
-    if selected_profile:
-        args.extend(["--profile", selected_profile])
-    _run_daycog_printing(args, env=proc_env)
+    """Import existing pool/client state through native daycog auth-config create."""
+    _auth_config_command("create", pool_name=pool_name, pool_id=pool_id,
+                         client_name=client_name, client_id=client_id,
+                         profile=profile, region=region)
 
 
 @config_app.command("update")
 def cognito_config_update(
-    pool_name: Optional[str] = typer.Option(
-        None, "--pool-name", help="Cognito pool name (default from target DB name)"
-    ),
-    profile: Optional[str] = typer.Option(
-        None,
-        "--profile",
-        help="AWS profile (required unless configured on the explicit TAPDB target)",
-    ),
-    region: Optional[str] = typer.Option(
-        None,
-        "--region",
-        "-r",
-        help="AWS region (required unless configured on the explicit TAPDB target)",
-    ),
+    pool_name: Optional[str] = typer.Option(None, "--pool-name", help="Exact existing pool name"),
+    pool_id: Optional[str] = typer.Option(None, "--pool-id", help="Exact existing pool ID"),
+    client_name: Optional[str] = typer.Option(None, "--client-name", help="Exact existing app client name"),
+    client_id: Optional[str] = typer.Option(None, "--client-id", help="Exact existing app client ID"),
+    profile: str = typer.Option(..., "--profile", help="Explicit existing AWS profile"),
+    region: str = typer.Option(..., "--region", "-r", help="Explicit AWS region"),
 ) -> None:
-    """Update a Daycog pool context from AWS and refresh the active context."""
-    env = Environment.target
-    selected_pool, proc_env, selected_region, selected_profile = (
-        _resolve_pool_command_context(
-            env,
-            pool_name=pool_name,
-            region=region,
-            profile=profile,
-        )
-    )
-    args = [
-        "config",
-        "update",
-        "--pool-name",
-        selected_pool,
-        "--region",
-        selected_region,
-    ]
-    if selected_profile:
-        args.extend(["--profile", selected_profile])
-    _run_daycog_printing(args, env=proc_env)
+    """Update the selected file through native daycog auth-config update."""
+    _auth_config_command("update", pool_name=pool_name, pool_id=pool_id,
+                         client_name=client_name, client_id=client_id,
+                         profile=profile, region=region)
 
 
 @cognito_app.command("add-user")
@@ -1480,7 +1098,7 @@ def cognito_add_user(
         raise typer.Exit(1)
 
     try:
-        pool_id, context_name, _, proc_env = _resolve_bound_daycog_context(env)
+        pool_id, auth_config_path, _, proc_env = _resolve_bound_daycog_config(env)
     except RuntimeError as e:
         ccyo_out.error(f"{e}")
         raise typer.Exit(1)
@@ -1506,6 +1124,6 @@ def cognito_add_user(
     ccyo_out.success(f"Created Cognito user: {email}")
     ccyo_out.print_text(f"  Pool: [dim]{pool_id}[/dim]")
     ccyo_out.print_text(
-        f"  Daycog context: [dim]{_daycog_config_path()} :: {context_name}[/dim]"
+        f"  Daycog auth config: [dim]{auth_config_path}[/dim]"
     )
     ccyo_out.print_text(f"  tapdb role: [dim]{role}[/dim]")

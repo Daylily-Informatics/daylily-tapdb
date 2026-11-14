@@ -14,7 +14,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature
 
-from admin.cognito import get_cognito_auth
+from admin.cognito import get_cognito_admin_client
 from admin.db_pool import get_db_connection
 from daylily_tapdb.cli.db_config import get_admin_settings
 from daylily_tapdb.user_store import (
@@ -140,7 +140,7 @@ def _resolve_shared_auth_user(request: Request) -> Optional[dict]:
             raise HTTPException(503, "Shared host must supply stable actor_issuer and actor_subject for TapDB 11 user provisioning")
         user = get_or_create_user_from_email(email, role=bloom_user["role"],
             attribution=Attribution("human", bloom_user["actor_issuer"], bloom_user["actor_subject"],
-                get_db_config()["owner_repo_name"],str(uuid4()),str(uuid4())))
+                get_db_config()["client_id"],str(uuid4()),str(uuid4())))
 
     request.session["user_uid"] = user["uid"]
     request.session["cognito_username"] = email
@@ -231,8 +231,9 @@ def get_user_by_uid(user_uid: int | str) -> Optional[dict]:
 
 def authenticate_with_cognito(username_or_email: str, password: str) -> dict:
     """Authenticate against Cognito using daylily-auth-cognito."""
-    auth = get_cognito_auth()
-    return auth.authenticate(email=username_or_email, password=password)
+    from daylily_auth_cognito.admin.passwords import authenticate
+
+    return authenticate(get_cognito_admin_client(), email=username_or_email, password=password)
 
 
 def create_cognito_user_account(
@@ -246,28 +247,24 @@ def create_cognito_user_account(
     if not normalized:
         raise ValueError("Email is required")
 
-    auth = get_cognito_auth()
-    attrs = [
-        {"Name": "email", "Value": normalized},
-        {"Name": "email_verified", "Value": "true"},
-    ]
+    from daylily_auth_cognito.admin.passwords import set_user_password
+    from daylily_auth_cognito.admin.users import create_user
+
+    auth = get_cognito_admin_client()
+    attrs = []
     if display_name:
         attrs.append({"Name": "name", "Value": display_name.strip()})
 
     try:
-        auth.cognito.admin_create_user(
-            UserPoolId=auth.user_pool_id,
-            Username=normalized,
-            TemporaryPassword=password,
-            UserAttributes=attrs,
-            MessageAction="SUPPRESS",
+        create_user(
+            auth,
+            email=normalized,
+            temporary_password=password,
+            email_verified=True,
+            suppress_message=True,
+            extra_attributes=attrs,
         )
-        auth.cognito.admin_set_user_password(
-            UserPoolId=auth.user_pool_id,
-            Username=normalized,
-            Password=password,
-            Permanent=True,
-        )
+        set_user_password(auth, email=normalized, password=password, permanent=True)
     except auth.cognito.exceptions.UsernameExistsException:
         raise ValueError("Account already exists")
     except auth.cognito.exceptions.InvalidPasswordException:
@@ -280,8 +277,10 @@ def respond_to_new_password_challenge(
     username_or_email: str, new_password: str, challenge_session: str
 ) -> dict:
     """Complete Cognito NEW_PASSWORD_REQUIRED challenge."""
-    auth = get_cognito_auth()
-    return auth.respond_to_new_password_challenge(
+    from daylily_auth_cognito.admin.passwords import respond_to_new_password_challenge as respond
+
+    return respond(
+        get_cognito_admin_client(),
         email=username_or_email,
         new_password=new_password,
         session=challenge_session,
@@ -292,8 +291,10 @@ def change_cognito_password(
     access_token: str, current_password: str, new_password: str
 ) -> None:
     """Change password for an authenticated Cognito user."""
-    auth = get_cognito_auth()
-    auth.change_password(
+    from daylily_auth_cognito.admin.passwords import change_password
+
+    change_password(
+        get_cognito_admin_client(),
         access_token=access_token,
         old_password=current_password,
         new_password=new_password,

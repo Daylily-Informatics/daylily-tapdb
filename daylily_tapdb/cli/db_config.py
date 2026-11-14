@@ -379,6 +379,7 @@ def _build_db_config_from_section(
             section_name=section_name,
         ),
         "schema_name": schema_name,
+        "cognito_auth_config_path": _file_str("cognito_auth_config_path") or "",
         "cognito_user_pool_id": _file_str("cognito_user_pool_id") or "",
         "cognito_app_client_id": _file_str("cognito_app_client_id") or "",
         "cognito_app_client_secret": _file_str("cognito_app_client_secret") or "",

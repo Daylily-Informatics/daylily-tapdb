@@ -90,7 +90,9 @@ That split is deliberate:
 - `ui` manages the canonical TapDB GUI server process.
 - `bootstrap` is the one-command orchestration path.
 - `users` manages actor-backed TAPDB auth users.
-- `cognito` is the TAPDB-side bridge to `daylily-auth-cognito`.
+- `cognito` is the TAPDB-side bridge to `daylily-auth-cognito`. It selects one
+  explicit flat auth-config file through `target.cognito_auth_config_path`;
+  see [native Admin authentication](cognito-native-admin.md).
 - `aurora` is optional cloud infrastructure support.
 
 Existing-service recovery and conversion must follow the ordered operator

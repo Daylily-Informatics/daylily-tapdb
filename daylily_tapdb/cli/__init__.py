@@ -882,6 +882,7 @@ def build_app():
             password=None,
             database=None,
             schema_name=None,
+            cognito_auth_config_path=None,
             cognito_user_pool_id=None,
             cognito_app_client_id=None,
             cognito_app_client_secret=None,
@@ -1602,6 +1603,11 @@ def build_app():
         schema_name: Optional[str] = typer.Option(
             None, "--schema-name", help="PostgreSQL schema name"
         ),
+        cognito_auth_config_path: Optional[str] = typer.Option(
+            None,
+            "--cognito-auth-config-path",
+            help="Explicit absolute daycog flat auth-config file path",
+        ),
         cognito_user_pool_id: Optional[str] = typer.Option(
             None, "--cognito-user-pool-id", help="Bound Cognito user pool ID"
         ),
@@ -1784,6 +1790,7 @@ def build_app():
             "allow_global_claims",
             "database",
             "schema_name",
+            "cognito_auth_config_path",
             "cognito_user_pool_id",
             "cognito_app_client_id",
             "cognito_app_client_secret",
@@ -1905,6 +1912,11 @@ def build_app():
                 schema_name,
                 field_name="schema_name",
             )
+        if cognito_auth_config_path is not None:
+            selected_auth_path = Path(cognito_auth_config_path)
+            if not cognito_auth_config_path.strip() or not selected_auth_path.is_absolute():
+                raise RuntimeError("--cognito-auth-config-path must be an explicit absolute path")
+            updates["cognito_auth_config_path"] = str(selected_auth_path)
         if cognito_user_pool_id is not None:
             updates["cognito_user_pool_id"] = str(cognito_user_pool_id).strip()
         if cognito_app_client_id is not None:

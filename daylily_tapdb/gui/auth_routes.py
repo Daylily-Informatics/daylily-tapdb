@@ -26,7 +26,7 @@ from admin.auth import (
     respond_to_new_password_challenge,
     update_last_login,
 )
-from admin.cognito import get_cognito_auth, resolve_tapdb_pool_config
+from admin.cognito import get_cognito_token_verifier, resolve_tapdb_pool_config
 
 LOGGER = logging.getLogger(__name__)
 
@@ -176,37 +176,22 @@ def _fetch_oauth_userinfo(runtime: dict[str, str], access_token: str) -> dict[st
 def _resolve_oauth_user_profile(
     tokens: dict[str, Any], runtime: dict[str, str]
 ) -> dict[str, str]:
-    claims: dict[str, Any] = {}
     access_token = str(tokens.get("access_token") or "")
-    id_token = str(tokens.get("id_token") or "")
-    if access_token:
-        try:
-            claims.update(_fetch_oauth_userinfo(runtime, access_token))
-        except Exception as exc:
-            LOGGER.warning("Failed to fetch Cognito userInfo claims: %s", exc)
-    if (not claims or not claims.get("email")) and id_token:
-        try:
-            claims.update(get_cognito_auth().verify_token(id_token))
-        except Exception as exc:
-            LOGGER.warning("Failed to verify Cognito id_token claims: %s", exc)
-    email = (
-        str(
-            claims.get("email")
-            or claims.get("cognito:username")
-            or claims.get("username")
-            or ""
-        )
-        .strip()
-        .lower()
-    )
+    if not access_token:
+        raise RuntimeError("Cognito OAuth response is missing an access token")
+    claims = get_cognito_token_verifier().verify_token(access_token)
+    userinfo = _fetch_oauth_userinfo(runtime, access_token)
+    if not claims.get("sub") or userinfo.get("sub") != claims["sub"]:
+        raise RuntimeError("Cognito userInfo subject must match the verified access-token subject")
+    email = str(userinfo.get("email") or "").strip().lower()
     if not email:
         raise RuntimeError(
-            "OAuth login succeeded but no email or username claim was returned"
+            "OAuth login succeeded but no email claim was returned"
         )
     display_name = str(
-        claims.get("name")
-        or claims.get("preferred_username")
-        or claims.get("given_name")
+        userinfo.get("name")
+        or userinfo.get("preferred_username")
+        or userinfo.get("given_name")
         or ""
     ).strip()
     if not claims.get("sub"):
@@ -221,7 +206,7 @@ def _cognito_attribution(subject: str):
     pool=resolve_tapdb_pool_config()
     cfg=get_db_config()
     return Attribution("human", f"cognito:{pool.pool_id}", subject,
-        cfg["owner_repo_name"],str(uuid4()),str(uuid4()))
+        cfg["client_id"],str(uuid4()),str(uuid4()))
 
 
 def _safe_next_path(request: Request, value: str) -> str:
@@ -364,7 +349,7 @@ def create_tapdb_gui_auth_router(*, templates: Environment) -> APIRouter:
             )
         if not user:
             try:
-                claims=get_cognito_auth().verify_token(auth_result["id_token"])
+                claims=get_cognito_token_verifier().verify_token(auth_result["access_token"])
                 user = get_or_create_user_from_email(cognito_username, attribution=_cognito_attribution(claims["sub"]))
             except Exception as exc:
                 return _render_auth(
@@ -436,7 +421,7 @@ def create_tapdb_gui_auth_router(*, templates: Environment) -> APIRouter:
         try:
             create_cognito_user_account(email, password, display_name=display_name)
             auth_result = authenticate_with_cognito(email, password)
-            claims=get_cognito_auth().verify_token(auth_result["id_token"])
+            claims=get_cognito_token_verifier().verify_token(auth_result["access_token"])
             user = get_or_create_user_from_email(
                 email, display_name=display_name, role="user", attribution=_cognito_attribution(claims["sub"])
             )
