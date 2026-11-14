@@ -25,6 +25,7 @@ from daylily_tapdb.backup.engine import sanitized_libpq_environment
 from daylily_tapdb.cli.census import census
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config
 from daylily_tapdb.cli.identity import identity_app
+from daylily_tapdb.cli.issuance import issuance_app
 from daylily_tapdb.cli.runtime_principal import runtime_principal_app
 from daylily_tapdb.cli.sequences import sequences_app
 from daylily_tapdb.governance import GovernanceContext
@@ -958,6 +959,7 @@ db_app.add_typer(config_app, name="config")
 db_app.add_typer(identity_app, name="identity")
 db_app.add_typer(sequences_app, name="sequences")
 db_app.add_typer(runtime_principal_app, name="runtime-principal")
+db_app.add_typer(issuance_app, name="issuance-profile")
 
 db_app.command("census")(census)
 

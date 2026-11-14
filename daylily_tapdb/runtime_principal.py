@@ -681,8 +681,10 @@ def _managed_sequence_bindings(
                     for evidence in mapping["evidence"]
                 )
             )
-            if target["issuance_profile"]["mode"] == "single_prefix":
-                allowed = allowed and mapping["prefix"] == target["issuance_profile"]["prefix"]
+            if target["issuance_profile"]["mode"] != "canonical":
+                allowed = allowed and mapping["prefix"] in set(
+                    profile_from_config(target).identity_prefixes().values()
+                )
         else:
             allowed = False
         if not allowed:

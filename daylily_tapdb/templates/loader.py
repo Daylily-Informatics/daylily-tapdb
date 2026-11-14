@@ -960,6 +960,13 @@ def _validate_seed_ownership(
         source=str(domain_registry_path),
         governance_authorization=governance_authorization,
     )
+    _assert_prefix_claimed(
+        domain_code=domain_code,
+        prefix=issuance_profile.identity_prefix("generic_template"),
+        owner_repo_name=issuance_profile.core_prefix_owner(owner_repo_name),
+        prefix_registry=prefix_registry,
+        source=str(prefix_registry_path),
+    )
 
     for template in templates:
         prefix = str(template.get("instance_prefix") or "").strip().upper()
@@ -1029,7 +1036,7 @@ def seed_templates(
         for template in prepared_templates
     ]
     prefixes = sorted(
-        {
+        {issuance_profile.identity_prefix("generic_template")} | {
             str(template.get("instance_prefix") or "").strip().upper()
             for template in prepared_templates
             if str(template.get("instance_prefix") or "").strip()
@@ -1065,7 +1072,7 @@ def seed_templates(
                 skipped += 1
 
     if create_governance_objects and (
-        resolved_owner == "daylily-tapdb" or issuance_profile.mode == "single_prefix"
+        resolved_owner == "daylily-tapdb" or issuance_profile.mode != "canonical"
     ) and any(
         str(template.get("category") or "") == "governance"
         for template in prepared_templates

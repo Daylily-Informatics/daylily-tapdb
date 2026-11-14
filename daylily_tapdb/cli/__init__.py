@@ -1278,7 +1278,7 @@ def build_app():
         issuance_profile_json: str = typer.Option(
             ...,
             "--issuance-profile-json",
-            help="Required explicit JSON profile: version 1, canonical or single_prefix with prefix",
+            help="Required version 1 JSON profile: canonical, single_prefix with prefix, or template_split with prefix and template_prefix",
         ),
         domain_code: str = typer.Option(
             ...,
@@ -1834,17 +1834,15 @@ def build_app():
                 )
             return value
 
-        target_cfg = _required_mapping(root, "target", "root")
-        admin_root = _required_mapping(root, "admin", "root")
-        footer = _required_mapping(admin_root, "footer", "admin")
-        session = _required_mapping(admin_root, "session", "admin")
-        auth = _required_mapping(admin_root, "auth", "admin")
-        disabled_user = _required_mapping(auth, "disabled_user", "admin.auth")
-        shared_host = _required_mapping(auth, "shared_host", "admin.auth")
-        cors = _required_mapping(admin_root, "cors", "admin")
-        ui_root = _required_mapping(admin_root, "ui", "admin")
-        tls = _required_mapping(ui_root, "tls", "admin.ui")
-        metrics = _required_mapping(admin_root, "metrics", "admin")
+        def _section(*keys: str) -> dict[str, object]:
+            section = root
+            label = "root"
+            for key in keys:
+                section = _required_mapping(section, key, label)
+                label = key if label == "root" else f"{label}.{key}"
+            return section
+
+        target_cfg = _section("target")
 
         inventory_changes = {
             key: value
@@ -2000,67 +1998,63 @@ def build_app():
 
         admin_changed = False
         if admin_repo_url is not None:
-            footer["repo_url"] = str(admin_repo_url).strip()
+            _section("admin", "footer")["repo_url"] = str(admin_repo_url).strip()
             admin_changed = True
         if admin_session_secret is not None:
-            session["secret"] = str(admin_session_secret)
+            _section("admin", "session")["secret"] = str(admin_session_secret)
             admin_changed = True
         if admin_auth_mode is not None:
-            auth["mode"] = str(admin_auth_mode).strip().lower()
+            _section("admin", "auth")["mode"] = str(admin_auth_mode).strip().lower()
             admin_changed = True
         if admin_disabled_user_email is not None:
-            disabled_user["email"] = str(admin_disabled_user_email).strip().lower()
+            _section("admin", "auth", "disabled_user")["email"] = str(admin_disabled_user_email).strip().lower()
             admin_changed = True
         if admin_disabled_user_role is not None:
-            disabled_user["role"] = str(admin_disabled_user_role).strip().lower()
+            _section("admin", "auth", "disabled_user")["role"] = str(admin_disabled_user_role).strip().lower()
             admin_changed = True
         if admin_shared_host_session_secret is not None:
-            shared_host["session_secret"] = str(admin_shared_host_session_secret)
+            _section("admin", "auth", "shared_host")["session_secret"] = str(admin_shared_host_session_secret)
             admin_changed = True
         if admin_shared_host_session_cookie is not None:
-            shared_host["session_cookie"] = str(
+            _section("admin", "auth", "shared_host")["session_cookie"] = str(
                 admin_shared_host_session_cookie
             ).strip()
             admin_changed = True
         if admin_shared_host_session_max_age_seconds is not None:
-            shared_host["session_max_age_seconds"] = int(
+            _section("admin", "auth", "shared_host")["session_max_age_seconds"] = int(
                 admin_shared_host_session_max_age_seconds
             )
             admin_changed = True
         if admin_allowed_origin:
-            cors["allowed_origins"] = [
+            _section("admin", "cors")["allowed_origins"] = [
                 str(item).strip() for item in admin_allowed_origin if str(item).strip()
             ]
             admin_changed = True
         if admin_tls_cert_path is not None:
-            tls["cert_path"] = str(admin_tls_cert_path).strip()
+            _section("admin", "ui", "tls")["cert_path"] = str(admin_tls_cert_path).strip()
             admin_changed = True
         if admin_tls_key_path is not None:
-            tls["key_path"] = str(admin_tls_key_path).strip()
+            _section("admin", "ui", "tls")["key_path"] = str(admin_tls_key_path).strip()
             admin_changed = True
         if admin_metrics_enabled is not None:
-            metrics["enabled"] = bool(admin_metrics_enabled)
+            _section("admin", "metrics")["enabled"] = bool(admin_metrics_enabled)
             admin_changed = True
         if admin_metrics_queue_max is not None:
-            metrics["queue_max"] = int(admin_metrics_queue_max)
+            _section("admin", "metrics")["queue_max"] = int(admin_metrics_queue_max)
             admin_changed = True
         if admin_metrics_flush_seconds is not None:
-            metrics["flush_seconds"] = float(admin_metrics_flush_seconds)
+            _section("admin", "metrics")["flush_seconds"] = float(admin_metrics_flush_seconds)
             admin_changed = True
         backup_changed = False
-        backup_root = root.get("backup")
-        if not isinstance(backup_root, dict):
-            backup_root = _default_backup_config()
-            root["backup"] = backup_root
         if backup_receipts_directory is not None:
             from daylily_tapdb.backup.receipts import validate_receipts_directory
 
-            backup_root["receipts_directory"] = str(
+            _section("backup")["receipts_directory"] = str(
                 validate_receipts_directory(backup_receipts_directory)
             )
             backup_changed = True
         if backup_storage_uri is not None:
-            storage_section = _required_mapping(backup_root, "storage", "backup")
+            storage_section = _required_mapping(_section("backup"), "storage", "backup")
             # Reject credential-bearing URIs at write time, not just at read
             # time -- otherwise a bad value sits in the file until a backup
             # runs, and manifests carry storage URIs to shared destinations.
@@ -2069,7 +2063,7 @@ def build_app():
             )
             backup_changed = True
         if backup_keep_last is not None:
-            retention_section = _required_mapping(backup_root, "retention", "backup")
+            retention_section = _required_mapping(_section("backup"), "retention", "backup")
             if int(backup_keep_last) < 1:
                 raise RuntimeError("--backup-keep-last must be at least 1")
             retention_section["keep_last"] = int(backup_keep_last)
@@ -2080,7 +2074,7 @@ def build_app():
                     "--backup-expected-interval-hours must be zero or greater "
                     "(zero means no cadence is configured)"
                 )
-            backup_root["expected_interval_hours"] = float(
+            _section("backup")["expected_interval_hours"] = float(
                 backup_expected_interval_hours
             )
             backup_changed = True
@@ -2093,12 +2087,12 @@ def build_app():
             # Top-level under `backup:`, matching expected_interval_hours --
             # not nested under `backup.rehearsal`, whose block `config init`
             # merges wholesale and whose exact contents are asserted by tests.
-            backup_root["expected_rehearsal_interval_days"] = float(
+            _section("backup")["expected_rehearsal_interval_days"] = float(
                 backup_expected_rehearsal_interval_days
             )
             backup_changed = True
         if backup_rehearsal_database_prefix is not None:
-            rehearsal_section = _required_mapping(backup_root, "rehearsal", "backup")
+            rehearsal_section = _required_mapping(_section("backup"), "rehearsal", "backup")
             rehearsal_section["database_prefix"] = (
                 validate_postgres_identifier_component(
                     backup_rehearsal_database_prefix,
@@ -2108,7 +2102,7 @@ def build_app():
             backup_changed = True
         if backup_receipt_mirror_uri is not None:
             mirror = str(backup_receipt_mirror_uri).strip()
-            backup_root["receipt_mirror"] = (
+            _section("backup")["receipt_mirror"] = (
                 {
                     "uri": _validated_storage_uri(
                         mirror, field_name="backup.receipt_mirror.uri"
@@ -2120,12 +2114,11 @@ def build_app():
             backup_changed = True
 
         safety_changed = False
-        safety_root = _required_mapping(root, "safety", "root")
         if safety_tier is not None:
             normalized = str(safety_tier).strip().lower()
             if normalized not in {"local", "shared", "production"}:
                 raise RuntimeError("--safety-tier must be local, shared, or production")
-            safety_root["safety_tier"] = normalized
+            _section("safety")["safety_tier"] = normalized
             safety_changed = True
         if destructive_operations is not None:
             normalized = str(destructive_operations).strip().lower()
@@ -2133,7 +2126,7 @@ def build_app():
                 raise RuntimeError(
                     "--destructive-operations must be blocked, confirm_required, or allowed"
                 )
-            safety_root["destructive_operations"] = normalized
+            _section("safety")["destructive_operations"] = normalized
             safety_changed = True
 
         if (

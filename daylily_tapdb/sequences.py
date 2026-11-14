@@ -1162,13 +1162,31 @@ def require_instance_prefix_sequence(session: Any, prefix: str) -> None:
     definition. The registry owns prefix authority; this native read establishes
     only the schema's existing binding and the principal's allocation privilege.
     """
+    _require_prefix_sequence(session, prefix, identity_entity=None)
+
+
+def require_identity_prefix_sequence(session: Any, entity: str, prefix: str) -> None:
+    """Require the exact configured native identity allocator without mutation."""
+    from daylily_tapdb.euid import EUIDConfig
+
+    if entity not in EUIDConfig().CORE_PREFIXES:
+        raise ValueError(f"Unknown native identity entity: {entity!r}")
+    _require_prefix_sequence(session, prefix, identity_entity=entity)
+
+
+def _require_prefix_sequence(session: Any, prefix: str, *, identity_entity: str | None) -> None:
     normalized = _normalize_instance_prefix(prefix)
-    available = session.execute(text("""
+    resolver = (
+        "tapdb_require_instance_prefix(:prefix)" if identity_entity is None
+        else "tapdb_get_identity_prefix(:entity)"
+    )
+    available = session.execute(text(f"""
         SELECT c.oid
         FROM pg_catalog.pg_class c
         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = pg_catalog.current_schema()
-          AND c.relname = pg_catalog.lower(tapdb_require_instance_prefix(:prefix)) || '_instance_seq'
+          AND c.relname = pg_catalog.lower({resolver}) || '_instance_seq'
+          AND :prefix = {resolver}
           AND c.relkind = 'S'
           AND pg_catalog.has_sequence_privilege(c.oid, 'USAGE')
           AND (
@@ -1180,10 +1198,10 @@ def require_instance_prefix_sequence(session: Any, prefix: str) -> None:
                 AND p.prefix = :prefix
             )
           )
-    """), {"prefix": normalized}).scalar_one_or_none()
+    """), {"prefix": normalized, "entity": identity_entity}).scalar_one_or_none()
     if available is None:
         raise SequenceProtectionError(
-            f"Instance prefix {normalized!r} requires an operator-provisioned native "
+            f"Prefix {normalized!r} requires its exact configured operator-provisioned native "
             "allocator and runtime USAGE grant before template authoring"
         )
 

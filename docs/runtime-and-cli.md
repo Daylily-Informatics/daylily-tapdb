@@ -283,3 +283,12 @@ IAM signing; TapDB does not guess it.
   use qualified object resolution so temporary objects cannot redirect them.
 
 That keeps the README and local docs aligned with the current CLI contract and avoids mixing cloud rollout mechanics into the core mental model.
+
+## Scoped configuration updates
+
+`tapdb --config ABSOLUTE_CONFIG_PATH db-config update` requires only the
+sections selected by its supplied options. Issuance-profile and operator
+credential updates do not require a standalone GUI `admin` section in an
+embedded service configuration. Unrelated GUI, backup and safety sections are
+left unchanged; no missing sections or defaults are generated. Editing a
+missing section fails explicitly.

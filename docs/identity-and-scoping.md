@@ -73,8 +73,9 @@ meta:
     mode: canonical
 ```
 
-A deployment can instead select one registry-owned prefix for all of its new
-identities. For the fresh Bloom deployment the identity settings are:
+A deployment can select one registry-owned prefix for all new identities using
+`single_prefix`. To separate template identities from every other identity,
+use `template_split`. Bloom's prospective split is:
 
 ```yaml
 meta:
@@ -83,8 +84,9 @@ meta:
   owner_repo_name: bloom-vlfg-7
   issuance_profile:
     version: 1
-    mode: single_prefix
+    mode: template_split
     prefix: BG
+    template_prefix: BTX
 target:
   domain_code: M
 ```
@@ -97,46 +99,54 @@ Neither a new database name nor a new owner creates another sequence space in
 the externally visible EUID. Prefix availability and ownership must therefore
 be established before a second database starts issuing identities.
 
-`config init` requires `--issuance-profile-json`; `config update` accepts the
-same flag to replace the complete requested profile. The values are
-`{"version":1,"mode":"canonical"}` or, for this deployment,
-`{"version":1,"mode":"single_prefix","prefix":"BG"}`. Changing a config
+`db-config init` requires `--issuance-profile-json`; `db-config update` accepts
+the same flag to replace the complete requested profile. The supported shapes
+are `{"version":1,"mode":"canonical"}`,
+`{"version":1,"mode":"single_prefix","prefix":"BG"}` and
+`{"version":1,"mode":"template_split","prefix":"BG","template_prefix":"BTX"}`.
+Every field shown is explicit; prefixes are exact registered values, and a
+split requires distinct base and template prefixes. Changing a config
 does not rewrite a persisted database profile. Native schema bootstrap binds
 the profile to `(domain_code, issuer_app_code)` and rejects a conflicting
 existing binding. Upgrading a package/config alone does not install this schema
 contract on an existing database.
 
-`config update --additional-tenant-ids-json` replaces the complete additional
+`db-config update --additional-tenant-ids-json` replaces the complete additional
 tenant allowlist using native UUID validation. Use an explicit JSON array,
 including `[]` when no additional tenants are authorized. Set this list before
 binding the runtime principal; changing the config alone cannot change an
 existing immutable database scope binding.
 
-After provisioning and native binding, `config update --remove-operator`
+After provisioning and native binding, `db-config update --remove-operator`
 removes the complete `target.operator` mapping without changing the runtime
 identity or the canonical config path. It cannot be combined with operator
 credential options. This produces a runtime-only config; future operator work
 requires explicitly supplying operator credentials through the native config
 interface again.
 
-All Bloom-owned templates, material/container instances, lineage edges, audit
-records, actors, messages, external references, sets, saved queries, DAG views,
-and governance objects then use the native `bg_instance_seq`. Internal SQL
-primary-key sequences remain unchanged. Bundled core definitions are
+In `template_split`, new template EUIDs use `btx_instance_seq`. Material/container
+instances, lineage edges, audit records, actors, messages, external references,
+sets, saved queries, DAG views and governance instances continue to share
+`bg_instance_seq`. Under `single_prefix`, templates also use that base sequence.
+Internal SQL primary-key sequences remain unchanged. Bundled core definitions are
 authenticated against the installed package before their allocation prefix is
 projected; their coordinates, schemas, mapped classes and reference semantics
-remain canonical. New application templates must explicitly declare `BG`.
-The runtime template-authoring API requires an already provisioned allocator
-and does not create sequences or request operator privileges.
+remain canonical. New application templates must explicitly declare
+`instance_prefix: BG`, even when the template's own EUID uses BTX. Runtime
+authoring requires the configured template allocator and declared instance
+allocator, with existing runtime USAGE; it creates no sequences and obtains no
+operator privileges. Both exact domain/prefix claims belong to `bloom-vlfg-7`.
 
 ```mermaid
 flowchart LR
-    PROFILE["Explicit profile\ndomain M / owner bloom-vlfg-7 / prefix BG"]
+    PROFILE["Explicit template_split\ndomain M / owner bloom-vlfg-7"]
     TYPE["Native template coordinates\nand SQLAlchemy mapped class"]
-    TRIGGERS["Native template, instance,\nlineage and audit triggers"]
-    SEQ["One native BG sequence"]
+    TRIGGERS["Native identity triggers"]
+    TSEQ["BTX sequence\nnew template identities"]
+    SEQ["BG sequence\nall other new identities"]
     PROFILE --> TRIGGERS
     TYPE --> TRIGGERS
+    TRIGGERS --> TSEQ
     TRIGGERS --> SEQ
 ```
 
@@ -152,6 +162,54 @@ Persisted EUIDs and existing template definitions remain immutable. Future
 granular prefixes require a separately authorized native profile change and
 new template versions/objects; they must never rewrite historical EUIDs or
 reassign an active prefix to another allocator.
+
+### Prospective template-prefix transition
+
+For an existing `single_prefix` database, `db issuance-profile transition` is
+the explicit operator lifecycle. It supports only an unchanged base prefix
+with a newly selected, distinct template prefix; changing domain, owner or any
+other allocation role is outside this operation. Prefix availability and exact
+ownership must already be established through native registry/allocation
+controls. This command does not discover another allocator or borrow its
+sequence position.
+
+Keep the config on the old profile until apply succeeds. Use the same explicit
+operator config, attribution envelope and receipt for plan and apply. The
+following absolute paths illustrate caller-supplied files:
+
+```sh
+tapdb --config /absolute/path/tapdb-config.yaml \
+  --attribution /absolute/path/operator-attribution.json \
+  db issuance-profile transition \
+  --expected-profile-json '{"version":1,"mode":"single_prefix","prefix":"BG"}' \
+  --new-profile-json '{"version":1,"mode":"template_split","prefix":"BG","template_prefix":"BTX"}' \
+  --receipt /absolute/path/template-prefix-plan.json
+```
+
+The read-only plan binds the configured target and authenticated physical
+database, native release, operator attribution, existing profile/bindings and
+exact governed claims. Review that receipt, then run the same command with
+`--apply`; the native operation consumes the unchanged receipt. Global
+`--dry-run` retains plan behavior. Apply installs the native profile-column and
+constraint upgrade where needed, replaces the packaged allocator routines,
+provisions the separate sequence through the native allocator service, changes
+only the template identity binding and profile, and applies native proven
+allocator grants to the existing runtime. These changes commit together.
+Allocation writes take native locks during this deployment step.
+
+The result is written beside the plan with `.result.json` appended to its
+stem. Its `new_profile` is the input for the subsequent native
+`db-config update --issuance-profile-json` operation on the same config path;
+restart consumers with that explicit profile. The transition itself neither
+rewrites config nor starts a service. Ordinary bootstrap still rejects a
+conflicting persisted profile, so editing config alone cannot bypass this
+lifecycle. Failed transactions roll back their database changes; a successful
+apply is not replayed.
+
+Existing BG templates remain readable, immutable and usable for their existing
+instances. No template EUID, object identity, history or base-sequence position
+changes. Publishing a new application template version creates a new BTX
+template identity; it does not edit or renumber the old definition.
 
 ## Runtime Context
 

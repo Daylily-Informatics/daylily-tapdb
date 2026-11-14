@@ -19,7 +19,7 @@ from daylily_tapdb.issuance import IssuanceProfile
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.sequences import (
-    _normalize_instance_prefix, require_instance_prefix_sequence,
+    _normalize_instance_prefix, require_identity_prefix_sequence, require_instance_prefix_sequence,
 )
 from daylily_tapdb.services.object_operations import object_payload
 from daylily_tapdb.templates.mutation import allow_template_mutations
@@ -132,6 +132,10 @@ def author_templates(
     Global template visibility requires the runtime's existing global-row grant.
     """
     pack = RuntimeTemplatePack.model_validate(payload)
+    template_prefix = issuance_profile.identity_prefix("generic_template")
+    if issuance_profile.mode != "canonical":
+        governance.require_prefix(template_prefix)
+    require_identity_prefix_sequence(session, "generic_template", template_prefix)
     core_coordinates = {
         "/".join(str(item[field]) for field in ("category", "type", "subtype", "version"))
         for item in load_template_configs(find_tapdb_core_config_dir())

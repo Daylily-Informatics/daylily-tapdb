@@ -24,35 +24,49 @@ _OWNER_INFO = "tapdb.issuance_owner"
 @dataclass(frozen=True)
 class IssuanceProfile:
     version: int
-    mode: Literal["canonical", "single_prefix"]
+    mode: Literal["canonical", "single_prefix", "template_split"]
     prefix: str | None = None
+    template_prefix: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.version) is not int or self.version != 1:
             raise ValueError("issuance_profile.version must be 1")
-        if not isinstance(self.mode, str) or self.mode not in {"canonical", "single_prefix"}:
-            raise ValueError("issuance_profile.mode must be canonical or single_prefix")
+        if not isinstance(self.mode, str) or self.mode not in {"canonical", "single_prefix", "template_split"}:
+            raise ValueError("issuance_profile.mode must be canonical, single_prefix, or template_split")
         if self.mode == "canonical":
-            if self.prefix is not None:
-                raise ValueError("canonical issuance_profile must not specify prefix")
+            if self.prefix is not None or self.template_prefix is not None:
+                raise ValueError("canonical issuance_profile must not specify allocation prefixes")
         elif not isinstance(self.prefix, str) or normalize_prefix(self.prefix) != self.prefix:
-            raise ValueError("single_prefix issuance_profile requires an exact Meridian prefix")
+            raise ValueError("Noncanonical issuance_profile requires an exact Meridian prefix")
+        if self.mode == "template_split":
+            if (
+                not isinstance(self.template_prefix, str)
+                or normalize_prefix(self.template_prefix) != self.template_prefix
+                or self.template_prefix == self.prefix
+            ):
+                raise ValueError("template_split requires a distinct exact template_prefix")
+        elif self.template_prefix is not None:
+            raise ValueError("Only template_split may specify template_prefix")
 
     @classmethod
     def from_mapping(cls, value: Any) -> IssuanceProfile:
         if not isinstance(value, Mapping):
             raise ValueError("Explicit meta.issuance_profile mapping is required")
         required = {"version", "mode"}
-        if value.get("mode") == "single_prefix":
+        if value.get("mode") in {"single_prefix", "template_split"}:
             required.add("prefix")
+        if value.get("mode") == "template_split":
+            required.add("template_prefix")
         if set(value) != required:
             raise ValueError(f"issuance_profile must contain exactly {sorted(required)}")
         return cls(**dict(value))
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"version": self.version, "mode": self.mode}
-        if self.mode == "single_prefix":
+        if self.mode != "canonical":
             result["prefix"] = self.prefix
+        if self.mode == "template_split":
+            result["template_prefix"] = self.template_prefix
         return result
 
     def instance_prefix(self, declared_prefix: str) -> str:
@@ -60,7 +74,7 @@ class IssuanceProfile:
         normalized = normalize_prefix(declared_prefix)
         if normalized is None:
             raise ValueError("A declared instance prefix is required")
-        return cast(str, self.prefix) if self.mode == "single_prefix" else normalized
+        return normalized if self.mode == "canonical" else cast(str, self.prefix)
 
     def accepts_template_prefix(self, prefix: str) -> bool:
         """Whether a new application definition explicitly uses this profile."""
@@ -77,13 +91,15 @@ class IssuanceProfile:
             canonical = EUIDConfig().CORE_PREFIXES[entity]
         except KeyError as exc:
             raise ValueError(f"Unknown native identity entity: {entity!r}") from exc
+        if entity == "generic_template" and self.mode == "template_split":
+            return cast(str, self.template_prefix)
         return self.instance_prefix(canonical)
 
     def identity_prefixes(self) -> dict[str, str]:
         return {name: self.identity_prefix(name) for name in EUIDConfig().CORE_PREFIXES}
 
     def core_prefix_owner(self, owner_repo_name: str) -> str:
-        return owner_repo_name if self.mode == "single_prefix" else "daylily-tapdb"
+        return "daylily-tapdb" if self.mode == "canonical" else owner_repo_name
 
     def project_core_template(self, canonical: Mapping[str, Any]) -> dict[str, Any]:
         """Project an already authenticated bundled definition, preserving type."""
@@ -113,6 +129,7 @@ def issuance_profile_binding_sql(cfg: Mapping[str, Any]) -> str:
 
     domain, owner = literal(cfg["domain_code"]), literal(cfg["owner_repo_name"])
     mode, prefix = literal(profile.mode), literal(profile.prefix)
+    template_prefix = literal(profile.template_prefix)
     return f"""
     DO $tapdb_issuance$
     BEGIN
@@ -120,14 +137,15 @@ def issuance_profile_binding_sql(cfg: Mapping[str, Any]) -> str:
         SELECT 1 FROM {table}
         WHERE domain_code = {domain} AND issuer_app_code = {owner}
           AND (version <> {profile.version} OR mode <> {mode}
-            OR prefix IS DISTINCT FROM {prefix})
+            OR prefix IS DISTINCT FROM {prefix}
+            OR template_prefix IS DISTINCT FROM {template_prefix})
       ) THEN
         RAISE EXCEPTION 'Existing native issuance profile conflicts with explicit configuration';
       END IF;
     END;
     $tapdb_issuance$;
-    INSERT INTO {table}(domain_code, issuer_app_code, version, mode, prefix)
-    VALUES ({domain}, {owner}, {profile.version}, {mode}, {prefix})
+    INSERT INTO {table}(domain_code, issuer_app_code, version, mode, prefix, template_prefix)
+    VALUES ({domain}, {owner}, {profile.version}, {mode}, {prefix}, {template_prefix})
     ON CONFLICT (domain_code, issuer_app_code) DO NOTHING;
     """
 

@@ -188,12 +188,17 @@ CREATE TABLE IF NOT EXISTS tapdb_issuance_profile (
     domain_code TEXT NOT NULL,
     issuer_app_code TEXT NOT NULL,
     version INTEGER NOT NULL CHECK (version = 1),
-    mode TEXT NOT NULL CHECK (mode IN ('canonical', 'single_prefix')),
+    mode TEXT NOT NULL CHECK (mode IN ('canonical', 'single_prefix', 'template_split')),
     prefix TEXT,
+    template_prefix TEXT,
     created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (domain_code, issuer_app_code),
-    CHECK ((mode = 'canonical' AND prefix IS NULL)
-        OR (mode = 'single_prefix' AND prefix IS NOT NULL AND prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'))
+    CHECK ((mode = 'canonical' AND prefix IS NULL AND template_prefix IS NULL)
+        OR (mode = 'single_prefix' AND prefix IS NOT NULL AND prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+            AND template_prefix IS NULL)
+        OR (mode = 'template_split' AND prefix IS NOT NULL AND prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+            AND template_prefix IS NOT NULL AND template_prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+            AND template_prefix <> prefix))
 );
 
 -- Prefix configuration for TapDB-managed identity tables.
@@ -885,7 +890,7 @@ DECLARE
     profile RECORD;
 BEGIN
     EXECUTE pg_catalog.format(
-        'SELECT version, mode, prefix FROM %I.tapdb_issuance_profile '
+        'SELECT version, mode, prefix, template_prefix FROM %I.tapdb_issuance_profile '
         'WHERE domain_code = $1 AND issuer_app_code = $2', pg_catalog.current_schema()
     ) INTO profile USING tapdb_current_domain_code(), tapdb_current_owner_repo_name();
     IF profile.version IS NULL THEN
@@ -895,9 +900,13 @@ BEGIN
     IF profile.version <> 1 THEN
         RAISE EXCEPTION 'Unsupported native issuance profile version %', profile.version;
     END IF;
-    IF profile.mode = 'canonical' AND profile.prefix IS NULL THEN
+    IF profile.mode = 'canonical' AND profile.prefix IS NULL AND profile.template_prefix IS NULL THEN
         RETURN tapdb_validate_meridian_prefix(declared_prefix);
-    ELSIF profile.mode = 'single_prefix' AND profile.prefix IS NOT NULL THEN
+    ELSIF profile.mode = 'single_prefix' AND profile.prefix IS NOT NULL AND profile.template_prefix IS NULL THEN
+        RETURN tapdb_validate_meridian_prefix(profile.prefix);
+    ELSIF profile.mode = 'template_split' AND profile.prefix IS NOT NULL
+          AND profile.template_prefix IS NOT NULL AND profile.template_prefix <> profile.prefix THEN
+        PERFORM tapdb_validate_meridian_prefix(profile.template_prefix);
         RETURN tapdb_validate_meridian_prefix(profile.prefix);
     END IF;
     RAISE EXCEPTION 'Malformed explicit native issuance profile';
@@ -926,6 +935,8 @@ DECLARE
     prefix TEXT;
     dc TEXT;
     owner_repo_name TEXT;
+    profile RECORD;
+    expected TEXT;
 BEGIN
     dc := tapdb_current_domain_code();
     owner_repo_name := tapdb_current_owner_repo_name();
@@ -942,7 +953,21 @@ BEGIN
             entity_name, dc, owner_repo_name;
     END IF;
 
-    prefix := tapdb_require_instance_prefix(prefix);
+    -- Validate the complete profile through the instance resolver first. Only
+    -- the template's own identity may use the separate template allocator.
+    expected := tapdb_resolve_issuance_prefix(prefix);
+    EXECUTE pg_catalog.format(
+        'SELECT mode, template_prefix FROM %I.tapdb_issuance_profile '
+        'WHERE domain_code = $1 AND issuer_app_code = $2', pg_catalog.current_schema()
+    ) INTO profile USING dc, owner_repo_name;
+    IF entity_name = 'generic_template' AND profile.mode = 'template_split' THEN
+        expected := tapdb_validate_meridian_prefix(profile.template_prefix);
+    END IF;
+    prefix := tapdb_validate_meridian_prefix(prefix);
+    IF prefix IS DISTINCT FROM expected THEN
+        RAISE EXCEPTION 'Identity entity % prefix % conflicts with explicit issuance prefix %',
+            entity_name, prefix, expected;
+    END IF;
     IF prefix IN ('GX', 'TGX') THEN
         RAISE EXCEPTION
             'Identity entity "%" is configured with unresolved/reserved prefix "%"',
@@ -962,6 +987,7 @@ DECLARE
     dc TEXT;
     seq_val BIGINT;
     seq_name TEXT;
+    profile_mode TEXT;
 BEGIN
     -- Populate domain_code and issuer_app_code from session context
     NEW.domain_code := tapdb_current_domain_code();
@@ -987,7 +1013,18 @@ BEGIN
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
-        prefix := tapdb_require_instance_prefix(prefix);
+        EXECUTE pg_catalog.format(
+            'SELECT mode FROM %I.tapdb_issuance_profile '
+            'WHERE domain_code = $1 AND issuer_app_code = $2', TG_TABLE_SCHEMA
+        ) INTO profile_mode USING NEW.domain_code, NEW.issuer_app_code;
+        IF profile_mode = 'template_split' THEN
+            prefix := tapdb_validate_meridian_prefix(prefix);
+            IF prefix IS DISTINCT FROM tapdb_get_identity_prefix('generic_template') THEN
+                RAISE EXCEPTION 'Provided template EUID prefix conflicts with explicit template issuance prefix';
+            END IF;
+        ELSE
+            prefix := tapdb_require_instance_prefix(prefix);
+        END IF;
         IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
