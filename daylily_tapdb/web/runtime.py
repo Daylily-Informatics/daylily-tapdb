@@ -7,6 +7,7 @@ import os
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Generator, Optional
 
 from sqlalchemy import create_engine, event, text
@@ -280,7 +281,20 @@ def _build_engine_for_cfg(
         region = str(cfg["region"]).strip()
         iam_auth = _parse_bool(cfg["iam_auth"], default=False)
         aws_profile = str(cfg.get("aws_profile") or "").strip() or None
-        ca_path = AuroraConnectionBuilder.ensure_ca_bundle()
+        sslrootcert = cfg.get("sslrootcert")
+        ca_error = (
+            "Aurora web runtime requires target.sslrootcert to name an "
+            "existing absolute CA bundle file"
+        )
+        if (
+            not isinstance(sslrootcert, str)
+            or not sslrootcert
+            or sslrootcert != sslrootcert.strip()
+        ):
+            raise ValueError(ca_error)
+        ca_path = Path(sslrootcert)
+        if not ca_path.is_absolute() or not ca_path.is_file():
+            raise ValueError(ca_error)
         url = URL.create(
             "postgresql+psycopg2",
             username=user,

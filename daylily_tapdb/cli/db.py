@@ -1145,7 +1145,11 @@ def db_schema_apply(
         "--claim-template-prefix", help="Register the configured template prefix to this explicit owner",
     )] = False,
 ):
-    """Apply TAPDB schema to an existing database."""
+    """Apply TAPDB schema to an existing database.
+
+    Failures use SystemExit, as in the native backup CLI: cli_core_yo runs
+    Click with standalone_mode=False and discards a returned typer.Exit code.
+    """
     env = Environment.target
     _ensure_dirs()
     cfg = _get_db_config(env)
@@ -1169,7 +1173,7 @@ def db_schema_apply(
             "Operator schema-apply preflight could not verify the configured "
             f"database and schema ({type(exc).__name__})"
         )
-        raise typer.Exit(1) from exc
+        raise SystemExit(1) from exc
 
     if claim_template_prefix:
         from daylily_tapdb.issuance import claim_configured_template_prefix
@@ -1181,13 +1185,13 @@ def db_schema_apply(
         ccyo_out.success(f"Schema file: {schema_file}")
     except FileNotFoundError as e:
         ccyo_out.error(f"{e}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     try:
         _ensure_schema_exists(env)
     except RuntimeError as e:
         ccyo_out.error(f"{e}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     if schema_preexisted:
         if reinitialize:
@@ -1202,11 +1206,11 @@ def db_schema_apply(
     rls_file = schema_file.parent / "rls.sql"
     if not rls_file.is_file():
         ccyo_out.error(f"Required RLS schema asset not found: {rls_file}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     identity_file = schema_file.parent / "runtime_identity_authorization.sql"
     if not identity_file.is_file():
         ccyo_out.error(f"Required identity authorization asset not found: {identity_file}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     schema_name = _get_schema_name(env)
     runtime_user = str(cfg["user"])
     operator_user = str(_auth_for_connection_role(cfg, "operator")["user"])
@@ -1256,7 +1260,7 @@ def db_schema_apply(
     if not success:
         ccyo_out.error(f"Schema apply failed:\n{psql_out}")
         _log_operation(env.value, "SCHEMA_APPLY_FAILED", psql_out[:200])
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     _log_operation(env.value, "SCHEMA_APPLY", f"Schema applied from {schema_file}")
     ccyo_out.success("Schema applied successfully")
@@ -1266,14 +1270,14 @@ def db_schema_apply(
         ccyo_out.success("Identity prefixes synced")
     except (ValueError, RuntimeError) as e:
         ccyo_out.error(f"{e}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     if not schema_preexisted:
         try:
             _write_migration_baseline(env)
         except Exception as e:
             ccyo_out.error(f"Failed to write migration baseline: {e}")
-            raise typer.Exit(1)
+            raise SystemExit(1)
 
     ccyo_out.heading("Tables available:")
     for table in [
