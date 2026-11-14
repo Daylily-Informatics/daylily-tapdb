@@ -57,10 +57,13 @@ class AuditDigest:
         self.active += values.get('is_deleted') is False
         self.deleted += values.get('is_deleted') is True
         self.invalid_scope += any(not str(values.get(k) or '').strip() for k in ('domain_code', 'issuer_app_code'))
-        for digest, row in ((self.raw, values), (self.expected, dict(values, changed_by=REPLACEMENT) if replace else values)):
-            framed = canonical_json([uid, content_hash(row)]).encode('utf-8')
-            digest.update(len(framed).to_bytes(8, 'big'))
-            digest.update(framed)
+        raw_frame = canonical_json([uid, content_hash(values)]).encode('utf-8')
+        self.raw.update(len(raw_frame).to_bytes(8, 'big') + raw_frame)
+        expected_frame = raw_frame
+        if replace:
+            projected = dict(values, changed_by=REPLACEMENT)
+            expected_frame = canonical_json([uid, content_hash(projected)]).encode('utf-8')
+        self.expected.update(len(expected_frame).to_bytes(8, 'big') + expected_frame)
         self.transformed += replace
 
     def finish(self) -> dict[str, Any]:
@@ -227,10 +230,22 @@ REVIEWED_ASSETS = {
 }
 
 
+# The later four exact assets reapply the canonical audit catalog and have
+# no audit row transformation. Full audit summary and catalog equality apply.
+AUDIT_UNCHANGED_RLS_CLOSURE = {
+    name: REVIEWED_ASSETS[name]
+    for name in (
+        '20260911_210000_versioned_xrf_scope.sql',
+        '20260913_082300_runtime_identity_authorization.sql',
+        '20260918_070400_system_user_authorization_contract.sql',
+        '20260926_220000_reviewed_scope_correction.sql',
+    )
+}
+
 # These exact migrations modify issuance-profile metadata or functions only.
 UNCHANGED_AUDIT_ASSETS = {
     '20261114_150000_template_issuance_prefix.sql': '74fa76e3b5fc5a3eed8990858d42dd81545e0240a2c57e01077089c923325bcc',
-    '20261114_160000_reconcile_template_issuance.sql': '3dc5b498f5bb055c93c00694620692a7ccdebee7d5509186ac65c952dceffb5c',
+    '20261114_160000_reconcile_template_issuance.sql': '1b6fc52b3660eafb0d113c9fd912700e59d1b05de66aae653ee21831c2e7c49a',
     '20261114_180000_meridian_separated_checksum.sql': 'f432a71df4844eadadc6e5f31ae03d7129928413806e8f659033757ef24e2ebc',
 }
 
@@ -243,6 +258,6 @@ def validate_pending(pending: list[dict]) -> bool:
         if name in observed:
             if observed.pop(name) != expected:
                 fail("Audit-preserving migration differs from its exact reviewed source")
-    if observed not in ({}, REVIEWED_ASSETS):
+    if observed not in ({}, REVIEWED_ASSETS, AUDIT_UNCHANGED_RLS_CLOSURE):
         fail("Compact audit mode requires an exact reviewed migration closure")
-    return bool(observed)
+    return observed == REVIEWED_ASSETS

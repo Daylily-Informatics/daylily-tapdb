@@ -1,5 +1,23 @@
 -- Unified native profile constraints; retained identities and bindings are unchanged.
+-- tapdb-allow-schema: tapdb_issuance_profile
 ALTER TABLE tapdb_issuance_profile ADD COLUMN IF NOT EXISTS template_prefix TEXT;
+DO $tapdb_legacy_profile_check$
+DECLARE
+    legacy_definition TEXT;
+BEGIN
+    SELECT pg_get_constraintdef(oid, true) INTO legacy_definition
+      FROM pg_constraint
+     WHERE conrelid = 'tapdb_issuance_profile'::regclass
+       AND conname = 'tapdb_issuance_profile_check1'
+       AND contype = 'c';
+    IF legacy_definition IS NOT NULL THEN
+        IF legacy_definition <> $definition$CHECK (template_prefix IS NULL OR mode = 'canonical'::text AND template_prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'::text)$definition$ THEN
+            RAISE EXCEPTION 'Unexpected tapdb_issuance_profile_check1 definition';
+        END IF;
+        ALTER TABLE tapdb_issuance_profile DROP CONSTRAINT tapdb_issuance_profile_check1;
+    END IF;
+END;
+$tapdb_legacy_profile_check$;
 ALTER TABLE tapdb_issuance_profile
     DROP CONSTRAINT IF EXISTS tapdb_issuance_profile_mode_check,
     DROP CONSTRAINT IF EXISTS tapdb_issuance_profile_check,
