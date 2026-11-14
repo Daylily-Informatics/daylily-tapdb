@@ -49,7 +49,7 @@ def _shared_auth_enabled() -> bool:
 
 
 def _disabled_auth_user() -> dict:
-    """Synthetic user used when TAPDB admin auth is disabled."""
+    """Return the configured identity for disabled admin authentication."""
     settings = _admin_settings()
     email = str(settings.get("disabled_user_email") or "").strip().lower()
     if not email:

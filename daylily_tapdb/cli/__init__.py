@@ -1687,12 +1687,12 @@ def build_app():
         admin_disabled_user_email: Optional[str] = typer.Option(
             None,
             "--admin-disabled-user-email",
-            help="Synthetic disabled-auth admin email",
+            help="Administrator email when admin authentication is disabled",
         ),
         admin_disabled_user_role: Optional[str] = typer.Option(
             None,
             "--admin-disabled-user-role",
-            help="Synthetic disabled-auth admin role",
+            help="Administrator role when admin authentication is disabled",
         ),
         admin_shared_host_session_secret: Optional[str] = typer.Option(
             None,

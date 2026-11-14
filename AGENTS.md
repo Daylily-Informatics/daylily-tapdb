@@ -28,7 +28,7 @@ Canonical usage contract for AI agents (Augment, Claude, Copilot, etc.).
 | `daylily_tapdb/gui/` | Sole standalone and embeddable GUI/management API implementation |
 | `schema/` | Base SQL schema (`tapdb_schema.sql`) and migrations (`migrations/`) |
 | `tests/` | pytest test suite |
-| `tools/` | DB load-testing (synthetic data generator, pgbench scripts) |
+| `tools/` | DB load-testing (demo dataset generator, pgbench scripts) |
 | `config/` | Template config packs (core + examples) |
 | `docs/` | Supplementary documentation |
 
@@ -140,3 +140,9 @@ pip install -e ".[dev,gui,cli]"      # Full install with canonical GUI
   default `--mode isolated` is non-destructive)
 - Add a check, a `pg_dump`, or a receipt write to the CLI or GUI routes —
   those belong in `daylily_tapdb.backup`, and a contract test enforces it
+## Records created while exercising a deployment
+
+- Use ordinary record types and native write paths when an authorized user creates records to demonstrate, exercise, or test a deployment. These are real records. The deployment and the record type govern access, validation, identity, lineage, retention, audit, and downstream processing.
+- Use “demo” or “user testing” in an ordinary name or description when it clarifies purpose. A purpose annotation carries no authority. Do not use the term “synthetic” to classify records, and do not introduce a separate test-record type, flag, filter, or lifecycle based on creation purpose.
+- Record actual collection, measurement and clinical status in the owning fields. Keep existing identifiers and historical audit evidence when updating current terminology.
+
