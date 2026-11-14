@@ -21,6 +21,12 @@ that prefix. Code identifies them by template coordinates, never by EUID prefix.
 The native template seed operation must have loaded the definitions before use;
 the API does not seed or infer missing templates.
 
+The template is the native saved-definition object envelope. Its version remains
+`1.0`: it already stores a versioned definition in JSON properties rather than
+declaring the presentation fields in its template schema. The executable
+presentation contract in TapDB 13.0.0 is **`tapdb.dag-view-definition/v2`**. No template
+rewrite, database migration, or additional relationship store is required.
+
 ```mermaid
 flowchart RL
     V["DAG view: layout and presentation"] -->|saved_view_of_query| Q["Saved query: executor and specification"]
@@ -64,7 +70,7 @@ operation; a GUI should call these same endpoints.
 
 | Method and path | Behavior |
 | --- | --- |
-| `GET /api/saved-query-executors` | Registered executor schemas and definition schemas |
+| `GET /api/saved-query-executors` | Registered executor schemas, definition schemas and the required `view_definition_contract` |
 | `GET /api/saved-queries` | Tenant queries; `limit` and native-UID `after_uid` pagination |
 | `POST /api/saved-queries` | Create a query owned by the authenticated creator |
 | `GET /api/saved-queries/{euid}` | Current definition and native relationship identities |
@@ -102,6 +108,16 @@ result snapshot, cache or credentials. A revision conflict returns HTTP 409;
 unavailable tenant objects return 404; ownership denial returns 403; malformed
 definitions or unavailable executors return 422. A deleted linked query cannot
 run. Missing or ambiguous query bindings are explicit errors.
+
+View create/update and view execution require a complete v2 definition. A
+variant without an explicit replacement definition also requires its source to
+be v2. Existing v1 objects remain listable/readable, and their native revisions
+remain available. No read operation converts or rewrites them. To use one with
+the current executable contract, its creator/admin supplies a complete v2
+definition through guarded `PUT`, or a tenant user creates a variant with an
+explicit v2 definition. A v1 execution or implicit v1 copy returns HTTP 422; there
+is no compatibility path or inferred default expansion. The saved-query,
+saved-definition envelope and result envelope contracts are unchanged.
 
 History responses come directly from `HistoryService.object_at`. That service's
 epoch and completeness semantics apply; unavailable past history is not
@@ -141,23 +157,97 @@ A view's presentation definition is separate:
 {
   "name": "Labware and material provenance",
   "definition": {
-    "contract": "tapdb.dag-view-definition/v1",
+    "contract": "tapdb.dag-view-definition/v2",
     "layout": "labware",
     "arrow_direction": "child_to_parent",
     "content_mode": "parallel",
     "time_order": "older_left",
-    "show_historical_placements": true,
-    "fit_on_replay": true,
-    "replay_rate": 1.0,
+    "group_offsets": [],
+    "node_offsets": [],
+    "lanes": [],
+    "visibility": {
+      "historical_placements": true,
+      "empty_positions": true,
+      "hidden_nodes": [],
+      "hidden_edges": [],
+      "hidden_relationship_types": []
+    },
+    "viewport": {"mode": "fit"},
+    "replay": {"rate": 1.0, "fit_on_step": true},
     "labels": ["euid", "name", "type", "position"]
   }
 }
 ```
 
-The view describes presentation; it does not persist graph nodes, edges, copied
-object relationships or inferred history. Supported replay rates are `0.2`,
-`0.5`, `1.0`, `2.0` and `5.0`, all forward. A consuming renderer must implement the
-named layout or explain that it is unavailable. The substrate does not silently
+All v2 fields shown above are explicit; no old field names are accepted as
+aliases. Empty lists explicitly mean no overrides of that kind. A view is
+presentation, not a graph snapshot: it stores no containment membership,
+geometry, physical position assignment, biological relationship, or inferred
+history. The owning projection remains authoritative for those facts.
+
+| Field | Typed presentation contract |
+| --- | --- |
+| `layout` | Renderer layout identifier; an unsupported layout is explained, not replaced. |
+| `content_mode` | `embedded` or `parallel`. Placement in a content lane does not change material ownership. |
+| `group_offsets` | List of `{group: {service_id, euid}, delta: {x, y}}`. Each native owning-service/EUID pair occurs at most once. Deltas use graph model coordinates. |
+| `node_offsets` | List of `{node: {service_id, euid}, delta: {x, y}}` for independent positioning of material or other individually movable projected nodes. Each native owning-service/EUID pair occurs at most once. Deltas use graph model coordinates and do not move descendants. |
+| `lanes` | Ordered list of `{lane_id, visible, delta: {x, y}}`, with unique IDs declared by the projection/layout. It orders those lanes and applies their visibility and model-coordinate deltas. Unlisted lanes retain the owning projection's arrangement. An empty list makes no lane overrides. |
+| `visibility` | Explicit historical-placement and empty-position switches, hidden node and edge selectors (`{service_id, euid}`), and hidden native relationship types. This only filters rendering. |
+| `viewport` | Either `{mode: "fit"}` or `{mode: "fixed", pan: {x, y}, zoom: positive_number}`. Pan uses rendered CSS-pixel coordinates; zoom is dimensionless. A fixed viewport has no inferred pan/zoom. |
+| `replay` | `rate` is `0.2`, `0.5`, `1.0`, `2.0` or `5.0`, all forward. `fit_on_step` controls fitting when an operation step changes; it may supersede a fixed initial viewport. It does not change timestamps, operation groups, or native history. |
+| `labels` | Explicit list drawn from `euid`, `name`, `type` and `position`. |
+
+Coordinates must be finite, and zoom must be positive. EUID selectors accept
+canonical native identifiers and must be copied from persisted objects/edges
+returned by the owning projection, not generated display IDs. Shape validation
+does not claim that an identifier is currently in the query result. The substrate
+does not run a query or issue database/network probes merely to save a view.
+The consumer explains selectors or lane IDs absent from the projection instead
+of inventing an object, silently dropping the saved preference, or changing its
+query. An object absent only from the selected playback frame retains its
+presentation setting for frames in which it appears.
+
+For example, a caller can construct a group offset from a selected persisted
+projection node without inventing an EUID:
+
+```python
+group_offset = {
+    "group": {
+        "service_id": selected_node["service_id"],
+        "euid": selected_node["euid"],
+    },
+    "delta": {"x": 120.0, "y": -40.0},
+}
+```
+
+The renderer derives a group's active descendants at the selected time from
+the projection. It applies the group's delta to the plate/rack header, its fixed
+wells/slots, currently placed tubes, and contained material, including material
+shown in a parallel lane. A node's final model position is its projected base
+position plus its lane delta, its active containing group's delta, and its own
+node delta. Independent material dragging updates only that material's
+`node_offsets` entry. Later group movement still carries the material while
+preserving its independent adjustment; its owning-holder edge follows the
+displayed node. A node offset does not move that node's descendants. A renderer
+keeps fixed wells/slots locked to their grid; it explains a requested independent
+offset for such a node as unsupported rather than changing physical geometry.
+
+These deltas never change fixed row/column addresses or material ownership.
+Historical placement edges keep their original slot endpoints. The view cannot
+provide a replacement list of children, custom slots, or relationship endpoints.
+A group selector that is not a projected containing object is explained as
+unsupported rather than treated as invented containment.
+
+Visibility does not delete objects or lineage and does not remove them from the
+query result or a manifest. The consumer omits rendered edges with hidden
+endpoints; their native identities and history stay in the projection. Saving
+group/node offsets, visibility, lanes, viewport or replay preferences uses the same guarded
+view API and creates an ordinary native view revision. Query revisions and
+bindings are unchanged. Variants copy these settings into an independently
+owned native view linked through the existing variant lineage.
+
+A consuming renderer must implement the requested layout and presentation
+contract or explain that they are unavailable. The substrate does not silently
 substitute another layout or execute an unregistered query implementation.
 
 ## Host execution integration

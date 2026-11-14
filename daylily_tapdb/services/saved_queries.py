@@ -10,12 +10,13 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 import json
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from sqlalchemy import select
 
+from daylily_tapdb.euid import validate_euid
 from daylily_tapdb.factory import InstanceFactory
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
@@ -24,6 +25,7 @@ from daylily_tapdb.templates import TemplateManager
 
 QUERY_TEMPLATE = "query/saved/generic/1.0"
 VIEW_TEMPLATE = "view/dag/generic/1.0"
+VIEW_DEFINITION_CONTRACT = "tapdb.dag-view-definition/v2"
 TEMPLATES = {"query": QUERY_TEMPLATE, "view": VIEW_TEMPLATE}
 QUERY_VARIANT = "saved_query_variant_of"
 VIEW_VARIANT = "saved_view_variant_of"
@@ -46,18 +48,105 @@ class QueryDefinition(DefinitionModel):
     specification: dict[str, JsonValue]
 
 
+class ViewPoint(DefinitionModel):
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+
+
+class ViewElement(DefinitionModel):
+    """A presentation selector copied from a native projection, not a relation."""
+
+    service_id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_.-]*$")
+    euid: str = Field(min_length=1)
+
+    @field_validator("euid")
+    @classmethod
+    def canonical_euid(cls, value: str) -> str:
+        if not validate_euid(value):
+            raise ValueError("presentation selectors require a canonical native EUID")
+        return value
+
+
+class ViewGroupOffset(DefinitionModel):
+    """Model-coordinate delta for a group whose members come from the projection."""
+
+    group: ViewElement
+    delta: ViewPoint
+
+
+class ViewNodeOffset(DefinitionModel):
+    """Independent model-coordinate adjustment of one persisted projected node."""
+
+    node: ViewElement
+    delta: ViewPoint
+
+
+class ViewLane(DefinitionModel):
+    """Ordered display lane declared by the owning projection/layout."""
+
+    lane_id: str = Field(min_length=1, pattern=r"^[A-Za-z][A-Za-z0-9_.:/-]*$")
+    visible: bool
+    delta: ViewPoint
+
+
+class ViewVisibility(DefinitionModel):
+    historical_placements: bool
+    empty_positions: bool
+    hidden_nodes: list[ViewElement]
+    hidden_edges: list[ViewElement]
+    hidden_relationship_types: list[str]
+
+    @field_validator("hidden_relationship_types")
+    @classmethod
+    def exact_relationship_types(cls, values: list[str]) -> list[str]:
+        for value in values:
+            _exact(value, "relationship type")
+        return values
+
+
+class FitViewViewport(DefinitionModel):
+    mode: Literal["fit"]
+
+
+class FixedViewViewport(DefinitionModel):
+    mode: Literal["fixed"]
+    pan: ViewPoint
+    zoom: float = Field(gt=0, allow_inf_nan=False)
+
+
+class ViewReplay(DefinitionModel):
+    rate: Literal[0.2, 0.5, 1.0, 2.0, 5.0]
+    fit_on_step: bool
+
+
 class ViewDefinition(DefinitionModel):
-    contract: Literal["tapdb.dag-view-definition/v1"]
+    """Complete v2 presentation; never supplies geometry or containment facts."""
+
+    contract: Literal["tapdb.dag-view-definition/v2"]
     layout: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_.-]*$")
-    arrow_direction: Literal["child_to_parent"] = "child_to_parent"
-    content_mode: Literal["embedded", "parallel"] = "embedded"
-    time_order: Literal["older_left"] = "older_left"
-    show_historical_placements: bool = True
-    fit_on_replay: bool = True
-    replay_rate: Literal[0.2, 0.5, 1.0, 2.0, 5.0] = 1.0
-    labels: list[Literal["euid", "name", "type", "position"]] = Field(
-        default_factory=lambda: ["euid", "name", "type"]
-    )
+    arrow_direction: Literal["child_to_parent"]
+    content_mode: Literal["embedded", "parallel"]
+    time_order: Literal["older_left"]
+    group_offsets: list[ViewGroupOffset]
+    node_offsets: list[ViewNodeOffset]
+    lanes: list[ViewLane]
+    visibility: ViewVisibility
+    viewport: Annotated[FitViewViewport | FixedViewViewport, Field(discriminator="mode")]
+    replay: ViewReplay
+    labels: list[Literal["euid", "name", "type", "position"]]
+
+    @model_validator(mode="after")
+    def unambiguous_presentation(self):
+        groups = [(item.group.service_id, item.group.euid) for item in self.group_offsets]
+        if len(groups) != len(set(groups)):
+            raise ValueError("group_offsets must contain each owning-service/EUID pair once")
+        nodes = [(item.node.service_id, item.node.euid) for item in self.node_offsets]
+        if len(nodes) != len(set(nodes)):
+            raise ValueError("node_offsets must contain each owning-service/EUID pair once")
+        lane_ids = [lane.lane_id for lane in self.lanes]
+        if len(lane_ids) != len(set(lane_ids)):
+            raise ValueError("lanes must contain each declared lane_id once")
+        return self
 
 
 class ObjectSearchDefinition(DefinitionModel):
@@ -245,6 +334,11 @@ class SavedQueryService:
     def _definition(self, kind: str, definition: dict) -> dict:
         _definition_fields(definition)
         if kind == "view":
+            if not isinstance(definition, dict) or definition.get("contract") != VIEW_DEFINITION_CONTRACT:
+                raise ValueError(
+                    f"DAG view authoring and execution require {VIEW_DEFINITION_CONTRACT}; "
+                    "supply a complete definition through a guarded update or variant"
+                )
             return ViewDefinition.model_validate(definition).model_dump(mode="json")
         parsed = QueryDefinition.model_validate(definition)
         executor = self.executors.get(parsed.executor)
@@ -484,6 +578,7 @@ class SavedQueryService:
     ) -> dict:
         view = self._get("view", euid)
         require_revision(view, expected_revision)
+        self._definition("view", self._properties(view)["definition"])
         binding = self._binding(view)
         if binding is None:
             raise ValueError("DAG view has no query relationship")

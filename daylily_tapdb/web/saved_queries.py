@@ -19,6 +19,7 @@ from daylily_tapdb.services.saved_queries import (
     QueryExecutor,
     SavedQueryPrincipal,
     SavedQueryService,
+    VIEW_DEFINITION_CONTRACT,
     ViewDefinition,
     query_executors,
 )
@@ -133,6 +134,7 @@ def saved_queries_router(
         return {
             "contract": "tapdb.saved-query-executors/v1",
             "query_definition_schema": QueryDefinition.model_json_schema(),
+            "view_definition_contract": VIEW_DEFINITION_CONTRACT,
             "view_definition_schema": ViewDefinition.model_json_schema(),
             "executors": [
                 {
