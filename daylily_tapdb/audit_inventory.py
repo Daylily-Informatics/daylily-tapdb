@@ -43,7 +43,7 @@ class AuditDigest:
         self.active = self.deleted = self.invalid_scope = 0
 
     def add(self, raw: str, replace: bool) -> None:
-        from daylily_tapdb.identity_inventory import canonical_json, content_hash
+        from daylily_tapdb.identity_inventory import canonical_json
         values = json.loads(raw, parse_float=str)
         uid = values.get('uid')
         if type(uid) is not int or (self.previous_uid is not None and uid <= self.previous_uid):
@@ -58,12 +58,16 @@ class AuditDigest:
         self.active += values.get('is_deleted') is False
         self.deleted += values.get('is_deleted') is True
         self.invalid_scope += any(not str(values.get(k) or '').strip() for k in ('domain_code', 'issuer_app_code'))
-        raw_frame = canonical_json([uid, content_hash(values)]).encode('utf-8')
+        # An audit row is bounded by capture(). Encode it in one pass with the
+        # same canonical JSON options as content_hash; keep the v1 framing.
+        row_hash = hashlib.sha256(canonical_json(values).encode('utf-8')).hexdigest()
+        raw_frame = canonical_json([uid, row_hash]).encode('utf-8')
         self.raw.update(len(raw_frame).to_bytes(8, 'big') + raw_frame)
         expected_frame = raw_frame
         if replace:
             projected = dict(values, changed_by=REPLACEMENT)
-            expected_frame = canonical_json([uid, content_hash(projected)]).encode('utf-8')
+            projected_hash = hashlib.sha256(canonical_json(projected).encode('utf-8')).hexdigest()
+            expected_frame = canonical_json([uid, projected_hash]).encode('utf-8')
         self.expected.update(len(expected_frame).to_bytes(8, 'big') + expected_frame)
         self.transformed += replace
 
@@ -235,14 +239,17 @@ REVIEWED_ASSETS = {
 
 # The later four exact assets reapply the canonical audit catalog and have
 # no audit row transformation. Full audit summary and catalog equality apply.
+# The XRF wrapper includes the RLS source already bundled since TapDB 13.1.0.
+# Keep its current expansion separate from the older pre-10 closure above.
 AUDIT_UNCHANGED_RLS_CLOSURE = {
-    name: REVIEWED_ASSETS[name]
-    for name in (
-        '20260911_210000_versioned_xrf_scope.sql',
-        '20260913_082300_runtime_identity_authorization.sql',
-        '20260918_070400_system_user_authorization_contract.sql',
-        '20260926_220000_reviewed_scope_correction.sql',
-    )
+    '20260911_210000_versioned_xrf_scope.sql':
+        '521f9219b5556334ab7084e07a18ef701a505aa8a21e01e0175e1d769318cd1e',
+    '20260913_082300_runtime_identity_authorization.sql':
+        REVIEWED_ASSETS['20260913_082300_runtime_identity_authorization.sql'],
+    '20260918_070400_system_user_authorization_contract.sql':
+        REVIEWED_ASSETS['20260918_070400_system_user_authorization_contract.sql'],
+    '20260926_220000_reviewed_scope_correction.sql':
+        REVIEWED_ASSETS['20260926_220000_reviewed_scope_correction.sql'],
 }
 
 # These exact migrations modify issuance-profile metadata or functions only.
