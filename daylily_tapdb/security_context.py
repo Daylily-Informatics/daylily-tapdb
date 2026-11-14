@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+import json
+from collections.abc import Mapping
+from contextvars import ContextVar
+from dataclasses import dataclass, asdict
 from typing import Any
 
 from sqlalchemy import text
@@ -19,6 +22,98 @@ def _exact(value: Any, field: str, *, allow_empty: bool = False) -> str:
     return normalized
 
 
+def canonical_additional_tenant_ids(value: Any) -> tuple[str, ...]:
+    """Validate a finite UUID allowlist; never accept wildcards or inferred scope."""
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("additional_tenant_ids must be a list of canonical UUIDs")
+    tenants = []
+    for tenant in value:
+        if not isinstance(tenant, str) or str(uuid.UUID(tenant)) != tenant:
+            raise ValueError("additional_tenant_ids must contain canonical UUIDs")
+        tenants.append(tenant)
+    if len(set(tenants)) != len(tenants):
+        raise ValueError("additional_tenant_ids must not contain duplicates")
+    return tuple(sorted(tenants))
+
+
+def configured_graph_tenant_scope(
+    cfg: Mapping[str, Any],
+) -> frozenset[str | None] | None:
+    """DAG scope for an explicitly allowlisted service, after runtime RLS admission."""
+    primary = str(cfg.get("tenant_id") or "") or None
+    additional = set(
+        canonical_additional_tenant_ids(cfg.get("additional_tenant_ids", ()))
+    )
+    # Explicit native global visibility also admits ordinary shared-catalog
+    # lineage for a single tenant. RLS remains the read authority; this merely
+    # validates the already-visible graph against the exact configured scope.
+    if not additional.difference({primary}):
+        if primary is not None and cfg.get("allow_global_claims") is True:
+            return frozenset({primary, None})
+        return None
+    return frozenset({primary, None, *additional})
+
+
+@dataclass(frozen=True)
+class Attribution:
+    """Application-asserted initiator; PostgreSQL records its own principal.
+
+    Never infer this envelope from the legacy display actor. Subjects are opaque
+    identities, not necessarily UUIDs. Request/operation IDs are caller supplied.
+    """
+    actor_kind: str
+    actor_issuer: str
+    actor_subject: str
+    service_identity: str
+    request_id: str
+    operation_id: str
+    correction_reason: str | None = None
+    version: int = 1
+
+    def __post_init__(self) -> None:
+        if type(self.version) is not int or self.version != 1 or self.actor_kind not in {"human", "service"}:
+            raise ValueError("attribution requires version 1 and human/service actor_kind")
+        for field in ("actor_issuer", "actor_subject", "service_identity", "request_id", "operation_id"):
+            if not isinstance(getattr(self, field), str):
+                raise ValueError(field + " must be a string")
+            _exact(getattr(self, field), field)
+        if self.correction_reason is not None:
+            _exact(self.correction_reason, "correction_reason")
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
+
+
+# Explicit CLI/request envelopes; never connection-pool state or legacy actors.
+_invocation_attribution: ContextVar[Attribution | None] = ContextVar("tapdb_attribution", default=None)
+
+
+def invocation_attribution() -> Attribution | None:
+    explicit = _invocation_attribution.get()
+    if explicit is not None:
+        return explicit
+    from cli_core_yo.runtime import get_context, ContextNotInitializedError
+    try:
+        runtime = get_context()
+    except ContextNotInitializedError:
+        return None  # Native Python/HTTP caller, not a CLI invocation.
+    path = runtime.invocation.get("attribution")
+    if path is None:
+        return None
+    from pathlib import Path
+    return Attribution(**json.loads(Path(path).read_text()))
+
+
+def set_invocation_attribution(value: Attribution | None):
+    if value is not None and not isinstance(value, Attribution):
+        raise ValueError("explicit Attribution envelope required")
+    return _invocation_attribution.set(value)
+
+
+def reset_invocation_attribution(token):
+    _invocation_attribution.reset(token)
+
+
 @dataclass(frozen=True)
 class TapdbTransactionContext:
     """All security-relevant state installed together inside one transaction."""
@@ -30,6 +125,8 @@ class TapdbTransactionContext:
     tenant_id: str | uuid.UUID | None
     actor: str
     allow_global_rows: bool = False
+    additional_tenant_ids: tuple[str, ...] = ()
+    attribution: Attribution | None = None
 
     def __post_init__(self) -> None:
         _exact(self.config_identity, "config_identity")
@@ -37,14 +134,25 @@ class TapdbTransactionContext:
         _exact(self.domain_code, "domain_code")
         _exact(self.owner_repo_name, "owner_repo_name")
         _exact(self.actor, "actor")
+        if self.attribution is not None and not isinstance(self.attribution, Attribution):
+            raise ValueError("attribution must be an Attribution envelope")
         if self.tenant_id is not None:
             uuid.UUID(str(self.tenant_id))
         if not isinstance(self.allow_global_rows, bool):
             raise ValueError("allow_global_rows must be boolean")
+        object.__setattr__(
+            self,
+            "additional_tenant_ids",
+            canonical_additional_tenant_ids(self.additional_tenant_ids),
+        )
 
     @property
     def tenant_setting(self) -> str:
         return "" if self.tenant_id is None else str(self.tenant_id)
+
+    @property
+    def additional_tenants_setting(self) -> str:
+        return "{" + ",".join(self.additional_tenant_ids) + "}"
 
 
 def is_postgresql_session(session: Any) -> bool:
@@ -67,13 +175,17 @@ def transaction_context_pgoptions(context: TapdbTransactionContext) -> str:
         return value.replace("\\", "\\\\").replace(" ", "\\ ")
 
     settings = (
+        ("TimeZone", "UTC"),
+        ("DateStyle", "ISO, YMD"),
         ("search_path", context.schema_name),
         ("session.current_config_identity", context.config_identity),
         ("session.current_schema_name", context.schema_name),
         ("session.current_domain_code", context.domain_code),
         ("session.current_owner_repo_name", context.owner_repo_name),
         ("session.current_tenant_id", context.tenant_setting),
+        ("session.additional_tenant_ids", context.additional_tenants_setting),
         ("session.current_username", context.actor),
+        ("session.tapdb_attribution", context.attribution.to_json() if context.attribution else ""),
         (
             "session.allow_global_rows",
             "true" if context.allow_global_rows else "false",
@@ -93,13 +205,17 @@ def apply_transaction_context(
     if not is_postgresql_session(session):
         return
     settings = (
+        ("TimeZone", "UTC"),
+        ("DateStyle", "ISO, YMD"),
         ("search_path", context.schema_name),
         ("session.current_config_identity", context.config_identity),
         ("session.current_schema_name", context.schema_name),
         ("session.current_domain_code", context.domain_code),
         ("session.current_owner_repo_name", context.owner_repo_name),
         ("session.current_tenant_id", context.tenant_setting),
+        ("session.additional_tenant_ids", context.additional_tenants_setting),
         ("session.current_username", context.actor),
+        ("session.tapdb_attribution", context.attribution.to_json() if context.attribution else ""),
         (
             "session.allow_global_rows",
             "true" if context.allow_global_rows else "false",
@@ -208,6 +324,7 @@ def assert_operator_role(
 
 
 __all__ = [
+    "Attribution",
     "TapdbTransactionContext",
     "apply_transaction_context",
     "assert_operator_role",

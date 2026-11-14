@@ -89,10 +89,11 @@ prefix_registry_path.write_text(
 )
 PY
 
-tapdb --config "$CONFIG_PATH" db-config init \
+tapdb --config "$CONFIG_PATH" config init \
     --client-id "$CLIENT_ID" \
     --database-name "$DATABASE_NAME" \
     --owner-repo-name "$OWNER_REPO_NAME" \
+    --issuance-profile-json '{"version":1,"mode":"canonical"}' \
     --domain-code "$DOMAIN_CODE" \
     --domain-registry-path "$DOMAIN_REGISTRY_PATH" \
     --prefix-ownership-registry-path "$PREFIX_OWNERSHIP_REGISTRY_PATH" \

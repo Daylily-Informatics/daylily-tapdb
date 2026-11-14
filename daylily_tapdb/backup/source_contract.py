@@ -6,8 +6,6 @@ application version or used to waive a physical inventory mismatch.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from typing import Any, Mapping
 
@@ -18,14 +16,11 @@ IDENTITY_ASSET = "identity-inventory.json"
 
 
 def contract_hash(payload: Mapping[str, Any]) -> str:
-    return hashlib.sha256(
-        json.dumps(
-            {key: value for key, value in payload.items() if key != "sha256"},
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-    ).hexdigest()
+    from daylily_tapdb.identity_inventory import content_hash
+
+    return content_hash(
+        {key: value for key, value in payload.items() if key != "sha256"}
+    )
 
 
 def capture_source_contract(
@@ -40,7 +35,38 @@ def capture_source_contract(
     from daylily_tapdb.identity_inventory import capture_identity_inventory
     from daylily_tapdb.sequences import capture_sequence_inventory
 
-    if not re.fullmatch(r"\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.-]+)?", source_version):
+    if not re.fullmatch(
+        r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+|[.-][A-Za-z0-9.-]+)?", source_version
+    ):
+        raise BackupVerificationError("source_version must be an explicit exact version")
+    return source_contract_from_capture(
+        identity_inventory=capture_identity_inventory(
+            connection, schema_name=schema_name, target=target
+        ),
+        sequence_inventory=capture_sequence_inventory(
+            connection, schema_name=schema_name, target=target
+        ),
+        source_version=source_version,
+        recovery_family=recovery_family,
+    )
+
+
+def source_contract_from_capture(
+    *,
+    identity_inventory: dict[str, Any],
+    sequence_inventory: dict[str, Any],
+    source_version: str,
+    recovery_family: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compose inventories just captured by the caller in the same snapshot.
+
+    This does not cache across transactions or accept a prior receipt as live
+    evidence. The migration caller already owns both captures and subsequently
+    runs the existing source-contract comparison.
+    """
+    if not re.fullmatch(
+        r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+|[.-][A-Za-z0-9.-]+)?", source_version
+    ):
         raise BackupVerificationError(
             "source_version must be an explicit exact version"
         )
@@ -48,12 +74,8 @@ def capture_source_contract(
         "schema_version": SOURCE_CONTRACT_VERSION,
         "source_version": source_version,
         "source_version_evidence": "operator_declared",
-        "identity_inventory": capture_identity_inventory(
-            connection, schema_name=schema_name, target=target
-        ),
-        "sequence_inventory": capture_sequence_inventory(
-            connection, schema_name=schema_name, target=target
-        ),
+        "identity_inventory": identity_inventory,
+        "sequence_inventory": sequence_inventory,
     }
     if recovery_family is not None:
         from daylily_tapdb.backup.recovery import (
@@ -81,7 +103,8 @@ def validate_source_contract(contract: Mapping[str, Any]) -> None:
     if contract.get("source_version_evidence") != "operator_declared":
         raise BackupVerificationError("source version provenance must be explicit")
     if not re.fullmatch(
-        r"\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.-]+)?", str(contract.get("source_version", ""))
+        r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+|[.-][A-Za-z0-9.-]+)?",
+        str(contract.get("source_version", "")),
     ):
         raise BackupVerificationError("source contract has no explicit exact version")
     identity = contract.get("identity_inventory")

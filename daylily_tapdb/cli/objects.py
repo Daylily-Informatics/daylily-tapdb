@@ -5,6 +5,8 @@ from __future__ import annotations
 import getpass
 import json
 from typing import Any
+from pathlib import Path
+from daylily_tapdb.security_context import Attribution, invocation_attribution
 
 import typer
 
@@ -20,6 +22,8 @@ from daylily_tapdb.services.object_operations import (
 from daylily_tapdb.services.object_search import search_objects
 
 objects_app = typer.Typer(help="Exact-selector object reads and governed mutations")
+scope_app = typer.Typer(help="Exact reviewed native operator scope correction")
+objects_app.add_typer(scope_app, name="scope-correct")
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -137,13 +141,18 @@ def objects_update(
     machine_uuid: str = typer.Option("", "--machine-uuid"),
     uid: int | None = typer.Option(None, "--uid", min=1),
     record_type: str = typer.Option("", "--record-type"),
+    expected_revision: int | None = typer.Option(None, "--expected-revision", min=0),
+    attribution: Path | None = typer.Option(None, "--attribution", exists=True, dir_okay=False),
     apply: bool = typer.Option(False, "--apply"),
     actor: str = typer.Option("", "--actor"),
 ) -> None:
     effective_apply = apply and not _dry_run_requested()
     selector = _selector_options(euid, machine_uuid, uid, record_type)
     effective_actor = _actor(actor)
-    with _connection(effective_actor) as conn:
+    ctx=Attribution(**json.loads(attribution.read_text())) if attribution else invocation_attribution()
+    if effective_apply and ctx is None:
+        raise typer.BadParameter("--attribution is required for writes")
+    with _tapdb_connection_for_env(Environment.target, app_username=effective_actor, attribution=ctx) as conn:
         with conn.session_scope(commit=effective_apply) as session:
             payload = update_object(
                 session,
@@ -151,6 +160,7 @@ def objects_update(
                 _changes(set_values),
                 actor=effective_actor,
                 dry_run=not effective_apply,
+                expected_revision=expected_revision,
             )
     _emit(payload)
 
@@ -196,21 +206,91 @@ def objects_delete(
     machine_uuid: str = typer.Option("", "--machine-uuid"),
     uid: int | None = typer.Option(None, "--uid", min=1),
     record_type: str = typer.Option("", "--record-type"),
+    expected_revision: int | None = typer.Option(None, "--expected-revision", min=0),
+    attribution: Path | None = typer.Option(None, "--attribution", exists=True, dir_okay=False),
     apply: bool = typer.Option(False, "--apply"),
     actor: str = typer.Option("", "--actor"),
 ) -> None:
     effective_apply = apply and not _dry_run_requested()
     selector = _selector_options(euid, machine_uuid, uid, record_type)
     effective_actor = _actor(actor)
-    with _connection(effective_actor) as conn:
+    ctx=Attribution(**json.loads(attribution.read_text())) if attribution else invocation_attribution()
+    if effective_apply and ctx is None:
+        raise typer.BadParameter("--attribution is required for writes")
+    with _tapdb_connection_for_env(Environment.target, app_username=effective_actor, attribution=ctx) as conn:
         with conn.session_scope(commit=effective_apply) as session:
             payload = soft_delete_object(
                 session,
                 selector,
                 actor=effective_actor,
                 dry_run=not effective_apply,
+                expected_revision=expected_revision,
             )
     _emit(payload)
 
 
 __all__ = ["objects_app"]
+
+
+@scope_app.command("preview")
+def scope_preview(
+    request: str = typer.Option(..., "--request"),
+    receipt: str = typer.Option(..., "--receipt"),
+) -> None:
+    from daylily_tapdb.services.scope_corrections import (
+        load_scope_document, preview_scope_correction, validate_request, write_scope_document,
+    )
+
+    inputs = validate_request(load_scope_document(request))
+    with _tapdb_connection_for_env(
+        Environment.target, app_username=inputs["actor"], connection_role="operator"
+    ) as conn:
+        with conn.session_scope(commit=False) as session:
+            payload = preview_scope_correction(session, inputs)
+    write_scope_document(receipt, payload)
+    _emit({"status": "preview", "sha256": payload["sha256"], "receipt": receipt})
+
+
+@scope_app.command("apply")
+def scope_apply(
+    plan: str = typer.Option(..., "--plan"),
+    expected_plan_sha256: str = typer.Option(..., "--expected-plan-sha256"),
+    receipt: str = typer.Option(..., "--receipt"),
+) -> None:
+    from daylily_tapdb.services.scope_corrections import (
+        apply_scope_correction, load_scope_document, validate_request, write_scope_document,
+    )
+
+    if _dry_run_requested():
+        raise typer.BadParameter("scope-correct apply cannot run with global dry-run; use preview")
+    document = load_scope_document(plan)
+    inputs = validate_request(document["request"])
+    with _tapdb_connection_for_env(
+        Environment.target, app_username=inputs["actor"], connection_role="operator"
+    ) as conn:
+        with conn.session_scope(commit=True) as session:
+            payload = apply_scope_correction(session, document, expected_plan_sha256)
+    payload["status"] = "committed"
+    write_scope_document(receipt, payload)
+    _emit(payload)
+
+
+@scope_app.command("status")
+def scope_status(
+    plan: str = typer.Option(..., "--plan"),
+    expected_plan_sha256: str = typer.Option(..., "--expected-plan-sha256"),
+    receipt: str = typer.Option(..., "--receipt"),
+) -> None:
+    from daylily_tapdb.services.scope_corrections import (
+        get_scope_correction_status, load_scope_document, validate_request, write_scope_document,
+    )
+
+    document = load_scope_document(plan)
+    inputs = validate_request(document["request"])
+    with _tapdb_connection_for_env(
+        Environment.target, app_username=inputs["actor"], connection_role="operator"
+    ) as conn:
+        with conn.session_scope(commit=False) as session:
+            payload = get_scope_correction_status(session, document, expected_plan_sha256)
+    write_scope_document(receipt, payload)
+    _emit(payload)

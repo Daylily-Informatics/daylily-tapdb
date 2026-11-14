@@ -18,6 +18,7 @@ import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Generator, Optional
 
 from sqlalchemy import create_engine, event, text
@@ -102,6 +103,7 @@ class AdminDBConnection:
     def __init__(self, bundle: EngineBundle):
         self._bundle = bundle
         self.app_username: Optional[str] = None
+        self.attribution = None
 
     def __enter__(self) -> "AdminDBConnection":
         return self
@@ -118,8 +120,15 @@ class AdminDBConnection:
         trans = session.begin()
         token = db_username_var.set(_audit_username_for_session(self.app_username))
         try:
-            _set_search_path(session, self._bundle.schema_name)
-            _set_audit_username(session, self.app_username)
+            from daylily_tapdb.security_context import TapdbTransactionContext, apply_transaction_context, invocation_attribution
+            cfg=self._bundle.cfg
+            apply_transaction_context(session, TapdbTransactionContext(
+                config_identity=str(cfg["config_path"]), schema_name=self._bundle.schema_name,
+                domain_code=cfg["domain_code"], owner_repo_name=cfg["owner_repo_name"],
+                tenant_id=cfg.get("tenant_id") or None, actor=_audit_username_for_session(self.app_username),
+                allow_global_rows=bool(cfg.get("allow_global_claims")),
+                additional_tenant_ids=tuple(cfg.get("additional_tenant_ids", ())),
+                attribution=self.attribution if self.attribution is not None else invocation_attribution()))
             yield session
             if commit:
                 trans.commit()
@@ -226,7 +235,20 @@ def _build_engine_for_cfg(cfg: dict[str, str], *, env_name: str) -> Engine:
             or (os.environ.get("AWS_PROFILE") or "").strip()
             or None
         )
-        ca_path = AuroraConnectionBuilder.ensure_ca_bundle()
+        sslrootcert = cfg.get("sslrootcert")
+        ca_error = (
+            "Aurora admin runtime requires target.sslrootcert to name an "
+            "existing absolute CA bundle file"
+        )
+        if (
+            not isinstance(sslrootcert, str)
+            or not sslrootcert
+            or sslrootcert != sslrootcert.strip()
+        ):
+            raise ValueError(ca_error)
+        ca_path = Path(sslrootcert)
+        if not ca_path.is_absolute() or not ca_path.is_file():
+            raise ValueError(ca_error)
         url = URL.create(
             "postgresql+psycopg2",
             username=user,

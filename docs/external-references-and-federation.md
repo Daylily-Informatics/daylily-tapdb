@@ -1,5 +1,9 @@
 # External References, Discoverability, and Federation
 
+TapDB 11: [attribution, revisions, independent registration, annotations, and
+adoption contract](tapdb-11-integrity.md). Existing write signatures require
+explicit revision preconditions; the new contract supersedes older examples.
+
 This guide is the TapDB 10.0 contract for linking a local object to something
 owned elsewhere and for composing discoverable graphs across a known fleet.
 It is written for application developers, visualizer authors, and database
@@ -75,7 +79,7 @@ natural-identity winner is selected.
 
 Both target types use the reserved `XRF` prefix and exact core templates:
 
-- `reference/external_identifier/tapdb_object/1.0/`
+- `reference/external_identifier/tapdb_object/2.0/`
 - `reference/external_identifier/opaque/1.0/`
 
 The direction is always local source to XRF:
@@ -134,7 +138,10 @@ spec = ExternalLinkSpec(
 
 with connection.session_scope(commit=True) as session:
     source = load_source_in_this_session(session)
-    result = ExternalReferenceService(session).attach(source, spec)
+    result = ExternalReferenceService(session).attach(
+        source, spec, expected_source_revision=source.record_revision,
+        expected_lineage_revision=None,
+    )
     assert result.status in {"created", "existing", "reactivated"}
 ~~~
 
@@ -473,3 +480,28 @@ TapDB 10 has no:
 
 A missing configuration, target, manifest, auth context, or canonical
 relationship fails clearly. Do not rebuild a removed path in an application.
+## Partial graphs and node diagnostics
+
+Native DAG-v2 projection and federation isolate attributable data failures at
+the smallest trustworthy boundary. A node with malformed properties,
+presentation or external-reference data remains visible with an explicit
+`traversal_boundary`, `status: not_traversed`, and `expandable: false`. Its
+properties, presentation and external projections are withheld. No descendant
+is included solely through that node, and no reference from it is followed.
+Other valid branches continue. This also applies to conflicting responses for
+the same established node identity.
+
+Invalid, inaccessible, conflicting or cyclic lineage is omitted and reported
+in `graph_issues` on an already visible endpoint. Diagnostics use fixed public
+messages; they do not serialize exception bodies or hidden endpoint identities.
+Local cycles and cross-service reciprocal references are not accepted as DAG
+edges. These are read-time boundaries, not record repairs or compatibility
+interpretation of older external-reference formats.
+
+Responses retain HTTP success when a trustworthy partial graph is available,
+set `meta.partial`, and expose `warnings`, `node_errors`,
+`unsupported_external_references` and `blocked_relationships`. A federation
+deadline after the root has loaded preserves the accumulated graph and marks
+unfinished branches unavailable. Root authentication, service/envelope identity,
+domain/tenant/owner isolation and unavailable databases remain explicit errors;
+they are never bypassed to produce a graph.

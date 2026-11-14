@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
@@ -43,6 +43,57 @@ def normalize_owner_repo_name(owner_repo_name: str) -> str:
     return meridian_validate_issuer_app_code(owner_repo_name)
 
 
+@dataclass(frozen=True)
+class GovernanceAuthorization:
+    """Explicit caller authorization; Meridian remains the policy authority.
+
+    These values must come from the caller's canonical configuration, never
+    from the registry owner, runtime identity, or TapDB safety tier.
+    """
+
+    reserved_for: str | None = None
+    deployment_environment: str | None = None
+    approval_tokens: tuple[str, ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        for name in ("reserved_for", "deployment_environment"):
+            value = getattr(self, name)
+            if value is not None and (
+                not isinstance(value, str) or not value.strip()
+            ):
+                raise ValueError(
+                    f"governance_authorization.{name} must be a nonempty string"
+                )
+        if not isinstance(self.approval_tokens, (list, tuple)) or any(
+            not isinstance(token, str) or not token.strip()
+            for token in self.approval_tokens
+        ):
+            raise ValueError(
+                "governance_authorization.approval_tokens must be an array of nonempty strings"
+            )
+        object.__setattr__(self, "approval_tokens", tuple(self.approval_tokens))
+
+    @classmethod
+    def from_value(
+        cls, value: GovernanceAuthorization | Mapping[str, object] | None
+    ) -> GovernanceAuthorization | None:
+        if value is None or isinstance(value, cls):
+            return value
+        if not isinstance(value, Mapping):
+            raise ValueError("governance_authorization must be an object")
+        if set(value) - {"reserved_for", "deployment_environment", "approval_tokens"}:
+            raise ValueError("governance_authorization contains unsupported fields")
+        return cls(**value)
+
+    def to_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {"approval_tokens": list(self.approval_tokens)}
+        if self.reserved_for is not None:
+            result["reserved_for"] = self.reserved_for
+        if self.deployment_environment is not None:
+            result["deployment_environment"] = self.deployment_environment
+        return result
+
+
 def load_domain_registry(path: str | Path) -> frozenset[str]:
     resolved = _resolved_path(path)
     return meridian_load_domain_registry(resolved)
@@ -81,7 +132,10 @@ def assert_registered_domain(
     registry: frozenset[str] | None = None,
     registry_metadata: Mapping[str, Mapping[str, object]] | None = None,
     path: str | Path | None = None,
+    governance_authorization: GovernanceAuthorization | Mapping[str, object] | None = None,
 ) -> str:
+    authorization = GovernanceAuthorization.from_value(governance_authorization)
+    authorization_kwargs = authorization.to_dict() if authorization is not None else {}
     normalized_domain_code = _validate_domain_code(domain_code)
     if registry is None and registry_metadata is None:
         resolved_path = _resolved_path(path)
@@ -92,12 +146,14 @@ def assert_registered_domain(
             normalized_domain_code,
             registry_metadata=registry_metadata,
             path=resolved_path,
+            **authorization_kwargs,
         )
     return meridian_assert_registered_domain(
         normalized_domain_code,
         registry=registry,
         registry_metadata=registry_metadata,
         path=resolved_path,
+        **authorization_kwargs,
     )
 
 
@@ -155,6 +211,7 @@ class GovernanceContext:
     registered_domains: frozenset[str]
     domain_registry_metadata: Mapping[str, Mapping[str, object]]
     prefix_ownership: Mapping[tuple[str, str], str]
+    governance_authorization: GovernanceAuthorization | None = None
     public_domain_registry_repository: str = MERIDIAN_REGISTRY_REPOSITORY
     public_domain_registry_version: str = MERIDIAN_REGISTRY_VERSION
     public_domain_registry_index_url: str = MERIDIAN_REGISTRY_INDEX_URL
@@ -167,7 +224,9 @@ class GovernanceContext:
         owner_repo_name: str,
         domain_registry_path: str | Path,
         prefix_ownership_registry_path: str | Path,
+        governance_authorization: GovernanceAuthorization | Mapping[str, object] | None = None,
     ) -> "GovernanceContext":
+        authorization = GovernanceAuthorization.from_value(governance_authorization)
         resolved_domain_registry_path = _resolved_path(domain_registry_path)
         resolved_prefix_ownership_registry_path = _resolved_path(
             prefix_ownership_registry_path
@@ -188,6 +247,7 @@ class GovernanceContext:
             registry=registered_domains,
             registry_metadata=domain_registry_metadata,
             path=resolved_domain_registry_path,
+            governance_authorization=authorization,
         )
         normalized_owner_repo_name = normalize_owner_repo_name(owner_repo_name)
         return cls(
@@ -198,6 +258,7 @@ class GovernanceContext:
             registered_domains=registered_domains,
             domain_registry_metadata=domain_registry_metadata,
             prefix_ownership=prefix_ownership,
+            governance_authorization=authorization,
         )
 
     def require_prefix(self, prefix: str) -> str:

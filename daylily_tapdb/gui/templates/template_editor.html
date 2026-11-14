@@ -6,10 +6,7 @@
   {% if seed_template %}
   <p>Seed: <a href="{{ tapdb_gui_url(request, '/object/' ~ seed_template.euid) }}">{{ seed_template.euid }}</a> · {{ seed_template.code }}</p>
   {% endif %}
-  <p>Validate JSON first, then save. Save is insert-only; existing templates remain read-only.</p>
-  {% if saved %}
-  <div class="notice ok">Saved {{ saved.inserted }} template(s); skipped {{ saved.skipped }}.</div>
-  {% endif %}
+  <p>Save creates new template versions through the runtime API using already provisioned prefixes. Existing template definitions are immutable.</p>
   {% if issues %}
   <div class="notice bad">
     {% for issue in issues %}
@@ -28,6 +25,8 @@
     <label>Subtype <input id="builder-subtype" value="{{ builder_seed.subtype }}"></label>
     <label>Version <input id="builder-version" value="{{ builder_seed.version }}"></label>
     <label>Instance Prefix <input id="builder-prefix" value="{{ builder_seed.instance_prefix }}"></label>
+    <label>Template class <input id="builder-template-class" value="{{ builder_seed.polymorphic_discriminator }}"></label>
+    <label>Instance class <input id="builder-instance-class" value="{{ builder_seed.instance_polymorphic_identity }}"></label>
   </div>
   <div class="builder-panel">
     <h3>Properties</h3>
@@ -43,6 +42,8 @@
   </div>
   <div class="builder-panel">
     <h3>Child Instantiation</h3>
+    {% if not builder_seed.editable_layouts %}<p>This template has a detailed native layout. Edit its instantiation_layouts in JSON; the visual builder preserves that layout unchanged.</p>{% endif %}
+    <fieldset {% if not builder_seed.editable_layouts %}disabled{% endif %}>
     <div id="builder-children" class="stack compact">
       {% for child in builder_seed.children %}
       <div class="builder-row">
@@ -53,6 +54,7 @@
       {% endfor %}
     </div>
     <button type="button" class="secondary" id="builder-add-child">Add Child Rule</button>
+    </fieldset>
   </div>
   <div class="toolbar">
     <button type="button" id="builder-generate-json">Build JSON</button>
@@ -60,18 +62,61 @@
 </section>
 
 <section class="band">
-  <form method="post" class="editor">
+  <form id="template-api-form" action="{{ tapdb_gui_url(request, '/api/templates') }}" method="post" class="editor">
     <textarea id="template-json" name="template_json" spellcheck="false" data-tapdb-json-editor data-json-editor-label="Template pack JSON">{{ raw_json }}</textarea>
     <div class="toolbar">
-      <button formaction="{{ tapdb_gui_url(request, '/templates/validate') }}" type="submit">Validate</button>
-      <button formaction="{{ tapdb_gui_url(request, '/templates/save') }}" type="submit">Save</button>
+      <button id="template-validate" type="button">Validate</button>
+      <button type="submit">Save</button>
       <a class="button secondary" href="{{ tapdb_gui_url(request, '/templates') }}">Cancel</a>
     </div>
+    <div id="template-api-result" role="status" hidden></div>
+    <div id="template-created-links"></div>
+    <noscript>JavaScript is required to submit this editor to the JSON API.</noscript>
   </form>
 </section>
 <script>
 (() => {
   const byId = (id) => document.getElementById(id);
+  const submitTemplate = async (save) => {
+    const form = byId("template-api-form");
+    const result = byId("template-api-result");
+    const buttons = [...form.querySelectorAll("button")];
+    buttons.forEach(button => { button.disabled = true; });
+    try {
+      const payload = JSON.parse(byId("template-json").value);
+      const response = await window.TapdbApi.request(
+        save ? form.action : {{ tapdb_gui_url(request, '/api/templates/validate') | tojson }}, payload);
+      if (!save) {
+        window.TapdbApi.notice(result, response.valid ? "Template JSON shape is valid. Save enforces the configured prefix rights and native scope."
+          : response.issues.map(issue => issue.message).join("\n"), !response.valid);
+        return;
+      }
+      window.TapdbApi.notice(result, `Saved ${response.inserted} template(s).`);
+      const links = byId("template-created-links");
+      links.replaceChildren();
+      response.templates.forEach(template => {
+        const row = document.createElement("p");
+        const link = document.createElement("a");
+        link.href = {{ tapdb_gui_url(request, '/object/') | tojson }} + encodeURIComponent(template.euid);
+        link.textContent = `${template.name} · ${template.euid}`;
+        row.append(link, " · ");
+        const create = document.createElement("a");
+        create.href = {{ tapdb_gui_url(request, '/create/') | tojson }} + encodeURIComponent(template.euid);
+        create.textContent = "Create instance";
+        row.append(create);
+        links.append(row);
+      });
+    } catch (error) {
+      window.TapdbApi.notice(result, error.message, true);
+    } finally {
+      buttons.forEach(button => { button.disabled = false; });
+    }
+  };
+  byId("template-api-form").addEventListener("submit", event => {
+    event.preventDefault();
+    submitTemplate(true);
+  });
+  byId("template-validate").addEventListener("click", () => submitTemplate(false));
   const addRow = (targetId, html) => {
     const row = document.createElement("div");
     row.className = "builder-row";
@@ -98,42 +143,55 @@
     );
   });
   byId("builder-generate-json").addEventListener("click", () => {
+    try {
+    const current = JSON.parse(byId("template-json").value);
+    if (!Array.isArray(current.templates) || current.templates.length !== 1) {
+      throw new Error("The visual builder edits one template. Edit multi-template packs directly in JSON.");
+    }
+    const source = current.templates[0];
     const properties = {};
     document.querySelectorAll("#builder-properties .builder-row").forEach((row) => {
       const key = row.querySelector("[data-builder-property-key]").value.trim();
       const value = parseBuilderPropertyValue(row.querySelector("[data-builder-property-value]").value);
       if (key) properties[key] = value;
     });
-    const layouts = [];
-    document.querySelectorAll("#builder-children .builder-row").forEach((row) => {
+    const layouts = {{ builder_seed.editable_layouts | tojson }} ? [] : source.json_addl.instantiation_layouts;
+    if ({{ builder_seed.editable_layouts | tojson }}) document.querySelectorAll("#builder-children .builder-row").forEach((row) => {
       const templateCode = row.querySelector("[data-builder-child-code]").value.trim();
       const count = Number.parseInt(row.querySelector("[data-builder-child-count]").value, 10);
-      const relationshipType = row.querySelector("[data-builder-child-relation]").value.trim() || "contains";
+      const relationshipType = row.querySelector("[data-builder-child-relation]").value.trim();
       if (templateCode) {
+        if (!Number.isInteger(count) || count < 1 || !relationshipType) {
+          throw new Error("Each child requires a positive count and an explicit relationship type.");
+        }
         layouts.push({
           relationship_type: relationshipType,
           name_pattern: "{parent_name}_{index}",
-          child_templates: [{ template_code: templateCode, count: Number.isFinite(count) && count > 0 ? count : 1 }],
+          child_templates: [{ template_code: templateCode, count }],
         });
       }
     });
     const prefix = byId("builder-prefix").value.trim();
     const payload = {
       templates: [{
+        ...source,
         name: byId("builder-name").value.trim(),
-        polymorphic_discriminator: "generic_template",
+        polymorphic_discriminator: byId("builder-template-class").value.trim(),
         category: byId("builder-category").value.trim(),
         type: byId("builder-type").value.trim(),
         subtype: byId("builder-subtype").value.trim(),
-        version: byId("builder-version").value.trim() || "1.0",
+        version: byId("builder-version").value.trim(),
         instance_prefix: prefix,
-        instance_polymorphic_identity: "generic_instance",
-        json_addl: { properties, instantiation_layouts: layouts },
+        instance_polymorphic_identity: byId("builder-instance-class").value.trim(),
+        json_addl: { ...source.json_addl, properties, instantiation_layouts: layouts },
       }],
     };
     const templateJson = byId("template-json");
     templateJson.value = JSON.stringify(payload, null, 2);
     window.TapdbJsonEditor?.setValue(templateJson, templateJson.value);
+    } catch (error) {
+      window.TapdbApi.notice(byId("template-api-result"), error.message, true);
+    }
   });
 })();
 </script>

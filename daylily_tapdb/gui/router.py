@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import secrets
 from contextlib import asynccontextmanager
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 from urllib.parse import parse_qs, urlencode
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
@@ -44,21 +46,29 @@ from daylily_tapdb import InstanceFactory, TemplateManager, __version__
 from daylily_tapdb.cli.context import set_cli_context
 from daylily_tapdb.cli.db_config import get_admin_settings, get_db_config
 from daylily_tapdb.euid import validate_euid
+from daylily_tapdb.factory.instance import _instance_model_for_template
 from daylily_tapdb.external_references import (
+    OPAQUE_IDENTIFIER_TEMPLATE_CODE,
+    TAPDB_OBJECT_TEMPLATE_CODE,
+    _canonical_xrf_filter,
     _is_xrf_coordinates,
     _project_outbound_external_references,
 )
 from daylily_tapdb.governance import GovernanceContext
+from daylily_tapdb.issuance import profile_from_config
 from daylily_tapdb.graph_contracts import (
     attach_v0_edge_metadata,
     describe_lineage_contract,
     is_strict_canonical_edge_type,
 )
+from daylily_tapdb.revisions import RevisionConflict, lock_records, require_revision
 from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.models.template import generic_template
+from daylily_tapdb.security_context import configured_graph_tenant_scope
 from daylily_tapdb.services.graph_payloads import (
+    GraphLineageReader,
     build_graph_v2_payload,
     build_visible_graph_v2_payload,
 )
@@ -70,10 +80,10 @@ from daylily_tapdb.services.object_operations import (
     update_object,
 )
 from daylily_tapdb.services.object_search import search_objects
-from daylily_tapdb.templates.loader import (
-    ConfigIssue,
-    find_tapdb_core_config_dir,
-    seed_templates,
+from daylily_tapdb.services.saved_queries import QueryExecutor, is_saved_definition
+from daylily_tapdb.templates.loader import ConfigIssue
+from daylily_tapdb.templates.runtime import (
+    RuntimeTemplatePack, TemplateExistsError, author_templates,
 )
 from daylily_tapdb.templates.repository import (
     export_repository_pack,
@@ -86,10 +96,6 @@ from daylily_tapdb.validation.governance import (
     assess_object,
     editor_data_for_object,
     normalize_validator_ref,
-)
-from daylily_tapdb.validation.instantiation_layouts import (
-    format_validation_error,
-    validate_instantiation_layouts,
 )
 from daylily_tapdb.web.bridge import (
     TapdbHostBridge,
@@ -289,6 +295,7 @@ def _render(
 def _record_to_dict(obj: Any, record_type: str) -> dict[str, Any]:
     return {
         "uid": getattr(obj, "uid", None),
+        "record_revision": getattr(obj, "record_revision", None),
         "euid": getattr(obj, "euid", None),
         "record_type": record_type,
         "name": getattr(obj, "name", None),
@@ -411,6 +418,12 @@ def _object_detail_context(
         if record_type == "instance"
         else {"external_refs": [], "external_identifiers": []}
     )
+    dedicated_definition = _is_xrf_coordinates(obj) or is_saved_definition(obj)
+    if record_type == "lineage":
+        dedicated_definition = any(
+            _is_xrf_coordinates(item) or is_saved_definition(item)
+            for item in (obj.parent_instance, obj.child_instance)
+        )
     return {
         "obj": payload,
         "record_type": record_type,
@@ -418,7 +431,8 @@ def _object_detail_context(
         "audit_rows": _audit_rows(session, euid),
         "external_refs": external["external_refs"],
         "external_identifiers": external["external_identifiers"],
-        "manual_create_allowed": not _is_xrf_coordinates(obj),
+        "manual_create_allowed": not (_is_xrf_coordinates(obj) or is_saved_definition(obj)),
+        "dedicated_definition": dedicated_definition,
         "editor": editor_data_for_object(session, euid),
     }
 
@@ -539,6 +553,7 @@ def _template_row(template: generic_template) -> dict[str, Any]:
         ),
         "bstatus": template.bstatus,
         "code": _template_code(template),
+        "manual_create_allowed": not (_is_xrf_coordinates(template) or is_saved_definition(template)),
     }
 
 
@@ -576,46 +591,23 @@ def _template_seed_pack(template: generic_template) -> dict[str, Any]:
                 "subtype": template.subtype,
                 "version": template.version,
                 "instance_prefix": template.instance_prefix,
-                "instance_polymorphic_identity": getattr(
-                    template,
-                    "instance_polymorphic_identity",
-                    "generic_instance",
-                ),
+                "instance_polymorphic_identity": _instance_model_for_template(
+                    template
+                ).__mapper__.polymorphic_identity,
                 "validator_ref": normalize_validator_ref(
                     getattr(template, "validator_ref", None)
                 ),
                 "json_addl": template.json_addl or {},
+                "json_addl_schema": template.json_addl_schema,
+                "bstatus": template.bstatus,
+                "is_singleton": template.is_singleton,
             }
         ]
     }
 
 
 def _builder_value(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
     return json.dumps(value, sort_keys=True)
-
-
-def _default_builder_seed() -> dict[str, Any]:
-    return {
-        "seed_euid": "",
-        "name": "96 Well Generic Plate",
-        "category": "container",
-        "type": "plate",
-        "subtype": "96well-generic",
-        "version": "1.0",
-        "instance_prefix": "PAT",
-        "properties": [{"key": "plate_format", "value": "96"}],
-        "children": [
-            {
-                "template_code": "container/well/generic/1.0",
-                "count": 96,
-                "relationship_type": "contains",
-            }
-        ],
-    }
 
 
 def _builder_seed_from_template(
@@ -634,6 +626,16 @@ def _builder_seed_from_template(
 
     child_rows: list[dict[str, Any]] = []
     layouts = json_addl.get("instantiation_layouts")
+    editable_layouts = isinstance(layouts, list) and all(
+        isinstance(layout, dict)
+        and set(layout).issubset({"relationship_type", "name_pattern", "child_templates"})
+        and layout.get("name_pattern") in (None, "{parent_name}_{index}")
+        and isinstance(layout.get("child_templates"), list)
+        and len(layout["child_templates"]) == 1
+        and isinstance(layout["child_templates"][0], dict)
+        and set(layout["child_templates"][0]).issubset({"template_code", "count"})
+        for layout in layouts
+    )
     if isinstance(layouts, list):
         for layout in layouts:
             if not isinstance(layout, dict):
@@ -667,8 +669,11 @@ def _builder_seed_from_template(
         "subtype": str(template.get("subtype") or ""),
         "version": str(template.get("version") or "1.0"),
         "instance_prefix": str(template.get("instance_prefix") or ""),
+        "polymorphic_discriminator": template["polymorphic_discriminator"],
+        "instance_polymorphic_identity": template["instance_polymorphic_identity"],
         "properties": property_rows,
         "children": child_rows,
+        "editable_layouts": editable_layouts,
     }
 
 
@@ -676,20 +681,17 @@ def _template_editor_context(
     payload: dict[str, Any],
     *,
     seed_template: dict[str, Any] | None = None,
-    use_default_builder: bool = False,
 ) -> dict[str, Any]:
     templates = payload.get("templates") if isinstance(payload, dict) else None
     first_template = templates[0] if isinstance(templates, list) and templates else None
 
-    if use_default_builder and seed_template is None:
-        builder_seed = _default_builder_seed()
-    elif isinstance(first_template, dict):
+    if isinstance(first_template, dict):
         builder_seed = _builder_seed_from_template(
             first_template,
             seed_euid=str(seed_template.get("euid") or "") if seed_template else "",
         )
     else:
-        builder_seed = _default_builder_seed()
+        raise ValueError("Template editor requires an explicit nonempty definition pack")
 
     return {
         "raw_json": json.dumps(payload, indent=2, sort_keys=True),
@@ -699,79 +701,11 @@ def _template_editor_context(
 
 
 def _validate_template_payload(payload: dict[str, Any]) -> list[ConfigIssue]:
-    issues: list[ConfigIssue] = []
-    templates = payload.get("templates")
-    if not isinstance(templates, list) or not templates:
-        return [
-            ConfigIssue(level="error", message="templates must be a non-empty array")
-        ]
-
-    required = (
-        "name",
-        "polymorphic_discriminator",
-        "category",
-        "type",
-        "subtype",
-        "version",
-        "instance_prefix",
-    )
-    seen: set[tuple[str, str, str, str]] = set()
-    for index, template in enumerate(templates):
-        if not isinstance(template, dict):
-            issues.append(
-                ConfigIssue(
-                    level="error",
-                    message=f"templates[{index}] must be a JSON object",
-                )
-            )
-            continue
-        for key in required:
-            if not str(template.get(key) or "").strip():
-                issues.append(
-                    ConfigIssue(
-                        level="error",
-                        message=f"templates[{index}] missing required field {key!r}",
-                    )
-                )
-        key = (
-            str(template.get("category") or ""),
-            str(template.get("type") or ""),
-            str(template.get("subtype") or ""),
-            str(template.get("version") or ""),
-        )
-        if key in seen:
-            issues.append(
-                ConfigIssue(
-                    level="error",
-                    template_code="/".join(key),
-                    message=f"duplicate template key: {key!r}",
-                )
-            )
-        seen.add(key)
-        json_addl = template.get("json_addl")
-        if json_addl is not None and not isinstance(json_addl, dict):
-            issues.append(
-                ConfigIssue(
-                    level="error",
-                    template_code="/".join(key),
-                    message="json_addl must be a JSON object",
-                )
-            )
-        if isinstance(json_addl, dict) and json_addl.get("instantiation_layouts"):
-            try:
-                validate_instantiation_layouts(json_addl.get("instantiation_layouts"))
-            except ValidationError as exc:
-                issues.append(
-                    ConfigIssue(
-                        level="error",
-                        template_code="/".join(key),
-                        message=(
-                            "Invalid instantiation_layouts: "
-                            f"{format_validation_error(exc)}"
-                        ),
-                    )
-                )
-    return issues
+    try:
+        RuntimeTemplatePack.model_validate(payload)
+    except ValidationError as exc:
+        return [ConfigIssue(level="error", message=str(exc))]
+    return []
 
 
 def _create_instance_from_template(
@@ -792,6 +726,7 @@ def _create_instance_from_template(
         raise HTTPException(
             status_code=404, detail=f"Template not found: {template_euid}"
         )
+    _require_generic_instance_template(template)
     factory = InstanceFactory(TemplateManager(), domain_code=str(cfg["domain_code"]))
     instance = factory.create_instance(
         session,
@@ -799,13 +734,22 @@ def _create_instance_from_template(
         name=name.strip(),
         properties=properties,
         create_children=create_children,
+        tenant_id=UUID(str(cfg["tenant_id"])) if cfg.get("tenant_id") else None,
     )
     return {
         "template_euid": template.euid,
         "template_code": _template_code(template),
         "instance_euid": instance.euid,
+        "record_revision": instance.record_revision,
         "create_children": create_children,
     }
+
+
+def _require_generic_instance_template(template: Any) -> None:
+    if _is_xrf_coordinates(template) or is_saved_definition(template):
+        raise HTTPException(
+            403, "This template requires its dedicated native API",
+        )
 
 
 def _create_object_repair(
@@ -832,6 +776,8 @@ def _create_object_repair(
         message = str(exc)
         status = 404 if message.lower().startswith("object not found") else 422
         raise HTTPException(status_code=status, detail=message) from exc
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -845,6 +791,7 @@ def _update_object_name(
     name: str,
     actor: str = "",
     dry_run: bool = False,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     value = str(name or "").strip()
     if not value:
@@ -861,9 +808,12 @@ def _update_object_name(
             {"name": value},
             actor=actor,
             dry_run=dry_run,
+            expected_revision=expected_revision,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -877,6 +827,7 @@ def _update_object_status(
     bstatus: str,
     actor: str = "",
     dry_run: bool = False,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     status = str(bstatus or "").strip()
     if not status:
@@ -893,9 +844,12 @@ def _update_object_status(
             {"bstatus": status},
             actor=actor,
             dry_run=dry_run,
+            expected_revision=expected_revision,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -907,12 +861,28 @@ def _add_object_lineage(
     *,
     euid: str,
     related_euid: str,
+    expected_revision: int,
+    related_expected_revision: int,
     direction: str,
     relationship_type: str,
     v0_edge: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if direction not in {"parent", "child"}:
+        raise HTTPException(422, "direction must be parent or child")
+    if not isinstance(relationship_type, str) or not relationship_type.strip() or relationship_type != relationship_type.strip():
+        raise HTTPException(422, "relationship_type must be nonblank exact text")
     current = _resolve_instance(session, euid, label="Object")
     related = _resolve_instance(session, related_euid, label="Related object")
+    if any(_is_xrf_coordinates(obj) or is_saved_definition(obj) for obj in (current, related)):
+        raise HTTPException(403, "This relationship requires its dedicated native API")
+    lock_records(session,[current,related])
+    try:
+        require_revision(current,expected_revision)
+        require_revision(related,related_expected_revision)
+    except RevisionConflict as exc:
+        raise HTTPException(409,str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
     if direction == "child":
         parent, child = current, related
     else:
@@ -964,6 +934,7 @@ def _add_object_lineage(
     )
     return {
         "lineage_euid": getattr(lineage, "euid", None),
+        "record_revision": lineage.record_revision,
         "parent_euid": parent.euid,
         "child_euid": child.euid,
         "relationship_type": (relationship_type or "").strip() or "generic",
@@ -984,6 +955,7 @@ def _meridian_validation_payload(
         owner_repo_name=str(cfg["owner_repo_name"]),
         domain_registry_path=str(cfg["domain_registry_path"]),
         prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
+        governance_authorization=cfg.get("governance_authorization"),
     )
     euid_valid = None
     if euid:
@@ -1026,6 +998,7 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
         owner_repo_name=str(cfg["owner_repo_name"]),
         domain_registry_path=str(cfg["domain_registry_path"]),
         prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
+        governance_authorization=cfg.get("governance_authorization"),
     )
     checks.append(
         {
@@ -1045,18 +1018,17 @@ def _readiness_payload(*, config_path: str) -> dict[str, Any]:
                 .filter_by(
                     category="reference",
                     type="external_identifier",
-                    version="1.0",
                     is_deleted=False,
                 )
-                .filter(generic_template.subtype.in_(("tapdb_object", "opaque")))
+                .filter(_canonical_xrf_filter(generic_template))
                 .all()
             )
             external_template_codes = sorted(
                 _template_code(template) for template in external_templates
             )
             external_templates_ready = external_template_codes == [
-                "reference/external_identifier/opaque/1.0/",
-                "reference/external_identifier/tapdb_object/1.0/",
+                OPAQUE_IDENTIFIER_TEMPLATE_CODE,
+                TAPDB_OBJECT_TEMPLATE_CODE,
             ]
             template_count = len(
                 session.query(generic_template)
@@ -1241,10 +1213,14 @@ def _audit_payload(
         raise ValueError("operation_type must be ALL, INSERT, UPDATE, or DELETE")
     with get_db(config_path) as conn:
         conn.app_username = current_identifier
+        from daylily_tapdb.gui.integrity import authenticated_attribution
+        initiator = authenticated_attribution(user, conn) if not is_admin else None
         with conn.session_scope() as session:
             entries = query_audit_trail(
                 session,
-                changed_by=effective_actor or None,
+                changed_by=(effective_actor or None) if is_admin else None,
+                actor_issuer=initiator.actor_issuer if initiator else None,
+                actor_subject=initiator.actor_subject if initiator else None,
                 euid=str(euid or "").strip() or None,
                 operation_type=normalized_operation or None,
                 limit=limit,
@@ -1266,6 +1242,7 @@ def create_tapdb_gui_router(
     *,
     config_path: str,
     host_bridge: TapdbHostBridge | None = None,
+    saved_query_executors: Mapping[str, QueryExecutor] | None = None,
 ) -> APIRouter:
     """Build the embeddable TapDB GUI router."""
 
@@ -1286,6 +1263,11 @@ def create_tapdb_gui_router(
         return HTMLResponse(
             js_path.read_text(encoding="utf-8"), media_type="application/javascript"
         )
+
+    @router.get("/static/tapdb-api.js")
+    async def gui_api_js():
+        path = BASE_DIR / "static" / "js" / "tapdb-api.js"
+        return Response(path.read_text(encoding="utf-8"), media_type="application/javascript")
 
     @router.get("/static/tapdb-json-editor.js")
     async def gui_json_editor_js():
@@ -1561,41 +1543,6 @@ def create_tapdb_gui_router(
             repository_error=repository_error,
         )
 
-    @router.post("/templates/repository/export")
-    async def templates_repository_export_page(
-        request: Request,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        form = await _read_urlencoded_form(request)
-        repository_pack = str(form.get("repository_pack") or "")
-        cfg = get_db_config(config_path=resolved_config_path)
-        try:
-            with get_db(resolved_config_path) as conn:
-                conn.app_username = user.get("username")
-                with conn.session_scope() as session:
-                    export_repository_pack(
-                        session,
-                        repository_pack,
-                        domain_code=str(cfg["domain_code"]),
-                        issuer_app_code=str(cfg["owner_repo_name"]),
-                        prefix_registry_path=str(cfg["prefix_ownership_registry_path"]),
-                        actor=str(user.get("username") or ""),
-                    )
-        except Exception as exc:
-            return RedirectResponse(
-                gui_url_with_query(
-                    request,
-                    "/templates",
-                    repository_pack=repository_pack,
-                    repository_error=str(exc)[:200],
-                ),
-                status_code=303,
-            )
-        return RedirectResponse(
-            gui_url_with_query(request, "/templates", repository_pack=repository_pack),
-            status_code=303,
-        )
-
     @router.get("/api/templates/repository/status")
     async def templates_repository_status_api(
         repository_pack: str,
@@ -1683,6 +1630,8 @@ def create_tapdb_gui_router(
         apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 try:
                     return asdict(
@@ -1695,6 +1644,9 @@ def create_tapdb_gui_router(
                             prefix_registry_path=str(
                                 cfg["prefix_ownership_registry_path"]
                             ),
+                            issuance_profile=profile_from_config(cfg),
+                            execution="runtime",
+                            governance_authorization=cfg.get("governance_authorization"),
                             dry_run=not apply,
                         )
                     )
@@ -1707,7 +1659,8 @@ def create_tapdb_gui_router(
         seed_euid: str = "",
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
-        payload = _example_template_pack()
+        cfg = get_db_config(config_path=resolved_config_path)
+        payload = _example_template_pack(instance_prefix=profile_from_config(cfg).prefix or "")
         seed_template = None
         if str(seed_euid or "").strip():
             with get_db(resolved_config_path) as conn:
@@ -1736,7 +1689,6 @@ def create_tapdb_gui_router(
             **_template_editor_context(
                 payload,
                 seed_template=seed_template,
-                use_default_builder=True,
             ),
             issues=[],
             saved=None,
@@ -1753,8 +1705,11 @@ def create_tapdb_gui_router(
             "template_editor.html",
             user=user,
             **_template_editor_context(
-                _example_template_pack(),
-                use_default_builder=True,
+                _example_template_pack(
+                    instance_prefix=profile_from_config(
+                        get_db_config(config_path=resolved_config_path)
+                    ).prefix or "",
+                ),
             ),
             issues=[
                 ConfigIssue(
@@ -1808,93 +1763,39 @@ def create_tapdb_gui_router(
             "issues": [jsonable_encoder(issue) for issue in issues],
         }
 
-    @router.post("/templates/save", response_class=HTMLResponse)
-    async def template_save_page(
-        request: Request,
+    @router.post("/api/templates", status_code=201)
+    async def template_create_api(
+        payload: RuntimeTemplatePack,
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
-        form = await _read_urlencoded_form(request)
-        template_json = str(form.get("template_json") or "")
-        payload = _parse_json_object(template_json, label="template_json")
-        issues = _validate_template_payload(payload)
-        if issues:
-            return _render(
-                templates,
-                request,
-                "template_editor.html",
-                user=user,
-                **_template_editor_context(payload),
-                issues=issues,
-                saved=None,
-            )
+        cfg = get_db_config(config_path=resolved_config_path)
         try:
-            cfg = get_db_config(config_path=resolved_config_path)
+            governance = GovernanceContext.load(
+                domain_code=str(cfg["domain_code"]),
+                owner_repo_name=str(cfg["owner_repo_name"]),
+                domain_registry_path=cfg["domain_registry_path"],
+                prefix_ownership_registry_path=cfg["prefix_ownership_registry_path"],
+                governance_authorization=cfg.get("governance_authorization"),
+            )
+            profile = profile_from_config(cfg)
             with get_db(resolved_config_path) as conn:
                 conn.app_username = user.get("username")
+                from daylily_tapdb.gui.integrity import authenticated_attribution
+                conn.attribution = authenticated_attribution(user, conn)
                 with conn.session_scope(commit=True) as session:
-                    for template in payload["templates"]:
-                        existing = (
-                            session.query(generic_template)
-                            .filter_by(
-                                domain_code=cfg["domain_code"],
-                                category=str(template["category"]),
-                                type=str(template["type"]),
-                                subtype=str(template["subtype"]),
-                                version=str(template["version"]),
-                                is_deleted=False,
-                            )
-                            .first()
-                        )
-                        if existing is not None:
-                            raise HTTPException(
-                                status_code=409,
-                                detail=(
-                                    "Template already exists and is read-only: "
-                                    f"{_template_code(existing)}"
-                                ),
-                            )
-                    summary = seed_templates(
-                        session,
-                        [dict(item) for item in payload["templates"]],
-                        overwrite=False,
-                        core_config_dir=find_tapdb_core_config_dir(),
-                        domain_code=str(cfg["domain_code"]),
-                        owner_repo_name=str(cfg["owner_repo_name"]),
-                        domain_registry_path=Path(str(cfg["domain_registry_path"])),
-                        prefix_registry_path=Path(
-                            str(cfg["prefix_ownership_registry_path"])
-                        ),
+                    result = author_templates(
+                        session, payload.model_dump(), governance=governance,
+                        issuance_profile=profile,
                     )
-        except HTTPException:
-            raise
-        except (
-            json.JSONDecodeError,
-            KeyError,
-            OSError,
-            RuntimeError,
-            ValueError,
-        ) as exc:
-            issues = [
-                ConfigIssue(level="error", message=f"Template save failed: {exc}")
-            ]
-            return _render(
-                templates,
-                request,
-                "template_editor.html",
-                user=user,
-                **_template_editor_context(payload),
-                issues=issues,
-                saved=None,
-            )
-        return _render(
-            templates,
-            request,
-            "template_editor.html",
-            user=user,
-            **_template_editor_context(payload),
-            issues=[],
-            saved=summary,
-        )
+            return jsonable_encoder(result)
+        except TemplateExistsError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except IntegrityError as exc:
+            raise HTTPException(409, "Template coordinates already exist or violate a native constraint") from exc
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        except (ValueError, KeyError, OSError, RuntimeError) as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @router.get("/create/{template_euid}", response_class=HTMLResponse)
     async def create_page(
@@ -1914,6 +1815,7 @@ def create_tapdb_gui_router(
                     raise HTTPException(
                         status_code=404, detail=f"Template not found: {template_euid}"
                     )
+                _require_generic_instance_template(template)
                 template_payload, template_code = _template_payload_and_code(template)
         return _render(
             templates,
@@ -1928,103 +1830,41 @@ def create_tapdb_gui_router(
             },
         )
 
-    @router.post("/create/{template_euid}")
-    async def create_submit(
-        request: Request,
-        template_euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        form = await _read_urlencoded_form(request)
-        name = str(form.get("name") or "")
-        properties_json = str(form.get("properties_json") or "{}")
-        create_children = str(form.get("create_children") or "")
-        properties = _parse_json_object(
-            properties_json or "{}", label="properties_json"
-        )
-        cfg = get_db_config(config_path=resolved_config_path)
-        try:
-            with get_db(resolved_config_path) as conn:
-                conn.app_username = user.get("username")
-                with conn.session_scope(commit=True) as session:
-                    created = _create_instance_from_template(
-                        session,
-                        cfg=cfg,
-                        template_euid=template_euid,
-                        name=name.strip(),
-                        properties=properties,
-                        create_children=str(create_children).lower()
-                        in {"true", "1", "on"},
-                    )
-                    instance_euid = created["instance_euid"]
-        except ValueError as exc:
-            with get_db(resolved_config_path) as conn:
-                conn.app_username = user.get("username")
-                with conn.session_scope() as session:
-                    template = (
-                        session.query(generic_template)
-                        .filter_by(euid=template_euid, is_deleted=False)
-                        .first()
-                    )
-                    if template is None:
-                        raise HTTPException(
-                            status_code=404,
-                            detail=f"Template not found: {template_euid}",
-                        ) from exc
-                    template_payload, template_code = _template_payload_and_code(
-                        template
-                    )
-            return _render(
-                templates,
-                request,
-                "create.html",
-                user=user,
-                template=template_payload,
-                template_code=template_code,
-                error=str(exc),
-                form={
-                    "name": name,
-                    "properties_json": json.dumps(properties, indent=2, sort_keys=True),
-                    "create_children": create_children,
-                },
-            )
-        return RedirectResponse(
-            gui_url_with_query(
-                request, f"/object/{instance_euid}", notice="instance_created"
-            ),
-            status_code=303,
-        )
-
-    @router.post("/api/create/{template_euid}")
+    @router.post("/api/create/{template_euid}", status_code=201)
     async def create_api(
         request: Request,
         template_euid: str,
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=400,
-                detail="create payload must be a JSON object",
-            )
-        properties = payload.get("properties") or {}
+        payload = await _read_optional_json_object(request)
+        _reject_unknown_payload_fields(payload, allowed={"name", "properties", "create_children"})
+        name = payload.get("name")
+        properties = payload.get("properties")
+        create_children = payload.get("create_children")
+        if not isinstance(name, str) or not name.strip() or name != name.strip():
+            raise HTTPException(422, "name must be nonblank exact text")
         if not isinstance(properties, dict):
-            raise HTTPException(
-                status_code=400, detail="properties must be a JSON object"
-            )
+            raise HTTPException(422, "properties must be a JSON object")
+        if type(create_children) is not bool:
+            raise HTTPException(422, "create_children must be an explicit boolean")
         cfg = get_db_config(config_path=resolved_config_path)
-        with get_db(resolved_config_path) as conn:
-            conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
-                return jsonable_encoder(
-                    _create_instance_from_template(
-                        session,
-                        cfg=cfg,
-                        template_euid=template_euid,
-                        name=str(payload.get("name") or ""),
-                        properties=properties,
-                        create_children=bool(payload.get("create_children")),
+        try:
+            with get_db(resolved_config_path) as conn:
+                conn.app_username = user.get("username")
+                from daylily_tapdb.gui.integrity import authenticated_attribution
+                conn.attribution = authenticated_attribution(user, conn)
+                with conn.session_scope(commit=True) as session:
+                    result = _create_instance_from_template(
+                        session, cfg=cfg, template_euid=template_euid,
+                        name=name, properties=properties, create_children=create_children,
                     )
-                )
+            return jsonable_encoder(result)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except IntegrityError as exc:
+            raise HTTPException(409, "Instance creation violates a native identity or lineage constraint") from exc
 
     def _graph_payload(
         session: Any,
@@ -2034,6 +1874,7 @@ def create_tapdb_gui_router(
         depth: int,
         max_nodes: int,
         max_edges: int,
+        tenant_scope: frozenset[str | None] | None,
     ) -> dict[str, Any]:
         exact_start = str(start_euid or "").strip()
         if exact_start:
@@ -2049,6 +1890,8 @@ def create_tapdb_gui_router(
                 depth=depth,
                 max_nodes=max_nodes,
                 max_edges=max_edges,
+                tenant_scope=tenant_scope,
+                lineage_reader=GraphLineageReader(session),
             )
 
         instances = (
@@ -2079,6 +1922,7 @@ def create_tapdb_gui_router(
             service_id=service_id,
             max_nodes=max_nodes,
             max_edges=max_edges,
+            tenant_scope=tenant_scope,
         )
 
     @router.get("/graph", response_class=HTMLResponse)
@@ -2101,6 +1945,7 @@ def create_tapdb_gui_router(
                     depth=depth,
                     max_nodes=max_nodes,
                     max_edges=max_edges,
+                    tenant_scope=configured_graph_tenant_scope(cfg),
                 )
         return _render(
             templates,
@@ -2133,6 +1978,7 @@ def create_tapdb_gui_router(
                     depth=depth,
                     max_nodes=max_nodes,
                     max_edges=max_edges,
+                    tenant_scope=configured_graph_tenant_scope(cfg),
                 )
 
     @router.get("/object/{euid}/graph", response_class=HTMLResponse)
@@ -2158,6 +2004,8 @@ def create_tapdb_gui_router(
                     depth=depth,
                     max_nodes=1_000,
                     max_edges=500,
+                    tenant_scope=configured_graph_tenant_scope(cfg),
+                    lineage_reader=GraphLineageReader(session),
                 )
         return _render(
             templates,
@@ -2193,6 +2041,8 @@ def create_tapdb_gui_router(
                     depth=depth,
                     max_nodes=1_000,
                     max_edges=500,
+                    tenant_scope=configured_graph_tenant_scope(cfg),
+                    lineage_reader=GraphLineageReader(session),
                 )
 
     @router.get("/object/{euid}", response_class=HTMLResponse)
@@ -2217,6 +2067,7 @@ def create_tapdb_gui_router(
             external_refs=context["external_refs"],
             external_identifiers=context["external_identifiers"],
             manual_create_allowed=context["manual_create_allowed"],
+            dedicated_definition=context["dedicated_definition"],
             editor=context["editor"],
             notice=notice,
             json_text=json.dumps(
@@ -2241,12 +2092,19 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         payload = await _read_optional_json_object(request)
+        _reject_unknown_payload_fields(
+            payload, allowed={"changes", "apply", "expected_revision", "reason"},
+        )
         changes = payload.get("changes")
         if not isinstance(changes, dict):
             raise HTTPException(status_code=400, detail="changes must be an object")
         apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(
+                user, conn, reason=payload.get("reason"),
+            ) if apply else None
             with conn.session_scope(commit=apply) as session:
                 try:
                     return update_object(
@@ -2255,9 +2113,12 @@ def create_tapdb_gui_router(
                         changes,
                         actor=str(user.get("username") or ""),
                         dry_run=not apply,
+                        expected_revision=payload.get("expected_revision"),
                     )
                 except LookupError as exc:
                     raise HTTPException(status_code=404, detail=str(exc)) from exc
+                except RevisionConflict as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
                 except PermissionError as exc:
                     raise HTTPException(status_code=403, detail=str(exc)) from exc
                 except Exception as exc:
@@ -2267,10 +2128,13 @@ def create_tapdb_gui_router(
     async def governed_object_delete_api(
         euid: str,
         apply: bool = False,
+        expected_revision: int | None = None,
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 try:
                     return soft_delete_object(
@@ -2278,9 +2142,12 @@ def create_tapdb_gui_router(
                         ObjectSelector(euid=euid),
                         actor=str(user.get("username") or ""),
                         dry_run=not apply,
+                        expected_revision=expected_revision,
                     )
                 except LookupError as exc:
                     raise HTTPException(status_code=404, detail=str(exc)) from exc
+                except RevisionConflict as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
                 except PermissionError as exc:
                     raise HTTPException(status_code=403, detail=str(exc)) from exc
                 except Exception as exc:
@@ -2373,34 +2240,6 @@ def create_tapdb_gui_router(
             }
         )
 
-    @router.post("/object/{euid}/repairs")
-    async def create_repair(
-        request: Request,
-        euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        form = await _read_urlencoded_form(request)
-        _require_form_apply(form)
-        payload = _parse_json_object(
-            str(form.get("repair_payload") or "{}"), label="repair_payload"
-        )
-        cfg = get_db_config(config_path=resolved_config_path)
-        with get_db(resolved_config_path) as conn:
-            conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
-                _create_object_repair(
-                    session,
-                    cfg=cfg,
-                    euid=euid,
-                    actor=str(user.get("username") or ""),
-                    reason=str(form.get("reason") or ""),
-                    repair_payload=payload,
-                )
-        return RedirectResponse(
-            gui_url_with_query(request, f"/object/{euid}", notice="repair_created"),
-            status_code=303,
-        )
-
     @router.post("/api/object/{euid}/repairs")
     async def create_repair_api(
         request: Request,
@@ -2421,6 +2260,8 @@ def create_tapdb_gui_router(
         apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 return jsonable_encoder(
                     _create_object_repair(
@@ -2434,56 +2275,6 @@ def create_tapdb_gui_router(
                     )
                 )
 
-    @router.post("/object/{euid}/edit-json")
-    async def edit_json(
-        request: Request,
-        euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        form = await _read_urlencoded_form(request)
-        _require_form_apply(form)
-        json_addl = str(form.get("json_addl") or "")
-        payload = _parse_json_object(json_addl, label="json_addl")
-        cfg = get_db_config(config_path=resolved_config_path)
-        with get_db(resolved_config_path) as conn:
-            conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
-                _create_object_repair(
-                    session,
-                    cfg=cfg,
-                    euid=euid,
-                    actor=str(user.get("username") or ""),
-                    reason="JSON repair submitted through legacy edit-json route",
-                    repair_payload=payload,
-                )
-        return RedirectResponse(
-            gui_url_with_query(request, f"/object/{euid}", notice="repair_created"),
-            status_code=303,
-        )
-
-    @router.post("/object/{euid}/name")
-    async def edit_name(
-        request: Request,
-        euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        form = await _read_urlencoded_form(request)
-        _require_form_apply(form)
-        name = str(form.get("name") or "")
-        with get_db(resolved_config_path) as conn:
-            conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
-                _update_object_name(
-                    session,
-                    euid=euid,
-                    name=name,
-                    actor=str(user.get("username") or ""),
-                )
-        return RedirectResponse(
-            gui_url_with_query(request, f"/object/{euid}", notice="name_updated"),
-            status_code=303,
-        )
-
     @router.post("/api/object/{euid}/name")
     async def edit_name_api(
         request: Request,
@@ -2492,10 +2283,12 @@ def create_tapdb_gui_router(
     ):
         payload = await _read_optional_json_object(request)
         _reject_immutable_object_fields(payload)
-        _reject_unknown_payload_fields(payload, allowed={"apply", "name"})
+        _reject_unknown_payload_fields(payload, allowed={"apply", "name", "expected_revision"})
         apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 return jsonable_encoder(
                     _update_object_name(
@@ -2503,6 +2296,7 @@ def create_tapdb_gui_router(
                         euid=euid,
                         name=str(payload.get("name") or ""),
                         actor=str(user.get("username") or ""),
+                    expected_revision=payload.get("expected_revision"),
                         dry_run=not apply,
                     )
                 )
@@ -2514,55 +2308,36 @@ def create_tapdb_gui_router(
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
         payload = await _read_optional_json_object(request)
-        _reject_immutable_object_fields(payload)
         _reject_unknown_payload_fields(
-            payload, allowed={"apply", "json_addl", "reason"}
+            payload, allowed={"apply", "json_addl", "reason", "expected_revision"},
         )
         json_addl = payload.get("json_addl")
         if not isinstance(json_addl, dict):
-            raise HTTPException(
-                status_code=400, detail="json_addl must be a JSON object"
-            )
+            raise HTTPException(422, "json_addl must be a JSON object")
+        reason = payload.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise HTTPException(422, "A reason is required for the JSON change")
         apply = payload.get("apply") is True
-        cfg = get_db_config(config_path=resolved_config_path)
-        with get_db(resolved_config_path) as conn:
-            conn.app_username = user.get("username")
-            with conn.session_scope(commit=apply) as session:
-                return jsonable_encoder(
-                    _create_object_repair(
-                        session,
-                        cfg=cfg,
-                        euid=euid,
-                        actor=str(user.get("username") or ""),
-                        reason=str(payload.get("reason") or "").strip()
-                        or "JSON repair submitted through compatibility edit-json API",
-                        repair_payload=json_addl,
-                        dry_run=not apply,
+        try:
+            with get_db(resolved_config_path) as conn:
+                conn.app_username = user.get("username")
+                from daylily_tapdb.gui.integrity import authenticated_attribution
+                conn.attribution = authenticated_attribution(user, conn, reason=reason) if apply else None
+                with conn.session_scope(commit=apply) as session:
+                    result = update_object(
+                        session, ObjectSelector(euid=euid), {"json_addl": json_addl},
+                        actor=str(user.get("username") or ""), dry_run=not apply,
+                        expected_revision=payload.get("expected_revision"),
                     )
-                )
-
-    @router.post("/object/{euid}/status")
-    async def edit_status(
-        request: Request,
-        euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        form = await _read_urlencoded_form(request)
-        _require_form_apply(form)
-        bstatus = str(form.get("bstatus") or "")
-        with get_db(resolved_config_path) as conn:
-            conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
-                _update_object_status(
-                    session,
-                    euid=euid,
-                    bstatus=bstatus,
-                    actor=str(user.get("username") or ""),
-                )
-        return RedirectResponse(
-            gui_url_with_query(request, f"/object/{euid}", notice="status_updated"),
-            status_code=303,
-        )
+            return jsonable_encoder(result)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except RevisionConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @router.post("/api/object/{euid}/status")
     async def edit_status_api(
@@ -2572,10 +2347,12 @@ def create_tapdb_gui_router(
     ):
         payload = await _read_optional_json_object(request)
         _reject_immutable_object_fields(payload)
-        _reject_unknown_payload_fields(payload, allowed={"apply", "bstatus"})
+        _reject_unknown_payload_fields(payload, allowed={"apply", "bstatus", "expected_revision"})
         apply = payload.get("apply") is True
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn) if apply else None
             with conn.session_scope(commit=apply) as session:
                 return jsonable_encoder(
                     _update_object_status(
@@ -2583,48 +2360,10 @@ def create_tapdb_gui_router(
                         euid=euid,
                         bstatus=str(payload.get("bstatus") or ""),
                         actor=str(user.get("username") or ""),
+                    expected_revision=payload.get("expected_revision"),
                         dry_run=not apply,
                     )
                 )
-
-    @router.post("/object/{euid}/lineage")
-    async def add_lineage(
-        request: Request,
-        euid: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        form = await _read_urlencoded_form(request)
-        related_euid = str(form.get("related_euid") or "")
-        direction = str(form.get("direction") or "parent")
-        relationship_type = str(form.get("relationship_type") or "generic")
-        evidence_refs = _parse_evidence_refs(str(form.get("evidence_refs") or ""))
-        v0_edge = None
-        if evidence_refs or is_strict_canonical_edge_type(relationship_type):
-            v0_edge = {
-                "edge_type": relationship_type,
-                "asserted_by_system": str(
-                    form.get("asserted_by_system") or "tapdb-gui"
-                ),
-                "evidence_refs": evidence_refs,
-                "correlation_id": str(form.get("correlation_id") or ""),
-                "causation_id": str(form.get("causation_id") or ""),
-                "edge_state": str(form.get("edge_state") or "active"),
-            }
-        with get_db(resolved_config_path) as conn:
-            conn.app_username = user.get("username")
-            with conn.session_scope(commit=True) as session:
-                _add_object_lineage(
-                    session,
-                    euid=euid,
-                    related_euid=related_euid,
-                    direction=direction,
-                    relationship_type=relationship_type,
-                    v0_edge=v0_edge,
-                )
-        return RedirectResponse(
-            gui_url_with_query(request, f"/object/{euid}", notice="lineage_added"),
-            status_code=303,
-        )
 
     @router.post("/api/object/{euid}/lineage")
     async def add_lineage_api(
@@ -2632,26 +2371,28 @@ def create_tapdb_gui_router(
         euid: str,
         user: dict[str, Any] = Depends(require_tapdb_gui_admin),
     ):
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=400, detail="lineage payload must be a JSON object"
-            )
+        payload = await _read_optional_json_object(request)
+        _reject_unknown_payload_fields(payload, allowed={
+            "related_euid", "expected_revision", "related_expected_revision",
+            "direction", "relationship_type", "v0_edge",
+        })
+        if "v0_edge" in payload and not isinstance(payload["v0_edge"], dict):
+            raise HTTPException(422, "v0_edge must be an object when supplied")
         with get_db(resolved_config_path) as conn:
             conn.app_username = user.get("username")
+            from daylily_tapdb.gui.integrity import authenticated_attribution
+            conn.attribution = authenticated_attribution(user, conn)
             with conn.session_scope(commit=True) as session:
                 return jsonable_encoder(
                     _add_object_lineage(
                         session,
                         euid=euid,
                         related_euid=str(payload.get("related_euid") or ""),
-                        direction=str(payload.get("direction") or "parent"),
-                        relationship_type=str(
-                            payload.get("relationship_type") or "generic"
-                        ),
-                        v0_edge=payload.get("v0_edge")
-                        if isinstance(payload.get("v0_edge"), dict)
-                        else None,
+                        expected_revision=payload.get("expected_revision"),
+                        related_expected_revision=payload.get("related_expected_revision"),
+                        direction=payload.get("direction"),
+                        relationship_type=payload.get("relationship_type"),
+                        v0_edge=payload.get("v0_edge"),
                     )
                 )
 
@@ -2856,24 +2597,6 @@ def create_tapdb_gui_router(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid_backup_ref") from exc
 
-    def _receipt_url(
-        request: Request,
-        receipt_id: str | None,
-        *,
-        fallback_notice: str = "",
-        fallback_error: str = "",
-    ) -> str:
-        """Link to the evidence page, or fall back if no receipt was written.
-
-        ``record_receipt=False`` paths and dry runs legitimately produce no
-        receipt; those still need somewhere to land.
-        """
-        if receipt_id:
-            return gui_url(request, f"/admin/backups/receipts/{receipt_id}")
-        return gui_url_with_query(
-            request, "/admin/backups", notice=fallback_notice, error=fallback_error
-        )
-
     def _backups_context() -> dict[str, Any]:
         from daylily_tapdb.backup import views as backup_views
 
@@ -2895,10 +2618,10 @@ def create_tapdb_gui_router(
             backups=_backups_context(),
             notice=notice,
             error=error,
-            create_url=gui_url(request, "/admin/backups/create"),
-            verify_url_for=lambda ref: gui_url(request, f"/admin/backups/{ref}/verify"),
+            create_url=gui_url(request, "/api/admin/backups"),
+            verify_url_for=lambda ref: gui_url(request, f"/api/admin/backups/{ref}/verify"),
             rehearse_url_for=lambda ref: gui_url(
-                request, f"/admin/backups/{ref}/rehearse"
+                request, f"/api/admin/backups/{ref}/rehearse"
             ),
             restore_url_for=lambda ref: gui_url(
                 request, f"/admin/backups/{ref}/restore"
@@ -3110,101 +2833,6 @@ def create_tapdb_gui_router(
             )
         )
 
-    @router.post("/admin/backups/create")
-    async def backups_create(
-        request: Request,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        from daylily_tapdb.backup import service as backup_service
-        from daylily_tapdb.backup.receipts import SURFACE_GUI, Actor
-
-        form = await request.form()
-        cfg, settings = _backup_env()
-        actor = Actor(surface=SURFACE_GUI, username=user.get("email"))
-        try:
-            created = backup_service.create_backup(
-                cfg,
-                settings,
-                backup_class=str(form.get("backup_class") or "full"),
-                allow_drift=bool(form.get("allow_drift")),
-                note=str(form.get("note") or "") or None,
-                actor=actor,
-                **_backup_form_evidence(form, source=True),
-            )
-        except Exception as exc:
-            return RedirectResponse(
-                gui_url_with_query(request, "/admin/backups", error=str(exc)[:200]),
-                status_code=303,
-            )
-        # Same evidence page as verify/rehearse/restore -- a create runs its
-        # own quick verification, and those verdicts are worth showing.
-        return RedirectResponse(
-            _receipt_url(request, created.receipt_id, fallback_notice="backup_created"),
-            status_code=303,
-        )
-
-    @router.post("/admin/backups/{ref}/verify")
-    async def backups_verify(
-        request: Request,
-        ref: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        from daylily_tapdb.backup import service as backup_service
-        from daylily_tapdb.backup.receipts import SURFACE_GUI, Actor
-
-        cfg, settings = _backup_env()
-        try:
-            report = backup_service.verify_backup(
-                cfg,
-                settings,
-                backup_id=_validated_backup_ref(ref),
-                actor=Actor(surface=SURFACE_GUI, username=user.get("email")),
-            )
-        except Exception as exc:
-            return RedirectResponse(
-                gui_url_with_query(request, "/admin/backups", error=str(exc)[:200]),
-                status_code=303,
-            )
-        return RedirectResponse(
-            _receipt_url(
-                request,
-                report.receipt_id,
-                fallback_error="" if report.ok else "verify_failed",
-            ),
-            status_code=303,
-        )
-
-    @router.post("/admin/backups/{ref}/rehearse")
-    async def backups_rehearse(
-        request: Request,
-        ref: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        from daylily_tapdb.backup import verify as backup_verify
-        from daylily_tapdb.backup.receipts import SURFACE_GUI, Actor
-
-        cfg, settings = _backup_env()
-        try:
-            evidence = backup_verify.rehearse_restore(
-                cfg,
-                settings,
-                backup_id=_validated_backup_ref(ref),
-                actor=Actor(surface=SURFACE_GUI, username=user.get("email")),
-            )
-        except Exception as exc:
-            return RedirectResponse(
-                gui_url_with_query(request, "/admin/backups", error=str(exc)[:200]),
-                status_code=303,
-            )
-        return RedirectResponse(
-            _receipt_url(
-                request,
-                evidence.receipt_id,
-                fallback_error="" if evidence.ok else "rehearsal_failed",
-            ),
-            status_code=303,
-        )
-
     def _review(request: Request, ref: str, mode: str) -> dict[str, Any]:
         from daylily_tapdb.backup import verify as backup_verify
         from daylily_tapdb.backup import views as backup_views
@@ -3213,75 +2841,6 @@ def create_tapdb_gui_router(
         options = backup_verify.RestoreOptions(mode=mode or "isolated")
         return backup_views.restore_review_context(
             cfg, settings, backup_id=_validated_backup_ref(ref), options=options
-        )
-
-    def _backup_form_evidence(form: Any, *, source: bool = False) -> dict[str, Any]:
-        from admin.backups import recovery_evidence_from, source_evidence_from
-
-        payload = {}
-        keys = (
-            ("source_contract", "recovery_family")
-            if source
-            else (
-                "recovery_source",
-                "writer_fence",
-                "provider_contract",
-                "quarantine_receipt",
-            )
-        )
-        for key in keys:
-            raw = str(form.get(key) or "").strip()
-            try:
-                payload[key] = json.loads(raw) if raw else None
-            except json.JSONDecodeError as exc:
-                raise HTTPException(
-                    status_code=400, detail=f"{key} must contain valid JSON"
-                ) from exc
-        if not source:
-            payload["control_config"] = str(form.get("control_config") or "") or None
-        return (
-            source_evidence_from(payload) if source else recovery_evidence_from(payload)
-        )
-
-    @router.post("/admin/backups/{ref}/restore/stage", response_class=HTMLResponse)
-    async def backups_restore_stage_form(
-        request: Request,
-        ref: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        from daylily_tapdb.backup import verify as backup_verify
-        from daylily_tapdb.backup import views as backup_views
-
-        form = await request.form()
-        evidence = _backup_form_evidence(form)
-        options = backup_verify.RestoreOptions(
-            mode=str(form.get("mode") or "isolated"),
-            target_database=str(form.get("target_database") or "") or None,
-            keep_superseded=bool(form.get("keep_superseded")),
-        )
-        cfg, settings = _backup_env()
-        try:
-            review = backup_views.restore_review_context(
-                cfg,
-                settings,
-                backup_id=_validated_backup_ref(ref),
-                options=options,
-                **evidence,
-            )
-        except Exception as exc:
-            from admin.backups import as_http
-
-            raise as_http(exc) from exc
-        return _render(
-            templates,
-            request,
-            "restore_review.html",
-            user=user,
-            review=review,
-            error="",
-            apply_url=gui_url(request, f"/admin/backups/{ref}/restore"),
-            review_url=gui_url(request, f"/admin/backups/{ref}/restore"),
-            backups_url=gui_url(request, "/admin/backups"),
         )
 
     @router.get("/admin/backups/{ref}/restore", response_class=HTMLResponse)
@@ -3299,7 +2858,8 @@ def create_tapdb_gui_router(
             user=user,
             review=_review(request, ref, mode),
             error=error,
-            apply_url=gui_url(request, f"/admin/backups/{ref}/restore"),
+            apply_url=gui_url(request, f"/api/admin/backups/{ref}/restore/apply"),
+            stage_url=gui_url(request, f"/api/admin/backups/{ref}/restore/stage"),
             review_url=gui_url(request, f"/admin/backups/{ref}/restore"),
             backups_url=gui_url(request, "/admin/backups"),
         )
@@ -3324,96 +2884,14 @@ def create_tapdb_gui_router(
             )
         )
 
-    @router.post("/admin/backups/{ref}/restore", response_class=HTMLResponse)
-    async def backups_restore_apply(
-        request: Request,
-        ref: str,
-        user: dict[str, Any] = Depends(require_tapdb_gui_admin),
-    ):
-        from daylily_tapdb.backup import verify as backup_verify
-        from daylily_tapdb.backup import views as backup_views
-        from daylily_tapdb.backup.receipts import SURFACE_GUI, Actor
-
-        form = await request.form()
-        mode = str(form.get("mode") or "isolated")
-        evidence = _backup_form_evidence(form)
-        cfg, settings = _backup_env()
-        options = backup_verify.RestoreOptions(
-            mode=mode,
-            target_database=str(form.get("target_database") or "") or None,
-            target_schema=str(form.get("target_schema") or "") or None,
-            keep_superseded=bool(form.get("keep_superseded")),
-        )
-        # The CLI and management JSON routes both validate these before use. quote_ident
-        # holds the line either way, but a surface that skips the shared
-        # validator is a surface that can drift -- and the operator gets a SQL
-        # error instead of a clear rejection.
-        try:
-            options.validated_target_database()
-            options.validated_target_schema()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=400, detail=f"invalid restore options: {exc}"
-            ) from exc
-
-        try:
-            result = backup_views.apply_restore_from_review(
-                cfg,
-                settings,
-                backup_id=_validated_backup_ref(ref),
-                plan_fingerprint=str(form.get("plan_fingerprint") or "") or None,
-                confirm_target=str(form.get("confirm_target") or "") or None,
-                options=options,
-                actor=Actor(surface=SURFACE_GUI, username=user.get("email")),
-                **evidence,
-            )
-        except Exception as exc:
-            # Re-render the review with a *fresh* fingerprint. Handing back the
-            # stale one would let the operator retry into the same refusal.
-            # An unresolved recovery journal can deliberately refuse that
-            # read-only restage. Never mask it with an unhandled second error
-            # or put an old apply form back in front of the operator.
-            try:
-                review = backup_views.restore_review_context(
-                    cfg,
-                    settings,
-                    backup_id=_validated_backup_ref(ref),
-                    options=options,
-                    **evidence,
-                )
-            except Exception as review_exc:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "error": "restore_review_unavailable",
-                        "message": (
-                            "Restore failed and a new review could not be established. "
-                            "Inspect the retained recovery journal and reconcile any "
-                            "unresolved outcome before staging another attempt."
-                        ),
-                        "restore_error": getattr(exc, "code", type(exc).__name__),
-                        "review_error": getattr(
-                            review_exc, "code", type(review_exc).__name__
-                        ),
-                    },
-                ) from review_exc
-            return _render(
-                templates,
-                request,
-                "restore_review.html",
-                user=user,
-                review=review,
-                error=str(exc)[:300],
-                apply_url=gui_url(request, f"/admin/backups/{ref}/restore"),
-                review_url=gui_url(request, f"/admin/backups/{ref}/restore"),
-                backups_url=gui_url(request, "/admin/backups"),
-            )
-
-        return RedirectResponse(
-            _receipt_url(request, result.receipt_id, fallback_notice="restore_applied"),
-            status_code=303,
-        )
-
+    from daylily_tapdb.web.saved_queries import saved_queries_router
+    router.include_router(saved_queries_router(
+        config_path=resolved_config_path, require_user=require_tapdb_gui_user,
+        executors=saved_query_executors,
+    ))
+    from daylily_tapdb.gui.integrity import integrity_router
+    router.include_router(integrity_router(config_path=resolved_config_path,
+        require_user=require_tapdb_gui_user, require_admin=require_tapdb_gui_admin))
     return router
 
 
@@ -3421,6 +2899,7 @@ def create_tapdb_gui_app(
     *,
     config_path: str,
     host_bridge: TapdbHostBridge | None = None,
+    saved_query_executors: Mapping[str, QueryExecutor] | None = None,
 ):
     """Build TapDB's single standalone and embeddable ASGI application."""
 
@@ -3535,6 +3014,7 @@ def create_tapdb_gui_app(
         create_tapdb_gui_router(
             config_path=resolved_config_path,
             host_bridge=host_bridge,
+            saved_query_executors=saved_query_executors,
         )
     )
     from daylily_tapdb.admin_health import install_tapdb_admin_health_routes
@@ -3569,68 +3049,18 @@ def create_tapdb_gui_app(
     return app
 
 
-def _example_template_pack() -> dict[str, Any]:
+def _example_template_pack(*, instance_prefix: str) -> dict[str, Any]:
+    """Visible authoring starter; canonical mode requires an explicit prefix."""
     return {
-        "templates": [
-            {
-                "name": "Example Actor",
-                "polymorphic_discriminator": "generic_template",
-                "category": "actor",
-                "type": "person",
-                "subtype": "example_actor",
-                "version": "1.0",
-                "instance_prefix": "ACT",
-                "instance_polymorphic_identity": "generic_instance",
-                "json_addl": {
-                    "properties": {
-                        "display_name": "",
-                        "email": "",
-                    },
-                    "instantiation_layouts": [],
-                },
-            },
-            {
-                "name": "Example Well",
-                "polymorphic_discriminator": "generic_template",
-                "category": "container",
-                "type": "well",
-                "subtype": "generic",
-                "version": "1.0",
-                "instance_prefix": "WEN",
-                "instance_polymorphic_identity": "generic_instance",
-                "json_addl": {
-                    "properties": {
-                        "position": "",
-                    },
-                    "instantiation_layouts": [],
-                },
-            },
-            {
-                "name": "Example Plate",
-                "polymorphic_discriminator": "generic_template",
-                "category": "container",
-                "type": "plate",
-                "subtype": "96well-generic",
-                "version": "1.0",
-                "instance_prefix": "PAT",
-                "instance_polymorphic_identity": "generic_instance",
-                "json_addl": {
-                    "properties": {
-                        "plate_type": "custom",
-                    },
-                    "instantiation_layouts": [
-                        {
-                            "relationship_type": "contains",
-                            "name_pattern": "{parent_name}_well_{index}",
-                            "child_templates": [
-                                {
-                                    "template_code": "container/well/generic/1.0",
-                                    "count": 96,
-                                }
-                            ],
-                        }
-                    ],
-                },
-            },
-        ]
+        "templates": [{
+            "name": "New Template",
+            "polymorphic_discriminator": "generic_template",
+            "category": "object",
+            "type": "generic",
+            "subtype": "generic",
+            "version": "1.0",
+            "instance_prefix": instance_prefix,
+            "instance_polymorphic_identity": "generic_instance",
+            "json_addl": {"properties": {}, "instantiation_layouts": []},
+        }],
     }

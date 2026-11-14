@@ -9,13 +9,39 @@ from typing import Any
 from cli_core_yo.spec import CommandPolicy
 
 JSON_COMMANDS: set[tuple[str | None, str]] = {
+    ("db/migration-run", "prepare"),
+    ("db/migration-run", "resume"),
+    ("db/migration-run", "reconcile"),
+    ("db/archive", "retain"),
+    ("db/archive", "fence"),
+    ("db/archive", "restore-plan"),
+    ("integrity-adopt", "plan"),
+    ("integrity-adopt", "apply"),
+    ("history", "status"),
+    ("history", "boundary"),
+    ("history", "object-at"),
+    ("history", "graph-at"),
+    ("history", "plan-correction"),
+    ("history", "apply-correction"),
+    ("history", "audit"),
+    ("references", "resolve"),
+    ("references", "register"),
+    ("references", "annotate"),
+    ("references", "attach"),
+    ("references", "detach"),
+    ("references", "reconcile"),
+
+    ("db/schema", "drift-check"),
+    ("db", "census"),
     ("db/identity", "inventory"),
+    ("db/identity", "prefix-from-evidence"),
     ("db/identity", "verify"),
     ("db/sequences", "advance"),
     ("db/sequences", "reconcile"),
     ("db/sequences", "verify"),
     ("db/runtime-principal", "bootstrap"),
     ("db/runtime-principal", "bind"),
+    ("db/issuance-profile", "transition"),
     ("validation", "assess"),
     ("validation", "revalidate"),
     ("validation", "editor-data"),
@@ -45,10 +71,23 @@ JSON_COMMANDS: set[tuple[str | None, str]] = {
 }
 
 MUTATING_COMMANDS = {
+    ("db/archive", "fence"),
+    ("db/migration-run", "resume"),
+    ("db/migration-run", "reconcile"),
+    ("db/archive", "retain"),
+    ("integrity-adopt", "apply"),
+    ("history", "apply-correction"),
+    ("references", "register"),
+    ("references", "annotate"),
+    ("references", "attach"),
+    ("references", "detach"),
+    ("references", "reconcile"),
+
     ("db/sequences", "advance"),
     ("db/sequences", "reconcile"),
     ("db/runtime-principal", "bootstrap"),
     ("db/runtime-principal", "bind"),
+    ("db/issuance-profile", "transition"),
     ("bootstrap", "local"),
     ("bootstrap", "aurora"),
     ("ui", "start"),
@@ -57,6 +96,7 @@ MUTATING_COMMANDS = {
     ("ui", "restart"),
     ("db-config", "init"),
     ("db-config", "update"),
+    ("db-config", "set-governance-authorization"),
     ("db", "create"),
     ("db", "delete"),
     ("db", "setup"),
@@ -127,10 +167,13 @@ INTERACTIVE_COMMANDS = {
 #: commands (plan, restore-plan, verify, list) have nothing to simulate and
 #: must never appear here.
 DRY_RUN_COMMANDS = {
+    ("db/archive", "fence"),
+    ("db/migration-run", "resume"),
     ("db/sequences", "advance"),
     ("db/sequences", "reconcile"),
     ("db/runtime-principal", "bootstrap"),
     ("db/runtime-principal", "bind"),
+    ("db/issuance-profile", "transition"),
     ("backup", "create"),
     ("backup", "restore"),
     ("backup", "rehearse"),
@@ -142,6 +185,7 @@ DRY_RUN_COMMANDS = {
 }
 
 LONG_RUNNING_COMMANDS = {
+    ("db/migration-run", "resume"),
     ("bootstrap", "local"),
     ("bootstrap", "aurora"),
     ("ui", "start"),

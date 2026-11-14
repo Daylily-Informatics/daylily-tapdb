@@ -21,6 +21,7 @@ from daylily_tapdb.sequences import (
     build_sequence_advance_plan,
     build_writer_fence_takeover_plan,
     capture_sequence_inventory,
+    reconcile_original_acl_restoration,
     reconcile_writer_fence_release,
     record_sequence_advance_outcome,
     release_database_writer_fence,
@@ -312,6 +313,13 @@ def reconcile(
             help="Exact lost-acknowledgement release intent to observe",
         ),
     ] = None,
+    observe_original_acl_restoration: Annotated[
+        bool,
+        typer.Option(
+            "--observe-original-acl-restoration",
+            help="Audit an already restored original ACL; never change ACLs or establish a fence",
+        ),
+    ] = False,
     apply: Annotated[
         bool,
         typer.Option("--apply", help="Apply the exact reviewed reconciliation receipt"),
@@ -341,7 +349,7 @@ def reconcile(
         ),
     ] = None,
 ) -> None:
-    """Explicit stalled-gate takeover; leave operator-only access for a NEW review."""
+    """Review an explicit takeover, release or already restored original ACL."""
     try:
         if not receipt.is_absolute() or receipt.exists():
             raise ValueError("--receipt must name an absolute new file")
@@ -354,6 +362,12 @@ def reconcile(
         if (fence_intent_receipt_id is None) == (release_intent_receipt_id is None):
             raise ValueError(
                 "Supply exactly one explicit fence or release intent receipt ID"
+            )
+        if observe_original_acl_restoration and (
+            fence_intent_receipt_id is None or recovery_family is None
+        ):
+            raise ValueError(
+                "Original-ACL restoration requires an exact takeover intent and recovery family"
             )
         effective_apply = apply and not get_context().dry_run
         if effective_apply and preflight_receipt is None:
@@ -370,7 +384,23 @@ def reconcile(
         with operator_session(
             control_cfg, isolation_level="REPEATABLE READ"
         ) as control:
-            if release_intent_receipt_id is not None:
+            if observe_original_acl_restoration:
+                if fence_intent_receipt_id is None or family is None:
+                    raise ValueError("Exact takeover intent and recovery family are required")
+                payload = reconcile_original_acl_restoration(
+                    control,
+                    target_connection_factory=lambda: operator_session(
+                        cfg, isolation_level="REPEATABLE READ"
+                    ),
+                    target=target,
+                    fence_intent_receipt_id=fence_intent_receipt_id,
+                    receipts_dir=receipts_dir,
+                    recovery_family=family,
+                    provider_contract=provider,
+                    dry_run=not effective_apply,
+                    preflight_receipt=reviewed,
+                )
+            elif release_intent_receipt_id is not None:
                 payload = reconcile_writer_fence_release(
                     control,
                     release_intent_receipt_id=release_intent_receipt_id,

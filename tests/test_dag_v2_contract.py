@@ -283,14 +283,15 @@ def test_graph_v2_snapshot_presentation_and_truncation() -> None:
 def test_graph_v2_rejects_self_loop_cycle_cross_tenant_and_metadata_edges() -> None:
     root = _instance(1, "persisted-root")
     self_loop = _lineage(2, "persisted-self-loop", root, root)
-    with pytest.raises(DagV2GraphContractError, match="Self-loop"):
-        build_graph_v2_payload(
+    self_loop_result = build_graph_v2_payload(
             root,
             record_type="instance",
             service_id="example-service",
             depth=2,
             max_nodes=10,
         )
+    assert self_loop_result["elements"]["edges"] == []
+    assert self_loop_result["meta"]["blocked_relationships"] == 1
     root.parent_of_lineages.rows.remove(self_loop)
     root.child_of_lineages.rows.remove(self_loop)
 
@@ -314,14 +315,15 @@ def test_graph_v2_rejects_self_loop_cycle_cross_tenant_and_metadata_edges() -> N
         "persisted-metadata-source",
         properties={"external_payload": {"tapdb_graph": {"copied": True}}},
     )
-    with pytest.raises(DagV2GraphContractError, match="canonical XRF lineage"):
-        build_graph_v2_payload(
+    isolated_result = build_graph_v2_payload(
             isolated,
             record_type="instance",
             service_id="example-service",
             depth=0,
             max_nodes=10,
         )
+    assert isolated_result["meta"]["node_errors"] == 1
+    assert isolated_result["elements"]["nodes"][0]["data"]["external_refs"] == []
 
 
 class _ObjectQuery:
@@ -450,3 +452,153 @@ def test_v2_routes_are_authenticated_and_dispatch_exact_external_search(
     assert exact.status_code == 200
     assert external_calls[-1]["external_service_id"] == "remote"
     assert external_calls[-1]["external_object_euid"] == "persisted-by-owner"
+
+
+@pytest.mark.parametrize("version", ["1.0", "0.9"])
+@pytest.mark.parametrize("service", ["ursa", "dewey", "bloom"])
+def test_unsupported_reference_is_a_leaf_and_valid_branches_continue(version, service):
+    from daylily_tapdb.services.graph_payloads import build_object_detail_v2_payload
+
+    root = _instance(1, "root-label")
+    valid = _instance(2, "valid-label")
+    descendant = _instance(3, "descendant-label")
+    old = _instance(4, "old-reference-label", properties={
+        "target_object_euid": "foreign-label", "auth": "must-not-be-projected",
+        "graph_presentation": "unsupported-old-presentation",
+    })
+    old.category, old.type, old.subtype, old.version = (
+        "reference", "external_identifier", "tapdb_object", version,
+    )
+    other_parent = _instance(5, "unreachable-parent-label")
+    other_child = _instance(6, "unreachable-child-label")
+    _lineage(11, "root-valid-edge", root, valid)
+    _lineage(12, "valid-descendant-edge", valid, descendant)
+    _lineage(13, "root-old-edge", root, old)
+    _lineage(14, "other-parent-edge", other_parent, old)
+    _lineage(15, "old-child-edge", old, other_child)
+    payload = build_graph_v2_payload(root, record_type="instance", service_id=service,
+                                   depth=4, max_nodes=20)
+    nodes = {n["data"]["euid"]: n["data"] for n in payload["elements"]["nodes"]}
+    assert set(nodes) == {root.euid, valid.euid, descendant.euid, old.euid}
+    assert len(payload["elements"]["edges"]) == 3
+    boundary = nodes[old.euid]
+    assert boundary["traversal_boundary"]["status"] == "not_traversed"
+    assert boundary["traversal_boundary"]["reference_version"] == version
+    assert boundary["properties"] == {}
+    assert boundary["external_refs"] == boundary["external_identifiers"] == []
+    assert boundary["expandable"] is False
+    assert payload["meta"]["partial"] is True
+    assert payload["meta"]["truncated"] is False
+    assert payload["warnings"][0]["euid"] == old.euid
+    assert old.json_addl["properties"]["target_object_euid"] == "foreign-label"
+    detail = build_object_detail_v2_payload(old, record_type="instance", service_id=service)
+    assert detail == boundary
+
+
+def test_unsupported_reference_root_does_not_read_adjacency():
+    old = _instance(1, "old-root-label", properties={"target_object_euid": "remote-label"})
+    old.category, old.type, old.subtype = "reference", "external_identifier", "tapdb_object"
+
+    class NoAdjacency:
+        outgoing = {}
+        def prefetch(self, _objects):
+            pytest.fail("Unsupported reference adjacency must not be traversed")
+        def materialize(self, nodes, edges):
+            assert nodes == [old] and edges == []
+
+    result = build_graph_v2_payload(old, record_type="instance", service_id="ursa",
+                                   depth=4, max_nodes=20, lineage_reader=NoAdjacency())
+    assert len(result["elements"]["nodes"]) == 1
+    assert result["elements"]["edges"] == []
+
+
+def test_boundary_handling_rejects_pseudo_edges_without_bypassing_scope():
+    root = _instance(1, "root-label", properties={"target_object_euid": "remote-label"})
+    result = build_graph_v2_payload(root, record_type="instance", service_id="ursa", depth=4, max_nodes=20)
+    assert result["meta"]["node_errors"] == 1
+    assert result["elements"]["edges"] == []
+    root.json_addl = {"properties": {}}
+    old = _instance(2, "wrong-owner-reference")
+    old.category, old.type, old.subtype = "reference", "external_identifier", "tapdb_object"
+    old.issuer_app_code = "another-owner"
+    _lineage(3, "wrong-owner-edge", root, old)
+    with pytest.raises(DagV2GraphContractError):
+        build_graph_v2_payload(root, record_type="instance", service_id="ursa", depth=4, max_nodes=20)
+
+
+def test_visible_graph_preserves_old_reference_but_omits_its_outgoing_assertion():
+    from daylily_tapdb.services.graph_payloads import build_visible_graph_v2_payload
+    root, old, valid = (_instance(i, label) for i, label in enumerate(
+        ("root-label", "old-label", "valid-label"), 1))
+    old.category, old.type, old.subtype = "reference", "external_identifier", "tapdb_object"
+    incoming = _lineage(4, "incoming-label", root, old)
+    outgoing = _lineage(5, "outgoing-label", old, valid)
+    result = build_visible_graph_v2_payload([root, old, valid], [incoming, outgoing],
+        service_id="dewey", max_nodes=20, max_edges=20)
+    assert len(result["elements"]["nodes"]) == 3
+    assert [e["data"]["euid"] for e in result["elements"]["edges"]] == [incoming.euid]
+    assert result["meta"]["unsupported_external_references"] == 1
+
+
+@pytest.mark.parametrize("properties", [
+    {"graph_presentation": {"collapse_by_default": "secret-invalid-value"}},
+    {"target_object_euid": "private-invalid-target"},
+])
+def test_bad_node_is_visible_but_cannot_contribute_descendants(properties):
+    root, good, bad, unreachable = (_instance(i, label) for i, label in enumerate(
+        ("root-label", "valid-child-label", "bad-child-label", "unreachable-label"), 1))
+    bad.json_addl = {"properties": properties}
+    _lineage(10, "good-edge-label", root, good)
+    _lineage(11, "bad-edge-label", root, bad)
+    _lineage(12, "unreachable-edge-label", bad, unreachable)
+    result = build_graph_v2_payload(root, record_type="instance", service_id="dewey", depth=4, max_nodes=20)
+    nodes = {n["data"]["euid"]: n["data"] for n in result["elements"]["nodes"]}
+    assert set(nodes) == {root.euid, good.euid, bad.euid}
+    assert nodes[bad.euid]["expandable"] is False
+    assert nodes[bad.euid]["properties"] == {}
+    assert len(result["elements"]["edges"]) == 2
+    assert result["meta"]["node_errors"] == 1
+    assert "private-invalid-target" not in json.dumps(result)
+    assert "secret-invalid-value" not in json.dumps(result)
+
+
+def test_invalid_canonical_reference_does_not_stop_its_parent_other_children():
+    root, valid, bad = (_instance(i, label) for i, label in enumerate(
+        ("root-label", "valid-child-label", "bad-reference-label"), 1))
+    bad.category, bad.type, bad.subtype, bad.version = "reference", "external_identifier", "tapdb_object", "2.0"
+    bad.json_addl = {"properties": {"target_object_euid": "private-invalid-target"}}
+    _lineage(10, "valid-edge-label", root, valid)
+    _lineage(11, "bad-edge-label", root, bad)
+    result = build_graph_v2_payload(root, record_type="instance", service_id="ursa", depth=4, max_nodes=20)
+    nodes = {n["data"]["euid"]: n["data"] for n in result["elements"]["nodes"]}
+    assert set(nodes) == {root.euid, valid.euid, bad.euid}
+    assert "traversal_boundary" not in nodes[root.euid]
+    assert nodes[bad.euid]["traversal_boundary"]["code"] == "invalid_external_reference"
+    assert nodes[root.euid]["external_refs"] == []
+    assert "private-invalid-target" not in json.dumps(result)
+
+
+def test_bad_relationship_and_cycle_preserve_valid_branches():
+    root, good, bad = (_instance(i, label) for i, label in enumerate(
+        ("root-label", "valid-child-label", "bad-child-label"), 1))
+    _lineage(10, "forward-edge-label", root, good)
+    _lineage(11, "return-edge-label", good, root)
+    malformed = _lineage(12, "malformed-edge-label", root, bad)
+    malformed.json_addl = {"properties": {"assertion_provenance": " invalid-private-value "}}
+    result = build_graph_v2_payload(root, record_type="instance", service_id="ursa", depth=4, max_nodes=20)
+    assert {n["data"]["euid"] for n in result["elements"]["nodes"]} == {root.euid, good.euid}
+    assert len(result["elements"]["edges"]) == 1
+    assert result["meta"]["blocked_relationships"] == 2
+    assert "invalid-private-value" not in json.dumps(result)
+
+
+def test_missing_endpoint_is_reported_without_leaking_the_hidden_identity():
+    root, hidden, good = (_instance(i, label) for i, label in enumerate(
+        ("root-label", "private-hidden-label", "valid-child-label"), 1))
+    missing = _lineage(10, "missing-edge-label", root, hidden)
+    missing.child_instance = None
+    _lineage(11, "valid-edge-label", root, good)
+    result = build_graph_v2_payload(root, record_type="instance", service_id="ursa", depth=4, max_nodes=20)
+    assert len(result["elements"]["nodes"]) == 2
+    assert result["meta"]["blocked_relationships"] == 1
+    assert "private-hidden-label" not in json.dumps(result)

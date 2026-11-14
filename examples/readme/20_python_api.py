@@ -57,6 +57,7 @@ def main() -> None:
         app_username="tapdb_readme_example",
         domain_code=domain_code,
         owner_repo_name=owner_repo_name,
+        issuance_profile=cfg["issuance_profile"],
         config_identity=str(config_path),
     )
 

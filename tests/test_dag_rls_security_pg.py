@@ -44,6 +44,7 @@ def _set_context(
         ("session.current_domain_code", "Z"),
         ("session.current_owner_repo_name", owner),
         ("session.current_tenant_id", "" if tenant_id is None else str(tenant_id)),
+        ("session.additional_tenant_ids", "{}"),
         ("session.current_username", "pytest:dag-rls-security"),
         ("session.allow_global_rows", "true" if allow_global_rows else "false"),
     )
@@ -179,7 +180,7 @@ def _insert_template(
             "reference",
             "external_identifier",
             "tapdb_object",
-            "1.0",
+            "2.0",
             "XRF",
         )
     elif opaque_xrf:
@@ -218,7 +219,7 @@ def _insert_instance(
     if typed_xrf and opaque_xrf:
         raise ValueError("an XRF test instance must select one subtype")
     if typed_xrf:
-        coordinates = ("reference", "external_identifier", "tapdb_object", "1.0")
+        coordinates = ("reference", "external_identifier", "tapdb_object", "2.0")
     elif opaque_xrf:
         coordinates = ("reference", "external_identifier", "opaque", "1.0")
     else:

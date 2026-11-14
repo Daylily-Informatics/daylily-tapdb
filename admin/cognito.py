@@ -39,10 +39,8 @@ def resolve_tapdb_pool_config(env_name: Optional[str] = None) -> TapdbPoolConfig
         )
 
     app_client_id = (cfg.get("cognito_app_client_id") or "").strip()
-    region = (cfg.get("cognito_region") or cfg.get("region") or "").strip()
-    client_name = (
-        cfg.get("cognito_client_name") or REQUIRED_COGNITO_CLIENT_NAME
-    ).strip()
+    region = (cfg.get("cognito_region") or "").strip()
+    client_name = (cfg.get("cognito_client_name") or "").strip()
     if client_name != REQUIRED_COGNITO_CLIENT_NAME:
         raise RuntimeError(
             f"TAPDB config must set cognito_client_name={REQUIRED_COGNITO_CLIENT_NAME!r} "
@@ -74,19 +72,34 @@ def resolve_tapdb_pool_config(env_name: Optional[str] = None) -> TapdbPoolConfig
 
 
 @lru_cache(maxsize=8)
-def get_cognito_auth(env_name: Optional[str] = None):
-    """Build and cache a CognitoAuth instance for TAPDB Admin."""
+def get_cognito_admin_client(env_name: Optional[str] = None):
+    """Use the pinned native admin boundary for password and account operations."""
     pool_cfg = resolve_tapdb_pool_config(env_name)
-    from daylily_cognito import CognitoAuth
+    from daylily_auth_cognito.admin.client import CognitoAdminClient
 
-    return CognitoAuth(
+    return CognitoAdminClient(
         region=pool_cfg.region,
         user_pool_id=pool_cfg.pool_id,
         app_client_id=pool_cfg.app_client_id,
-        profile=pool_cfg.aws_profile,
+        app_client_secret=pool_cfg.app_client_secret or None,
+        aws_profile=pool_cfg.aws_profile,
+    )
+
+
+@lru_cache(maxsize=8)
+def get_cognito_token_verifier(env_name: Optional[str] = None):
+    """Build the pinned native verifier for Cognito access tokens."""
+    from daylily_auth_cognito import CognitoTokenVerifier
+
+    pool_cfg = resolve_tapdb_pool_config(env_name)
+    return CognitoTokenVerifier(
+        region=pool_cfg.region,
+        user_pool_id=pool_cfg.pool_id,
+        app_client_id=pool_cfg.app_client_id,
     )
 
 
 def clear_cognito_auth_cache() -> None:
-    """Clear cached CognitoAuth instances."""
-    get_cognito_auth.cache_clear()
+    """Clear cached native admin clients and token verifiers."""
+    get_cognito_admin_client.cache_clear()
+    get_cognito_token_verifier.cache_clear()

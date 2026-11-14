@@ -1,0 +1,40 @@
+{
+  "templates": [
+    {
+      "name": "Saved Query",
+      "polymorphic_discriminator": "generic_template",
+      "category": "query",
+      "type": "saved",
+      "subtype": "generic",
+      "version": "1.0",
+      "instance_prefix": "GSE",
+      "instance_polymorphic_identity": "generic_instance",
+      "validator_ref": "UNIVERSAL_PASS@1",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Tenant-shared structured query, authored through SavedQueryService. Execution is supplied by an explicitly registered read-only service.",
+        "properties": {},
+        "instantiation_layouts": []
+      }
+    },
+    {
+      "name": "DAG View",
+      "polymorphic_discriminator": "generic_template",
+      "category": "view",
+      "type": "dag",
+      "subtype": "generic",
+      "version": "1.0",
+      "instance_prefix": "GSE",
+      "instance_polymorphic_identity": "generic_instance",
+      "validator_ref": "UNIVERSAL_PASS@1",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Independently revisioned DAG presentation. Its saved query and variant source are related by native lineage, not copied EUID properties.",
+        "properties": {},
+        "instantiation_layouts": []
+      }
+    }
+  ]
+}

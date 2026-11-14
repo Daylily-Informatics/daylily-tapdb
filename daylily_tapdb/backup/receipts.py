@@ -1,6 +1,7 @@
 """Immutable, hash-chained receipts for every backup lifecycle run.
 
-Receipts are files under ``<config_dir>/backups/receipts/``, not database rows:
+Receipts are files in the explicitly configured ``backup.receipts_directory``
+or, when omitted, ``<config_dir>/backups/receipts/``, not database rows:
 a restore replaces the database that would otherwise hold the record of that
 very restore. Files survive it.
 
@@ -21,9 +22,38 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from daylily_tapdb.backup.errors import BackupVerificationError
 from daylily_tapdb.backup.manifest import canonical_bytes, sha256_hex
 
 RECEIPTS_DIRNAME = "receipts"
+
+
+def validate_receipts_directory(value: Any) -> Path:
+    """Validate an explicit journal path without creating or repairing it.
+
+    Recovery-family descriptors seal exact canonical directory names. Reject
+    aliases rather than silently redirecting history to a different journal.
+    """
+    message = (
+        "backup.receipts_directory must be an absolute canonical path to an "
+        "existing directory (no symlinks or path aliases)"
+    )
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise BackupVerificationError(message)
+    path = Path(value)
+    try:
+        valid = (
+            path.is_absolute()
+            and str(path) == value
+            and path.resolve(strict=True) == path
+            and path.is_dir()
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise BackupVerificationError(message) from exc
+    if not valid:
+        raise BackupVerificationError(message)
+    return path
+
 
 OPERATION_CREATE = "backup_create"
 OPERATION_RESTORE = "backup_restore"

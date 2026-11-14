@@ -36,12 +36,16 @@ These layers are used together:
 
 ## Meridian EUIDs
 
-TapDB uses `meridian-euid==0.4.8` for canonical Meridian formatting and
-checksum validation:
+TapDB uses `meridian-euid==1.0.0` for canonical Meridian formatting and
+checksum validation. New issuance uses the abstract grammar
+`DOMAIN-PREFIX-BODY-CHECKSUM` (three hyphens). Existing
+`DOMAIN-PREFIX-BODYCHECKSUM` (two hyphens) uses its original checksum and stays
+unchanged. Single-hyphen legacy strings and empty components fail.
 
-```text
-DOMAIN-PREFIX-BODYCHECKSUM
-```
+The three-hyphen payload is `DOMAIN-PREFIX-BODY-`: each hyphen contributes zero
+and advances the MOD 32 weight. Syntax selects one algorithm; no retry with the
+other checksum occurs. The new SQL migration changes functions only, preserving
+stored identity and sequence positions. See [operator migrations](operator-migrations.md).
 
 When documentation needs an example, capture the value returned after the
 owning service persists the object:
@@ -59,6 +63,163 @@ Important rules:
 - Do not infer object type, tenant, workflow state, or routing from the string.
 - Do not handcraft EUIDs.
 - Do not substitute UUIDs for EUIDs.
+
+## Explicit issuance profiles
+
+Every config must declare `meta.issuance_profile`. There is no omitted-profile
+default. Select canonical allocation explicitly to retain TapDB's canonical
+core prefixes and each application template's declared prefix:
+
+```yaml
+meta:
+  issuance_profile:
+    version: 1
+    mode: canonical
+```
+
+A deployment can select one registry-owned prefix for all new identities using
+`single_prefix`. To separate template identities from every other identity,
+use `template_split`. Bloom's prospective split is:
+
+```yaml
+meta:
+  client_id: bloom
+  database_name: vlfg-7
+  owner_repo_name: bloom-vlfg-7
+  issuance_profile:
+    version: 1
+    mode: template_split
+    prefix: BG
+    template_prefix: BTX
+target:
+  domain_code: M
+```
+
+These are identity fragments, not complete connection configurations. The
+producer application is the explicit `client_id`; the registry/RLS owner is
+`owner_repo_name`. A deployment owner is not a service routing identifier.
+The registry must grant the exact domain/prefix to that owner before bootstrap.
+Neither a new database name nor a new owner creates another sequence space in
+the externally visible EUID. Prefix availability and ownership must therefore
+be established before a second database starts issuing identities.
+
+`db-config init` requires `--issuance-profile-json`; `db-config update` accepts
+the same flag to replace the complete requested profile. The supported shapes
+are `{"version":1,"mode":"canonical"}`,
+`{"version":1,"mode":"canonical","template_prefix":"RGT"}`,
+`{"version":1,"mode":"single_prefix","prefix":"BG"}` and
+`{"version":1,"mode":"template_split","prefix":"BG","template_prefix":"BTX"}`.
+Every field shown is explicit; prefixes are exact registered values, and a
+split requires distinct base and template prefixes. Changing a config
+does not rewrite a persisted database profile. Native schema bootstrap binds
+the profile to `(domain_code, issuer_app_code)` and rejects a conflicting
+existing binding. Upgrading a package/config alone does not install this schema
+contract on an existing database. Canonical issuance may override only the
+template allocator; each application's declared instance prefixes and all core
+instance/edge/audit allocations remain canonical. That explicit template prefix
+belongs to the deployment owner, while canonical core prefixes retain their
+native core owner. Existing profile changes use `db issuance-profile transition`
+with an exact old/new profile and its native plan/apply receipt.
+
+`db-config update --additional-tenant-ids-json` replaces the complete additional
+tenant allowlist using native UUID validation. Use an explicit JSON array,
+including `[]` when no additional tenants are authorized. Set this list before
+binding the runtime principal; changing the config alone cannot change an
+existing immutable database scope binding.
+
+After provisioning and native binding, `db-config update --remove-operator`
+removes the complete `target.operator` mapping without changing the runtime
+identity or the canonical config path. It cannot be combined with operator
+credential options. This produces a runtime-only config; future operator work
+requires explicitly supplying operator credentials through the native config
+interface again.
+
+In `template_split`, new template EUIDs use `btx_instance_seq`. Material/container
+instances, lineage edges, audit records, actors, messages, external references,
+sets, saved queries, DAG views and governance instances continue to share
+`bg_instance_seq`. Under `single_prefix`, templates also use that base sequence.
+Internal SQL primary-key sequences remain unchanged. Bundled core definitions are
+authenticated against the installed package before their allocation prefix is
+projected; their coordinates, schemas, mapped classes and reference semantics
+remain canonical. New application templates must explicitly declare
+`instance_prefix: BG`, even when the template's own EUID uses BTX. Runtime
+authoring requires the configured template allocator and declared instance
+allocator, with existing runtime USAGE; it creates no sequences and obtains no
+operator privileges. Both exact domain/prefix claims belong to `bloom-vlfg-7`.
+
+```mermaid
+flowchart LR
+    PROFILE["Explicit template_split\ndomain M / owner bloom-vlfg-7"]
+    TYPE["Native template coordinates\nand SQLAlchemy mapped class"]
+    TRIGGERS["Native identity triggers"]
+    TSEQ["BTX sequence\nnew template identities"]
+    SEQ["BG sequence\nall other new identities"]
+    PROFILE --> TRIGGERS
+    TYPE --> TRIGGERS
+    TRIGGERS --> TSEQ
+    TRIGGERS --> SEQ
+```
+
+Python consumers pass the explicit resolved profile to
+`TAPDBConnection(issuance_profile=cfg["issuance_profile"], ...)`. The native
+engine carries that profile into SQLAlchemy sessions, including an
+application's own sessionmaker bound to that engine. Prefixes never select an
+ORM class or substitute for native four-part template resolution. A core XRF
+still uses its exact external-reference template even when its prefix is
+shared with other objects.
+
+Persisted EUIDs and existing template definitions remain immutable. Future
+granular prefixes require a separately authorized native profile change and
+new template versions/objects; they must never rewrite historical EUIDs or
+reassign an active prefix to another allocator.
+
+### Prospective template-prefix transition
+
+For an existing `single_prefix` database, `db issuance-profile transition` is
+the explicit operator lifecycle. It supports only an unchanged base prefix
+with a newly selected, distinct template prefix; changing domain, owner or any
+other allocation role is outside this operation. Prefix availability and exact
+ownership must already be established through native registry/allocation
+controls. This command does not discover another allocator or borrow its
+sequence position.
+
+Keep the config on the old profile until apply succeeds. Use the same explicit
+operator config, attribution envelope and receipt for plan and apply. The
+following absolute paths illustrate caller-supplied files:
+
+```sh
+tapdb --config /absolute/path/tapdb-config.yaml \
+  --attribution /absolute/path/operator-attribution.json \
+  db issuance-profile transition \
+  --expected-profile-json '{"version":1,"mode":"single_prefix","prefix":"BG"}' \
+  --new-profile-json '{"version":1,"mode":"template_split","prefix":"BG","template_prefix":"BTX"}' \
+  --receipt /absolute/path/template-prefix-plan.json
+```
+
+The read-only plan binds the configured target and authenticated physical
+database, native release, operator attribution, existing profile/bindings and
+exact governed claims. Review that receipt, then run the same command with
+`--apply`; the native operation consumes the unchanged receipt. Global
+`--dry-run` retains plan behavior. Apply installs the native profile-column and
+constraint upgrade where needed, replaces the packaged allocator routines,
+provisions the separate sequence through the native allocator service, changes
+only the template identity binding and profile, and applies native proven
+allocator grants to the existing runtime. These changes commit together.
+Allocation writes take native locks during this deployment step.
+
+The result is written beside the plan with `.result.json` appended to its
+stem. Its `new_profile` is the input for the subsequent native
+`db-config update --issuance-profile-json` operation on the same config path;
+restart consumers with that explicit profile. The transition itself neither
+rewrites config nor starts a service. Ordinary bootstrap still rejects a
+conflicting persisted profile, so editing config alone cannot bypass this
+lifecycle. Failed transactions roll back their database changes; a successful
+apply is not replayed.
+
+Existing BG templates remain readable, immutable and usable for their existing
+instances. No template EUID, object identity, history or base-sequence position
+changes. Publishing a new application template version creates a new BTX
+template identity; it does not edit or renumber the old definition.
 
 ## Runtime Context
 
@@ -80,6 +241,7 @@ The config metadata must include:
 - `meta.client_id`
 - `meta.database_name`
 - `meta.owner_repo_name`
+- `meta.issuance_profile`
 - `meta.domain_registry_path`
 - `meta.prefix_ownership_registry_path`
 - `target.domain_code`
@@ -91,7 +253,7 @@ and no compatibility path for missing governance metadata.
 
 The public Meridian domain-code authority is
 [`lsmc-bio/meridian-registry`](https://github.com/lsmc-bio/meridian-registry).
-TapDB consumes it through `meridian-euid==0.4.8`, which pins public registry
+TapDB consumes it through `meridian-euid==1.0.0`, which pins public registry
 version `0.1.1` and exposes `meridian-euid domain-check ... --registry-index`.
 The configured `meta.domain_registry_path` is still a local runtime fixture used
 to assert that the selected deployment domain is registered for that runtime.

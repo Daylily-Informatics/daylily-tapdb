@@ -29,7 +29,8 @@ from daylily_tapdb.cli.context import (
 from daylily_tapdb.cli.db_config import validate_postgres_identifier_component
 from daylily_tapdb.cli.output import print_renderable
 from daylily_tapdb.cli.spec import spec
-from daylily_tapdb.governance import normalize_owner_repo_name
+from daylily_tapdb.governance import GovernanceAuthorization, normalize_owner_repo_name
+from daylily_tapdb.issuance import IssuanceProfile
 
 DEFAULT_UI_PORT = 8911
 DEFAULT_UI_HOST = "localhost"
@@ -290,6 +291,8 @@ def build_app():
     @app.callback()
     def _root_callback(
         ctx: typer.Context,
+        attribution: Optional[Path] = typer.Option(None, "--attribution", exists=True, dir_okay=False,
+            help="Explicit v1 actor/service envelope for native writes"),
         client_id: Optional[str] = typer.Option(
             None,
             "--client-id",
@@ -319,6 +322,10 @@ def build_app():
             _reset()
         except Exception:
             pass
+        from daylily_tapdb.security_context import Attribution, set_invocation_attribution, reset_invocation_attribution
+        envelope = Attribution(**json.loads(attribution.read_text())) if attribution else None
+        attribution_token = set_invocation_attribution(envelope)
+        ctx.call_on_close(lambda: reset_invocation_attribution(attribution_token))
         prior_context = active_context_overrides()
         set_cli_context(
             client_id=(
@@ -351,6 +358,10 @@ def build_app():
     app.add_typer(cognito_app, name="cognito")
     app.add_typer(templates_app, name="templates")
     app.add_typer(objects_app, name="objects")
+    from daylily_tapdb.cli.integrity import history_app, references_app, adoption_app
+    app.add_typer(history_app, name="history")
+    app.add_typer(references_app, name="references")
+    app.add_typer(adoption_app, name="integrity-adopt")
 
     # Aurora subcommand — always visible, but requires boto3
     _has_boto3 = False
@@ -871,6 +882,7 @@ def build_app():
             password=None,
             database=None,
             schema_name=None,
+            cognito_auth_config_path=None,
             cognito_user_pool_id=None,
             cognito_app_client_id=None,
             cognito_app_client_secret=None,
@@ -883,6 +895,8 @@ def build_app():
             owner_repo_name=None,
             domain_registry_path=None,
             prefix_ownership_registry_path=None,
+            governance_authorization_json=None,
+            issuance_profile_json=None,
             support_email=None,
             admin_repo_url=None,
             admin_session_secret=None,
@@ -1045,6 +1059,8 @@ def build_app():
         domain_code: str,
         domain_registry_path: str,
         prefix_ownership_registry_path: str,
+        governance_authorization_json: str | None,
+        issuance_profile_json: str,
         engine_type: str,
         host: str,
         hostaddr: str | None,
@@ -1074,6 +1090,7 @@ def build_app():
         config_path = _require_explicit_config_flag()
 
         normalized_owner_repo_name = normalize_owner_repo_name(owner_repo_name)
+        issuance_profile = IssuanceProfile.from_mapping(json.loads(issuance_profile_json))
 
         existing = _read_yaml_or_json_file(config_path, allow_create=True)
         existing_meta = existing.get("meta") if isinstance(existing, dict) else None
@@ -1129,11 +1146,27 @@ def build_app():
             "client_id": client_id,
             "database_name": database_name,
             "owner_repo_name": normalized_owner_repo_name,
+            "issuance_profile": issuance_profile.to_dict(),
             "domain_registry_path": str(Path(domain_registry_path).expanduser()),
             "prefix_ownership_registry_path": str(
                 Path(prefix_ownership_registry_path).expanduser()
             ),
         }
+        authorization_value = (
+            json.loads(governance_authorization_json)
+            if governance_authorization_json is not None
+            else (
+                existing_meta.get("governance_authorization")
+                if isinstance(existing_meta, dict) else None
+            )
+        )
+        if governance_authorization_json is not None and not isinstance(
+            authorization_value, dict
+        ):
+            raise ValueError("--governance-authorization-json must contain a JSON object")
+        authorization = GovernanceAuthorization.from_value(authorization_value)
+        if authorization is not None:
+            root["meta"]["governance_authorization"] = authorization.to_dict()
         admin_root = root.get("admin")
         if not isinstance(admin_root, dict) or force:
             root["admin"] = _default_admin_config()
@@ -1242,6 +1275,11 @@ def build_app():
             "--owner-repo-name",
             help="Repo-name token used for Meridian prefix ownership validation",
         ),
+        issuance_profile_json: str = typer.Option(
+            ...,
+            "--issuance-profile-json",
+            help="Required version 1 JSON profile: canonical, single_prefix with prefix, or template_split with prefix and template_prefix",
+        ),
         domain_code: str = typer.Option(
             ...,
             "--domain-code",
@@ -1256,6 +1294,11 @@ def build_app():
             ...,
             "--prefix-ownership-registry-path",
             help="Path to the shared Meridian prefix ownership registry JSON",
+        ),
+        governance_authorization_json: Optional[str] = typer.Option(
+            None,
+            "--governance-authorization-json",
+            help="Explicit Meridian authorization object: reserved_for, deployment_environment, approval_tokens",
         ),
         engine_type: str = typer.Option(
             ...,
@@ -1376,9 +1419,11 @@ def build_app():
             client_id=client_id,
             database_name=database_name,
             owner_repo_name=owner_repo_name,
+            issuance_profile_json=issuance_profile_json,
             domain_code=domain_code,
             domain_registry_path=domain_registry_path,
             prefix_ownership_registry_path=prefix_ownership_registry_path,
+            governance_authorization_json=governance_authorization_json,
             engine_type=engine_type,
             host=host,
             hostaddr=hostaddr,
@@ -1417,8 +1462,62 @@ def build_app():
             f"database={target_cfg['database']} schema={target_cfg['schema_name']}"
         )
 
+    @config_root_app.command("set-governance-authorization")
+    def config_set_governance_authorization(
+        authorization_json: str = typer.Option(
+            ..., "--authorization-json",
+            help="Complete explicit reserved_for/deployment_environment/approval_tokens object",
+        ),
+    ) -> None:
+        """Set only governance metadata after validating the resulting target."""
+        from daylily_tapdb.cli.governance_config import set_governance_authorization
+
+        config_path = set_governance_authorization(
+            _require_explicit_config_flag(), json.loads(authorization_json)
+        )
+        ccyo_out.success("TAPDB explicit governance authorization updated")
+        ccyo_out.print_text(f"  Path:      [dim]{config_path}[/dim]")
+
     @config_root_app.command("update")
     def config_update(
+        additional_tenant_ids_json: Annotated[
+            Optional[str],
+            typer.Option(
+                "--additional-tenant-ids-json",
+                help="Replace the complete additional tenant UUID allowlist as an explicit JSON array",
+            ),
+        ] = None,
+        remove_operator: Annotated[
+            bool,
+            typer.Option(
+                "--remove-operator",
+                help="Remove the complete target.operator mapping while preserving runtime identity and config path",
+            ),
+        ] = False,
+        inventory_max_rows: Annotated[
+            Optional[int],
+            typer.Option(
+                "--inventory-max-rows",
+                min=1,
+                help="Maximum complete identity-inventory rows",
+            ),
+        ] = None,
+        inventory_max_row_bytes: Annotated[
+            Optional[int],
+            typer.Option(
+                "--inventory-max-row-bytes",
+                min=1,
+                help="Maximum bytes in one serialized source row",
+            ),
+        ] = None,
+        inventory_max_receipt_bytes: Annotated[
+            Optional[int],
+            typer.Option(
+                "--inventory-max-receipt-bytes",
+                min=1,
+                help="Maximum cumulative identity row-evidence bytes",
+            ),
+        ] = None,
         engine_type: Optional[str] = typer.Option(
             None, "--engine-type", help="Database engine type for this target"
         ),
@@ -1504,6 +1603,11 @@ def build_app():
         schema_name: Optional[str] = typer.Option(
             None, "--schema-name", help="PostgreSQL schema name"
         ),
+        cognito_auth_config_path: Optional[str] = typer.Option(
+            None,
+            "--cognito-auth-config-path",
+            help="Explicit absolute daycog flat auth-config file path",
+        ),
         cognito_user_pool_id: Optional[str] = typer.Option(
             None, "--cognito-user-pool-id", help="Bound Cognito user pool ID"
         ),
@@ -1543,6 +1647,16 @@ def build_app():
             None,
             "--prefix-ownership-registry-path",
             help="Shared Meridian prefix ownership registry path",
+        ),
+        governance_authorization_json: Optional[str] = typer.Option(
+            None,
+            "--governance-authorization-json",
+            help="Replace the complete explicit Meridian authorization JSON object",
+        ),
+        issuance_profile_json: Optional[str] = typer.Option(
+            None,
+            "--issuance-profile-json",
+            help="Replace explicit issuance profile JSON; does not change a persisted database binding",
         ),
         support_email: Optional[str] = typer.Option(
             None, "--support-email", help="Support email address"
@@ -1632,6 +1746,11 @@ def build_app():
             "--backup-keep-last",
             help="Backups to retain (recorded in manifests; enforcement is external)",
         ),
+        backup_receipts_directory: Optional[str] = typer.Option(
+            None,
+            "--backup-receipts-directory",
+            help="Existing absolute canonical receipt journal directory",
+        ),
         backup_expected_interval_hours: Optional[float] = typer.Option(
             None,
             "--backup-expected-interval-hours",
@@ -1671,6 +1790,7 @@ def build_app():
             "allow_global_claims",
             "database",
             "schema_name",
+            "cognito_auth_config_path",
             "cognito_user_pool_id",
             "cognito_app_client_id",
             "cognito_app_client_secret",
@@ -1714,17 +1834,34 @@ def build_app():
                 )
             return value
 
-        target_cfg = _required_mapping(root, "target", "root")
-        admin_root = _required_mapping(root, "admin", "root")
-        footer = _required_mapping(admin_root, "footer", "admin")
-        session = _required_mapping(admin_root, "session", "admin")
-        auth = _required_mapping(admin_root, "auth", "admin")
-        disabled_user = _required_mapping(auth, "disabled_user", "admin.auth")
-        shared_host = _required_mapping(auth, "shared_host", "admin.auth")
-        cors = _required_mapping(admin_root, "cors", "admin")
-        ui_root = _required_mapping(admin_root, "ui", "admin")
-        tls = _required_mapping(ui_root, "tls", "admin.ui")
-        metrics = _required_mapping(admin_root, "metrics", "admin")
+        def _section(*keys: str) -> dict[str, object]:
+            section = root
+            label = "root"
+            for key in keys:
+                section = _required_mapping(section, key, label)
+                label = key if label == "root" else f"{label}.{key}"
+            return section
+
+        target_cfg = _section("target")
+
+        inventory_changes = {
+            key: value
+            for key, value in {
+                "max_rows": inventory_max_rows,
+                "max_row_bytes": inventory_max_row_bytes,
+                "max_receipt_bytes": inventory_max_receipt_bytes,
+            }.items()
+            if value is not None
+        }
+        if inventory_changes:
+            from dataclasses import asdict
+
+            from daylily_tapdb.identity_inventory import InventoryLimits
+
+            current_limits = asdict(InventoryLimits.parse(root.get("inventory_limits")))
+            root["inventory_limits"] = asdict(
+                InventoryLimits.parse(current_limits | inventory_changes)
+            )
 
         updates = _explicit_aurora_config_fields(
             region=region,
@@ -1760,6 +1897,12 @@ def build_app():
             updates["tenant_id"] = normalized_tenant_id
         if allow_global_claims is not None:
             target_cfg["allow_global_claims"] = bool(allow_global_claims)
+        if additional_tenant_ids_json is not None:
+            from daylily_tapdb.security_context import canonical_additional_tenant_ids
+
+            updates["additional_tenant_ids"] = list(canonical_additional_tenant_ids(
+                json.loads(additional_tenant_ids_json)
+            ))
         if database is not None:
             updates["database"] = str(database).strip()
         if schema_name is not None:
@@ -1767,6 +1910,11 @@ def build_app():
                 schema_name,
                 field_name="schema_name",
             )
+        if cognito_auth_config_path is not None:
+            selected_auth_path = Path(cognito_auth_config_path)
+            if not cognito_auth_config_path.strip() or not selected_auth_path.is_absolute():
+                raise RuntimeError("--cognito-auth-config-path must be an explicit absolute path")
+            updates["cognito_auth_config_path"] = str(selected_auth_path)
         if cognito_user_pool_id is not None:
             updates["cognito_user_pool_id"] = str(cognito_user_pool_id).strip()
         if cognito_app_client_id is not None:
@@ -1789,14 +1937,32 @@ def build_app():
             updates["support_email"] = str(support_email).strip()
         if owner_repo_name is not None:
             meta["owner_repo_name"] = normalize_owner_repo_name(owner_repo_name)
+        if issuance_profile_json is not None:
+            meta["issuance_profile"] = IssuanceProfile.from_mapping(
+                json.loads(issuance_profile_json)
+            ).to_dict()
         if domain_registry_path is not None:
             meta["domain_registry_path"] = str(Path(domain_registry_path).expanduser())
         if prefix_ownership_registry_path is not None:
             meta["prefix_ownership_registry_path"] = str(
                 Path(prefix_ownership_registry_path).expanduser()
             )
+        if governance_authorization_json is not None:
+            authorization_value = json.loads(governance_authorization_json)
+            if not isinstance(authorization_value, dict):
+                raise ValueError("--governance-authorization-json must contain a JSON object")
+            authorization = GovernanceAuthorization.from_value(authorization_value)
+            meta["governance_authorization"] = authorization.to_dict()
 
-        operator_changed = any(
+        metadata_changed = any(value is not None for value in (
+            owner_repo_name,
+            domain_registry_path,
+            prefix_ownership_registry_path,
+            governance_authorization_json,
+            issuance_profile_json,
+        ))
+
+        operator_updates = any(
             value is not None
             for value in (
                 operator_user,
@@ -1805,8 +1971,13 @@ def build_app():
                 operator_iam_auth,
             )
         )
+        if remove_operator and operator_updates:
+            raise RuntimeError("--remove-operator cannot be combined with operator credential options")
+        if remove_operator:
+            target_cfg.pop("operator", None)
+        operator_changed = remove_operator or operator_updates
         operator_cfg = target_cfg.get("operator")
-        if operator_changed and not isinstance(operator_cfg, dict):
+        if operator_updates and not isinstance(operator_cfg, dict):
             operator_cfg = {}
             target_cfg["operator"] = operator_cfg
         if isinstance(operator_cfg, dict):
@@ -1827,60 +1998,63 @@ def build_app():
 
         admin_changed = False
         if admin_repo_url is not None:
-            footer["repo_url"] = str(admin_repo_url).strip()
+            _section("admin", "footer")["repo_url"] = str(admin_repo_url).strip()
             admin_changed = True
         if admin_session_secret is not None:
-            session["secret"] = str(admin_session_secret)
+            _section("admin", "session")["secret"] = str(admin_session_secret)
             admin_changed = True
         if admin_auth_mode is not None:
-            auth["mode"] = str(admin_auth_mode).strip().lower()
+            _section("admin", "auth")["mode"] = str(admin_auth_mode).strip().lower()
             admin_changed = True
         if admin_disabled_user_email is not None:
-            disabled_user["email"] = str(admin_disabled_user_email).strip().lower()
+            _section("admin", "auth", "disabled_user")["email"] = str(admin_disabled_user_email).strip().lower()
             admin_changed = True
         if admin_disabled_user_role is not None:
-            disabled_user["role"] = str(admin_disabled_user_role).strip().lower()
+            _section("admin", "auth", "disabled_user")["role"] = str(admin_disabled_user_role).strip().lower()
             admin_changed = True
         if admin_shared_host_session_secret is not None:
-            shared_host["session_secret"] = str(admin_shared_host_session_secret)
+            _section("admin", "auth", "shared_host")["session_secret"] = str(admin_shared_host_session_secret)
             admin_changed = True
         if admin_shared_host_session_cookie is not None:
-            shared_host["session_cookie"] = str(
+            _section("admin", "auth", "shared_host")["session_cookie"] = str(
                 admin_shared_host_session_cookie
             ).strip()
             admin_changed = True
         if admin_shared_host_session_max_age_seconds is not None:
-            shared_host["session_max_age_seconds"] = int(
+            _section("admin", "auth", "shared_host")["session_max_age_seconds"] = int(
                 admin_shared_host_session_max_age_seconds
             )
             admin_changed = True
         if admin_allowed_origin:
-            cors["allowed_origins"] = [
+            _section("admin", "cors")["allowed_origins"] = [
                 str(item).strip() for item in admin_allowed_origin if str(item).strip()
             ]
             admin_changed = True
         if admin_tls_cert_path is not None:
-            tls["cert_path"] = str(admin_tls_cert_path).strip()
+            _section("admin", "ui", "tls")["cert_path"] = str(admin_tls_cert_path).strip()
             admin_changed = True
         if admin_tls_key_path is not None:
-            tls["key_path"] = str(admin_tls_key_path).strip()
+            _section("admin", "ui", "tls")["key_path"] = str(admin_tls_key_path).strip()
             admin_changed = True
         if admin_metrics_enabled is not None:
-            metrics["enabled"] = bool(admin_metrics_enabled)
+            _section("admin", "metrics")["enabled"] = bool(admin_metrics_enabled)
             admin_changed = True
         if admin_metrics_queue_max is not None:
-            metrics["queue_max"] = int(admin_metrics_queue_max)
+            _section("admin", "metrics")["queue_max"] = int(admin_metrics_queue_max)
             admin_changed = True
         if admin_metrics_flush_seconds is not None:
-            metrics["flush_seconds"] = float(admin_metrics_flush_seconds)
+            _section("admin", "metrics")["flush_seconds"] = float(admin_metrics_flush_seconds)
             admin_changed = True
         backup_changed = False
-        backup_root = root.get("backup")
-        if not isinstance(backup_root, dict):
-            backup_root = _default_backup_config()
-            root["backup"] = backup_root
+        if backup_receipts_directory is not None:
+            from daylily_tapdb.backup.receipts import validate_receipts_directory
+
+            _section("backup")["receipts_directory"] = str(
+                validate_receipts_directory(backup_receipts_directory)
+            )
+            backup_changed = True
         if backup_storage_uri is not None:
-            storage_section = _required_mapping(backup_root, "storage", "backup")
+            storage_section = _required_mapping(_section("backup"), "storage", "backup")
             # Reject credential-bearing URIs at write time, not just at read
             # time -- otherwise a bad value sits in the file until a backup
             # runs, and manifests carry storage URIs to shared destinations.
@@ -1889,7 +2063,7 @@ def build_app():
             )
             backup_changed = True
         if backup_keep_last is not None:
-            retention_section = _required_mapping(backup_root, "retention", "backup")
+            retention_section = _required_mapping(_section("backup"), "retention", "backup")
             if int(backup_keep_last) < 1:
                 raise RuntimeError("--backup-keep-last must be at least 1")
             retention_section["keep_last"] = int(backup_keep_last)
@@ -1900,7 +2074,7 @@ def build_app():
                     "--backup-expected-interval-hours must be zero or greater "
                     "(zero means no cadence is configured)"
                 )
-            backup_root["expected_interval_hours"] = float(
+            _section("backup")["expected_interval_hours"] = float(
                 backup_expected_interval_hours
             )
             backup_changed = True
@@ -1913,12 +2087,12 @@ def build_app():
             # Top-level under `backup:`, matching expected_interval_hours --
             # not nested under `backup.rehearsal`, whose block `config init`
             # merges wholesale and whose exact contents are asserted by tests.
-            backup_root["expected_rehearsal_interval_days"] = float(
+            _section("backup")["expected_rehearsal_interval_days"] = float(
                 backup_expected_rehearsal_interval_days
             )
             backup_changed = True
         if backup_rehearsal_database_prefix is not None:
-            rehearsal_section = _required_mapping(backup_root, "rehearsal", "backup")
+            rehearsal_section = _required_mapping(_section("backup"), "rehearsal", "backup")
             rehearsal_section["database_prefix"] = (
                 validate_postgres_identifier_component(
                     backup_rehearsal_database_prefix,
@@ -1928,7 +2102,7 @@ def build_app():
             backup_changed = True
         if backup_receipt_mirror_uri is not None:
             mirror = str(backup_receipt_mirror_uri).strip()
-            backup_root["receipt_mirror"] = (
+            _section("backup")["receipt_mirror"] = (
                 {
                     "uri": _validated_storage_uri(
                         mirror, field_name="backup.receipt_mirror.uri"
@@ -1940,12 +2114,11 @@ def build_app():
             backup_changed = True
 
         safety_changed = False
-        safety_root = _required_mapping(root, "safety", "root")
         if safety_tier is not None:
             normalized = str(safety_tier).strip().lower()
             if normalized not in {"local", "shared", "production"}:
                 raise RuntimeError("--safety-tier must be local, shared, or production")
-            safety_root["safety_tier"] = normalized
+            _section("safety")["safety_tier"] = normalized
             safety_changed = True
         if destructive_operations is not None:
             normalized = str(destructive_operations).strip().lower()
@@ -1953,7 +2126,7 @@ def build_app():
                 raise RuntimeError(
                     "--destructive-operations must be blocked, confirm_required, or allowed"
                 )
-            safety_root["destructive_operations"] = normalized
+            _section("safety")["destructive_operations"] = normalized
             safety_changed = True
 
         if (
@@ -1963,6 +2136,8 @@ def build_app():
             and not safety_changed
             and not backup_changed
             and not operator_changed
+            and not inventory_changes
+            and not metadata_changed
         ):
             raise RuntimeError("No config changes requested.")
 
@@ -1988,6 +2163,8 @@ def build_app():
         ccyo_out.success("TAPDB explicit-target config updated")
         ccyo_out.print_text(f"  Namespace: [bold]{ctx.namespace_slug()}[/bold]")
         ccyo_out.print_text(f"  Path:      [dim]{config_path}[/dim]")
+        if remove_operator:
+            ccyo_out.print_text("  removed:   target.operator")
         for field_name in sorted(clear_fields):
             ccyo_out.print_text(f"  cleared:   {field_name}")
         for field_name in sorted(updates.keys()):

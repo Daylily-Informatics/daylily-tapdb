@@ -57,6 +57,7 @@ from daylily_tapdb.backup.receipts import (
     STATUS_SUCCEEDED,
     SURFACE_CLI,
     Actor,
+    validate_receipts_directory,
     write_receipt,
 )
 from daylily_tapdb.backup.storage import (
@@ -277,6 +278,8 @@ def storage_for(settings: dict[str, Any]) -> Any:
 
 def receipts_directory(settings: dict[str, Any]) -> Path:
     """Return where receipts live for this target."""
+    if "receipts_directory" in settings:
+        return validate_receipts_directory(settings["receipts_directory"])
     return Path(settings["config_dir"]) / "backups" / "receipts"
 
 
@@ -339,6 +342,7 @@ def open_session(
         app_username=app_username,
         domain_code=str(connection_cfg["domain_code"]),
         owner_repo_name=str(connection_cfg["owner_repo_name"]),
+        issuance_profile=connection_cfg["issuance_profile"],
         schema_name=str(connection_cfg["schema_name"]),
         tenant_id=connection_cfg.get("tenant_id") or None,
         allow_global_rows=bool(connection_cfg.get("allow_global_claims")),
@@ -469,6 +473,12 @@ def inventory_target(cfg: Mapping[str, Any]) -> dict[str, Any]:
         raise BackupVerificationError("complete explicit inventory target is required")
     if "sequence_mappings" in cfg:
         result["sequence_mappings"] = cfg["sequence_mappings"]
+    if "inventory_limits" in cfg:
+        result["inventory_limits"] = cfg["inventory_limits"]
+    if "inventory_mode" in cfg:
+        from daylily_tapdb.audit_inventory import validate_mode
+
+        result["inventory_mode"] = validate_mode(cfg["inventory_mode"])
     return result
 
 
@@ -479,7 +489,7 @@ def _source_contract_config(
     if contract is None:
         return cfg
     from daylily_tapdb.backup.source_contract import validate_source_contract
-    from daylily_tapdb.identity_inventory import validate_target
+    from daylily_tapdb.identity_inventory import validate_target, with_inventory_limits
 
     validate_source_contract(contract)
     target = validate_target(inventory_target(cfg), str(cfg["schema_name"]))
@@ -492,7 +502,9 @@ def _source_contract_config(
         raise BackupVerificationError(
             "source contract and config declare conflicting sequence mappings"
         )
-    return dict(cfg, sequence_mappings=mappings)
+    return with_inventory_limits(
+        dict(cfg, sequence_mappings=mappings), contract["identity_inventory"]
+    )
 
 
 def _backup_recovery_family(
@@ -502,6 +514,7 @@ def _backup_recovery_family(
 ) -> Optional[dict[str, Any]]:
     from daylily_tapdb.backup.recovery import validate_recovery_family
 
+    directory = receipts_directory(dict(settings))
     recorded = source_contract.get("recovery_family") if source_contract else None
     if recorded is not None and recovery_family != recorded:
         raise BackupVerificationError(
@@ -510,7 +523,7 @@ def _backup_recovery_family(
     if recovery_family is None:
         return None
     return validate_recovery_family(
-        recovery_family, required_directory=receipts_directory(dict(settings))
+        recovery_family, required_directory=directory
     )
 
 
@@ -532,7 +545,7 @@ def _schema_drift(session: Any, cfg: dict[str, Any]) -> dict[str, Any]:
     same files a new object is added to -- so this needs no maintenance when
     the schema grows.
     """
-    from daylily_tapdb.euid import GENERIC_TEMPLATE_PREFIX
+    from daylily_tapdb.issuance import profile_from_config
     from daylily_tapdb.schema_inventory import (
         diff_schema_inventory,
         drift_entry_counts,
@@ -548,7 +561,7 @@ def _schema_drift(session: Any, cfg: dict[str, Any]) -> dict[str, Any]:
     # identity prefix, not the domain code -- matching the drift check in
     # cli/db.py. Deriving it any other way reports phantom drift on every
     # target.
-    dynamic_sequence = f"{GENERIC_TEMPLATE_PREFIX.lower()}_instance_seq"
+    dynamic_sequence = f"{profile_from_config(cfg).identity_prefix('generic_template').lower()}_instance_seq"
 
     expected = load_expected_schema_inventory(
         asset_paths, dynamic_sequence_name=dynamic_sequence
@@ -1313,9 +1326,9 @@ def _capture(
                     ]
                     contract_descriptor = source_contract_descriptor(contract)
                     identity_asset = staging / IDENTITY_ASSET
-                    identity_asset.write_bytes(
-                        canonical_bytes(contract["identity_inventory"])
-                    )
+                    from daylily_tapdb.migration_identity import write_json_receipt
+
+                    write_json_receipt(identity_asset, contract["identity_inventory"])
 
     manifest = BackupManifest(
         backup_id=backup_id,

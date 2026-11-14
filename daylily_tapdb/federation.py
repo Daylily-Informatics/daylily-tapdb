@@ -17,6 +17,10 @@ from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 from urllib.parse import urlsplit
 
 from daylily_tapdb.euid import validate_euid
+from daylily_tapdb.services.graph_errors import (
+    NODE_ERROR_MESSAGES, RELATIONSHIP_ERROR_MESSAGES, add_issue,
+    prune_stopped_branches, relationship_error, retain_acyclic_edges, stop_node,
+)
 from daylily_tapdb.web.dag_v2 import validate_dag_v2_manifest
 
 _SERVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -192,7 +196,7 @@ def _failure(service_id: str, operation: str, exc: BaseException) -> dict[str, A
         "operation": operation,
         "status": "failed",
         "error_type": type(exc).__name__,
-        "message": str(exc)[:512],
+        "message": (str(exc) or type(exc).__name__)[:512],
     }
 
 
@@ -449,10 +453,80 @@ class DagV2FederationClient:
         return winners[0]
 
     @staticmethod
+    def _validate_boundary(data: Mapping[str, Any]) -> None:
+        boundary = data.get("traversal_boundary")
+        if boundary is None:
+            return
+        if (isinstance(boundary, Mapping) and isinstance(boundary.get("code"), str)
+                and boundary["code"] in NODE_ERROR_MESSAGES):
+            if (set(boundary) != {"code", "status", "message"}
+                    or boundary.get("status") != "not_traversed"
+                    or boundary.get("message") != NODE_ERROR_MESSAGES[boundary["code"]]
+                    or data.get("expandable") is not False
+                    or data.get("external_refs") != [] or data.get("external_identifiers") != []
+                    or data.get("properties") != {} or data.get("presentation") != {}):
+                raise FederationContractError("invalid node-error boundary")
+            return
+        if (
+            not isinstance(boundary, Mapping)
+            or set(boundary) != {"code", "status", "reference_version", "supported_version", "message"}
+            or boundary.get("code") != "unsupported_external_reference"
+            or boundary.get("status") != "not_traversed"
+            or boundary.get("reference_version") != data.get("version")
+            or boundary.get("reference_version") == boundary.get("supported_version")
+            or not all(isinstance(boundary.get(field), str) and 0 < len(boundary[field]) <= 512
+                       for field in ("reference_version", "supported_version", "message"))
+            or data.get("record_type") != "instance"
+            or (data.get("category"), data.get("type"), data.get("subtype"))
+               not in {("reference", "external_identifier", "tapdb_object"),
+                       ("reference", "external_identifier", "opaque")}
+            or data.get("expandable") is not False
+            or data.get("external_refs") != []
+            or data.get("external_identifiers") != []
+            or data.get("properties") != {}
+        ):
+            raise FederationContractError("invalid unsupported-reference boundary")
+
+    @staticmethod
+    def _validate_node_projection(data: Mapping[str, Any]) -> None:
+        for field in ("record_type", "category", "type", "subtype", "version", "display_label"):
+            if data.get(field) is not None and not isinstance(data[field], str):
+                raise FederationContractError("node display coordinates must be strings")
+        for field in ("properties", "presentation"):
+            if field in data and not isinstance(data[field], Mapping):
+                raise FederationContractError("node projection must be an object")
+        for field in ("external_refs", "external_identifiers"):
+            if not isinstance(data.get(field, []), list):
+                raise FederationContractError("graph external projections must be lists")
+            for item in data.get(field, []):
+                if not isinstance(item, Mapping):
+                    raise FederationContractError("external projection must be an object")
+                if field == "external_identifiers" and set(item) - _OPAQUE_IDENTIFIER_FIELDS:
+                    raise FederationContractError("opaque identifier projection has unsupported fields")
+                if field == "external_refs":
+                    FederatedObjectKey(item.get("target_service_id"), item.get("target_object_euid"))
+                    _persisted_euid(item.get("external_reference_euid"))
+                    _persisted_euid(item.get("lineage_euid"))
+        issues = data.get("graph_issues", [])
+        if not isinstance(issues, list):
+            raise FederationContractError("graph issues must be a list")
+        for issue in issues:
+            if (not isinstance(issue, Mapping)
+                    or set(issue) - {"code", "status", "message", "lineage_euid"}
+                    or not isinstance(issue.get("code"), str)
+                    or issue["code"] not in RELATIONSHIP_ERROR_MESSAGES
+                    or issue.get("status") != "not_traversed"
+                    or issue.get("message") != RELATIONSHIP_ERROR_MESSAGES[issue["code"]]):
+                raise FederationContractError("invalid relationship diagnostic")
+            if "lineage_euid" in issue:
+                _persisted_euid(issue["lineage_euid"])
+
+    @staticmethod
     def _validate_object(
         payload: Mapping[str, Any], service_id: str, euid: str
     ) -> dict[str, Any]:
         item = dict(payload)
+        DagV2FederationClient._validate_boundary(item)
         if item.get("service_id") != service_id or item.get("euid") != euid:
             raise FederationContractError(
                 "exact object identity does not match request"
@@ -478,7 +552,7 @@ class DagV2FederationClient:
             or not isinstance(elements.get("edges"), list)
         ):
             raise FederationContractError("graph payload has invalid DAG-v2 envelope")
-        nodes: list[dict[str, Any]] = []
+        by_id: dict[str, dict[str, Any]] = {}
         for raw in elements["nodes"]:
             if not isinstance(raw, Mapping) or not isinstance(raw.get("data"), Mapping):
                 raise FederationContractError("graph node must contain data")
@@ -488,30 +562,44 @@ class DagV2FederationClient:
             euid = _persisted_euid(data.get("euid"))
             if data.get("id") != euid:
                 raise FederationContractError("graph node id must equal its EUID")
-            if not isinstance(data.get("external_refs", []), list) or not isinstance(
-                data.get("external_identifiers", []), list
-            ):
-                raise FederationContractError(
-                    "graph external projections must be lists"
-                )
-            nodes.append({"data": data})
+            try:
+                DagV2FederationClient._validate_node_projection(data)
+                DagV2FederationClient._validate_boundary(data)
+            except (FederationContractError, ValueError):
+                data = stop_node(data, "invalid_external_projection")
+            prior = by_id.get(euid)
+            if prior is not None and prior != data:
+                data = stop_node(prior, "conflicting_node_response")
+            by_id[euid] = data
+        nodes = [{"data": data} for data in by_id.values()]
         node_ids = {node["data"]["euid"] for node in nodes}
+        boundary_ids = {node["data"]["euid"] for node in nodes
+                        if node["data"].get("traversal_boundary")}
         edges: list[dict[str, Any]] = []
         for raw in elements["edges"]:
             if not isinstance(raw, Mapping) or not isinstance(raw.get("data"), Mapping):
                 raise FederationContractError("graph edge must contain data")
             data = dict(raw["data"])
-            if (
-                data.get("service_id") != service_id
-                or data.get("source") not in node_ids
-                or data.get("target") not in node_ids
-            ):
-                raise FederationContractError(
-                    "graph edge has invalid service or endpoint"
-                )
-            _persisted_euid(data.get("euid"))
+            if data.get("service_id") != service_id:
+                raise FederationContractError("graph edge service_id mismatch")
+            source_id, target_id = data.get("source"), data.get("target")
+            source = by_id.get(source_id) if isinstance(source_id, str) else None
+            if isinstance(source_id, str) and source_id in boundary_ids:
+                continue
+            if source is None or not isinstance(target_id, str) or target_id not in node_ids:
+                if source is None:
+                    source = by_id.get(target_id) if isinstance(target_id, str) else None
+                if source is not None:
+                    add_issue(source, relationship_error("unavailable_endpoint"))
+                continue
+            try:
+                _persisted_euid(data.get("euid"))
+            except ValueError:
+                add_issue(source, relationship_error("invalid_relationship"))
+                continue
+            data["id"] = data["euid"]
             edges.append({"data": data})
-        return nodes, edges
+        return nodes, retain_acyclic_edges(nodes, edges)
 
     async def graph(
         self,
@@ -534,6 +622,7 @@ class DagV2FederationClient:
         manifest_cache: dict[str, dict[str, Any]] = {}
         nodes: dict[str, dict[str, Any]] = {}
         edges: dict[str, dict[str, Any]] = {}
+        conflicted_edges: set[str] = set()
         receipts: list[dict[str, Any]] = []
         warnings: list[dict[str, Any]] = []
         pending: list[FederatedObjectKey] = [start]
@@ -541,6 +630,7 @@ class DagV2FederationClient:
             FederatedObjectKey, list[tuple[str, Mapping[str, Any]]]
         ] = {}
         visited: set[FederatedObjectKey] = set()
+        failed: dict[FederatedObjectKey, str] = {}
         jumps = 0
         truncated_reasons: set[str] = set()
 
@@ -569,7 +659,10 @@ class DagV2FederationClient:
                     depth=local_depth,
                     max_nodes=self.limits.max_nodes,
                 )
-                return self._validate_graph(payload, service_id=key.service_id)
+                local_nodes, local_edges = self._validate_graph(payload, service_id=key.service_id)
+                if not any(node["data"]["euid"] == key.euid for node in local_nodes):
+                    raise FederationContractError("graph response does not contain its requested root")
+                return prune_stopped_branches(local_nodes, local_edges, key.euid)
 
         def unresolved(
             source_global_id: str,
@@ -579,6 +672,7 @@ class DagV2FederationClient:
         ) -> None:
             target_service = str(ref.get("target_service_id") or "")
             target_euid = str(ref.get("target_object_euid") or "")
+            edges.pop(f"bridge::{source_global_id}::{ref.get('lineage_euid')}", None)
             digest = hashlib.sha256(
                 json.dumps(
                     [source_global_id, target_service, target_euid, reason],
@@ -626,6 +720,7 @@ class DagV2FederationClient:
                     pending = []
                     if not batch:
                         break
+                    visited.update(batch)
                     outcomes = await asyncio.gather(
                         *(fetch(key) for key in batch), return_exceptions=True
                     )
@@ -638,6 +733,7 @@ class DagV2FederationClient:
                                     f"starting service failed: {receipt['message']}"
                                 ) from outcome
                             warnings.append(receipt)
+                            failed[key] = receipt['message']
                             for source_global_id, ref in pending_context.get(key, []):
                                 unresolved(
                                     source_global_id,
@@ -668,13 +764,23 @@ class DagV2FederationClient:
                             }
                             prior = nodes.get(global_id)
                             if prior is not None and prior != namespaced:
-                                raise FederationContractError(
-                                    f"conflicting duplicate graph node: {global_id}"
-                                )
+                                namespaced = {"data": stop_node(prior["data"], "conflicting_node_response")}
+                                data = namespaced["data"]
                             if len(nodes) >= self.limits.max_nodes and prior is None:
                                 truncated_reasons.add("max_nodes")
                                 continue
                             nodes[global_id] = namespaced
+                            if (prior is None or prior != namespaced) and data.get("traversal_boundary"):
+                                boundary = data["traversal_boundary"]
+                                warnings.append({
+                                    "service_id": key.service_id,
+                                    "operation": "graph",
+                                    "status": "not_traversed",
+                                    "euid": data["euid"],
+                                    "reason": boundary["code"],
+                                    "message": f"{data['euid']}: {boundary['message']}",
+                                })
+                            visited.add(FederatedObjectKey(key.service_id, str(data['euid'])))
 
                         for remote in remote_edges:
                             data = dict(remote["data"])
@@ -690,14 +796,19 @@ class DagV2FederationClient:
                             }
                             prior = edges.get(edge_id)
                             if prior is not None and prior != namespaced:
-                                raise FederationContractError(
-                                    f"conflicting duplicate graph edge: {edge_id}"
-                                )
-                            edges[edge_id] = namespaced
+                                edges.pop(edge_id)
+                                conflicted_edges.add(edge_id)
+                                for source_id in {prior["data"]["source"], namespaced["data"]["source"]}:
+                                    if source_id in nodes:
+                                        add_issue(nodes[source_id]["data"], relationship_error("conflicting_relationship", data["euid"]))
+                            if edge_id not in conflicted_edges:
+                                edges[edge_id] = namespaced
 
                         for remote in remote_nodes:
                             data = remote["data"]
                             source_global_id = f"{key.service_id}::{data['euid']}"
+                            if nodes.get(source_global_id, {}).get("data", {}).get("traversal_boundary"):
+                                continue
                             for identifier in data.get("external_identifiers", []):
                                 if not isinstance(identifier, Mapping):
                                     raise FederationContractError(
@@ -792,6 +903,10 @@ class DagV2FederationClient:
                                     )
                                     continue
                                 target_global_id = target_key.global_id
+                                if target_key in failed:
+                                    unresolved(source_global_id, ref,
+                                               reason=f"remote branch failed: {failed[target_key]}")
+                                    continue
                                 edge_id = f"bridge::{source_global_id}::{ref.get('lineage_euid')}"
                                 edges[edge_id] = {
                                     "data": {
@@ -837,7 +952,69 @@ class DagV2FederationClient:
                                     (source_global_id, ref)
                                 )
         except TimeoutError as exc:
-            raise FederationOperationError("federated graph deadline exceeded") from exc
+            if start.global_id not in nodes:
+                raise FederationOperationError("federated graph deadline exceeded before root was available") from exc
+            truncated_reasons.add("deadline")
+            warnings.append({"service_id": start.service_id, "operation": "graph",
+                             "status": "timeout", "message": "Graph deadline reached; completed branches retained"})
+            for key, contexts in pending_context.items():
+                if key.global_id not in nodes:
+                    for source_global_id, ref in contexts:
+                        unresolved(source_global_id, ref, reason="graph_deadline_exceeded")
+
+        # Each owner must still publish acyclic lineage. Cross-service reference
+        # assertions can legitimately be reciprocal, so retain their evidence as
+        # a non-expanding boundary when the bridge would close a directed cycle.
+        # Projection/merge failures are leaf boundaries even when another
+        # fetched neighborhood had already included their descendants.
+        retained_nodes, retained_edges = prune_stopped_branches(list(nodes.values()), list(edges.values()), start.global_id)
+        nodes = {node["data"]["id"]: node for node in retained_nodes}
+        edges = {edge["data"]["id"]: edge for edge in retained_edges}
+        local_edges = {key: edge for key, edge in edges.items()
+                       if edge['data'].get('edge_kind') != 'external_reference'}
+        accepted_local = {edge["data"]["id"]: edge for edge in retain_acyclic_edges(list(nodes.values()), list(local_edges.values()))}
+        for edge_id in local_edges.keys() - accepted_local.keys():
+            edges.pop(edge_id)
+        local_edges = accepted_local
+        adjacency: dict[str, set[str]] = {key: set() for key in nodes}
+        for edge in local_edges.values():
+            data = edge['data']
+            if data['source'] in nodes and data['target'] in nodes:
+                adjacency[data['source']].add(data['target'])
+
+        def reaches(start_id: str, target_id: str) -> bool:
+            pending_ids = [start_id]
+            seen: set[str] = set()
+            while pending_ids:
+                node_id = pending_ids.pop()
+                if node_id == target_id:
+                    return True
+                if node_id not in seen:
+                    seen.add(node_id)
+                    pending_ids.extend(adjacency.get(node_id, ()))
+            return False
+
+        cycle_blocks = 0
+        for edge_id, edge in sorted(list(edges.items())):
+            data = edge['data']
+            if data.get('edge_kind') != 'external_reference':
+                continue
+            source_id, target_id = data['source'], data['target']
+            if source_id not in nodes or target_id not in nodes:
+                continue
+            if reaches(target_id, source_id):
+                del edges[edge_id]
+                cycle_blocks += 1
+                unresolved(source_id, data, reason='external_reference_cycle_blocked')
+                warnings.append({
+                    'service_id': data['target_service_id'],
+                    'operation': 'external_jump', 'status': 'cycle_blocked',
+                    'message': 'Return reference retained without cyclic expansion',
+                    'source': source_id, 'target': target_id,
+                    'lineage_euid': data.get('lineage_euid'),
+                })
+            else:
+                adjacency[source_id].add(target_id)
 
         complete_edges = {
             edge_id: edge
@@ -847,6 +1024,10 @@ class DagV2FederationClient:
         if len(complete_edges) != len(edges):
             truncated_reasons.add("max_nodes")
         _assert_global_acyclic(nodes, complete_edges)
+        for node in nodes.values():
+            for issue in node["data"].get("graph_issues", []):
+                warnings.append({"service_id": node["data"]["service_id"],
+                                 "euid": node["data"]["euid"], "operation": "graph", **issue})
         return {
             "elements": {
                 "nodes": [nodes[key] for key in sorted(nodes)],
@@ -858,6 +1039,15 @@ class DagV2FederationClient:
                 "contract": "tapdb.federation:v1",
                 "start": start.global_id,
                 "external_jumps": jumps,
+                "cycle_blocks": cycle_blocks,
+                "unsupported_external_references": sum(
+                    node["data"].get("traversal_boundary", {}).get("code") == "unsupported_external_reference"
+                    for node in nodes.values()
+                ),
+                "node_errors": sum(node["data"].get("traversal_boundary", {}).get("code") in NODE_ERROR_MESSAGES
+                                   for node in nodes.values()),
+                "blocked_relationships": sum(len(node["data"].get("graph_issues", [])) for node in nodes.values()),
+                "partial": bool(warnings),
                 "truncated": bool(truncated_reasons),
                 "truncation_reason": "+".join(sorted(truncated_reasons)) or None,
                 "limits": asdict(self.limits),

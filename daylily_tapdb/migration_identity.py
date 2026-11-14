@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -230,7 +231,13 @@ def _canonical_json(value: Any) -> str:
 
 
 def _sha256(value: Any) -> str:
-    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256()
+    encoder = json.JSONEncoder(
+        default=_jsonable, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    for chunk in encoder.iterencode(value):
+        digest.update(chunk.encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _validated_transformation_contracts(
@@ -405,6 +412,15 @@ def _migration_tables(identity: Mapping[str, Any]) -> dict[str, Any]:
     """Adapt shared evidence for the existing exact transformation validators."""
     tables: dict[str, Any] = {}
     for name, table in identity["tables"].items():
+        if "audit_digest" in table:
+            from daylily_tapdb.audit_inventory import validate_summary
+            validate_summary(table)
+            tables[name] = {"columns": [c["name"] for c in table["columns"]],
+                            "primary_key": table["primary_key"],
+                            "row_count": table["row_count"],
+                            "immutable_columns": table["immutable_columns"],
+                            "audit_digest": table["audit_digest"]}
+            continue
         rows = []
         for key, row in table["rows"].items():
             values = row.get("identity", {})
@@ -446,6 +462,10 @@ def _validate_scope_and_sequences(
     from daylily_tapdb.sequences import verify_sequence_floors
 
     for table_name, table in snapshot["tables"].items():
+        if "audit_digest" in table:
+            if table["audit_digest"]["invalid_scope_rows"]:
+                raise MigrationPreflightError("audit_log has missing domain/owner scope")
+            continue
         for row in table["rows"]:
             for column in ("domain_code", "issuer_app_code"):
                 if (
@@ -470,8 +490,29 @@ def build_migration_preflight(
     receipts_dir: Path | None = None,
     recovery_family: Mapping[str, Any] | None = None,
     _reviewed_recovery: Mapping[str, Any] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Capture deterministic, sanitized preflight evidence without mutation."""
+    from daylily_tapdb.backup.recovery import validate_recovery_family
+    from daylily_tapdb.sequence_fence import read_fence_history
+
+    if recovery_family is not None:
+        if receipts_dir is None and _reviewed_recovery is None:
+            raise MigrationPreflightError(
+                "family migration requires explicit receipts_dir"
+            )
+        recovery_family = validate_recovery_family(
+            recovery_family, required_directory=receipts_dir
+        )
+    journal_roots = (
+        recovery_family["receipts_dirs"]
+        if recovery_family is not None
+        else [str(receipts_dir)] if receipts_dir is not None else []
+    )
+    journal_starts: dict[str, tuple[Any, list[str]]] = {}
+    for root in journal_roots:
+        history, head = read_fence_history(Path(root))
+        journal_starts[root] = (head, [item.receipt_id for item in history])
     schema_name = str(target.get("schema_name") or "").strip()
     if not schema_name:
         raise MigrationPreflightError("schema_name is required")
@@ -483,6 +524,8 @@ def build_migration_preflight(
         raise MigrationPreflightError(
             f"current schema {live_schema!r} does not match configured {schema_name!r}"
         )
+    if progress is not None:
+        progress("Loading migration assets and applied migration history")
     assets = _migration_assets(migrations_dir)
     tracking = _tracking_rows(connection)
     applied_names = {str(row["filename"]) for row in tracking}
@@ -495,12 +538,23 @@ def build_migration_preflight(
         for item in assets
         if item["filename"] not in applied_names
     ]
-    from daylily_tapdb.identity_inventory import capture_identity_inventory
+    from daylily_tapdb.identity_inventory import (
+        capture_identity_inventory,
+        with_inventory_limits,
+    )
     from daylily_tapdb.sequences import capture_sequence_inventory
 
+    if source_contract is not None:
+        target = with_inventory_limits(target, source_contract["identity_inventory"])
+    if target.get("inventory_mode") is not None:
+        from daylily_tapdb.audit_inventory import validate_mode, validate_pending
+        validate_mode(target["inventory_mode"])
+        validate_pending(pending)
     identity_inventory = capture_identity_inventory(
-        connection, schema_name=schema_name, target=target
+        connection, schema_name=schema_name, target=target, progress=progress
     )
+    if progress is not None:
+        progress("Capturing allocator inventory and retained recovery floors")
     sequence_inventory = capture_sequence_inventory(
         connection, schema_name=schema_name, target=target
     )
@@ -510,7 +564,6 @@ def build_migration_preflight(
         require_family_member,
         require_retained_definitions,
         retained_recovery_state,
-        validate_recovery_family,
     )
     from daylily_tapdb.sequences import build_sequence_advance_plan
 
@@ -522,13 +575,6 @@ def build_migration_preflight(
             "migration must explicitly retain its source recovery family"
         )
     if recovery_family is not None:
-        if receipts_dir is None and _reviewed_recovery is None:
-            raise MigrationPreflightError(
-                "family migration requires explicit receipts_dir"
-            )
-        recovery_family = validate_recovery_family(
-            recovery_family, required_directory=receipts_dir
-        )
         require_family_member(recovery_family, sequence_inventory)
     if _reviewed_recovery is not None:
         allocator_recovery = dict(_reviewed_recovery)
@@ -561,17 +607,18 @@ def build_migration_preflight(
         }
     if source_contract is not None:
         from daylily_tapdb.backup.source_contract import (
-            capture_source_contract,
+            source_contract_from_capture,
             verify_source_contract,
         )
 
-        actual = capture_source_contract(
-            connection,
-            schema_name=schema_name,
-            target=target,
+        actual = source_contract_from_capture(
+            identity_inventory=identity_inventory,
+            sequence_inventory=sequence_inventory,
             source_version=str(source_contract["source_version"]),
             recovery_family=recovery_family,
         )
+        if progress is not None:
+            progress("Comparing source contract using this snapshot's captured inventory")
         verify_source_contract(source_contract, actual)
     tables = _migration_tables(identity_inventory)
 
@@ -617,6 +664,12 @@ def build_migration_preflight(
         "template_instance_prefix_mapping": template_prefix_mapping,
     }
     _validate_scope_and_sequences(snapshot, validate_generators=_validate_generators)
+    for root, (start_head, start_ids) in journal_starts.items():
+        history, head = read_fence_history(Path(root))
+        if head != start_head or [item.receipt_id for item in history] != start_ids:
+            raise MigrationPreflightError("recovery journal changed during migration preflight")
+    if progress is not None:
+        progress("Serializing migration preflight evidence")
     snapshot["evidence_sha256"] = _sha256(snapshot)
     return snapshot
 
@@ -733,6 +786,12 @@ def _verify_preservation(
             raise MigrationReceiptMismatchError(
                 f"table disappeared during migration: {table_name}"
             )
+        if "audit_digest" in before:
+            # Complete content and exact catalog transition are checked by the
+            # shared physical verifier below; never fabricate an empty row set.
+            if "audit_digest" not in after:
+                raise MigrationReceiptMismatchError("audit inventory mode changed")
+            continue
         before_rows = {_canonical_json(row["key"]): row for row in before["rows"]}
         after_rows = {_canonical_json(row["key"]): row for row in after["rows"]}
         if table_name not in allowed_new_rows and set(before_rows) != set(after_rows):
@@ -991,6 +1050,11 @@ def _verify_physical_preservation(
     }
     declarations = {}
     for name, table in before["tables"].items():
+        if "audit_digest" in table:
+            from daylily_tapdb.audit_inventory import TRANSFORMATION, validate_pending
+            transform = validate_pending(preflight["pending_migrations"])
+            declarations[name] = {"audit_contract": TRANSFORMATION} if transform else {}
+            continue
         new_table = after["tables"].get(name, {})
         old_columns = {column["name"] for column in table["columns"]}
         new_columns = {column["name"] for column in new_table.get("columns", [])}
@@ -1153,14 +1217,20 @@ def apply_migration_preflight(
     target: Mapping[str, Any],
     writer_fence: Mapping[str, Any] | None = None,
     receipts_dir: Path | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> MigrationResult:
     """Apply exactly the receipt-bound migration set in the current transaction."""
     if not connection.in_transaction():
         raise MigrationPreflightError("migration apply requires an active transaction")
+    from daylily_tapdb.identity_inventory import with_inventory_limits
+
+    target = with_inventory_limits(target, preflight["identity_inventory"])
     schema_name = str(target.get("schema_name") or "").strip()
     lock_key = derive_advisory_lock_key(
         "tapdb.schema.migrate", target.get("database"), schema_name
     )
+    if progress is not None:
+        progress("Acquiring native migration lock and checking the writer fence")
     connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
     from daylily_tapdb.backup.receipts import SURFACE_CLI, Actor
     from daylily_tapdb.backup.recovery import begin_recovery, observe_recovery
@@ -1192,6 +1262,7 @@ def apply_migration_preflight(
         source_contract=preflight.get("source_contract"),
         receipts_dir=receipts_dir,
         recovery_family=preflight.get("recovery_family"),
+        progress=progress,
     )
     if _receipt_comparable(current) != _receipt_comparable(preflight):
         raise MigrationReceiptMismatchError(
@@ -1224,6 +1295,8 @@ def apply_migration_preflight(
         }
         for item in preflight["pending_migrations"]:
             filename = str(item["filename"])
+            if progress is not None:
+                progress(f"Applying SQL migration: {filename}")
             asset = asset_by_name.get(filename)
             if asset is None or asset["sha256"] != item["sha256"]:
                 raise MigrationReceiptMismatchError(
@@ -1246,8 +1319,13 @@ def apply_migration_preflight(
             _validate_generators=False,
             _reviewed_recovery=preflight["allocator_recovery"],
             recovery_family=preflight.get("recovery_family"),
+            progress=progress,
         )
+        if progress is not None:
+            progress("Comparing preserved identity before allocator advancement")
         _verify_preservation(preflight, interim, allow_declared_sequence_advances=False)
+        if progress is not None:
+            progress("Advancing only native reviewed allocator floors")
         sequence_result = _advance_permitted_identity_sequences(
             connection,
             preflight=preflight,
@@ -1263,6 +1341,7 @@ def apply_migration_preflight(
             target=target,
             _reviewed_recovery=preflight["allocator_recovery"],
             recovery_family=preflight.get("recovery_family"),
+            progress=progress,
         )
         from daylily_tapdb.sequences import sequence_next_value
 
@@ -1272,6 +1351,8 @@ def apply_migration_preflight(
             for item in preflight["allocator_recovery"]["plan"]["advances"]
             if item["next_value"] > sequence_next_value(original_states[item["name"]])
         }
+        if progress is not None:
+            progress("Comparing final preserved identity and allocator state")
         _verify_preservation(
             preflight, postflight, recovery_sequence_advances=reviewed_advances
         )
@@ -1328,6 +1409,7 @@ def finalize_migration_recovery(
     from daylily_tapdb.identity_inventory import (
         capture_identity_inventory,
         verify_identity_inventory,
+        with_inventory_limits,
     )
     from daylily_tapdb.sequences import (
         capture_sequence_inventory,
@@ -1347,7 +1429,11 @@ def finalize_migration_recovery(
     )
     validate_writer_fence(connection, observed, writer_fence)
     identity = capture_identity_inventory(
-        connection, schema_name=target["schema_name"], target=target
+        connection,
+        schema_name=target["schema_name"],
+        target=with_inventory_limits(
+            target, payload["postflight"]["identity_inventory"]
+        ),
     )
     verified = verify_identity_inventory(
         payload["postflight"]["identity_inventory"], identity
@@ -1433,9 +1519,7 @@ def write_json_receipt(path: Path, receipt: Mapping[str, Any]) -> None:
     if not path.is_absolute():
         raise MigrationPreflightError("receipt path must be absolute")
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = (json.dumps(_jsonable(receipt), indent=2, sort_keys=True) + "\n").encode(
-        "utf-8"
-    )
+    encoder = json.JSONEncoder(default=_jsonable, indent=2, sort_keys=True)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent,
         prefix=f".{path.name}.",
@@ -1445,7 +1529,9 @@ def write_json_receipt(path: Path, receipt: Mapping[str, Any]) -> None:
     linked = False
     try:
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
-            handle.write(payload)
+            for chunk in encoder.iterencode(receipt):
+                handle.write(chunk.encode("utf-8"))
+            handle.write(b"\n")
             handle.flush()
             os.fsync(handle.fileno())
             os.fchmod(handle.fileno(), 0o444)

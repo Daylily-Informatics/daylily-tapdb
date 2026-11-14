@@ -14,8 +14,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from daylily_tapdb.cli.context import resolve_context
 from daylily_tapdb.cli.db_config import get_db_config
+from daylily_tapdb.security_context import configured_graph_tenant_scope
 from daylily_tapdb.services.graph_payloads import (
     DagV2GraphContractError,
+    GraphLineageReader,
     build_graph_v2_payload,
     build_object_detail_v2_payload,
 )
@@ -306,7 +308,7 @@ def _build_router(
         return manifest.to_dict()
 
     @router.get("/api/dag/v2/object/{euid}")
-    async def dag_v2_object(
+    def dag_v2_object(
         euid: str,
         authenticated: Any = Depends(auth_dependency),
     ) -> dict[str, Any]:
@@ -318,10 +320,17 @@ def _build_router(
                 if obj is None or record_type is None:
                     raise HTTPException(status_code=404, detail="object_not_owned")
                 try:
+                    outbound = None
+                    if record_type == "instance":
+                        reader = GraphLineageReader(session)
+                        reader.prefetch([obj])
+                        reader.materialize([obj], [])
+                        outbound = reader.outgoing[int(obj.uid)]
                     return build_object_detail_v2_payload(
                         obj,
                         record_type=record_type,
                         service_id=manifest.service_id,
+                        outbound_lineages=outbound,
                     )
                 except (ValueError, DagV2GraphContractError) as exc:
                     raise HTTPException(
@@ -329,7 +338,7 @@ def _build_router(
                     ) from exc
 
     @router.get("/api/dag/v2/data")
-    async def dag_v2_data(
+    def dag_v2_data(
         start_euid: str,
         depth: int = Query(0, ge=0),
         max_nodes: int | None = Query(None, ge=1),
@@ -354,6 +363,10 @@ def _build_router(
                         service_id=manifest.service_id,
                         depth=depth,
                         max_nodes=effective_nodes,
+                        lineage_reader=GraphLineageReader(session),
+                        tenant_scope=configured_graph_tenant_scope(
+                            get_db_config(config_path=config_path)
+                        ),
                     )
                 except (ValueError, DagV2GraphContractError) as exc:
                     raise HTTPException(
@@ -361,7 +374,7 @@ def _build_router(
                     ) from exc
 
     @router.get("/api/dag/v2/search")
-    async def dag_v2_search(
+    def dag_v2_search(
         q: str = "",
         euid: str = "",
         record_type: str = "all",

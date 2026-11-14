@@ -16,6 +16,7 @@ Recommended usage:
         app_username="catalog-api",
         domain_code="Z",
         owner_repo_name="catalog-service",
+        issuance_profile={"version": 1, "mode": "canonical"},
         schema_name="catalog",
         config_identity="/abs/path/to/tapdb-config.yaml",
     ) as conn:
@@ -31,6 +32,7 @@ For write operations:
         app_username="catalog-api",
         domain_code="Z",
         owner_repo_name="catalog-service",
+        issuance_profile={"version": 1, "mode": "canonical"},
         schema_name="catalog",
         config_identity="/abs/path/to/tapdb-config.yaml",
     ) as conn:
@@ -46,7 +48,11 @@ from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session, sessionmaker
 
+from daylily_tapdb.issuance import IssuanceProfile, install_engine_profile
+
 from daylily_tapdb.security_context import (
+    Attribution,
+    invocation_attribution,
     TapdbTransactionContext,
     apply_transaction_context,
     assert_operator_role,
@@ -95,6 +101,9 @@ class TAPDBConnection:
         aws_profile: Optional[str] = None,
         sslrootcert: Optional[str] = None,
         server_port: Optional[int] = None,
+        additional_tenant_ids: tuple[str, ...] = (),
+        attribution: Attribution | None = None,
+        issuance_profile: IssuanceProfile | dict | None = None,
     ):
         """
         Initialize database connection.
@@ -122,9 +131,13 @@ class TAPDBConnection:
             secret_arn: Secrets Manager ARN for Aurora password retrieval.
             domain_code: Domain code for session scoping (1-4 chars). Required.
             owner_repo_name: Repo-name for session ownership scoping. Required.
+            issuance_profile: Explicit native profile from the selected config.
+                Required; canonical and single_prefix are separate policies.
             schema_name: PostgreSQL schema to use as this session's search_path.
             tenant_id: Fixed tenant UUID for this runtime principal, or ``None``
                 for a deliberately global principal.
+            additional_tenant_ids: Explicit finite UUID allowlist bound to the
+                same principal; never inferred from request state or database rows.
             allow_global_rows: Permit the fixed principal to access deliberate
                 global rows in its own domain and owner scope.
             config_identity: Exact absolute config path bound to the database
@@ -138,15 +151,22 @@ class TAPDBConnection:
         """
         self.logger = logging.getLogger(__name__ + ".TAPDBConnection")
 
+        self.issuance_profile = (
+            issuance_profile if isinstance(issuance_profile, IssuanceProfile)
+            else IssuanceProfile.from_mapping(issuance_profile)
+        )
+
         if not db_user:
             raise ValueError("db_user is required")
         if not app_username:
             raise ValueError("app_username is required")
+        self.attribution = attribution
         self.app_username = app_username
         self.domain_code = domain_code
         self.owner_repo_name = owner_repo_name
         self.schema_name = (schema_name or "").strip() or None
         self.tenant_id = tenant_id
+        self.additional_tenant_ids = additional_tenant_ids
         self.allow_global_rows = allow_global_rows
         self.config_identity = str(config_identity or "").strip()
         postgres_target = (
@@ -229,6 +249,9 @@ class TAPDBConnection:
             pool_timeout=pool_timeout,
             pool_recycle=pool_recycle,
             pool_pre_ping=True,
+        )
+        install_engine_profile(
+            self.engine, self.issuance_profile, owner_repo_name=self.owner_repo_name
         )
 
         # Create session factory
@@ -342,7 +365,9 @@ class TAPDBConnection:
             domain_code=self.domain_code or "",
             owner_repo_name=self.owner_repo_name or "",
             tenant_id=self.tenant_id,
+            additional_tenant_ids=self.additional_tenant_ids,
             actor=self.app_username,
+            attribution=self.attribution if self.attribution is not None else invocation_attribution(),
             allow_global_rows=self.allow_global_rows,
         )
 

@@ -502,24 +502,27 @@ def test_status_drift_and_nuke_branches(
         "unexpected": {"tables": [], "views": ["extra"]},
     }
     monkeypatch.setattr(
+        "cli_core_yo.runtime.get_context", lambda: SimpleNamespace(json_mode=False)
+    )
+    monkeypatch.setattr(
         db, "_run_schema_drift_check", lambda *_args, **_kwargs: (payload, False)
     )
-    with pytest.raises(typer.Exit) as clean:
+    with pytest.raises(SystemExit) as clean:
         db.db_schema_drift_check(json_output=True, strict=True)
-    assert clean.value.exit_code == 0
+    assert clean.value.code == 0
     db.db_schema_drift_check(json_output=False, strict=True)
 
     monkeypatch.setattr(
         db, "_run_schema_drift_check", lambda *_args, **_kwargs: (payload, True)
     )
-    with pytest.raises(typer.Exit):
+    with pytest.raises(SystemExit):
         db.db_schema_drift_check(json_output=False, strict=True)
     monkeypatch.setattr(
         db,
         "_run_schema_drift_check",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("drift")),
     )
-    with pytest.raises(typer.Exit):
+    with pytest.raises(SystemExit):
         db.db_schema_drift_check(json_output=True, strict=False)
 
     configured["engine_type"] = "local"
@@ -761,8 +764,7 @@ def test_template_validation_seed_and_adapter_helpers(
     monkeypatch.setattr(
         db, "_validate_template_configs", lambda *_args, **_kwargs: ([template], [])
     )
-    monkeypatch.setattr(db, "_check_db_exists", lambda *_args: True)
-    monkeypatch.setattr(db, "_schema_exists", lambda *_args: True)
+    monkeypatch.setattr(db, "_seed_operator_schema_exists", lambda cfg: True)
     monkeypatch.setattr(db, "_find_duplicate_template_keys", lambda *_args: {})
     db.db_seed(tmp_path, include_workflow=False, skip_existing=True, dry_run=True)
 
@@ -966,10 +968,12 @@ def test_remaining_database_refusal_branches(
     monkeypatch.setattr(db, "_schema_exists", lambda *_args: False)
     with pytest.raises(SystemExit):
         db.db_migrate(True, False, tmp_path / "missing-schema.json", None)
+    monkeypatch.setattr(db, "_seed_operator_schema_exists", lambda cfg: False)
     with pytest.raises(SystemExit):
         db.db_seed(tmp_path, False, True, False)
 
     monkeypatch.setattr(db, "_schema_exists", lambda *_args: True)
+    monkeypatch.setattr(db, "_seed_operator_schema_exists", lambda cfg: True)
     monkeypatch.setattr(db, "_resolve_seed_config_dirs", lambda _path: [tmp_path])
     warning = db._ConfigIssue("warning", "warn", "warn.json", "code")
     error = db._ConfigIssue("error", "bad", "bad.json", "code")

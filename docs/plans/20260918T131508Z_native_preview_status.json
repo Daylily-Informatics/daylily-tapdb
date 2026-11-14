@@ -1,0 +1,44 @@
+{
+  "applied": false,
+  "candidate_base_commit": "1566aa345f5d85826b0637660fbd4dac21242e49",
+  "candidate_manifest_sha256": "a20e6ac9faa9059995307f4b2fa512df81f2f39209bd8d20b76ab220d094307f",
+  "candidate_source": {
+    "daylily_tapdb/runtime_principal.py": "e52d04f1f894473fe1a5ee489c4b0b1af0a6b474671f21d20a21efa6f0c91c95",
+    "schema/migrations/20260918_070400_system_user_authorization_contract.sql": "e3b7313fd91777c86d3d7393c1e461f043b077b094c6dbbd340b02b70d74baf2",
+    "schema/runtime_identity_authorization.sql": "4d1c9ee33c1bffdc0be264d1c68a3e60a74799dd17f95ed13c0031d98d3d72f1"
+  },
+  "completed_at": "2026-09-18T13:15:08.482516+00:00",
+  "database": "tapdb_bloom_prod",
+  "evidence_sha256": "04178a66f0779f99863ac70758891fe6540380edf8945933db4f9c56e0da3c6e",
+  "journal_path": "/home/ubuntu/bloom_ops/tapdb101-20260911/journal",
+  "mappings_path": "/home/ubuntu/bloom_ops/tapdb101-20260911/receipts/source-sequence-mappings.json",
+  "mappings_sha256": "f4e5eaf485d8b5d5ecaca7ab44ebabf4d7f41cfbf611ff8a3410e33ccea2cca3",
+  "native_receipt": "/home/ubuntu/bloom_ops/kahlo-resolver-20260918T123300Z/native-preview.json",
+  "only_requested_migration_pending": true,
+  "operator_package": "10.1.5",
+  "operator_user": "dayhoff",
+  "pending_migrations": [
+    {
+      "allowed_columns": [],
+      "allowed_new_rows": [],
+      "allowed_new_tables": [],
+      "allowed_prefix_annotations": [],
+      "allowed_schema_tables": [],
+      "allowed_sequences": [],
+      "allowed_transformations": [],
+      "filename": "20260918_070400_system_user_authorization_contract.sql",
+      "sha256": "e3b7313fd91777c86d3d7393c1e461f043b077b094c6dbbd340b02b70d74baf2"
+    }
+  ],
+  "proposed_package": "10.1.6",
+  "recovery_family_path": "/home/ubuntu/bloom_ops/tapdb101-20260911/receipts/recovery-family.json",
+  "recovery_family_sha256": "092d552e2d23dbe4a3f061a9b5b2501213b7aff18702c077c297bebad14e51fb",
+  "recovery_pending_count": 0,
+  "rolled_back": true,
+  "runtime_user": "bloom_runtime_10",
+  "schema": "bloom.native-resolver-preview/1",
+  "schema_name": "tapdb_bloom_lsmcok1_local",
+  "started_at": "2026-09-18T12:33:00.804906+00:00",
+  "status": "captured",
+  "transaction_read_only": "on"
+}

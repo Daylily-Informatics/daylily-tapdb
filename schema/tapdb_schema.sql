@@ -182,6 +182,43 @@ $$;
 -- TABLES
 --------------------------------------------------------------------------------
 
+-- Allocation policy belongs to a logical domain/owner, never to a producer
+-- service label. Runtime roles can read this binding but cannot change it.
+CREATE TABLE IF NOT EXISTS tapdb_issuance_profile (
+    domain_code TEXT NOT NULL,
+    issuer_app_code TEXT NOT NULL,
+    version INTEGER NOT NULL CHECK (version = 1),
+    mode TEXT NOT NULL CHECK (mode IN ('canonical', 'single_prefix', 'template_split')),
+    prefix TEXT,
+    template_prefix TEXT,
+    created_dt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (domain_code, issuer_app_code),
+    CHECK ((mode = 'canonical' AND prefix IS NULL
+            AND (template_prefix IS NULL OR template_prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'))
+        OR (mode = 'single_prefix' AND prefix IS NOT NULL AND prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+            AND template_prefix IS NULL)
+        OR (mode = 'template_split' AND prefix IS NOT NULL AND prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+            AND template_prefix IS NOT NULL AND template_prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+            AND template_prefix <> prefix))
+);
+
+-- Unified native profile constraints; retained identities and bindings are unchanged.
+ALTER TABLE tapdb_issuance_profile ADD COLUMN IF NOT EXISTS template_prefix TEXT;
+ALTER TABLE tapdb_issuance_profile
+    DROP CONSTRAINT IF EXISTS tapdb_issuance_profile_mode_check,
+    DROP CONSTRAINT IF EXISTS tapdb_issuance_profile_check,
+    DROP CONSTRAINT IF EXISTS tapdb_issuance_profile_template_prefix_check,
+    ADD CONSTRAINT tapdb_issuance_profile_mode_check
+        CHECK (mode IN ('canonical', 'single_prefix', 'template_split')),
+    ADD CONSTRAINT tapdb_issuance_profile_check CHECK (
+        (mode = 'canonical' AND prefix IS NULL
+            AND (template_prefix IS NULL OR template_prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'))
+        OR (mode = 'single_prefix' AND prefix IS NOT NULL AND prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+            AND template_prefix IS NULL)
+        OR (mode = 'template_split' AND prefix IS NOT NULL AND prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+            AND template_prefix IS NOT NULL AND template_prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+            AND template_prefix <> prefix));
+
 -- Prefix configuration for TapDB-managed identity tables.
 -- Scoped by domain_code + owner repo name for shared-DB safety.
 CREATE TABLE IF NOT EXISTS tapdb_identity_prefix_config (
@@ -481,6 +518,44 @@ CREATE TABLE IF NOT EXISTS _tapdb_migrations (
 );
 
 --------------------------------------------------------------------------------
+-- Native history identity is distinct from EUID issuance. Restore must rotate epoch.
+CREATE TABLE IF NOT EXISTS tapdb_history_epoch (
+    epoch UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    origin TEXT NOT NULL CHECK (origin IN ('fresh', 'adoption', 'restore')),
+    adoption_snapshot TEXT NOT NULL,
+    database_principal NAME NOT NULL DEFAULT session_user
+);
+CREATE UNIQUE INDEX IF NOT EXISTS tapdb_one_active_epoch
+    ON tapdb_history_epoch (active) WHERE active;
+CREATE TABLE IF NOT EXISTS tapdb_history_baseline (
+    epoch UUID NOT NULL REFERENCES tapdb_history_epoch(epoch),
+    rel_table_name TEXT NOT NULL,
+    rel_table_uid_fk BIGINT NOT NULL,
+    rel_table_euid_fk TEXT NOT NULL,
+    tenant_id UUID,
+    domain_code TEXT NOT NULL,
+    issuer_app_code TEXT NOT NULL,
+    record_revision BIGINT NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    transaction_id TEXT NOT NULL DEFAULT pg_current_xact_id()::text,
+    attribution JSONB NOT NULL,
+    governing_template JSONB,
+    state JSONB NOT NULL,
+    PRIMARY KEY (epoch, rel_table_name, rel_table_uid_fk)
+);
+-- Fresh-only initialization; adoption handles preexisting rows explicitly.
+INSERT INTO tapdb_history_epoch (origin, adoption_snapshot)
+SELECT 'fresh', pg_current_snapshot()::text
+WHERE NOT EXISTS (SELECT 1 FROM tapdb_history_epoch)
+  AND NOT EXISTS (SELECT 1 FROM generic_template)
+  AND NOT EXISTS (SELECT 1 FROM generic_instance)
+  AND NOT EXISTS (SELECT 1 FROM generic_instance_lineage);
+ALTER TABLE generic_template ADD COLUMN IF NOT EXISTS record_revision BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE generic_instance ADD COLUMN IF NOT EXISTS record_revision BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE generic_instance_lineage ADD COLUMN IF NOT EXISTS record_revision BIGINT NOT NULL DEFAULT 0;
+
 -- HARDENING (idempotent-ish ALTERs for existing installs)
 --------------------------------------------------------------------------------
 
@@ -722,55 +797,52 @@ BEGIN
 END;
 $$;
 
--- Extract domain code from canonical EUID string (e.g. Z-AGX-1AB -> Z).
+-- Meridian 1.0.0: structural parsing selects v2 or v3 without rewriting IDs.
+CREATE OR REPLACE FUNCTION meridian_euid_parts(euid TEXT)
+RETURNS TEXT[] LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    parts TEXT[] := string_to_array(euid, '-');
+BEGIN
+    IF array_length(parts, 1) = 3 AND length(parts[3]) >= 2 THEN
+        parts := ARRAY[parts[1], parts[2], left(parts[3], -1), right(parts[3], 1)];
+    ELSIF array_length(parts, 1) = 4 THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'Invalid Meridian EUID structure: %', euid;
+    END IF;
+    IF parts[1] !~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+       OR parts[2] !~ '^[0-9A-HJ-KMNP-TV-Z]{1,4}$'
+       OR parts[3] !~ '^[1-9A-HJ-KMNP-TV-Z][0-9A-HJ-KMNP-TV-Z]*$'
+       OR parts[4] !~ '^[0-9A-HJ-KMNP-TV-Z]$' THEN
+        RAISE EXCEPTION 'Invalid Meridian EUID components: %', euid;
+    END IF;
+    RETURN parts;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION meridian_euid_domain_code(euid TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
-DECLARE
-    code TEXT;
 BEGIN
-    IF position('-' IN euid) = 0 THEN
-        RAISE EXCEPTION 'Invalid EUID format (missing domain code): %', euid;
-    END IF;
-    code := split_part(euid, '-', 1);
-    RETURN tapdb_validate_domain_code(code);
+    RETURN (meridian_euid_parts(euid))[1];
 END;
 $$;
 
--- Extract prefix token from canonical EUID string (e.g. Z-AGX-1AB -> AGX).
 CREATE OR REPLACE FUNCTION meridian_euid_prefix(euid TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
-DECLARE
-    prefix TEXT;
 BEGIN
-    IF length(euid) - length(replace(euid, '-', '')) <> 2 THEN
-        RAISE EXCEPTION 'Invalid EUID format (missing prefix): %', euid;
-    END IF;
-    prefix := split_part(euid, '-', 2);
-    RETURN tapdb_validate_meridian_prefix(prefix);
+    RETURN (meridian_euid_parts(euid))[2];
 END;
 $$;
 
--- Extract numeric sequence from EUID body (no checksum)
 CREATE OR REPLACE FUNCTION meridian_euid_seq_from_euid(euid TEXT)
 RETURNS BIGINT LANGUAGE plpgsql IMMUTABLE STRICT AS $$
-DECLARE
-    body_plus_check TEXT;
-    body TEXT;
 BEGIN
-    IF length(euid) - length(replace(euid, '-', '')) <> 2 THEN
-        RAISE EXCEPTION 'Invalid EUID format: %', euid;
-    END IF;
-    body_plus_check := split_part(euid, '-', 3);
-    IF length(body_plus_check) < 2 THEN
-        RAISE EXCEPTION 'Invalid EUID body/checksum segment: %', euid;
-    END IF;
-
-    body := substr(body_plus_check, 1, length(body_plus_check) - 1);
-    RETURN crockford_base32_decode(body);
+    RETURN crockford_base32_decode((meridian_euid_parts(euid))[3]);
 END;
 $$;
 
--- Meridian EUID: Luhn-style MOD 32 check character (SPEC.md §7.5)
+-- Original arithmetic is unchanged for v2's separator-free payload.
+-- For v3, each separator is zero-valued and consumes a weight position.
 CREATE OR REPLACE FUNCTION meridian_luhn_mod32_check(payload TEXT)
 RETURNS CHAR LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
@@ -779,9 +851,12 @@ DECLARE
     total INT := 0; payload_len INT; check_value INT;
 BEGIN
     payload_len := length(payload);
+    IF payload_len = 0 THEN
+        RAISE EXCEPTION 'Meridian checksum payload must be nonempty';
+    END IF;
     FOR i IN REVERSE payload_len..1 LOOP
         ch := substr(payload, i, 1);
-        v := position(ch IN alphabet) - 1;
+        v := CASE WHEN ch = '-' THEN 0 ELSE position(ch IN alphabet) - 1 END;
         IF v < 0 THEN
             RAISE EXCEPTION 'Invalid character "%" in EUID payload', ch;
         END IF;
@@ -794,26 +869,42 @@ BEGIN
 END;
 $$;
 
--- Meridian EUID: Generate canonical DOMAIN-PREFIX-BODYCHECK string.
+-- Preserve supplied identifiers: compare their own format/checksum and allocation.
+CREATE OR REPLACE FUNCTION meridian_euid_matches(euid TEXT, prefix TEXT, seq_val BIGINT, domain_code TEXT)
+RETURNS BOOLEAN LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    parts TEXT[] := meridian_euid_parts(euid);
+    payload TEXT;
+BEGIN
+    IF parts[1] <> domain_code OR parts[2] <> prefix
+       OR crockford_base32_decode(parts[3]) <> seq_val THEN
+        RETURN FALSE;
+    END IF;
+    IF length(euid) - length(replace(euid, '-', '')) = 2 THEN
+        payload := parts[1] || parts[2] || parts[3];
+    ELSE
+        payload := parts[1] || '-' || parts[2] || '-' || parts[3] || '-';
+    END IF;
+    RETURN parts[4] = meridian_luhn_mod32_check(payload);
+END;
+$$;
+
+-- New issuance always uses DOMAIN-PREFIX-BODY-CHECK.
 CREATE OR REPLACE FUNCTION meridian_generate_euid(prefix TEXT, seq_val BIGINT, domain_code TEXT)
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
     normalized_prefix TEXT;
     normalized_dc TEXT;
-    body TEXT;
     payload TEXT;
-    check_char CHAR;
 BEGIN
     normalized_prefix := tapdb_validate_meridian_prefix(prefix);
     IF domain_code IS NULL OR trim(domain_code) = '' THEN
-        RAISE EXCEPTION 'domain_code is required for Meridian v0.4.1 EUID generation';
+        RAISE EXCEPTION 'domain_code is required for Meridian EUID generation';
     END IF;
     normalized_dc := tapdb_validate_domain_code(domain_code);
-
-    body := crockford_base32_encode(seq_val);
-    payload := normalized_dc || normalized_prefix || body;
-    check_char := meridian_luhn_mod32_check(payload);
-    RETURN normalized_dc || '-' || normalized_prefix || '-' || body || check_char;
+    payload := normalized_dc || '-' || normalized_prefix || '-'
+        || crockford_base32_encode(seq_val) || '-';
+    RETURN payload || meridian_luhn_mod32_check(payload);
 END;
 $$;
 
@@ -825,6 +916,55 @@ END;
 $$;
 
 -- tapdb-managed-allocator-functions:start
+-- Profiles are explicitly installed by the native operator bootstrap. Prefix
+-- projection never changes template type or the session's producer attribution.
+CREATE OR REPLACE FUNCTION tapdb_resolve_issuance_prefix(declared_prefix TEXT)
+RETURNS TEXT LANGUAGE plpgsql STABLE STRICT AS $$
+DECLARE
+    profile RECORD;
+BEGIN
+    EXECUTE pg_catalog.format(
+        'SELECT version, mode, prefix, template_prefix FROM %I.tapdb_issuance_profile '
+        'WHERE domain_code = $1 AND issuer_app_code = $2', pg_catalog.current_schema()
+    ) INTO profile USING tapdb_current_domain_code(), tapdb_current_owner_repo_name();
+    IF profile.version IS NULL THEN
+        RAISE EXCEPTION 'Missing explicit native issuance profile for domain %, owner %',
+            tapdb_current_domain_code(), tapdb_current_owner_repo_name();
+    END IF;
+    IF profile.version <> 1 THEN
+        RAISE EXCEPTION 'Unsupported native issuance profile version %', profile.version;
+    END IF;
+    IF profile.mode = 'canonical' AND profile.prefix IS NULL THEN
+        IF profile.template_prefix IS NOT NULL THEN
+            PERFORM tapdb_validate_meridian_prefix(profile.template_prefix);
+        END IF;
+        RETURN tapdb_validate_meridian_prefix(declared_prefix);
+    ELSIF profile.mode = 'single_prefix' AND profile.prefix IS NOT NULL AND profile.template_prefix IS NULL THEN
+        RETURN tapdb_validate_meridian_prefix(profile.prefix);
+    ELSIF profile.mode = 'template_split' AND profile.prefix IS NOT NULL
+          AND profile.template_prefix IS NOT NULL AND profile.template_prefix <> profile.prefix THEN
+        PERFORM tapdb_validate_meridian_prefix(profile.template_prefix);
+        RETURN tapdb_validate_meridian_prefix(profile.prefix);
+    END IF;
+    RAISE EXCEPTION 'Malformed explicit native issuance profile';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION tapdb_require_instance_prefix(declared_prefix TEXT)
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    normalized TEXT := tapdb_validate_meridian_prefix(declared_prefix);
+    effective TEXT;
+BEGIN
+    effective := tapdb_resolve_issuance_prefix(normalized);
+    IF normalized IS DISTINCT FROM effective THEN
+        RAISE EXCEPTION 'Declared prefix % conflicts with explicit issuance prefix %',
+            normalized, effective;
+    END IF;
+    RETURN effective;
+END;
+$$;
+
 -- Resolve configured EUID prefix for TapDB-owned identity tables.
 CREATE OR REPLACE FUNCTION tapdb_get_identity_prefix(entity_name TEXT)
 RETURNS TEXT LANGUAGE plpgsql STABLE STRICT AS $$
@@ -832,6 +972,8 @@ DECLARE
     prefix TEXT;
     dc TEXT;
     owner_repo_name TEXT;
+    profile RECORD;
+    expected TEXT;
 BEGIN
     dc := tapdb_current_domain_code();
     owner_repo_name := tapdb_current_owner_repo_name();
@@ -848,7 +990,21 @@ BEGIN
             entity_name, dc, owner_repo_name;
     END IF;
 
+    -- Validate the complete profile through the instance resolver first. Only
+    -- the template's own identity may use the separate template allocator.
+    expected := tapdb_resolve_issuance_prefix(prefix);
+    EXECUTE pg_catalog.format(
+        'SELECT mode, template_prefix FROM %I.tapdb_issuance_profile '
+        'WHERE domain_code = $1 AND issuer_app_code = $2', pg_catalog.current_schema()
+    ) INTO profile USING dc, owner_repo_name;
+    IF entity_name = 'generic_template' AND profile.template_prefix IS NOT NULL THEN
+        expected := tapdb_validate_meridian_prefix(profile.template_prefix);
+    END IF;
     prefix := tapdb_validate_meridian_prefix(prefix);
+    IF prefix IS DISTINCT FROM expected THEN
+        RAISE EXCEPTION 'Identity entity % prefix % conflicts with explicit issuance prefix %',
+            entity_name, prefix, expected;
+    END IF;
     IF prefix IN ('GX', 'TGX') THEN
         RAISE EXCEPTION
             'Identity entity "%" is configured with unresolved/reserved prefix "%"',
@@ -868,10 +1024,12 @@ DECLARE
     dc TEXT;
     seq_val BIGINT;
     seq_name TEXT;
+    template_allocator TEXT;
 BEGIN
     -- Populate domain_code and issuer_app_code from session context
     NEW.domain_code := tapdb_current_domain_code();
     NEW.issuer_app_code := tapdb_current_owner_repo_name();
+    NEW.instance_prefix := tapdb_require_instance_prefix(NEW.instance_prefix);
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         prefix := tapdb_get_identity_prefix('generic_template');
@@ -892,8 +1050,19 @@ BEGIN
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
-        prefix := tapdb_validate_meridian_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        EXECUTE pg_catalog.format(
+            'SELECT template_prefix FROM %I.tapdb_issuance_profile '
+            'WHERE domain_code = $1 AND issuer_app_code = $2', TG_TABLE_SCHEMA
+        ) INTO template_allocator USING NEW.domain_code, NEW.issuer_app_code;
+        IF template_allocator IS NOT NULL THEN
+            prefix := tapdb_validate_meridian_prefix(prefix);
+            IF prefix IS DISTINCT FROM tapdb_get_identity_prefix('generic_template') THEN
+                RAISE EXCEPTION 'Provided template EUID prefix conflicts with explicit template issuance prefix';
+            END IF;
+        ELSE
+            prefix := tapdb_require_instance_prefix(prefix);
+        END IF;
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -931,7 +1100,7 @@ BEGIN
                 NEW.template_uid, NEW.domain_code, NEW.issuer_app_code;
         END IF;
 
-        prefix := tapdb_validate_meridian_prefix(prefix);
+        prefix := tapdb_require_instance_prefix(prefix);
         seq_name := pg_catalog.format(
             '%I.%I', TG_TABLE_SCHEMA, pg_catalog.lower(prefix) || '_instance_seq'
         );
@@ -951,8 +1120,8 @@ BEGIN
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
-        prefix := tapdb_validate_meridian_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        prefix := tapdb_require_instance_prefix(prefix);
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -995,8 +1164,8 @@ BEGIN
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
-        prefix := tapdb_validate_meridian_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        prefix := tapdb_require_instance_prefix(prefix);
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -1040,8 +1209,8 @@ BEGIN
         prefix := COALESCE(NEW.euid_prefix, meridian_euid_prefix(NEW.euid));
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
-        prefix := tapdb_validate_meridian_prefix(prefix);
-        IF NEW.euid <> meridian_generate_euid(prefix, seq_val, dc) THEN
+        prefix := tapdb_require_instance_prefix(prefix);
+        IF meridian_euid_matches(NEW.euid, prefix, seq_val, dc) IS NOT TRUE THEN
             RAISE EXCEPTION 'Provided EUID does not match provided/generated prefix+seq: %', NEW.euid;
         END IF;
         NEW.euid_prefix := prefix;
@@ -1061,6 +1230,8 @@ DECLARE
     function_name TEXT;
 BEGIN
     FOREACH function_name IN ARRAY ARRAY[
+        'tapdb_resolve_issuance_prefix',
+        'tapdb_require_instance_prefix',
         'tapdb_get_identity_prefix',
         'set_generic_template_euid',
         'set_generic_instance_euid',
@@ -1071,7 +1242,7 @@ BEGIN
             'ALTER FUNCTION %I.%I(%s) SET search_path TO %I, pg_catalog, pg_temp',
             scope_schema,
             function_name,
-            CASE WHEN function_name = 'tapdb_get_identity_prefix' THEN 'pg_catalog.text' ELSE '' END,
+            CASE WHEN function_name IN ('tapdb_get_identity_prefix', 'tapdb_resolve_issuance_prefix', 'tapdb_require_instance_prefix') THEN 'pg_catalog.text' ELSE '' END,
             scope_schema
         );
     END LOOP;

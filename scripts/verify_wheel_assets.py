@@ -55,6 +55,8 @@ def main() -> None:
         "daylily_tapdb/gui/templates/graph.html",
         "daylily_tapdb/migration_identity.py",
         "daylily_tapdb/identity_inventory.py",
+        "daylily_tapdb/principal_census.py",
+        "daylily_tapdb/cli/census.py",
         "daylily_tapdb/sequences.py",
         "daylily_tapdb/sequence_fence.py",
         "daylily_tapdb/runtime_principal.py",

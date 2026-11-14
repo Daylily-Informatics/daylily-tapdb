@@ -11,9 +11,11 @@ from cli_core_yo import ccyo_out
 
 from daylily_tapdb.cli.db_config import get_db_config
 from daylily_tapdb.identity_inventory import (
+    InventoryLimitExceededError,
     capture_identity_inventory,
     validate_target,
     verify_identity_inventory,
+    with_inventory_limits,
 )
 from daylily_tapdb.migration_identity import write_json_receipt
 from daylily_tapdb.runtime_principal import RuntimePrincipalError, operator_connection
@@ -50,6 +52,10 @@ def _resolve(
         },
         cfg["schema_name"],
     )
+    if "inventory_mode" in cfg:
+        target["inventory_mode"] = cfg["inventory_mode"]
+    if "inventory_limits" in cfg:
+        target["inventory_limits"] = cfg["inventory_limits"]
     if sequence_mappings is not None:
         target["sequence_mappings"] = _read(sequence_mappings)
     return cfg, target
@@ -71,14 +77,69 @@ def _fail(exc: Exception) -> None:
         if isinstance(exc, (ValueError, OSError, RuntimePrincipalError))
         else type(exc).__name__
     )
-    ccyo_out.emit_error_json("identity_inventory_error", message)
+    if isinstance(exc, InventoryLimitExceededError):
+        ccyo_out.emit_error_json(
+            "identity_inventory_limit", message, details=exc.diagnostics
+        )
+    else:
+        ccyo_out.emit_error_json("identity_inventory_error", message)
     raise SystemExit(2)
+
+
+@identity_app.command("prefix-from-evidence")
+def prefix_from_evidence(
+    evidence_kind: str = typer.Option(
+        ..., "--evidence-kind", help="Explicit archived_source_contract or catalog_schema_absent evidence"
+    ),
+    evidence: Path = typer.Option(..., "--evidence", help="Absolute existing native source-contract or census JSON"),
+    prefix: str = typer.Option(..., "--prefix", help="Exact Meridian prefix to project"),
+    archive_result: Path | None = typer.Option(
+        None, "--archive-result", help="Archive mode: absolute successful copy-SOP result JSON"
+    ),
+    recovery_family: Path | None = typer.Option(
+        None, "--recovery-family", help="Archive mode: absolute existing family descriptor naming native journal roots"
+    ),
+    receipt: Path | None = typer.Option(None, "--receipt", help="New absolute projected-evidence JSON path"),
+) -> None:
+    """Consume existing evidence explicitly; never open or modify a database."""
+    try:
+        if receipt is not None and (not receipt.is_absolute() or receipt.exists()):
+            raise ValueError("--receipt must name an absolute new file")
+        from daylily_tapdb.identity_prefix_inventory import project_prefix_from_evidence
+
+        payload = project_prefix_from_evidence(
+            evidence_kind=evidence_kind, evidence=_read(evidence), evidence_path=evidence,
+            prefix=prefix,
+            archive_result=_read(archive_result) if archive_result is not None else None,
+            archive_result_path=archive_result,
+            recovery_family=_read(recovery_family) if recovery_family is not None else None,
+            recovery_family_path=recovery_family,
+        )
+        if receipt is not None:
+            write_json_receipt(receipt, payload)
+    except Exception as exc:
+        _fail(exc)
+        return
+    ccyo_out.emit_json(payload)
 
 
 @identity_app.command("inventory")
 def inventory(
+    prefix: str | None = typer.Option(
+        None, "--prefix", help="Read one exact Meridian prefix only; not a full preservation inventory"
+    ),
+    allocation_receipts_dirs: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--allocation-receipts-dir",
+            help="Explicit native allocation journal directory for --prefix; repeat for each known journal",
+        ),
+    ] = None,
     receipt: Path | None = typer.Option(
         None, "--receipt", help="New absolute JSON receipt path"
+    ),
+    receipt_only: bool = typer.Option(
+        False, "--receipt-only", help="Write the complete receipt and print only its descriptor"
     ),
     source_version: str | None = typer.Option(
         None,
@@ -119,8 +180,20 @@ def inventory(
 ) -> None:
     """Read all physical tables without runtime schema initialization."""
     try:
+        if receipt_only and receipt is None:
+            raise ValueError("--receipt-only requires --receipt")
         if receipt is not None and (not receipt.is_absolute() or receipt.exists()):
             raise ValueError("--receipt must name an absolute new file")
+        if allocation_receipts_dirs is not None and prefix is None:
+            raise ValueError("--allocation-receipts-dir requires --prefix")
+        if prefix is not None and any(
+            value is not None
+            for value in (
+                source_version, sequence_mappings, recovery_family,
+                new_recovery_family_id, family_receipts_dir, family_receipt,
+            )
+        ):
+            raise ValueError("--prefix is scoped discovery and cannot be combined with preservation/recovery flags")
         creating_family = any(
             value is not None
             for value in (new_recovery_family_id, family_receipts_dir, family_receipt)
@@ -157,7 +230,14 @@ def inventory(
         with operator_connection(
             cfg, isolation_level="REPEATABLE READ", read_only=True
         ) as connection:
-            if source_version is not None:
+            if prefix is not None:
+                from daylily_tapdb.identity_prefix_inventory import capture_prefix_usage
+
+                payload = capture_prefix_usage(
+                    connection, schema_name=target["schema_name"], target=target, prefix=prefix,
+                    allocation_receipts_dirs=allocation_receipts_dirs or (),
+                )
+            elif source_version is not None:
                 from daylily_tapdb.backup.source_contract import (
                     capture_source_contract,
                     contract_hash,
@@ -197,7 +277,11 @@ def inventory(
     except Exception as exc:
         _fail(exc)
         return
-    ccyo_out.emit_json(payload)
+    ccyo_out.emit_json(
+        {"receipt": str(receipt), "schema_version": payload["schema_version"],
+         "sha256": payload["sha256"]}
+        if receipt_only else payload
+    )
 
 
 @identity_app.command("verify")
@@ -219,6 +303,7 @@ def verify(
     try:
         cfg, target = _resolve(sequence_mappings)
         original = _identity(_read(before))
+        target = with_inventory_limits(target, original)
         if after is None:
             with operator_connection(
                 cfg, isolation_level="REPEATABLE READ", read_only=True

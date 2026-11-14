@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from daylily_tapdb.external_references import TAPDB_OBJECT_TEMPLATE_CODE
 from daylily_tapdb.gui import create_tapdb_gui_app
 from daylily_tapdb.models.audit import audit_log
 from daylily_tapdb.models.instance import generic_instance
@@ -174,6 +175,7 @@ def _template(
     json_addl=None,
     uid=10,
     validator_ref="UNIVERSAL_PASS@1",
+    version="1.0",
 ):
     return SimpleNamespace(
         uid=uid,
@@ -183,7 +185,7 @@ def _template(
         category=category,
         type=type_name,
         subtype=subtype,
-        version="1.0",
+        version=version,
         instance_prefix=prefix,
         validator_ref=validator_ref,
         bstatus="active",
@@ -248,7 +250,9 @@ def _client(monkeypatch, *, role="admin", session=None, nav_links=()):
         session = _Session(
             {
                 generic_template: [
-                    _template(),
+                    _template(
+                        version=TAPDB_OBJECT_TEMPLATE_CODE.strip("/").split("/")[-1]
+                    ),
                     _template(
                         "persisted-opaque-template-euid",
                         uid=11,
@@ -1109,7 +1113,7 @@ def test_gui_readiness_page_and_api_report_seeded_external_template(monkeypatch)
         "ok": True,
         "detail": (
             "reference/external_identifier/opaque/1.0/, "
-            "reference/external_identifier/tapdb_object/1.0/"
+            "reference/external_identifier/tapdb_object/2.0/"
         ),
     }
     assert "meridian-registry" in page.text

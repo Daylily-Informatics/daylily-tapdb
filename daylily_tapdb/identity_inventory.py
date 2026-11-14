@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from sqlalchemy import text
@@ -85,6 +86,100 @@ class IdentityInventoryError(ValueError):
     """Identity evidence is incomplete, inconsistent, or unsafe to compare."""
 
 
+@dataclass(frozen=True)
+class InventoryLimits:
+    """Explicit finite resource policy, recorded with identity evidence."""
+
+    max_rows: int = MAX_ROWS
+    max_row_bytes: int = MAX_ROW_BYTES
+    max_receipt_bytes: int = MAX_RECEIPT_BYTES
+
+    def __post_init__(self) -> None:
+        for name, value in asdict(self).items():
+            if type(value) is not int or not 1 <= value <= 2**63 - 1:
+                raise IdentityInventoryError(
+                    f"inventory_limits.{name} must be a positive 64-bit integer"
+                )
+
+    @classmethod
+    def parse(cls, value: Any = None) -> InventoryLimits:
+        if isinstance(value, cls):
+            return value
+        defaults = dict(
+            max_rows=MAX_ROWS,
+            max_row_bytes=MAX_ROW_BYTES,
+            max_receipt_bytes=MAX_RECEIPT_BYTES,
+        )
+        if value is None:
+            return cls(**defaults)
+        if not isinstance(value, Mapping) or set(value) - set(defaults):
+            raise IdentityInventoryError(
+                "inventory_limits requires only max_rows, max_row_bytes and max_receipt_bytes"
+            )
+        return cls(**(defaults | dict(value)))
+
+
+class InventoryLimitExceededError(IdentityInventoryError):
+    """Sanitized resource diagnostic; never includes source row contents."""
+
+    def __init__(
+        self,
+        *,
+        table: str,
+        processed_rows: int,
+        accumulated_bytes: int,
+        attempted_bytes: int,
+        limit_name: str,
+        configured_value: int,
+        attempted_value: int,
+        phase: str = "identity.capture",
+    ) -> None:
+        self.diagnostics = dict(
+            phase=phase,
+            table=table,
+            processed_rows=processed_rows,
+            accumulated_bytes=accumulated_bytes,
+            attempted_bytes=attempted_bytes,
+            limit_name=limit_name,
+            configured_value=configured_value,
+            attempted_value=attempted_value,
+        )
+        super().__init__(
+            "Identity inventory limit exceeded: " + canonical_json(self.diagnostics)
+        )
+
+
+def with_inventory_limits(
+    target: Mapping[str, Any], inventory: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Retain reviewed limits across restore/migration, rejecting policy drift.
+
+    Existing v1 receipts without a limits field have the original v1 constants.
+    Limits are resource policy, not part of the physical database identity.
+    """
+    from daylily_tapdb.audit_inventory import MODE, VERSION
+    mode = inventory.get("inventory_mode")
+    if mode is not None:
+        if mode != MODE or inventory.get("schema_version") != VERSION:
+            raise IdentityInventoryError("Invalid compact inventory format")
+        if target.get("inventory_mode", mode) != mode:
+            raise IdentityInventoryError("Configured inventory_mode differs from receipt")
+        target = dict(target, inventory_mode=mode)
+    elif "inventory_mode" in target:
+        raise IdentityInventoryError("Inventory mode differs from reviewed receipt")
+    expected = InventoryLimits.parse(inventory.get("limits"))
+    if (
+        "inventory_limits" in target
+        and InventoryLimits.parse(target["inventory_limits"]) != expected
+    ):
+        raise IdentityInventoryError(
+            "Configured inventory_limits differ from the reviewed receipt"
+        )
+    if "limits" not in inventory and "inventory_limits" not in target:
+        return dict(target)
+    return dict(target, inventory_limits=asdict(expected))
+
+
 def quote_identifier(value: str) -> str:
     if not isinstance(value, str) or not value or "\x00" in value:
         raise IdentityInventoryError("An explicit nonempty SQL identifier is required")
@@ -102,7 +197,13 @@ def canonical_json(value: Any) -> str:
 
 
 def content_hash(value: Any) -> str:
-    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256()
+    encoder = json.JSONEncoder(
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
+    for chunk in encoder.iterencode(value):
+        digest.update(chunk.encode("utf-8"))
+    return digest.hexdigest()
 
 
 def seal_receipt(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -376,22 +477,58 @@ def _metadata(connection: Connection, table: Mapping[str, Any]) -> dict[str, Any
 
 
 def _capture_identity_inventory(
-    connection: Connection, *, schema_name: str, target: Mapping[str, Any]
+    connection: Connection,
+    *,
+    schema_name: str,
+    target: Mapping[str, Any],
+    limits: InventoryLimits | Mapping[str, Any] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Capture all physical table rows, identities, and catalog dependencies."""
+    from daylily_tapdb import audit_inventory as audit
+    mode = target.get("inventory_mode")
+    if mode is not None:
+        audit.validate_mode(mode)
+    explicit_limits = mode is not None or limits is not None or "inventory_limits" in target
+    policy = InventoryLimits.parse(
+        limits if limits is not None else target.get("inventory_limits")
+    )
     target = validate_target(target, schema_name)
     require_snapshot(connection)
     physical = physical_target(connection, target)
     tables: dict[str, Any] = {}
     receipt_bytes = 0
     total_rows = 0
+    largest_source_row_bytes = 0
     for table in catalog_tables(connection, schema_name):
         if table["kind"] == "f":
             raise IdentityInventoryError(
                 "Foreign tables cannot provide a local consistent snapshot"
             )
         name = table["name"]
+        if progress is not None:
+            progress(f"Capturing identity inventory: {schema_name}.{name}")
         entry = _metadata(connection, table)
+        if mode is not None and name == "audit_log":
+            policy_roles = connection.execute(text(
+                "SELECT polname, ARRAY(SELECT CASE WHEN r=0 THEN 'PUBLIC' "
+                "ELSE pg_get_userbyid(r)::text END FROM unnest(polroles) r ORDER BY r) roles "
+                "FROM pg_policy WHERE polrelid=:oid ORDER BY polname"
+            ), {"oid": table["oid"]}).mappings()
+            roles = {row["polname"]: row["roles"] for row in policy_roles}
+            for item in entry["policies"]:
+                item["roles"] = roles[item["name"]]
+            summary = audit.capture(connection, schema=schema_name, entry=entry,
+                                    limits=policy, processed_rows=total_rows,
+                                    receipt_bytes=receipt_bytes)
+            total_rows += summary["row_count"]
+            largest_source_row_bytes = max(largest_source_row_bytes, summary["largest_source_row_bytes"])
+            receipt_bytes += len(canonical_json(summary).encode("utf-8"))
+            if receipt_bytes > policy.max_receipt_bytes:
+                raise IdentityInventoryError("Compact inventory receipt limit exceeded")
+            entry.update(audit_digest=summary, row_count=summary["row_count"], content_sha256=summary["raw_sha256"])
+            tables[name] = entry
+            continue
         rows: dict[str, Any] = {}
         statement = text(
             f"SELECT to_jsonb(t)::text FROM ONLY {quote_identifier(schema_name)}.{quote_identifier(name)} t"
@@ -401,11 +538,23 @@ def _capture_identity_inventory(
         )
         try:
             for (raw,) in cursor:
+                raw_bytes = len(raw.encode("utf-8"))
+                for limit_name, attempted in (
+                    ("max_rows", total_rows + 1),
+                    ("max_row_bytes", raw_bytes),
+                ):
+                    if attempted > getattr(policy, limit_name):
+                        raise InventoryLimitExceededError(
+                            table=name,
+                            processed_rows=total_rows,
+                            accumulated_bytes=receipt_bytes,
+                            attempted_bytes=raw_bytes,
+                            limit_name=limit_name,
+                            configured_value=getattr(policy, limit_name),
+                            attempted_value=attempted,
+                        )
                 total_rows += 1
-                if total_rows > MAX_ROWS or len(raw.encode("utf-8")) > MAX_ROW_BYTES:
-                    raise IdentityInventoryError(
-                        "Identity capture exceeds the declared row/content bound"
-                    )
+                largest_source_row_bytes = max(largest_source_row_bytes, raw_bytes)
                 values = json.loads(raw, parse_float=str)
                 row_hash = content_hash(values)
                 key = (
@@ -418,7 +567,20 @@ def _capture_identity_inventory(
                         raise IdentityInventoryError(
                             f"Duplicate primary-key identity in {name}"
                         )
-                    rows[key]["count"] += 1
+                    previous = rows[key]["count"]
+                    extra = len(str(previous + 1)) - len(str(previous))
+                    if receipt_bytes + extra > policy.max_receipt_bytes:
+                        raise InventoryLimitExceededError(
+                            table=name,
+                            processed_rows=total_rows - 1,
+                            accumulated_bytes=receipt_bytes,
+                            attempted_bytes=receipt_bytes + extra,
+                            limit_name="max_receipt_bytes",
+                            configured_value=policy.max_receipt_bytes,
+                            attempted_value=receipt_bytes + extra,
+                        )
+                    receipt_bytes += extra
+                    rows[key]["count"] = previous + 1
                     continue
                 row = {
                     "sha256": row_hash,
@@ -433,11 +595,20 @@ def _capture_identity_inventory(
                         or column.endswith(("_uid", "_euid", "_uuid"))
                     },
                 }
-                receipt_bytes += len(canonical_json(row).encode("utf-8")) + len(key)
-                if receipt_bytes > MAX_RECEIPT_BYTES:
-                    raise IdentityInventoryError(
-                        "Identity receipt exceeds the declared size bound"
+                attempted_bytes = (
+                    receipt_bytes + len(canonical_json(row).encode("utf-8")) + len(key)
+                )
+                if attempted_bytes > policy.max_receipt_bytes:
+                    raise InventoryLimitExceededError(
+                        table=name,
+                        processed_rows=total_rows - 1,
+                        accumulated_bytes=receipt_bytes,
+                        attempted_bytes=attempted_bytes,
+                        limit_name="max_receipt_bytes",
+                        configured_value=policy.max_receipt_bytes,
+                        attempted_value=attempted_bytes,
                     )
+                receipt_bytes = attempted_bytes
                 rows[key] = row
         finally:
             cursor.close()
@@ -447,24 +618,44 @@ def _capture_identity_inventory(
             content_sha256=content_hash(rows),
         )
         tables[name] = entry
+    if mode is not None and "audit_log" not in tables:
+        raise IdentityInventoryError("Explicit audit inventory requires audit_log")
     return seal_receipt(
         {
-            "schema_version": INVENTORY_VERSION,
+            "schema_version": audit.VERSION if mode is not None else INVENTORY_VERSION,
+            **({"inventory_mode": mode} if mode is not None else {}),
             "schema_name": schema_name,
             "target": target,
             "physical_target": physical,
+            **(
+                {
+                    "limits": asdict(policy),
+                    "usage": {
+                        "rows": total_rows,
+                        "evidence_bytes": receipt_bytes,
+                        "largest_source_row_bytes": largest_source_row_bytes,
+                    },
+                }
+                if explicit_limits
+                else {}
+            ),
             "tables": tables,
         }
     )
 
 
 def capture_identity_inventory(
-    connection: Connection, *, schema_name: str, target: Mapping[str, Any]
+    connection: Connection,
+    *,
+    schema_name: str,
+    target: Mapping[str, Any],
+    limits: InventoryLimits | Mapping[str, Any] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Capture all physical tables in a stable read-only catalog context."""
     with catalog_capture_context(connection, schema_name=schema_name):
         return _capture_identity_inventory(
-            connection, schema_name=schema_name, target=target
+            connection, schema_name=schema_name, target=target, limits=limits, progress=progress
         )
 
 
@@ -660,8 +851,61 @@ def verify_identity_inventory(
     conversion_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compare exhaustive rows; explicit conversions never waive immutable identity."""
-    validate_receipt(before, INVENTORY_VERSION)
-    validate_receipt(after, INVENTORY_VERSION)
+    from daylily_tapdb import audit_inventory as audit
+    mode = before.get("inventory_mode")
+    if mode is not None:
+        audit.validate_mode(mode)
+    if after.get("inventory_mode") != mode:
+        raise IdentityInventoryError("Identity inventory modes differ")
+    version = audit.VERSION if mode is not None else INVENTORY_VERSION
+    validate_receipt(before, version)
+    validate_receipt(after, version)
+    if mode is not None:
+        for inventory in (before, after):
+            if "limits" not in inventory or "audit_log" not in inventory["tables"]:
+                raise IdentityInventoryError("Compact inventory lacks limits/audit evidence")
+            for name, table in inventory["tables"].items():
+                if name == "audit_log":
+                    audit.validate_summary(table)
+                elif "audit_digest" in table:
+                    raise IdentityInventoryError("Only audit_log supports compact evidence")
+    if InventoryLimits.parse(before.get("limits")) != InventoryLimits.parse(
+        after.get("limits")
+    ):
+        raise IdentityInventoryError(
+            "Inventory limits differ between compared receipts"
+        )
+    for inventory in (before, after):
+        if "limits" not in inventory:
+            continue  # Original v1 receipt contract; no configurable limits metadata.
+        policy = InventoryLimits.parse(inventory["limits"])
+        rows = 0
+        evidence_bytes = 0
+        for table in inventory["tables"].values():
+            if "audit_digest" in table:
+                summary = table["audit_digest"]
+                rows += summary["row_count"]
+                evidence_bytes += len(canonical_json(summary).encode("utf-8"))
+                if summary["largest_source_row_bytes"] > policy.max_row_bytes:
+                    raise IdentityInventoryError("Compact audit row limit exceeded")
+                continue
+            for key, row in table["rows"].items():
+                rows += row["count"]
+                evidence_bytes += len(canonical_json(row).encode("utf-8")) + len(key)
+        usage = inventory.get("usage", {})
+        largest = usage.get("largest_source_row_bytes")
+        if (
+            usage.get("rows") != rows
+            or usage.get("evidence_bytes") != evidence_bytes
+            or type(largest) is not int
+            or largest < 0
+            or rows > policy.max_rows
+            or evidence_bytes > policy.max_receipt_bytes
+            or largest > policy.max_row_bytes
+        ):
+            raise IdentityInventoryError(
+                "Identity receipt usage does not satisfy its recorded inventory_limits"
+            )
     conversion = conversion_manifest or {
         "schema_version": CONVERSION_VERSION,
         "tables": {},
@@ -701,6 +945,12 @@ def verify_identity_inventory(
             continue
         current = after["tables"][name]
         contract = declared.get(name, {})
+        if mode is not None and name == "audit_log":
+            if contract not in ({}, {"audit_contract": audit.TRANSFORMATION}):
+                raise IdentityInventoryError("Unsupported compact audit conversion")
+            audit.compare(original, current, schema=before["schema_name"],
+                          transform=bool(contract))
+            continue
         if set(contract) - {
             "added_rows",
             "added_columns",

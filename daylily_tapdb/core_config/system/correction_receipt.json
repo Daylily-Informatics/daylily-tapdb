@@ -1,0 +1,20 @@
+{
+  "templates": [
+    {
+      "name": "Correction Receipt",
+      "polymorphic_discriminator": "generic_template",
+      "category": "governance",
+      "type": "correction_receipt",
+      "subtype": "generic",
+      "version": "1.0",
+      "instance_prefix": "GVR",
+      "is_singleton": false,
+      "bstatus": "active",
+      "json_addl": {
+        "description": "Durable native forward-correction receipt, identified by caller operation identity.",
+        "properties": {},
+        "instantiation_layouts": []
+      }
+    }
+  ]
+}

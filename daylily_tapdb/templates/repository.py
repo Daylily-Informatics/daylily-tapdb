@@ -14,12 +14,15 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal, Mapping
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 
+from daylily_tapdb.governance import GovernanceAuthorization, GovernanceContext, assert_registered_domain
+from daylily_tapdb.issuance import IssuanceProfile
 from daylily_tapdb.models.template import generic_template
 from daylily_tapdb.templates.loader import find_tapdb_core_config_dir, seed_templates
+from daylily_tapdb.templates.runtime import author_templates
 
 REPOSITORY_PACK_FORMAT = "tapdb.repository-template-pack/v1"
 RECEIPT_FORMAT = "tapdb.repository-template-receipt/v1"
@@ -459,10 +462,17 @@ def _validate_import_claims(
     owner_repo_name: str,
     domain_registry_path: str | Path,
     prefix_registry_path: str | Path,
+    governance_authorization: GovernanceAuthorization | Mapping[str, object] | None = None,
 ) -> tuple[str, ...]:
     domain_payload = json.loads(Path(domain_registry_path).expanduser().read_text())
     if str(domain_code) not in (domain_payload.get("domains") or {}):
         raise ValueError(f"domain registry has no domain {domain_code!r}")
+    assert_registered_domain(
+        domain_code,
+        registry_metadata=domain_payload["domains"],
+        path=domain_registry_path,
+        governance_authorization=governance_authorization,
+    )
     prefixes = tuple(
         sorted(
             {
@@ -496,9 +506,19 @@ def import_repository_pack(
     owner_repo_name: str,
     domain_registry_path: str | Path,
     prefix_registry_path: str | Path,
+    issuance_profile: IssuanceProfile,
+    execution: Literal["runtime", "operator"],
+    governance_authorization: GovernanceAuthorization | Mapping[str, object] | None = None,
     dry_run: bool = True,
 ) -> RepositoryImportResult:
-    """Validate or import a pack through the supported governed seed loader."""
+    """Import through an explicitly selected native runtime or operator path.
+
+    Runtime imports may only use provisioned prefixes; they never invoke seed
+    provisioning. Operator imports retain the supported allocator lifecycle.
+    """
+
+    if execution not in {"runtime", "operator"}:
+        raise ValueError("repository import requires runtime or operator execution")
 
     path, payload, raw = read_repository_pack(pack_path)
     _verified_receipt(
@@ -513,16 +533,22 @@ def import_repository_pack(
         owner_repo_name=owner_repo_name,
         domain_registry_path=domain_registry_path,
         prefix_registry_path=prefix_registry_path,
+        governance_authorization=governance_authorization,
     )
-    existing_by_key = {
-        template_key(serialize_template(row)): serialize_template(row)
-        for row in session.execute(
+    requested_keys = [template_key(item) for item in payload["templates"]]
+    existing_by_key = {}
+    for row in session.execute(
             select(generic_template).where(
                 generic_template.domain_code == str(domain_code),
                 generic_template.issuer_app_code == str(owner_repo_name),
+                tuple_(generic_template.category, generic_template.type,
+                       generic_template.subtype, generic_template.version).in_(requested_keys),
             )
-        ).scalars()
-    }
+        ).scalars():
+        # Unrelated templates may have sensitive field names. Validate only the
+        # identities this pack can import, preserving all checks on those rows.
+        current = serialize_template(row)
+        existing_by_key[template_key(current)] = current
     skipped = 0
     pending: list[dict[str, Any]] = []
     for item in payload["templates"]:
@@ -538,18 +564,34 @@ def import_repository_pack(
             )
     inserted = 0
     if not dry_run and pending:
-        summary = seed_templates(
-            session,
-            pending,
-            overwrite=False,
-            core_config_dir=find_tapdb_core_config_dir(),
-            domain_code=str(domain_code),
-            owner_repo_name=str(owner_repo_name),
-            domain_registry_path=Path(domain_registry_path),
-            prefix_registry_path=Path(prefix_registry_path),
-        )
-        inserted = summary.inserted
-        skipped += summary.skipped
+        if execution == "runtime":
+            governance = GovernanceContext.load(
+                domain_code=domain_code,
+                owner_repo_name=owner_repo_name,
+                domain_registry_path=domain_registry_path,
+                prefix_ownership_registry_path=prefix_registry_path,
+                governance_authorization=governance_authorization,
+            )
+            result = author_templates(
+                session, {"templates": pending}, governance=governance,
+                issuance_profile=issuance_profile,
+            )
+            inserted = result["inserted"]
+        else:
+            summary = seed_templates(
+                session,
+                pending,
+                overwrite=False,
+                core_config_dir=find_tapdb_core_config_dir(),
+                domain_code=str(domain_code),
+                owner_repo_name=str(owner_repo_name),
+                domain_registry_path=Path(domain_registry_path),
+                prefix_registry_path=Path(prefix_registry_path),
+                issuance_profile=issuance_profile,
+                governance_authorization=governance_authorization,
+            )
+            inserted = summary.inserted
+            skipped += summary.skipped
     return RepositoryImportResult(
         dry_run=bool(dry_run),
         template_count=len(payload["templates"]),

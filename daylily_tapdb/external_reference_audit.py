@@ -9,6 +9,7 @@ from daylily_tapdb.external_references import (
     ExternalIdentifierTarget,
     ExternalReferenceContractError,
     TapDBObjectTarget,
+    _canonical_xrf_filter,
     _is_xrf_coordinates,
     _target_from_reference,
 )
@@ -37,7 +38,7 @@ def _properties(payload: Any) -> dict[str, Any] | None:
 def _template_state(session: Any) -> tuple[list[dict[str, Any]], int]:
     rows = (
         session.query(generic_template)
-        .filter_by(category="reference", type="external_identifier", version="1.0")
+        .filter(_canonical_xrf_filter(generic_template))
         .order_by(generic_template.uid.asc())
         .all()
     )
@@ -73,8 +74,9 @@ def _template_state(session: Any) -> tuple[list[dict[str, Any]], int]:
             )
             if fields != expected_fields or additional is not False:
                 diagnostics.append("template schema is not the exact canonical shape")
-            if row.instance_prefix != "XRF":
-                diagnostics.append("template instance_prefix is not XRF")
+            from daylily_tapdb.issuance import profile_for_session
+            if row.instance_prefix != profile_for_session(session).identity_prefix("external_reference_instance"):
+                diagnostics.append("template instance_prefix does not match the explicit issuance profile")
             if row.is_deleted or row.bstatus != "active":
                 diagnostics.append("template is not active")
             valid = not diagnostics
@@ -112,10 +114,7 @@ def audit_external_references(
     references = (
         session.query(generic_instance)
         .filter(
-            generic_instance.category == "reference",
-            generic_instance.type == "external_identifier",
-            generic_instance.subtype.in_(("tapdb_object", "opaque")),
-            generic_instance.version == "1.0",
+            _canonical_xrf_filter(generic_instance),
         )
         .order_by(generic_instance.uid.asc())
         .all()

@@ -1,0 +1,36 @@
+{
+  "version": "11.0.1",
+  "observed_at": "2026-09-30T21:39:46.727361+00:00",
+  "release_commit": "c7e1ae366068c58478c28007c2d11929cf392c16",
+  "annotated_tag": true,
+  "tag_object": "db0715f0c9206b56874ba5d6dc80bc85403205ba",
+  "branch": "codex/tapdb-backup-journal-11-0-1",
+  "github_release": "https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/11.0.1",
+  "github_published_at": "2026-09-30T21:38:01Z",
+  "pypi_release": "https://pypi.org/project/daylily-tapdb/11.0.1/",
+  "artifacts": {
+    "daylily_tapdb-11.0.1-py3-none-any.whl": {
+      "bytes": 746537,
+      "sha256": "ab7c74e127dd18433bf72eb4698ee0220a47a9573dd3a089512cd263451dfd64"
+    },
+    "daylily_tapdb-11.0.1.tar.gz": {
+      "bytes": 1519143,
+      "sha256": "bd646f98fb02b1d3e907bf55ada2273d684eae242f2b3d5fa697ec4ed18f9dd2"
+    }
+  },
+  "pypi_hashes_match": true,
+  "download_probe_exit_code": 0,
+  "downloaded_wheel_hash_matches": true,
+  "publisher": "existing twup function, personal PyPI repository",
+  "publisher_upload_succeeded": true,
+  "publisher_initial_exit_code": 1,
+  "initial_probe_note": "Upload accepted, but immediate simple-index download probes had not yet observed release. A later normal pip download succeeded; artifacts were not uploaded again.",
+  "build_note": "Project test venv did not include build. Used existing host Python build 1.4.2 in isolated build environment. No container build.",
+  "wheel_changed_source_matches_tag": true,
+  "focused_checks_passed": 19,
+  "broad_suite_or_ci_run": false,
+  "pr_or_merge_performed": false,
+  "consumer_deployment_performed": false,
+  "production_changed": false,
+  "atlas_ledger_commit": "5ba9edf51c12aba786adef8b1be17a35b96423ea"
+}

@@ -8,6 +8,8 @@ Example:
     from pathlib import Path
 
     from daylily_tapdb import TAPDBConnection, TemplateManager, InstanceFactory
+    from daylily_tapdb.security_context import Attribution
+    from uuid import uuid4
     from daylily_tapdb.cli.db_config import get_db_config
 
     # Connect using an explicit TapDB target config.
@@ -22,8 +24,11 @@ Example:
         schema_name=cfg["schema_name"],
         domain_code=cfg["domain_code"],
         owner_repo_name=cfg["owner_repo_name"],
+        issuance_profile=cfg["issuance_profile"],
         app_username="my_app",
         config_identity=str(config_path),
+        attribution=Attribution("service", "my_app", "operator-import",
+            "my_app", str(uuid4()), str(uuid4())),
     )
 
     templates = TemplateManager()
@@ -41,7 +46,7 @@ Note:
     ``config_identity`` are all required by PostgreSQL ``TAPDBConnection``
     sessions; every target value comes from one explicit absolute config.
 
-    The package bundles only the ten substrate templates documented in
+    The package bundles only the twelve substrate templates documented in
     ``docs/template-authoring.md``, including the two canonical external
     reference templates. Application-domain packs are supplied externally and
     seeded via ``tapdb db data seed``.

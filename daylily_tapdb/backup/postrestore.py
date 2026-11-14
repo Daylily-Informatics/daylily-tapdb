@@ -423,7 +423,7 @@ def check_schema_drift(session: Any, cfg: dict[str, Any], schema: str) -> CheckR
     """The restored schema must match the schema assets."""
     from pathlib import Path
 
-    from daylily_tapdb.euid import GENERIC_TEMPLATE_PREFIX
+    from daylily_tapdb.issuance import profile_from_config
     from daylily_tapdb.schema_inventory import (
         diff_schema_inventory,
         drift_entry_counts,
@@ -441,7 +441,7 @@ def check_schema_drift(session: Any, cfg: dict[str, Any], schema: str) -> CheckR
     asset_paths = schema_asset_files(schema_root)
     expected = load_expected_schema_inventory(
         asset_paths,
-        dynamic_sequence_name=f"{GENERIC_TEMPLATE_PREFIX.lower()}_instance_seq",
+        dynamic_sequence_name=f"{profile_from_config(cfg).identity_prefix('generic_template').lower()}_instance_seq",
     )
     live = load_live_schema_inventory(session, schema_name=schema)
     report = diff_schema_inventory(
@@ -499,14 +499,14 @@ def _object_addressable_tables() -> set[str]:
 def check_representative_objects(session: Any, manifest: BackupManifest) -> CheckResult:
     """Each sampled object must resolve through the normal lookup path.
 
-    Going through ``find_object_by_euid`` rather than raw SQL is the point: it
-    proves the restored data is reachable the way the application reaches it,
-    including the soft-delete filter and polymorphic dispatch.
+    Use the exact typed native object reader with include_deleted=True.
+    Backups deliberately retain soft-deleted rows: hidden from ordinary search
+    must not be misreported as missing from preserved history.
 
     Only samples from object-addressable tables are required to resolve; the
     rest are counted and reported, not failed.
     """
-    from daylily_tapdb.services.object_lookup import find_object_by_euid
+    from daylily_tapdb.services.object_operations import get_object, ObjectSelector
 
     samples = manifest.representative_objects[:SAMPLE_LIMIT]
     if not samples:
@@ -537,7 +537,8 @@ def check_representative_objects(session: Any, manifest: BackupManifest) -> Chec
             continue
         checked += 1
         try:
-            found, _ = find_object_by_euid(session, euid)
+            kind={'generic_template':'template','generic_instance':'instance','generic_instance_lineage':'lineage'}[sample['table']]
+            found = get_object(session,ObjectSelector(euid=euid,record_type=kind),include_deleted=True)
         except Exception as exc:  # noqa: BLE001 - reported, not swallowed
             found = None
             if first_error is None:
@@ -633,6 +634,7 @@ def run_all(
     from daylily_tapdb.identity_inventory import (
         capture_identity_inventory,
         verify_identity_inventory,
+        with_inventory_limits,
     )
 
     target_schema = schema or str(cfg["schema_name"])
@@ -652,7 +654,9 @@ def run_all(
         )
         return checks
     actual = capture_identity_inventory(
-        session, schema_name=target_schema, target=target
+        session,
+        schema_name=target_schema,
+        target=with_inventory_limits(target, identity_inventory),
     )
     result = verify_identity_inventory(
         identity_inventory,

@@ -11,6 +11,7 @@ import typer
 
 from daylily_tapdb.cli.db import Environment, _tapdb_connection_for_env
 from daylily_tapdb.cli.db_config import get_db_config
+from daylily_tapdb.issuance import profile_from_config
 from daylily_tapdb.templates.repository import (
     export_repository_pack,
     import_repository_pack,
@@ -86,6 +87,9 @@ def templates_import(
                 owner_repo_name=cfg["owner_repo_name"],
                 domain_registry_path=cfg["domain_registry_path"],
                 prefix_registry_path=cfg["prefix_ownership_registry_path"],
+                issuance_profile=profile_from_config(cfg),
+                execution="operator",
+                governance_authorization=cfg.get("governance_authorization"),
                 dry_run=not effective_apply,
             )
     _emit(asdict(result))

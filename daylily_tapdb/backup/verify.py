@@ -1369,6 +1369,9 @@ def restore_backup(
         source_cfg = dict(
             cfg, sequence_mappings=source["sequence_inventory"]["sequence_mappings"]
         )
+        from daylily_tapdb.identity_inventory import with_inventory_limits
+
+        source_cfg = with_inventory_limits(source_cfg, source["identity_inventory"])
         if quarantine_receipt is not None and (
             control_cfg is None or control_cfg["database"] == source_cfg["database"]
         ):
@@ -2138,6 +2141,28 @@ def _finalize_restored_target(
             actor=str(cfg["operator_user"]),
         )
         with connection.begin():
+            from daylily_tapdb.audit_storage import (
+                audit_writer_install_sql,
+                grant_audit_sequences,
+                enforce_audit_read_grants,
+            )
+
+            history_present = connection.execute(
+                text("SELECT to_regclass(:table) IS NOT NULL"),
+                {"table": '"' + schema.replace('"', '""') + '".tapdb_history_epoch'},
+            ).scalar_one()
+            if history_present:
+                connection.exec_driver_sql(
+                    audit_writer_install_sql(
+                        str(cfg["database"]), schema, str(cfg["operator_user"])
+                    ).replace("%", "%%")
+                )
+                grant_audit_sequences(
+                    connection, database=str(cfg["database"]), schema=schema
+                )
+                enforce_audit_read_grants(
+                    connection, database=str(cfg["database"]), schema=schema
+                )
             checks = _post_restore_checks(
                 cfg,
                 settings,
@@ -2158,6 +2183,29 @@ def _finalize_restored_target(
             ):
                 raise BackupVerificationError(
                     "post-commit allocator verification failed"
+                )
+            if not any(check.failed for check in checks) and history_present:
+                from daylily_tapdb.integrity_lifecycle import _establish_epoch
+
+                epoch = _establish_epoch(connection, cfg, origin="restore")
+                checks.append(
+                    CheckResult(
+                        id="history.new_epoch",
+                        status="pass",
+                        detail="Restored history retained; current states observed in a new epoch",
+                        data={"epoch": epoch},
+                    )
+                )
+            elif not any(check.failed for check in checks):
+                # Existing historical-source verification proved the retained
+                # old contract. Do not silently upgrade it during restoration.
+                # TapDB 11 runtime binding refuses this schema until adoption.
+                checks.append(
+                    CheckResult(
+                        id="history.adoption_required",
+                        status="warn",
+                        detail="Historical schema restored under its verified source contract; explicit TapDB 11 adoption is required before new-contract writes",
+                    )
                 )
             recovery.finish_recovery(
                 receipts_dir,

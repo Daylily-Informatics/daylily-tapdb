@@ -18,14 +18,9 @@ from daylily_tapdb.cli.context import (
     active_config_path,
     resolve_context,
 )
-from daylily_tapdb.euid import (
-    AUDIT_LOG_PREFIX,
-    GENERIC_INSTANCE_LINEAGE_PREFIX,
-    GENERIC_TEMPLATE_PREFIX,
-    SYSTEM_MESSAGE_PREFIX,
-    SYSTEM_USER_PREFIX,
-)
+from daylily_tapdb.issuance import IssuanceProfile
 from daylily_tapdb.governance import (
+    GovernanceAuthorization,
     GovernanceContext,
     normalize_owner_repo_name,
 )
@@ -304,6 +299,10 @@ def _build_db_config_from_section(
     if not isinstance(meta, dict):
         raise RuntimeError(f"Config metadata is required in {resolved_config_path}.")
     try:
+        issuance_profile = IssuanceProfile.from_mapping(meta.get("issuance_profile"))
+    except ValueError as exc:
+        raise RuntimeError(f"Config {resolved_config_path}: {exc}") from exc
+    try:
         owner_repo_name = normalize_owner_repo_name(
             str(meta.get("owner_repo_name") or "")
         )
@@ -345,7 +344,7 @@ def _build_db_config_from_section(
 
     safety_tier, destructive_operations = _read_safety(root, resolved_config_path)
 
-    cfg: dict[str, str] = {
+    cfg: dict[str, Any] = {
         "engine_type": engine_type,
         "host": _require_section_str(
             file_cfg,
@@ -380,6 +379,7 @@ def _build_db_config_from_section(
             section_name=section_name,
         ),
         "schema_name": schema_name,
+        "cognito_auth_config_path": _file_str("cognito_auth_config_path") or "",
         "cognito_user_pool_id": _file_str("cognito_user_pool_id") or "",
         "cognito_app_client_id": _file_str("cognito_app_client_id") or "",
         "cognito_app_client_secret": _file_str("cognito_app_client_secret") or "",
@@ -411,6 +411,20 @@ def _build_db_config_from_section(
         "target_name": target_name,
     }
 
+    if "inventory_mode" in root:
+        from daylily_tapdb.audit_inventory import validate_mode
+        cfg["inventory_mode"] = validate_mode(root["inventory_mode"])
+    if "inventory_limits" in root:
+        from dataclasses import asdict
+
+        from daylily_tapdb.identity_inventory import InventoryLimits
+
+        if not isinstance(root["inventory_limits"], dict):
+            raise RuntimeError("inventory_limits must be a mapping")
+        cfg["inventory_limits"] = asdict(
+            InventoryLimits.parse(root["inventory_limits"])
+        )
+
     tenant_id = (_file_str("tenant_id") or "").strip()
     if tenant_id:
         try:
@@ -420,6 +434,11 @@ def _build_db_config_from_section(
                 f"Config {resolved_config_path}: {section_name}.tenant_id must be a UUID"
             ) from exc
     cfg["tenant_id"] = tenant_id
+    from daylily_tapdb.security_context import canonical_additional_tenant_ids
+
+    cfg["additional_tenant_ids"] = list(
+        canonical_additional_tenant_ids(file_cfg.get("additional_tenant_ids", ()))
+    )
     allow_global_claims = file_cfg.get("allow_global_claims", False)
     if not isinstance(allow_global_claims, bool):
         raise RuntimeError(
@@ -480,11 +499,12 @@ def _build_db_config_from_section(
     cfg["owner_repo_name"] = owner_repo_name
     cfg["domain_registry_path"] = str(domain_registry_path)
     cfg["prefix_ownership_registry_path"] = str(prefix_ownership_registry_path)
-    cfg["generic_template_euid_prefix"] = GENERIC_TEMPLATE_PREFIX
-    cfg["generic_instance_lineage_euid_prefix"] = GENERIC_INSTANCE_LINEAGE_PREFIX
-    cfg["audit_log_euid_prefix"] = AUDIT_LOG_PREFIX
-    cfg["system_user_euid_prefix"] = SYSTEM_USER_PREFIX
-    cfg["system_message_euid_prefix"] = SYSTEM_MESSAGE_PREFIX
+    cfg["issuance_profile"] = issuance_profile.to_dict()
+    cfg["generic_template_euid_prefix"] = issuance_profile.identity_prefix("generic_template")
+    cfg["generic_instance_lineage_euid_prefix"] = issuance_profile.identity_prefix("generic_instance_lineage")
+    cfg["audit_log_euid_prefix"] = issuance_profile.identity_prefix("audit_log")
+    cfg["system_user_euid_prefix"] = issuance_profile.identity_prefix("system_user_instance")
+    cfg["system_message_euid_prefix"] = issuance_profile.identity_prefix("system_message_instance")
     cfg["config_path"] = str(resolved_config_path)
 
     if engine_type == "aurora":
@@ -547,13 +567,20 @@ def _build_db_config_from_section(
                 "supported for aurora explicit targets."
             )
 
+    authorization = GovernanceAuthorization.from_value(
+        meta.get("governance_authorization")
+    )
     governance = GovernanceContext.load(
         domain_code=str(cfg["domain_code"]),
         owner_repo_name=owner_repo_name,
         domain_registry_path=domain_registry_path,
         prefix_ownership_registry_path=prefix_ownership_registry_path,
+        governance_authorization=authorization,
     )
     cfg["domain_code"] = governance.domain_code
+    cfg["governance_authorization"] = (
+        authorization.to_dict() if authorization is not None else None
+    )
 
     return cfg
 
@@ -747,7 +774,7 @@ def get_backup_settings(
 ) -> dict[str, Any]:
     """Resolve normalized backup settings from the active TapDB config.
 
-    Every field has a working default, so a config written before this section
+    Optional fields have working defaults, so a config written before this section
     existed keeps working -- the backup subsystem is additive against consumers
     pinned to older releases.
 
@@ -770,6 +797,13 @@ def get_backup_settings(
         raise RuntimeError(f"No TAPDB config found at {resolved_config_path}.")
 
     backup = _as_mapping(root.get("backup"), field_name="backup")
+    receipt_location = {}
+    if "receipts_directory" in backup:
+        from daylily_tapdb.backup.receipts import validate_receipts_directory
+
+        receipt_location["receipts_directory"] = str(
+            validate_receipts_directory(backup["receipts_directory"])
+        )
     storage = _as_mapping(backup.get("storage"), field_name="backup.storage")
     retention = _as_mapping(backup.get("retention"), field_name="backup.retention")
     encryption = _as_mapping(backup.get("encryption"), field_name="backup.encryption")
@@ -799,6 +833,7 @@ def get_backup_settings(
     return {
         "config_path": str(resolved_config_path),
         "config_dir": str(Path(resolved_config_path).parent),
+        **receipt_location,
         "storage_uri": _credential_free_uri(
             _string(storage.get("uri")),
             field_name="backup.storage.uri",

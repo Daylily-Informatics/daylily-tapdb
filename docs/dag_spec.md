@@ -76,7 +76,7 @@ cross-tenant lineage.
 
 A graph-expandable reference is authoritative only when a local source has
 persisted lineage to a canonical
-`reference/external_identifier/tapdb_object/1.0/` XRF. It projects the exact
+`reference/external_identifier/tapdb_object/2.0/` XRF. It projects the exact
 target service/EUID and assertion evidence.
 
 A non-expandable identifier uses

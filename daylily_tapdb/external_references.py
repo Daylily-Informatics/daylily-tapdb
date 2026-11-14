@@ -14,11 +14,13 @@ import re
 import unicodedata
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
+from importlib.resources import files
 from typing import Any, Literal, Sequence, TypeAlias, cast
 from urllib.parse import urlsplit
 
+from sqlalchemy import tuple_
 from sqlalchemy.orm import aliased
 
 from daylily_tapdb.euid import validate_euid
@@ -28,13 +30,36 @@ from daylily_tapdb.models.instance import generic_instance
 from daylily_tapdb.models.lineage import generic_instance_lineage
 from daylily_tapdb.templates.manager import TemplateManager
 
-TAPDB_OBJECT_TEMPLATE_CODE = "reference/external_identifier/tapdb_object/1.0/"
-OPAQUE_IDENTIFIER_TEMPLATE_CODE = "reference/external_identifier/opaque/1.0/"
+
+def _packaged_reference_coordinates(filename: str, subtype: str) -> tuple[str, ...]:
+    """Read an exact declared identity; version carries no behavior or ordering."""
+    resource = files("daylily_tapdb").joinpath("core_config", "system", filename)
+    definitions = json.loads(resource.read_text())["templates"]
+    if len(definitions) != 1:
+        raise RuntimeError(
+            f"Packaged XRF definition must select one template: {filename}"
+        )
+    template = definitions[0]
+    if (template["category"], template["type"], template["subtype"]) != (
+        "reference",
+        "external_identifier",
+        subtype,
+    ):
+        raise RuntimeError(f"Packaged XRF definition has the wrong role: {filename}")
+    return tuple(
+        str(template[key]) for key in ("category", "type", "subtype", "version")
+    )
+
+
+_TAPDB_COORDS = _packaged_reference_coordinates(
+    "external_reference.json", "tapdb_object"
+)
+_OPAQUE_COORDS = _packaged_reference_coordinates("external_identifier.json", "opaque")
+TAPDB_OBJECT_TEMPLATE_CODE = "/".join(_TAPDB_COORDS) + "/"
+OPAQUE_IDENTIFIER_TEMPLATE_CODE = "/".join(_OPAQUE_COORDS) + "/"
 TAPDB_OBJECT_IDENTITY_NAMESPACE = "tapdb.external-reference/v1"
 OPAQUE_IDENTITY_NAMESPACE = "tapdb.external-identifier/v1"
 
-_TAPDB_COORDS = ("reference", "external_identifier", "tapdb_object", "1.0")
-_OPAQUE_COORDS = ("reference", "external_identifier", "opaque", "1.0")
 _XRF_COORDS = {_TAPDB_COORDS, _OPAQUE_COORDS}
 _SERVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _LOWER_TOKEN_RE = re.compile(r"^[a-z][a-z0-9._-]*$")
@@ -262,6 +287,12 @@ def _is_xrf_coordinates(obj: Any) -> bool:
     return _coordinates(obj) in _XRF_COORDS
 
 
+def _canonical_xrf_filter(model: Any) -> Any:
+    return tuple_(model.category, model.type, model.subtype, model.version).in_(
+        sorted(_XRF_COORDS)
+    )
+
+
 @lru_cache(maxsize=2)
 def _canonical_template_definition(subtype: str) -> dict[str, Any]:
     from daylily_tapdb.templates.loader import (
@@ -274,15 +305,25 @@ def _canonical_template_definition(subtype: str) -> dict[str, Any]:
             template.get("category"),
             template.get("type"),
             template.get("subtype"),
-            template.get("version"),
+            str(template.get("version")),
             template.get("instance_prefix"),
-        ) == ("reference", "external_identifier", subtype, "1.0", "XRF"):
-            return dict(template)
+        ) == (
+            "reference",
+            "external_identifier",
+            subtype,
+            _TAPDB_COORDS[3] if subtype == "tapdb_object" else _OPAQUE_COORDS[3],
+            "XRF",
+        ):
+            return {**template, "version": str(template["version"])}
     raise RuntimeError(f"installed TapDB core inventory has no exact {subtype} XRF")
 
 
 def _is_exact_xrf_template(template: Any, subtype: str) -> bool:
-    canonical = _canonical_template_definition(subtype)
+    from sqlalchemy.orm import object_session
+    from daylily_tapdb.issuance import profile_for_session
+
+    profile = profile_for_session(object_session(template))
+    canonical = profile.project_core_template(_canonical_template_definition(subtype))
     for field in (
         "name",
         "polymorphic_discriminator",
@@ -355,6 +396,12 @@ def _target_template_code(target: ExternalTarget) -> str:
         TAPDB_OBJECT_TEMPLATE_CODE
         if isinstance(target, TapDBObjectTarget)
         else OPAQUE_IDENTIFIER_TEMPLATE_CODE
+    )
+
+
+def _target_template_version(target: ExternalTarget) -> str:
+    return (
+        _TAPDB_COORDS[3] if isinstance(target, TapDBObjectTarget) else _OPAQUE_COORDS[3]
     )
 
 
@@ -542,21 +589,24 @@ def _projection(
     return "opaque", item
 
 
-def _project_outbound_external_references(obj: Any) -> dict[str, list[dict[str, Any]]]:
+def _project_outbound_external_references(
+    obj: Any, *, lineages: list[Any] | None = None
+) -> dict[str, list[dict[str, Any]]]:
     """Internal DAG/UI projection from authoritative active lineage only."""
 
     _reject_metadata_pseudo_edges(obj)
     refs: list[dict[str, Any]] = []
     identifiers: list[dict[str, Any]] = []
-    relation = getattr(obj, "parent_of_lineages", None)
-    if relation is None:
-        return {"external_refs": refs, "external_identifiers": identifiers}
-    query = (
-        relation.filter_by(is_deleted=False)
-        if hasattr(relation, "filter_by")
-        else relation
-    )
-    lineages = list(query.all() if hasattr(query, "all") else query)
+    if lineages is None:
+        relation = getattr(obj, "parent_of_lineages", None)
+        if relation is None:
+            return {"external_refs": refs, "external_identifiers": identifiers}
+        query = (
+            relation.filter_by(is_deleted=False)
+            if hasattr(relation, "filter_by")
+            else relation
+        )
+        lineages = list(query.all() if hasattr(query, "all") else query)
     for lineage in lineages:
         reference = getattr(lineage, "child_instance", None)
         if reference is None or not _is_xrf_coordinates(reference):
@@ -623,6 +673,7 @@ class ExternalReferenceService:
             self.session.query(generic_instance)
             .filter_by(uid=source.uid, is_deleted=False)
             .with_for_update()
+            .populate_existing()
             .one_or_none()
         )
         if locked is None or locked.euid != source.euid:
@@ -630,15 +681,33 @@ class ExternalReferenceService:
         return locked
 
     def _claim_reference(
-        self, source: generic_instance, target: ExternalTarget
+        self, source: generic_instance, target: ExternalTarget, *, prepare_only: bool = False
     ) -> generic_instance:
         if isinstance(target, ExternalIdentifierTarget) and target.scope == "tenant":
             if source.tenant_id != target.tenant_id:
                 raise ValueError(
                     "tenant-scoped identifier tenant_id must equal source.tenant_id"
                 )
+        return self._register_in_scope(target, source.domain_code, source.tenant_id, prepare_only=prepare_only, lock_reference=False)
+
+    def register(self, target: ExternalTarget) -> generic_instance:
+        """Create/resolve a canonical reference in explicit transaction scope.
+
+        No source instance is fabricated and no network request is made. This
+        establishes a local assertion only, not verified remote existence.
+        """
+        from sqlalchemy import text
+        domain, tenant = self.session.execute(text(
+            "SELECT tapdb_current_domain_code(), tapdb_current_tenant_id()"
+        )).one()
+        return self._register_in_scope(target, domain, tenant)
+
+    def _register_in_scope(self, target, domain, tenant, *, prepare_only=False, lock_reference=True):
+        if isinstance(target, ExternalIdentifierTarget) and target.scope == "tenant":
+            if str(target.tenant_id) != str(tenant):
+                raise ValueError("independent registration requires the exact current tenant")
         scope, tenant_id = _identity_scope(target)
-        factory = InstanceFactory(TemplateManager(), domain_code=source.domain_code)
+        factory = InstanceFactory(TemplateManager(), domain_code=domain)
         claim = factory.claim_instance_by_identity(
             self.session,
             template_code=_target_template_code(target),
@@ -652,6 +721,9 @@ class ExternalReferenceService:
             _external_reference_token=_external_reference_writer_token(),
         )
         reference = claim.instance
+        if lock_reference:
+            from daylily_tapdb.revisions import lock_records
+            lock_records(self.session,[reference])
         if reference.is_deleted:
             raise ExternalReferenceContractError(
                 "canonical XRF identity is soft-deleted and requires explicit repair"
@@ -686,7 +758,7 @@ class ExternalReferenceService:
                 )
             if old is None and new is not None:
                 enriched[key] = new
-        if enriched != existing:
+        if enriched != existing and not prepare_only:
             payload = dict(reference.json_addl)
             payload["properties"] = enriched
             reference.json_addl = payload
@@ -793,26 +865,48 @@ class ExternalReferenceService:
         _require_persisted_euid(lineage.euid, "lineage.euid")
         return ExternalLinkOutcome("created", reference, lineage)
 
-    def attach(
-        self, source: generic_instance, spec: ExternalLinkSpec
-    ) -> ExternalLinkOutcome:
-        """Create, replay, or reactivate exactly one canonical link."""
+    def attach(self, source: generic_instance, spec: ExternalLinkSpec, *,
+               expected_source_revision: int,
+               expected_lineage_revision: int | None = None,
+               owner_validator=None) -> ExternalLinkOutcome:
+        """Guard the exact assertion and endpoints; None means no prior edge.
 
-        if not isinstance(spec, ExternalLinkSpec):
-            raise ValueError("spec must be an ExternalLinkSpec")
-        locked = self._lock_source(source)
-        return self._attach_locked(locked, spec)
+        Consumers may validate their own binding cardinality under these locks.
+        TapDB does not impose tube-specific cardinalities on generic references.
+        """
+        from daylily_tapdb.revisions import lock_records, require_revision, RevisionConflict
+        self._require_source(source)
+        reference=self._claim_reference(source,spec.target,prepare_only=True)
+        lock_records(self.session,[source,reference])
+        require_revision(source,expected_source_revision)
+        if reference.is_deleted or source.is_deleted:
+            raise ValueError('association endpoints must be active')
+        candidates=self._lineage_candidates(source,reference,spec.relationship_type)
+        if candidates:
+            if len(candidates)!=1:
+                raise ExternalReferenceContractError('ambiguous lineage history')
+            require_revision(candidates[0],expected_lineage_revision)
+        elif expected_lineage_revision is not None:
+            raise RevisionConflict('expected lineage does not exist')
+        if owner_validator is not None:
+            owner_validator(self.session,source,reference,spec)
+        return self._attach_locked(source,spec)
 
     def _find_reference(self, target: ExternalTarget) -> generic_instance | None:
+        from sqlalchemy import text
+        domain, owner = self.session.execute(text(
+            "SELECT tapdb_current_domain_code(), tapdb_current_owner_repo_name()"
+        )).one()
         scope, tenant_id = _identity_scope(target)
         query = self.session.query(generic_instance).filter_by(
             identity_key=target.identity_key,
+            domain_code=domain, issuer_app_code=owner,
             category="reference",
             type="external_identifier",
             subtype=(
                 "tapdb_object" if isinstance(target, TapDBObjectTarget) else "opaque"
             ),
-            version="1.0",
+            version=_target_template_version(target),
         )
         query = (
             query.filter(generic_instance.tenant_id.is_(None))
@@ -828,11 +922,73 @@ class ExternalReferenceService:
                 )
         return reference
 
+    def resolve(self, target: ExternalTarget) -> generic_instance | None:
+        """Exact local read; does not claim identity or enrich metadata."""
+        return self._find_reference(target)
+
+    def annotate(
+        self, reference: generic_instance, *, authority: str, key: str,
+        data: dict[str, Any], expected_revision: int | None = None,
+    ) -> generic_instance:
+        """Versioned, tenant/authority-scoped annotation with authoritative lineage.
+
+        The annotation is metadata about the reference, never another local
+        representation of the remotely owned physical object.
+        """
+        from hashlib import sha256
+        from sqlalchemy import text
+        from daylily_tapdb.revisions import lock_records, require_revision
+        domain, tenant, attribution = self.session.execute(text(
+            "SELECT tapdb_current_domain_code(), tapdb_current_tenant_id(), tapdb_current_attribution()"
+        )).one()
+        if authority != attribution['service_identity']:
+            raise PermissionError('annotation authority must equal executing service identity')
+        if not key or key != key.strip() or not isinstance(data, dict):
+            raise ValueError('annotation key and JSON object data are required')
+        target = _target_from_reference(reference)
+        self._require_source(reference)
+        identity = sha256(json.dumps([reference.euid, authority, key], separators=(',', ':')).encode()).hexdigest()
+        factory = InstanceFactory(TemplateManager(), domain_code=domain)
+        payload = {'format': 'tapdb.reference-annotation/v1', 'authority': authority, 'key': key, 'data': data}
+        claim = factory.claim_instance_by_identity(
+            self.session, template_code='reference/annotation/generic/1.0/',
+            identity_key='tapdb.reference-annotation:' + identity,
+            name='External reference annotation',
+            scope=IdentityScope.TENANT if tenant else IdentityScope.GLOBAL,
+            tenant_id=tenant, properties=payload, create_children=False,
+        )
+        annotation = claim.instance
+        lock_records(self.session,[reference,annotation])
+        self._require_source(reference)
+        target=_target_from_reference(reference)
+        if claim.outcome == IdentityClaimOutcome.EXISTING:
+            lock_records(self.session, [annotation])
+            require_revision(annotation, expected_revision)
+            if annotation.is_deleted:
+                raise ValueError('annotation is soft-deleted; explicit correction required')
+            existing = dict(annotation.json_addl)
+            existing['properties'] = payload
+            annotation.json_addl = existing
+            self.session.flush()
+        else:
+            if expected_revision is not None:
+                raise ValueError('annotation does not exist at expected revision')
+            spec = ExternalLinkSpec(
+                target=target, relationship_type='annotates_reference',
+                assertion_authority=authority, asserted_at=datetime.now(timezone.utc),
+                assertion_provenance='tapdb.reference-annotation/v1',
+            )
+            self.session.refresh(annotation)
+            self.attach(annotation, spec, expected_source_revision=annotation.record_revision)
+        return annotation
+
     def detach(
         self,
         source: generic_instance,
         target: ExternalTarget,
         *,
+        expected_source_revision: int,
+        expected_lineage_revision: int | None,
         relationship_type: str,
         assertion_authority: str,
         deactivated_at: datetime,
@@ -848,11 +1004,20 @@ class ExternalReferenceService:
             "deactivation_provenance",
             max_length=2048,
         )
-        locked = self._lock_source(source)
+        from daylily_tapdb.revisions import lock_records, require_revision, RevisionConflict
         reference = self._find_reference(target)
+        lock_records(self.session, [source,reference] if reference is not None else [source])
+        require_revision(source,expected_source_revision)
+        locked=source
         if reference is None:
             return ExternalLinkOutcome("already_inactive", None, None)
         candidates = self._lineage_candidates(locked, reference, relationship_type)
+        if candidates:
+            if len(candidates)!=1:
+                raise ExternalReferenceContractError('ambiguous lineage history')
+            require_revision(candidates[0],expected_lineage_revision)
+        elif expected_lineage_revision is not None:
+            raise RevisionConflict('expected lineage does not exist')
         if len([item for item in candidates if item.is_deleted]) > 1:
             raise ExternalReferenceContractError(
                 "multiple historical deleted links require explicit repair"
@@ -886,6 +1051,8 @@ class ExternalReferenceService:
         assertion_authority: str,
         desired: Sequence[ExternalLinkSpec],
         *,
+        expected_source_revision: int,
+        expected_lineage_revisions: dict[str,int],
         deactivated_at: datetime,
         deactivation_provenance: str,
     ) -> tuple[ExternalLinkOutcome, ...]:
@@ -896,7 +1063,19 @@ class ExternalReferenceService:
             raise ValueError("desired must be a sequence of ExternalLinkSpec values")
         if len(desired) > 500:
             raise ValueError("desired may contain at most 500 links")
-        locked = self._lock_source(source)
+        from daylily_tapdb.revisions import lock_records, require_revision, RevisionConflict
+        self._require_source(source)
+        references=[self._claim_reference(source,spec.target,prepare_only=True) for spec in desired]
+        existing=self.session.query(generic_instance_lineage).filter_by(parent_instance_uid=source.uid,is_deleted=False).all()
+        references.extend(edge.child_instance for edge in existing)
+        lock_records(self.session,[source,*references])
+        require_revision(source,expected_source_revision)
+        locked=source
+        existing=self.session.query(generic_instance_lineage).filter_by(parent_instance_uid=source.uid,is_deleted=False).populate_existing().all()
+        current={edge.euid:edge.record_revision for edge in existing
+            if _is_xrf_coordinates(edge.child_instance) and _lineage_assertion(edge)['assertion_authority']==assertion_authority}
+        if current!=expected_lineage_revisions:
+            raise RevisionConflict('authority-owned association set changed')
         desired_keys: set[tuple[str, str]] = set()
         outcomes: list[ExternalLinkOutcome] = []
         for spec in desired:
@@ -934,6 +1113,8 @@ class ExternalReferenceService:
                 self.detach(
                     locked,
                     target,
+                    expected_source_revision=locked.record_revision,
+                    expected_lineage_revision=lineage.record_revision,
                     relationship_type=str(lineage.relationship_type),
                     assertion_authority=assertion_authority,
                     deactivated_at=deactivated_at,
@@ -971,10 +1152,7 @@ class ExternalReferenceService:
         query = query.filter(
             generic_instance_lineage.parent_instance_uid == source.uid,
             generic_instance_lineage.uid > after_uid,
-            reference_model.category == "reference",
-            reference_model.type == "external_identifier",
-            reference_model.subtype.in_(("tapdb_object", "opaque")),
-            reference_model.version == "1.0",
+            _canonical_xrf_filter(reference_model),
             reference_model.is_deleted.is_(False),
         )
         if not include_inactive:

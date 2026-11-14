@@ -58,6 +58,8 @@ class tapdb_core(Base):
     domain_code = Column(Text, nullable=False, server_default=FetchedValue())
     issuer_app_code = Column(Text, nullable=False, server_default=FetchedValue())
 
+    record_revision = Column(BIGINT, nullable=False, server_default=FetchedValue(), server_onupdate=FetchedValue())
+
     # Application-managed display name
     name = Column(Text, nullable=False)
 

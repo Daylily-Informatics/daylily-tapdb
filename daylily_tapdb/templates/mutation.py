@@ -1,8 +1,8 @@
 """Template mutation guardrails.
 
-TapDB template definitions must be loaded from JSON packs through TapDB-owned
-loader code. Direct ORM writes from client packages are rejected unless the
-current execution context explicitly opts into template mutation.
+TapDB template definitions are written through TapDB-owned runtime authoring or
+operator loading. Direct ORM writes from client packages are rejected unless the
+native operation explicitly opts into template mutation.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def template_mutation_error_message(template_code: str | None = None) -> str:
     """Return the operator-facing error for blocked template writes."""
     target = f" ({template_code})" if template_code else ""
     return (
-        "TapDB template mutation is blocked outside the TapDB JSON loader"
-        f"{target}. Define templates in a JSON pack and load them with "
-        "`tapdb db data seed --config <dir>` or the TapDB template loader API."
+        "TapDB template mutation is blocked outside native template operations"
+        f"{target}. Use the runtime template authoring API for new definitions, "
+        "or the operator template seed command for deployment installation."
     )

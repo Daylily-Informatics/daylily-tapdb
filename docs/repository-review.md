@@ -41,7 +41,7 @@ Runtime operation is explicit-target and config-first. A v4 config contains one
 selector or service-side target discovery. The canonical example is
 [`config/tapdb-config-example.yaml`](../config/tapdb-config-example.yaml).
 
-TapDB pins `meridian-euid==0.4.8`. Domain identity comes from the explicit
+TapDB pins `meridian-euid==1.0.0`. Domain identity comes from the explicit
 config and registry paths. Prefix ownership is separately governed by the
 prefix ownership registry. The effective owner-scoped template identity is
 `(domain_code, issuer_app_code, category, type, subtype, version)`.

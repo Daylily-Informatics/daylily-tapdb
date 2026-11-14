@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from daylily_tapdb.issuance import IssuanceProfile
+
 DEFAULT_VALIDATOR_REF = "UNIVERSAL_PASS@1"
 DEFAULT_TERMINOLOGY_REF = "TAPDB_EMPTY_TERMINOLOGY@1"
 DEFAULT_RELATIONSHIP_CONSTRAINT_REF = "TAPDB_ANY_RELATIONSHIP@1"
@@ -113,6 +115,8 @@ def ensure_core_governance_objects(
     session: Any,
     *,
     domain_code: str,
+    owner_repo_name: str,
+    issuance_profile: IssuanceProfile,
 ) -> int:
     """Ensure built-in governance objects exist.
 
@@ -182,16 +186,15 @@ def ensure_core_governance_objects(
                     generic_template.type == type_name,
                     generic_template.subtype == subtype,
                     generic_template.version == version,
-                    generic_template.issuer_app_code == "daylily-tapdb",
+                    generic_template.issuer_app_code == owner_repo_name,
                     generic_template.is_deleted.is_(False),
                 )
                 .first()
             )
         if template is None:
             continue
-        if not str(getattr(template, "instance_prefix", "") or "").strip():
-            template.instance_prefix = "GVR"
-            session.flush()
+        if template.instance_prefix != issuance_profile.identity_prefix("governance_instance"):
+            raise ValueError("Seeded governance template does not match the explicit issuance profile")
 
         with session.no_autoflush:
             existing = (

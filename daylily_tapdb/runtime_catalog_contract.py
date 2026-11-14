@@ -56,7 +56,7 @@ def security_assets() -> dict[str, str]:
     """Read only the imported distribution's assets, never cwd discovery."""
     return {
         name: _asset_path(name).read_text(encoding="utf-8")
-        for name in ("tapdb_schema.sql", "rls.sql", "allocator_functions.sql")
+        for name in ("tapdb_schema.sql", "rls.sql", "allocator_functions.sql", "runtime_identity_authorization.sql")
     }
 
 
@@ -86,9 +86,9 @@ def policy_expressions(schema_sql: str) -> dict[str, tuple[str, str]]:
     s = schema_sql
     scope = f"(domain_code = {s}.tapdb_current_domain_code()) AND (issuer_app_code = {s}.tapdb_current_owner_repo_name())"
     read_tenant = (
-        f"((tenant_id IS NULL) OR (tenant_id = {s}.tapdb_current_tenant_id()))"
+        f"((tenant_id IS NULL) OR (tenant_id = ANY ({s}.tapdb_allowed_tenant_ids())))"
     )
-    write_tenant = f"((tenant_id = {s}.tapdb_current_tenant_id()) OR ((tenant_id IS NULL) AND (({s}.tapdb_current_tenant_id() IS NULL) OR {s}.tapdb_allow_global_rows())))"
+    write_tenant = f"((tenant_id = ANY ({s}.tapdb_allowed_tenant_ids())) OR ((tenant_id IS NULL) AND (({s}.tapdb_current_tenant_id() IS NULL) OR {s}.tapdb_allow_global_rows())))"
     result = {
         name: (f"({scope} AND {read_tenant})", f"({scope} AND {write_tenant})")
         for name in (
@@ -96,11 +96,23 @@ def policy_expressions(schema_sql: str) -> dict[str, tuple[str, str]]:
             "generic_instance",
             "generic_instance_lineage",
             "audit_log",
+            "tapdb_history_baseline",
             "outbox_event",
             "inbox_message",
         )
     }
+    # Uncorrelated scalar subqueries become statement-local InitPlans. These
+    # SECURITY DEFINER resolvers still read the immutable principal binding;
+    # tenant visibility and all write policies retain their exact authority.
+    read_scope = (
+        f"(domain_code = ( SELECT {s}.tapdb_current_domain_code() AS tapdb_current_domain_code))"
+        f" AND (issuer_app_code = ( SELECT {s}.tapdb_current_owner_repo_name() AS tapdb_current_owner_repo_name))"
+    )
+    for name in ("generic_instance", "generic_instance_lineage"):
+        result[name] = (f"({read_scope} AND {read_tenant})", result[name][1])
+    result["tapdb_history_epoch"] = ("true", "false")
     result["tapdb_identity_prefix_config"] = (f"({scope})", f"({scope})")
+    result["tapdb_issuance_profile"] = (f"({scope})", f"({scope})")
     event_scope = scope.replace("(domain_code", "(event.domain_code").replace(
         "(issuer_app_code", "(event.issuer_app_code"
     )
@@ -129,14 +141,16 @@ _FUNCTION = re.compile(
     re.M | re.S,
 )
 _TRIGGER = re.compile(
-    r"^CREATE TRIGGER (?P<name>\w+)\s+(?P<timing>BEFORE|AFTER)\s+(?P<events>[A-Z\s]+?) ON (?P<relation>\w+)\s+FOR EACH ROW EXECUTE FUNCTION (?P<function>\w+)\(\);",
+    r"^CREATE TRIGGER (?P<name>\w+)\s+(?P<timing>BEFORE|AFTER)\s+(?P<events>[A-Z\s]+?) ON (?P<relation>\w+)\s+FOR EACH (?P<level>ROW|STATEMENT) EXECUTE FUNCTION (?P<function>\w+)\(\);",
     re.M,
 )
 _TYPES = {
     "TEXT": (25, "text"),
     "BIGINT": (20, "bigint"),
+    "JSONB": (3802, "jsonb"),
     "BOOLEAN": (16, "boolean"),
     "UUID": (2950, "uuid"),
+    "UUID[]": (2951, "uuid[]"),
     "VOID": (2278, "void"),
     "TRIGGER": (2279, "trigger"),
     "CHAR": (1042, "character"),
@@ -155,6 +169,8 @@ def _validate_allocator_copies(assets: dict[str, str]) -> None:
             "Canonical allocator asset differs from its exact inline base-schema copy"
         )
     signatures = {
+        "tapdb_resolve_issuance_prefix": "declared_prefix TEXT",
+        "tapdb_require_instance_prefix": "declared_prefix TEXT",
         "tapdb_get_identity_prefix": "entity_name TEXT",
         "set_generic_template_euid": "",
         "set_generic_instance_euid": "",
@@ -195,7 +211,7 @@ def canonical_security_contract(schema_name: str, schema_sql: str) -> dict[str, 
     pinned = set()
     for block in re.findall(
         r"DO \$tapdb_pin_[a-z_]+\$(.*?)END;\s*\$tapdb_pin_[a-z_]+\$;",
-        assets["rls.sql"] + "\n" + assets["allocator_functions.sql"],
+        assets["rls.sql"] + "\n" + assets["allocator_functions.sql"] + "\n" + assets["runtime_identity_authorization.sql"],
         re.S,
     ):
         names = re.search(
@@ -208,7 +224,7 @@ def canonical_security_contract(schema_name: str, schema_sql: str) -> dict[str, 
         pinned.update(re.findall(r"'([a-z_]+)'", names[1]))
     # Allocators are checked byte-for-byte above, then parsed once from the
     # standalone base copy. Do not let last-wins parsing conceal copy drift.
-    for source in (assets["tapdb_schema.sql"], assets["rls.sql"]):
+    for source in (assets["tapdb_schema.sql"], assets["rls.sql"], assets["runtime_identity_authorization.sql"]):
         matches = list(_FUNCTION.finditer(source))
         if len(matches) != len(
             re.findall(r"^CREATE OR REPLACE FUNCTION ", source, re.M)
@@ -275,16 +291,17 @@ def canonical_security_contract(schema_name: str, schema_sql: str) -> dict[str, 
         for match in trigger_matches:
             values = match.groupdict()
             event_bits = sum(
-                {"INSERT": 4, "DELETE": 8, "UPDATE": 16}[event.strip()]
+                {"INSERT": 4, "DELETE": 8, "UPDATE": 16, "TRUNCATE": 32}[event.strip()]
                 for event in values.pop("events").split("OR")
             )
             timing = values.pop("timing")
+            level = values.pop("level")
             triggers[(values["relation"], values["name"])] = {
                 **values,
                 "function_schema": schema_name,
                 "function_arguments": "",
                 "enabled": "O",
-                "type": 1 + (2 if timing == "BEFORE" else 0) + event_bits,
+                "type": (1 if level == "ROW" else 0) + (2 if timing == "BEFORE" else 0) + event_bits,
                 "when": None,
                 "columns": "",
                 "arguments_hex": "",
@@ -314,6 +331,7 @@ def validate_managed_security(
     functions: list[dict[str, Any]],
     triggers: list[dict[str, Any]],
     managed_tables: set[str],
+    audit_writer: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return only positively identified canonical routines eligible for grants."""
     if any({"name", "arguments"} - set(row) for row in functions) or any(
@@ -363,15 +381,20 @@ def validate_managed_security(
             raise RuntimeCatalogContractError(
                 f"Current canonical RLS migration routine is missing: {key}"
             )
+        if key[0] == "tapdb_resolve_user_authorization" and routine_row.get("public_execute") is not False:
+            raise RuntimeCatalogContractError("Canonical identity projection must deny PUBLIC EXECUTE")
         if (
             set(expected) - set(routine_row)
-            or routine_row["owner"] != owner
+            or routine_row["owner"] != (audit_writer if key[0] in {"record_insert", "record_update"} else owner)
             or any(routine_row.get(field) != value for field, value in expected.items())
         ):
             raise RuntimeCatalogContractError(
                 f"Canonical routine body or security metadata differs: {key}"
             )
-        routine_grants.append(routine_row)
+        if key[0] not in {"record_insert", "record_update"}:
+            routine_grants.append(routine_row)
+        elif routine_row.get("public_execute") is not False:
+            raise RuntimeCatalogContractError("Audit append routines must deny PUBLIC EXECUTE")
     actual_triggers = {
         (row["relation"], row["name"]): row
         for row in triggers

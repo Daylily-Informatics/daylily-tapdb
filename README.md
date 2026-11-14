@@ -19,6 +19,39 @@
   <a href="docs/backup-and-recovery.md">Recover</a>
 </p>
 
+## TapDB 12 identity and authoring contract
+
+TapDB 12 requires an explicit issuance profile for every configured connection.
+`canonical` retains the established per-kind prefixes; `single_prefix` issues
+templates, instances, lineage, audit and core records through one governed
+prefix. Existing EUIDs do not change. Object meaning comes from its native
+template and mapped class, rather than from its allocation prefix.
+
+The native Admin GUI authors templates and instances through the same published
+runtime APIs available to clients. Template authoring uses the constrained
+runtime account and preprovisioned allocation rights; it does not acquire an
+operator account. Typed saved queries and independent DAG views use native
+properties, lineage, permissions and revision history.
+
+Read the [breaking release contract](docs/tapdb-12-release-notes.md),
+[issuance configuration](docs/identity-and-scoping.md),
+[runtime authoring API](docs/runtime_template_authoring.md),
+[prefix discovery](docs/identity-prefix-discovery.md) and
+[saved-query/view API](docs/saved_queries.md) before adopting this release.
+Publication, deployment and live workflow acceptance are distinct outcomes;
+source changes alone do not establish a successful service rollout.
+
+## Retained TapDB 11 write and adoption contract
+
+TapDB 11 requires explicit human/service attribution for every domain write,
+expected revisions for guarded mutations, and reviewed adoption of existing
+databases. Audit history is append-only for constrained runtime roles. It does
+not protect against database owners or superusers.
+
+Read the [TapDB 11 contract and consumer handoff](docs/tapdb-11-integrity.md)
+before changing a service dependency. A package upgrade alone does not adopt
+its database or authenticated writer paths. EUID issuance is unchanged.
+
 ## Why TapDB
 
 TapDB is a reusable persistence substrate for services that need typed,
@@ -33,18 +66,19 @@ but never becomes the relationship authority.
 
 ## Install
 
-TapDB **10.1.0 is published** on
-[PyPI](https://pypi.org/project/daylily-tapdb/10.1.0/) and
-[GitHub](https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/10.1.0).
-Artifact hashes and fresh public installation are verified. Independent
-acceptance is user-attested; CI and formal GitHub review were explicitly
-waived through an owner-authorized administrative merge, not reported passed.
-See the [release handoff](docs/plans/20260910_tapdb_service_readiness_handoff.md)
-for exact provenance, qualification limitations and service adoption ordering.
+TapDB **13.2.0** reconciles canonical template-prefix overrides and split
+template/instance issuance, retaining runtime GUI/API template authoring,
+typed lookup, external references, saved queries, revisions and history.
+Use the same numeric version from [PyPI](https://pypi.org/project/daylily-tapdb/13.2.0/)
+and [GitHub](https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/13.2.0).
+See the [13.2 adoption contract](docs/tapdb-13.2-release-notes.md) before
+upgrading a database. The [TapDB 11 integrity contract](docs/tapdb-11-integrity.md)
+still governs attribution, audit, revisions and external references.
 
-The 10.1.0 release requires Python 3.12 or newer. Its database scope targets
-exact community PostgreSQL 16.13 plus isolated Aurora PostgreSQL 16.13
-acceptance. PostgreSQL 17 qualification is deferred to
+Python 3.12 or newer is required. TapDB 11's focused qualification used isolated
+community PostgreSQL 16.13; it is not an Aurora cutover or production acceptance.
+The earlier [10.1.0 handoff](docs/plans/20260910_tapdb_service_readiness_handoff.md)
+retains that release's separate historical evidence. PostgreSQL 17 qualification is deferred to
 [GitHub issue #107](https://github.com/Daylily-Informatics/daylily-tapdb/issues/107)
 and has not passed; this is not a declaration that PostgreSQL 17 is
 unsupported.
@@ -60,11 +94,25 @@ claim that existing temporary objects were removed. The qualified
 managed-allocator resolution remains required defense in depth.
 
 ```bash
-python -m pip install "daylily-tapdb[cli,gui]"
+python -m pip install "daylily-tapdb[aurora,gui]==14.0.0"
 ```
 
-TapDB pins `meridian-euid==0.4.8`. Consumers must not replace that pin with an
+TapDB pins `meridian-euid==1.0.0`. Consumers must not replace that pin with an
 unverified range or synthesize strings that resemble Meridian EUIDs.
+
+## 14.0.0: Meridian and native migration operations
+
+New EUIDs use `DOMAIN-PREFIX-BODY-CHECKSUM`. Existing two-hyphen IDs retain
+their exact strings and original checksum. The packaged SQL migration updates
+native issuance and parsing without rewriting objects, lineage, or counters.
+Upgrade consumers before enabling new-format issuance.
+
+The release adds an explicit migration-stage runner, native progress events,
+an archived-and-retained disposition, and a pinned PostgreSQL 16 operator image.
+See [the operator and migration guide](docs/operator-migrations.md) for preparation,
+resume, selected stop boundaries, archival, and recovery across generations.
+Package publication does not migrate or activate a service. No tests were run
+for this release.
 
 ## Quick start
 
@@ -190,7 +238,7 @@ and never commits or rolls back its caller's transaction.
 
 ## Canonical external references
 
-TapDB 10 has one external-reference model and one writer. A local source points
+TapDB has one external-reference model and one writer. A local source points
 through persisted lineage to a shared, typed `XRF` object. A federated target
 names an exact TapDB service and an EUID that service actually persisted; an
 opaque target names a non-expandable external identifier such as a DOI or PMID.
@@ -218,7 +266,10 @@ spec = ExternalLinkSpec(
 )
 
 with connection.session_scope(commit=True) as session:
-    outcome = ExternalReferenceService(session).attach(source, spec)
+    outcome = ExternalReferenceService(session).attach(
+        source, spec, expected_source_revision=source.record_revision,
+        expected_lineage_revision=None,  # Expects no existing association.
+    )
 ```
 
 `attach`, `detach`, authority-scoped `reconcile`, `list_for_source`, and

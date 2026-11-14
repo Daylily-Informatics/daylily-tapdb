@@ -3,6 +3,12 @@
 TapDB is a polymorphic evidence substrate. It stores evidence first and lets
 governance evolve around that evidence without rewriting history.
 
+An explicit, bounded operator scope correction is a separate administrative
+contract described in [Reviewed native scope correction](../reviewed_scope_correction.md).
+It corrects reviewed native tenancy and records truthful before/after evidence;
+it is not a validator repair or a physical-schema evidence transformation.
+Ordinary repair records retain their existing `subject_mutated=false` meaning.
+
 ## Core Doctrine
 
 Evidence persists. Governance evolves. Validators observe. Repairs add new

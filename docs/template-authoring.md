@@ -14,6 +14,11 @@ The practical rule is simple:
 TapDB ships only a minimal built-in operational core pack. Domain or product
 templates live outside this repository and are seeded explicitly.
 
+Reserved domains also require explicit [governance authorization](governance-authorization.md)
+from the canonical config or direct SDK caller. Template seed/import evaluates
+the existing Meridian policy before using the database session; prefix ownership
+alone does not authorize a reserved domain.
+
 Current built-in core templates are exactly:
 
 - `actor/user/system/1.0`
@@ -24,14 +29,18 @@ Current built-in core templates are exactly:
 - `governance/position/scheme/1.0`
 - `evidence/repair/record/1.0`
 - `message/webhook/event/1.0`
-- `reference/external_identifier/tapdb_object/1.0`
+- `reference/external_identifier/tapdb_object/2.0`
 - `reference/external_identifier/opaque/1.0`
+- `reference/annotation/generic/1.0`
+- `governance/correction_receipt/generic/1.0`
+- `query/saved/generic/1.0`
+- `view/dag/generic/1.0`
 
 There is no passive inheritance of generic client-usable prefixes from TapDB
 core.
 
 For each configured owner scope, an authenticated database operator seeds the
-exact ten definitions shipped in TapDB's installed core directory. The
+exact fourteen definitions shipped in TapDB's installed core directory. The
 persisted template rows use that configured owner so the owner's NOBYPASSRLS
 runtime can create same-owner System User, external-reference, message, and
 lineage objects. This is a bounded core operation, not a client prefix claim:
@@ -42,10 +51,36 @@ exact bundled content. A client pack cannot gain `SYS`, `XRF`, `MSG`, `GVR`,
 `actor/user/system/1.0` exists for the optional bundled GUI/auth subsystem. It
 is not a universal business-domain primitive; future extraction of that
 optional subsystem is tracked by issue #12. A cross-service relationship uses
-the separate typed `reference/external_identifier/tapdb_object/1.0` object plus
+the separate typed `reference/external_identifier/tapdb_object/2.0` object plus
 lineage and must never reuse System User as an external-reference surrogate.
 
 ## JSON Pack Shape
+
+A template's version is a numeric identity coordinate, not a compatibility,
+priority, authorization, or major/minor signal. Do not infer behavior from its
+value or select a template by ordering versions. Native XRF paths read the exact
+identity declared by the installed template pack; version values are not coded
+into the writer, reader, search, graph, or lineage authorization rules.
+
+Loaded semantic definitions are immutable, including defaults, properties,
+validation schemas, names and prefix bindings. Give changed definitions a new
+template identity. Additive seeding (`overwrite=False`) preserves existing rows.
+`overwrite=True` now rejects changed semantic fields instead of rewriting them;
+it never reactivates deleted or retired definitions. Explicit lifecycle or
+migration bookkeeping must remain separate from semantic definitions and retain
+its audit/receipt evidence. Zero bound instances does not authorize an overwrite.
+
+Schema and allocator migration does not convert application objects. Historical
+templates, bound instances, deleted records and lineage retain their identities
+and definitions. Application-owned conversion must select exact records and
+preserve applicable allocator floors; it is not implied by an upgrade.
+
+For issue #111, the declared TapDB-object definition now has a distinct version
+coordinate in the core JSON pack. Historical `1.0` rows are neither overwritten
+nor relabeled. Native XRF APIs use the newly declared identity and do not
+reinterpret historical payloads. Services already storing references under an
+earlier declared identity must plan any object conversion explicitly before
+adopting a new pack; no generic compatibility reader is installed.
 
 Template packs are JSON documents with a top-level `templates` array.
 
@@ -97,7 +132,7 @@ Examples:
 
 - `actor/user/system/1.0/`
 - `message/webhook/event/1.0/`
-- `reference/external_identifier/tapdb_object/1.0/`
+- `reference/external_identifier/tapdb_object/2.0/`
 - `container/plate/96well-generic/1.0/`
 - `container/tube/1.5ml-eppi/1.0/`
 

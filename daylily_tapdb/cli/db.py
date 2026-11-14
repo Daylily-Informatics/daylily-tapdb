@@ -22,15 +22,13 @@ from sqlalchemy.exc import DBAPIError
 
 from daylily_tapdb import TAPDBConnection
 from daylily_tapdb.backup.engine import sanitized_libpq_environment
+from daylily_tapdb.cli.census import census
 from daylily_tapdb.cli.db_config import get_config_path, get_db_config
 from daylily_tapdb.cli.identity import identity_app
+from daylily_tapdb.cli.issuance import issuance_app
+from daylily_tapdb.cli.migration_run import archive_app, migration_run_app
 from daylily_tapdb.cli.runtime_principal import runtime_principal_app
 from daylily_tapdb.cli.sequences import sequences_app
-from daylily_tapdb.euid import (
-    AUDIT_LOG_PREFIX,
-    GENERIC_INSTANCE_LINEAGE_PREFIX,
-    GENERIC_TEMPLATE_PREFIX,
-)
 from daylily_tapdb.governance import GovernanceContext
 from daylily_tapdb.migration_identity import (
     MigrationPreflightError,
@@ -55,7 +53,7 @@ from daylily_tapdb.schema_inventory import (
     schema_asset_files,
     schema_root_candidates,
 )
-from daylily_tapdb.security_context import operator_role_assertion_sql
+from daylily_tapdb.security_context import assert_operator_role, operator_role_assertion_sql
 from daylily_tapdb.templates import (
     ConfigIssue as _ConfigIssue,
 )
@@ -131,28 +129,29 @@ def _shared_sequence_name(prefix: str) -> str:
 
 def _required_identity_prefixes(env: "Environment") -> dict[str, str]:
     """Return validated TapDB-managed identity prefixes for the namespace."""
-    return {
-        "generic_template": GENERIC_TEMPLATE_PREFIX,
-        "generic_instance_lineage": GENERIC_INSTANCE_LINEAGE_PREFIX,
-        "audit_log": AUDIT_LOG_PREFIX,
-    }
+    from daylily_tapdb.issuance import profile_from_config
+
+    return profile_from_config(_get_db_config(env)).identity_prefixes()
 
 
 def _sync_identity_prefix_config(env: "Environment") -> None:
     """Persist required identity prefix config and ensure backing sequences."""
     from daylily_tapdb.runtime_principal import grant_proven_runtime_sequences
+    from daylily_tapdb.issuance import issuance_profile_binding_sql, profile_from_config
 
     cfg = _get_db_config(env)
+    profile = profile_from_config(cfg)
     prefixes = _required_identity_prefixes(env)
-    core_governance = GovernanceContext.load(
-        domain_code=str(cfg["domain_code"]),
-        owner_repo_name=_TAPDB_CORE_OWNER,
-        domain_registry_path=str(cfg["domain_registry_path"]),
-        prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
-    )
-    for prefix in prefixes.values():
-        core_governance.require_prefix(prefix)
-    domain_code = core_governance.domain_code
+    for entity, prefix in prefixes.items():
+        governance = GovernanceContext.load(
+            domain_code=str(cfg["domain_code"]),
+            owner_repo_name=profile.identity_prefix_owner(entity, str(cfg["owner_repo_name"])),
+            domain_registry_path=str(cfg["domain_registry_path"]),
+            prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
+            governance_authorization=cfg.get("governance_authorization"),
+        )
+        governance.require_prefix(prefix)
+    domain_code = str(cfg["domain_code"])
     owner_repo_name = str(cfg["owner_repo_name"]).strip()
     if not owner_repo_name:
         raise ValueError("owner_repo_name is required for identity prefix sync")
@@ -198,6 +197,7 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
             connection.execute(
                 text(_set_operator_context_sql(str(cfg["schema_name"]), cfg))
             )
+            connection.execute(text(issuance_profile_binding_sql(cfg)))
             connection.execute(text(sql))
             grant_proven_runtime_sequences(connection, cfg)
     except DBAPIError as exc:
@@ -205,7 +205,8 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
         conflict = "Existing TapDB identity prefix configuration conflicts with the required registry"
         # Only this exact operator-authored SQL error is safe to render. Other
         # driver messages may contain row values or connection details.
-        message = conflict if primary == conflict else "Database transaction failed"
+        profile_conflict = "Existing native issuance profile conflicts with explicit configuration"
+        message = primary if primary in {conflict, profile_conflict} else "Database transaction failed"
         raise RuntimeError(f"Failed to sync identity prefix config: {message}") from exc
 
 
@@ -579,6 +580,10 @@ def _set_runtime_context_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
             + _quoted_sql_literal(owner_repo_name),
             "SET session.current_tenant_id = "
             + _quoted_sql_literal(str(cfg.get("tenant_id") or "")),
+            "SET session.additional_tenant_ids = "
+            + _quoted_sql_literal(
+                "{" + ",".join(cfg.get("additional_tenant_ids", ())) + "}"
+            ),
             "SET session.current_username = " + _quoted_sql_literal(actor),
             "SET session.allow_global_rows = "
             + _quoted_sql_literal(
@@ -645,6 +650,18 @@ def _runtime_scope_binding_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
     ):
         raise ValueError("runtime scope binding requires complete target identity")
     tenant_sql = "NULL" if not tenant_id else f"{_quoted_sql_literal(tenant_id)}::uuid"
+    from daylily_tapdb.security_context import canonical_additional_tenant_ids
+
+    additional_sql = (
+        _quoted_sql_literal(
+            "{"
+            + ",".join(
+                canonical_additional_tenant_ids(cfg.get("additional_tenant_ids", ()))
+            )
+            + "}"
+        )
+        + "::uuid[]"
+    )
     values = ", ".join(
         [
             _quoted_sql_literal(runtime_user),
@@ -653,6 +670,7 @@ def _runtime_scope_binding_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
             _quoted_sql_literal(domain_code),
             _quoted_sql_literal(owner_repo_name),
             tenant_sql,
+            additional_sql,
             "TRUE" if bool(cfg.get("allow_global_claims")) else "FALSE",
         ]
     )
@@ -663,6 +681,7 @@ def _runtime_scope_binding_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
             f"domain_code = {_quoted_sql_literal(domain_code)}",
             f"issuer_app_code = {_quoted_sql_literal(owner_repo_name)}",
             f"tenant_id IS NOT DISTINCT FROM {tenant_sql}",
+            f"additional_tenant_ids = {additional_sql}",
             "allow_global_rows IS "
             + ("TRUE" if bool(cfg.get("allow_global_claims")) else "FALSE"),
         ]
@@ -671,7 +690,7 @@ def _runtime_scope_binding_sql(schema_name: str, cfg: Mapping[str, Any]) -> str:
     return (
         "INSERT INTO tapdb_runtime_principal_scope "
         "(role_name, config_identity, schema_name, domain_code, issuer_app_code, "
-        f"tenant_id, allow_global_rows) VALUES ({values}) "
+        f"tenant_id, additional_tenant_ids, allow_global_rows) VALUES ({values}) "
         "ON CONFLICT (role_name) DO NOTHING; "
         "DO $tapdb_scope_binding$ BEGIN "
         "IF NOT EXISTS (SELECT 1 FROM tapdb_runtime_principal_scope "
@@ -845,6 +864,30 @@ def _schema_exists(env: Environment) -> bool:
         return False
 
 
+def _seed_operator_schema_exists(cfg: Mapping[str, Any]) -> bool:
+    """Verify the configured target/schema with the authenticated operator."""
+    schema_name = str(cfg["schema_name"])
+    with operator_connection(cfg, read_only=True) as connection:
+        exists = connection.execute(
+            text(
+                "SELECT EXISTS ("
+                "SELECT 1 FROM pg_catalog.pg_namespace n "
+                "JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid "
+                "WHERE n.nspname = :schema_name "
+                "AND c.relname = 'generic_template' AND c.relkind IN ('r', 'p')"
+                ")"
+            ),
+            {"schema_name": schema_name},
+        ).scalar_one()
+        if exists:
+            assert_operator_role(
+                connection,
+                schema_name=schema_name,
+                operator_user=str(cfg["operator_user"]),
+            )
+        return bool(exists)
+
+
 def _ensure_schema_exists(env: Environment) -> None:
     """Create the configured PostgreSQL schema when it is absent."""
     schema_name = _get_schema_name(env)
@@ -917,6 +960,11 @@ db_app.add_typer(config_app, name="config")
 db_app.add_typer(identity_app, name="identity")
 db_app.add_typer(sequences_app, name="sequences")
 db_app.add_typer(runtime_principal_app, name="runtime-principal")
+db_app.add_typer(issuance_app, name="issuance-profile")
+db_app.add_typer(migration_run_app, name="migration-run")
+db_app.add_typer(archive_app, name="archive")
+
+db_app.command("census")(census)
 
 
 @db_app.callback()
@@ -1096,8 +1144,15 @@ def db_schema_apply(
         "-r",
         help="Re-apply idempotent schema operations and refresh existing objects.",
     ),
+    claim_template_prefix: Annotated[bool, typer.Option(
+        "--claim-template-prefix", help="Register the configured template prefix to this explicit owner",
+    )] = False,
 ):
-    """Apply TAPDB schema to an existing database."""
+    """Apply TAPDB schema to an existing database.
+
+    Failures use SystemExit, as in the native backup CLI: cli_core_yo runs
+    Click with standalone_mode=False and discards a returned typer.Exit code.
+    """
     env = Environment.target
     _ensure_dirs()
     cfg = _get_db_config(env)
@@ -1111,25 +1166,36 @@ def db_schema_apply(
     ccyo_out.print_text(f"  User:     {cfg['user']}")
     ccyo_out.print_text("")
 
-    if not _check_db_exists(env, cfg["database"]):
-        ccyo_out.error(f"Database '{cfg['database']}' does not exist")
-        ccyo_out.print_text("  Create with: [cyan]tapdb db create[/cyan]")
-        raise typer.Exit(1)
+    # Schema application is an operator operation. Authenticate against the
+    # configured database, not the control database using the runtime login.
+    # A connection/authority failure must not be reported as database absence.
+    try:
+        schema_preexisted = _seed_operator_schema_exists(cfg)
+    except Exception as exc:
+        ccyo_out.error(
+            "Operator schema-apply preflight could not verify the configured "
+            f"database and schema ({type(exc).__name__})"
+        )
+        raise SystemExit(1) from exc
+
+    if claim_template_prefix:
+        from daylily_tapdb.issuance import claim_configured_template_prefix
+
+        claim_configured_template_prefix(cfg)
 
     try:
         schema_file = _find_schema_file()
         ccyo_out.success(f"Schema file: {schema_file}")
     except FileNotFoundError as e:
         ccyo_out.error(f"{e}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     try:
         _ensure_schema_exists(env)
     except RuntimeError as e:
         ccyo_out.error(f"{e}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
-    schema_preexisted = _schema_exists(env)
     if schema_preexisted:
         if reinitialize:
             ccyo_out.warning("► Reapplying schema to refresh existing TAPDB objects...")
@@ -1143,7 +1209,11 @@ def db_schema_apply(
     rls_file = schema_file.parent / "rls.sql"
     if not rls_file.is_file():
         ccyo_out.error(f"Required RLS schema asset not found: {rls_file}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
+    identity_file = schema_file.parent / "runtime_identity_authorization.sql"
+    if not identity_file.is_file():
+        ccyo_out.error(f"Required identity authorization asset not found: {identity_file}")
+        raise SystemExit(1)
     schema_name = _get_schema_name(env)
     runtime_user = str(cfg["user"])
     operator_user = str(_auth_for_connection_role(cfg, "operator")["user"])
@@ -1164,13 +1234,18 @@ def db_schema_apply(
             "SELECT set_config('session.allow_global_rows', 'true', true);",
         ]
     )
+    from daylily_tapdb.audit_storage import audit_writer_install_sql
     schema_bundle = (
         "BEGIN;\n"
         + operator_context
-        + "\n"
+        + "\nDO $v11_adoption_guard$ BEGIN IF to_regclass('generic_instance') IS NOT NULL AND to_regclass('tapdb_history_epoch') IS NULL THEN RAISE EXCEPTION 'TapDB 11 requires reviewed integrity-adopt; schema apply cannot adopt existing history'; END IF; END $v11_adoption_guard$;\n"
         + schema_file.read_text(encoding="utf-8")
         + "\n"
         + rls_file.read_text(encoding="utf-8")
+        + "\n"
+        + identity_file.read_text(encoding="utf-8")
+        + "\n"
+        + audit_writer_install_sql(str(cfg["database"]), schema_name, operator_user)
         + "\n"
         + _runtime_scope_binding_sql(schema_name, cfg)
         + ";\n"
@@ -1188,7 +1263,7 @@ def db_schema_apply(
     if not success:
         ccyo_out.error(f"Schema apply failed:\n{psql_out}")
         _log_operation(env.value, "SCHEMA_APPLY_FAILED", psql_out[:200])
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     _log_operation(env.value, "SCHEMA_APPLY", f"Schema applied from {schema_file}")
     ccyo_out.success("Schema applied successfully")
@@ -1198,14 +1273,14 @@ def db_schema_apply(
         ccyo_out.success("Identity prefixes synced")
     except (ValueError, RuntimeError) as e:
         ccyo_out.error(f"{e}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     if not schema_preexisted:
         try:
             _write_migration_baseline(env)
         except Exception as e:
             ccyo_out.error(f"Failed to write migration baseline: {e}")
-            raise typer.Exit(1)
+            raise SystemExit(1)
 
     ccyo_out.heading("Tables available:")
     for table in [
@@ -1289,55 +1364,40 @@ def db_schema_drift_check(
     ),
 ):
     """Detect TAPDB schema drift against canonical TAPDB schema assets."""
+    from cli_core_yo.runtime import get_context
+
+    json_output = bool(json_output or get_context().json_mode)
     env = Environment.target
     cfg = _get_db_config(env)
-    if not _check_db_exists(env, cfg["database"]):
-        message = f"Database '{cfg['database']}' does not exist"
+
+    def emit_failure(message: str) -> None:
         if json_output:
-            ccyo_out.print_text(
-                json.dumps(
-                    {
-                        "status": "error",
-                        "target": "explicit",
-                        "database": cfg["database"],
-                        "schema_name": cfg["schema_name"],
-                        "strict": strict,
-                        "error": message,
-                    },
-                    indent=2,
-                    sort_keys=True,
-                )
+            ccyo_out.emit_json(
+                {
+                    "status": "error",
+                    "target": "explicit",
+                    "database": cfg["database"],
+                    "schema_name": cfg["schema_name"],
+                    "strict": strict,
+                    "error": message,
+                }
             )
         else:
-            ccyo_out.error(f"{message}")
-        raise typer.Exit(2)
+            ccyo_out.error(message)
+
+    if not _check_db_exists(env, cfg["database"]):
+        emit_failure(f"Database '{cfg['database']}' does not exist")
+        raise SystemExit(2)
 
     try:
         payload, has_drift = _run_schema_drift_check(env, strict=strict)
     except Exception as exc:
-        message = str(exc)
-        if json_output:
-            ccyo_out.print_text(
-                json.dumps(
-                    {
-                        "status": "error",
-                        "target": "explicit",
-                        "database": cfg["database"],
-                        "schema_name": cfg["schema_name"],
-                        "strict": strict,
-                        "error": message,
-                    },
-                    indent=2,
-                    sort_keys=True,
-                )
-            )
-        else:
-            ccyo_out.error(f"Drift check failed: {message}")
-        raise typer.Exit(2) from exc
+        emit_failure(str(exc))
+        raise SystemExit(2) from exc
 
     if json_output:
-        ccyo_out.print_text(json.dumps(payload, indent=2, sort_keys=True))
-        raise typer.Exit(1 if has_drift else 0)
+        ccyo_out.emit_json(payload)
+        raise SystemExit(1 if has_drift else 0)
 
     schema_name = payload.get("schema_name") or "(not found)"
     ccyo_out.print_text(
@@ -1364,7 +1424,7 @@ def db_schema_drift_check(
                 ccyo_out.print_text(f"  {category} ({len(values)}):")
                 for value in values:
                     ccyo_out.print_text(f"    - {value}")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     ccyo_out.success("\nNo TAPDB schema drift detected")
 
@@ -1516,6 +1576,8 @@ def db_nuke(
     DROP FUNCTION IF EXISTS meridian_euid_sandbox_prefix(TEXT);
     DROP FUNCTION IF EXISTS meridian_euid_prefix(TEXT);
     DROP FUNCTION IF EXISTS meridian_euid_seq_from_euid(TEXT);
+    DROP FUNCTION IF EXISTS meridian_euid_matches(TEXT, TEXT, BIGINT, TEXT);
+    DROP FUNCTION IF EXISTS meridian_euid_parts(TEXT);
     DROP FUNCTION IF EXISTS crockford_base32_decode(TEXT);
     DROP FUNCTION IF EXISTS soft_delete_row();
     DROP FUNCTION IF EXISTS record_update();
@@ -1624,6 +1686,8 @@ def db_migrate(
     ] = None,
 ):
     """Preflight or transactionally apply identity-preserving migrations."""
+    def progress(message: str) -> None:
+        typer.echo(f"Migration: {message}", err=True)
     env = Environment.target
     cfg = _get_db_config(env)
 
@@ -1703,6 +1767,12 @@ def db_migrate(
         "domain_code": cfg["domain_code"],
         "owner_repo_name": cfg["owner_repo_name"],
         **({"server_port": cfg["server_port"]} if "server_port" in cfg else {}),
+        **({"inventory_mode": cfg["inventory_mode"]} if "inventory_mode" in cfg else {}),
+        **(
+            {"inventory_limits": cfg["inventory_limits"]}
+            if "inventory_limits" in cfg
+            else {}
+        ),
     }
     try:
         if sequence_mappings is not None:
@@ -1720,7 +1790,9 @@ def db_migrate(
                     source_contract=historical,
                     receipts_dir=receipts_dir,
                     recovery_family=family,
+                    progress=progress,
                 )
+            progress("Writing preflight receipt")
             write_json_receipt(receipt, payload)
             ccyo_out.success(
                 f"Preflight captured: {len(payload['pending_migrations'])} pending"
@@ -1761,6 +1833,7 @@ def db_migrate(
                 control_connection = session_stack.enter_context(
                     operator_session(control_cfg, isolation_level="REPEATABLE READ")
                 )
+                progress("Acquiring the native database writer fence")
                 gate = acquire_database_writer_fence(
                     connection,
                     control_connection=control_connection,
@@ -1787,7 +1860,9 @@ def db_migrate(
                         target=target,
                         writer_fence=fence,
                         receipts_dir=receipts_dir,
+                        progress=progress,
                     )
+                    progress("Committing migration transaction")
                     apply_returned = True
             except Exception as apply_error:
                 intent = getattr(apply_error, "recovery_intent", None)
@@ -1813,6 +1888,7 @@ def db_migrate(
                     )
                 # Commit exceptions are ambiguous, never labelled aborted.
                 raise
+            progress("Finalizing native committed recovery evidence")
             with connection.begin():
                 completion = finalize_migration_recovery(
                     connection,
@@ -1821,6 +1897,7 @@ def db_migrate(
                     writer_fence=fence,
                 )
             if gate is not None:
+                progress("Releasing the native writer fence")
                 gate_release = release_database_writer_fence(
                     connection,
                     gate,
@@ -1828,6 +1905,7 @@ def db_migrate(
                     receipts_dir=receipts_dir,
                     control_connection=control_connection,
                 )
+        progress("Writing committed migration receipt")
         write_json_receipt(
             receipt,
             {
@@ -2192,6 +2270,7 @@ def _tapdb_connection_for_env(
     *,
     app_username: str,
     connection_role: str = "runtime",
+    attribution=None,
 ) -> TAPDBConnection:
     cfg = _get_db_config(env)
     engine_type = str(cfg["engine_type"]).strip().lower()
@@ -2208,10 +2287,13 @@ def _tapdb_connection_for_env(
         region=region,
         iam_auth=auth["iam_auth"],
         app_username=app_username,
+        attribution=attribution,
         domain_code=str(cfg["domain_code"]),
         owner_repo_name=str(cfg["owner_repo_name"]),
+        issuance_profile=cfg["issuance_profile"],
         schema_name=str(cfg["schema_name"]),
         tenant_id=str(cfg.get("tenant_id") or "") or None,
+        additional_tenant_ids=tuple(cfg.get("additional_tenant_ids", ())),
         allow_global_rows=bool(cfg.get("allow_global_claims")),
         config_identity=str(cfg["config_path"]),
         echo_sql=False,
@@ -2256,6 +2338,7 @@ def _create_default_admin(env: Environment, insecure_dev_defaults: bool) -> bool
             app_username="tapdb_admin",
             domain_code=str(cfg["domain_code"]),
             owner_repo_name=str(cfg["owner_repo_name"]),
+            issuance_profile=cfg["issuance_profile"],
             schema_name=str(cfg["schema_name"]),
             config_identity=str(cfg["config_path"]),
             echo_sql=False,
@@ -2300,7 +2383,7 @@ def db_seed(
     skip_existing: bool = typer.Option(
         True,
         "--skip-existing/--overwrite",
-        help="Skip existing templates (overwrite uses upsert)",
+        help="Skip existing templates; --overwrite validates immutable definitions and rejects semantic changes",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be seeded without making changes"
@@ -2339,13 +2422,17 @@ def db_seed(
     for directory in seed_config_dirs:
         ccyo_out.print_text(f"  - {directory}")
 
-    # Check database and schema exist
-    if not _check_db_exists(env, cfg["database"]):
-        ccyo_out.error(f"Database '{cfg['database']}' does not exist")
-        ccyo_out.print_text("  Create with: [cyan]tapdb db create[/cyan]")
-        raise SystemExit(1)
-
-    if not _schema_exists(env):
+    # The seed writer uses the operator. Its preflight must authenticate the
+    # same physical role and exact database before inspecting the schema.
+    try:
+        schema_exists = _seed_operator_schema_exists(cfg)
+    except Exception as exc:
+        ccyo_out.error(
+            "Operator seed preflight could not verify the configured database "
+            f"and schema ({type(exc).__name__})"
+        )
+        raise SystemExit(1) from exc
+    if not schema_exists:
         ccyo_out.error("TAPDB schema not found")
         ccyo_out.print_text("  Initialize with: [cyan]tapdb db schema apply[/cyan]")
         raise SystemExit(1)
@@ -2413,6 +2500,9 @@ def db_seed(
     ccyo_out.warning("\n► Seeding templates...")
     from daylily_tapdb.runtime_principal import grant_proven_runtime_sequences
 
+    from daylily_tapdb.security_context import Attribution
+    from uuid import uuid4
+
     overwrite = not skip_existing
     failed = 0
     try:
@@ -2420,6 +2510,7 @@ def db_seed(
             env,
             app_username="tapdb_template_seed",
             connection_role="operator",
+            attribution=Attribution("service", "daylily-tapdb", "template-seed", "tapdb-cli", str(uuid4()), "template-seed"),
         ) as conn:
             # Select the snapshot before session_scope installs transaction
             # context with its first query. Do not change isolation mid-flight.
@@ -2428,6 +2519,7 @@ def db_seed(
                 summary = _loader_seed_templates(
                     session,
                     templates,
+                    issuance_profile=conn.issuance_profile,
                     overwrite=overwrite,
                     core_config_dir=_loader_find_tapdb_core_config_dir(),
                     domain_code=str(_get_db_config(env)["domain_code"]),
@@ -2438,6 +2530,7 @@ def db_seed(
                     prefix_registry_path=str(
                         _get_db_config(env)["prefix_ownership_registry_path"]
                     ),
+                    governance_authorization=cfg.get("governance_authorization"),
                 )
                 grant_proven_runtime_sequences(session, cfg)
     except Exception as exc:
