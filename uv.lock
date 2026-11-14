@@ -504,7 +504,7 @@ wheels = [
 
 [[package]]
 name = "daylily-auth-cognito"
-version = "2.1.5"
+version = "2.1.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -516,9 +516,9 @@ dependencies = [
     { name = "rich" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/02/af8947a387570c09bc4b32c93935619a3bb742ff2505b0b44ccf8ffa9337/daylily_auth_cognito-2.1.5.tar.gz", hash = "sha256:407b73e22c72935652471c10a35481a7f415cc4c16aa3430632152cb2d3bf44a", size = 77340, upload-time = "2026-04-27T18:04:22.37Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e3/24/078f8e7114527d05f31fe306121b67cd64c88cd6f8b85f3d4ab3af26e604/daylily_auth_cognito-2.1.9.tar.gz", hash = "sha256:c20876a033606a4af3ebf43243db8e5750b539fdd5469cf724a188ec01bb116a", size = 67988, upload-time = "2026-10-14T06:23:45.675Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/8d/bac93d358a84a2c288a82dfb9480781597721992942063d51bfdacb564d4/daylily_auth_cognito-2.1.5-py3-none-any.whl", hash = "sha256:77499606791b90bfbe3a85a32f0dd0b70c70c085cd26fe33a15771baf1485081", size = 49918, upload-time = "2026-04-27T18:04:21.345Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/63/faa9ae0788ae55a10b4c03ec193cbba07692ea9c9defc85c1e121954b6e7/daylily_auth_cognito-2.1.9-py3-none-any.whl", hash = "sha256:2cfdf832be3a19210706fd2c4377cfc004dae98410a887449ed99bcc1ffae62d", size = 51170, upload-time = "2026-10-14T06:23:44.522Z" },
 ]
 
 [[package]]
@@ -580,7 +580,7 @@ requires-dist = [
     { name = "botocore", marker = "extra == 'aurora'" },
     { name = "cli-core-yo", specifier = "==2.1.1" },
     { name = "cli-core-yo", marker = "extra == 'dev'", specifier = "==2.1.1" },
-    { name = "daylily-auth-cognito", marker = "extra == 'gui'", specifier = "==2.1.5" },
+    { name = "daylily-auth-cognito", marker = "extra == 'gui'", specifier = "==2.1.9" },
     { name = "detect-secrets", marker = "extra == 'dev'", specifier = ">=1.4" },
     { name = "fastapi", marker = "extra == 'api'" },
     { name = "fastapi", marker = "extra == 'gui'" },
@@ -603,7 +603,7 @@ requires-dist = [
     { name = "rich" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1" },
     { name = "setuptools-scm", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "sqlalchemy", specifier = ">=2.0,<2.1" },
     { name = "typer" },
     { name = "uuid6", specifier = ">=2024.1.12" },
     { name = "uvicorn", marker = "extra == 'gui'" },

@@ -762,6 +762,9 @@ def cognito_add_app(
         "openid,email,profile", "--scopes", help="OAuth scopes CSV"
     ),
     idps: str = typer.Option("COGNITO", "--idp", help="Identity providers CSV"),
+    read_attributes: Optional[str] = typer.Option(
+        None, "--read-attributes", help="Explicit readable Cognito attributes CSV for the selected pool"
+    ),
     set_default: bool = typer.Option(
         False,
         "--set-default",
@@ -797,6 +800,8 @@ def cognito_add_app(
     ]
     if selected_profile:
         args.extend(["--profile", selected_profile])
+    if read_attributes is not None:
+        args.extend(["--read-attributes", read_attributes])
     if logout_url:
         args.extend(["--logout-url", logout_url])
     if generate_secret:

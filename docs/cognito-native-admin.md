@@ -23,7 +23,7 @@ flowchart LR
 Set `target.cognito_auth_config_path` using
 `tapdb db-config update --cognito-auth-config-path` and an absolute path. Every
 TapDB-to-Daycog command passes that exact file with `daycog --config`. Native
-Daycog 2.1.5 uses a flat file. Legacy `contexts` / `active_context` stores,
+Daycog 2.1.9 uses a flat file. Legacy `contexts` / `active_context` stores,
 home-directory inference, environment-shaped context emulation and automatic
 format conversion are not supported.
 
@@ -41,7 +41,12 @@ A binding never overwrites that separately supplied secret.
 Use these commands with the selected TapDB target config and actual values:
 
 1. `cognito add-app --pool-name ... --app-name tapdb --profile ... --region ...
-   --callback-url ... --logout-url ...` delegates native app-client creation.
+   --callback-url ... --logout-url ... --read-attributes ...` delegates native
+   app-client creation. Supply explicit comma-separated readable attribute names
+   supported by the selected pool. Include only attributes needed by this client;
+   custom attributes retain their native `custom:` names. The wrapper forwards
+   this list unchanged to Daycog's published CLI. Daycog retains its existing
+   email-only write permission for the new client.
    It rejects an existing client; it does not edit the pool, an existing client
    or the pool's hosted domain. The callback/logout URLs must describe the
    selected HTTPS GUI.
@@ -67,6 +72,14 @@ Use these commands with the selected TapDB target config and actual values:
 The Cognito identity is created before the TapDB actor. If actor creation fails,
 the command reports that partial result and stops. There is no automatic retry,
 account deletion, privilege upgrade or alternate authentication path.
+
+For a pool exposing `custom:tenant_id`, include that exact name in the explicit
+read-attribute list. This permits reading the existing verified claim; it does
+not create a claim value, provision membership, or authorize a tenant. The host
+application maps verified claims into its native UUID `tenant_id` context and
+enforces its own membership and role rules. Cognito subjects identify users;
+tenant IDs identify data scope; Meridian issuance ownership is independent of
+both. A `custom:customer_id` attribute is not a substitute for that contract.
 
 `cognito setup` and `setup-with-google` retain native pool provisioning. They
 require an explicit pool name, region and AWS profile and write the same native
