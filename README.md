@@ -66,13 +66,14 @@ but never becomes the relationship authority.
 
 ## Install
 
-TapDB **11.0.0** is published on [PyPI](https://pypi.org/project/daylily-tapdb/11.0.0/)
-and [GitHub](https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/11.0.0).
-It introduces breaking audit, attribution, history and reference
-contracts. Read the [release notes](docs/tapdb-11-release-notes.md) and
-[consumer adoption guide](docs/tapdb-11-integrity.md) before upgrading an existing
-service. Publication and qualification receipts are in the
-[release ledger](docs/plans/20260929_tapdb_integrity_11_ledger.md).
+TapDB **13.2.0** reconciles canonical template-prefix overrides and split
+template/instance issuance, retaining runtime GUI/API template authoring,
+typed lookup, external references, saved queries, revisions and history.
+Use the same numeric version from [PyPI](https://pypi.org/project/daylily-tapdb/13.2.0/)
+and [GitHub](https://github.com/Daylily-Informatics/daylily-tapdb/releases/tag/13.2.0).
+See the [13.2 adoption contract](docs/tapdb-13.2-release-notes.md) before
+upgrading a database. The [TapDB 11 integrity contract](docs/tapdb-11-integrity.md)
+still governs attribution, audit, revisions and external references.
 
 Python 3.12 or newer is required. TapDB 11's focused qualification used isolated
 community PostgreSQL 16.13; it is not an Aurora cutover or production acceptance.
@@ -93,7 +94,7 @@ claim that existing temporary objects were removed. The qualified
 managed-allocator resolution remains required defense in depth.
 
 ```bash
-python -m pip install "daylily-tapdb[cli,gui]"
+python -m pip install "daylily-tapdb[aurora,gui]==13.2.0"
 ```
 
 TapDB pins `meridian-euid==0.4.8`. Consumers must not replace that pin with an

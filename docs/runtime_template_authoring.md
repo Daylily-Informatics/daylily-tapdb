@@ -119,3 +119,45 @@ POST mutation routes were removed; the HTML GET pages remain views.
 `QueryExecutor` definitions. The mapping is passed to the canonical saved-query
 router; hosts do not mount a second saved-query API. See
 [saved queries](saved_queries.md) for definition ownership and execution contracts.
+
+## Dedicated template identifiers
+
+Canonical issuance can explicitly select a repository-owned `template_prefix`:
+
+```yaml
+meta:
+  issuance_profile:
+    version: 1
+    mode: canonical
+    template_prefix: RGT
+```
+
+This changes the EUID allocator for future templates in the configured
+owner/domain. It does not change a template's `instance_prefix`, stored EUIDs,
+relationships, audit identifiers or core-instance semantics. Application
+instance prefixes remain declared by their native templates.
+
+For a fresh target, use native `db-config update --issuance-profile-json` to
+author the explicit profile before schema creation. The optional native
+`db schema apply --claim-template-prefix` registers that selected canonical
+template prefix to the configured owner. Complete the registry's historical
+first-assignment review before making a new claim; conflicting ownership fails.
+
+For an existing target, retain its old config and use the receipt-bound native
+`db issuance-profile transition` operation with exact `--expected-profile-json`,
+`--new-profile-json` and an absolute `--receipt` path. Supply explicit root
+`--attribution`. Review the returned plan, then apply that same request and
+receipt with `--apply`. Only after native success, update the configuration to
+the returned new profile and restart its consumers. This replaces the 13.1
+`db schema apply --adopt-template-prefix-from` path.
+
+The transition supports canonical template-prefix changes and
+`single_prefix` to `template_split`, preserving the instance policy and all
+previous EUIDs. A later split profile may change its template prefix without
+changing the base prefix. Native schema apply/migrate reconciles the 13.0.3 and
+13.1 constraints; installing a package alone does not migrate a database.
+
+Bloom's explicit split profile uses `prefix: BG` and `template_prefix: BTX`.
+This is distinct from a canonical profile: every new non-template identity,
+including lineage, audit and core instances, remains under its base prefix.
+Runtime services retain constrained accounts and read-only registry mounts.

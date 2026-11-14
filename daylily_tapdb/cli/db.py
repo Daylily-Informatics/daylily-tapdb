@@ -141,16 +141,16 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
     cfg = _get_db_config(env)
     profile = profile_from_config(cfg)
     prefixes = _required_identity_prefixes(env)
-    core_governance = GovernanceContext.load(
-        domain_code=str(cfg["domain_code"]),
-        owner_repo_name=profile.core_prefix_owner(str(cfg["owner_repo_name"])),
-        domain_registry_path=str(cfg["domain_registry_path"]),
-        prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
-        governance_authorization=cfg.get("governance_authorization"),
-    )
-    for prefix in prefixes.values():
-        core_governance.require_prefix(prefix)
-    domain_code = core_governance.domain_code
+    for entity, prefix in prefixes.items():
+        governance = GovernanceContext.load(
+            domain_code=str(cfg["domain_code"]),
+            owner_repo_name=profile.identity_prefix_owner(entity, str(cfg["owner_repo_name"])),
+            domain_registry_path=str(cfg["domain_registry_path"]),
+            prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
+            governance_authorization=cfg.get("governance_authorization"),
+        )
+        governance.require_prefix(prefix)
+    domain_code = str(cfg["domain_code"])
     owner_repo_name = str(cfg["owner_repo_name"]).strip()
     if not owner_repo_name:
         raise ValueError("owner_repo_name is required for identity prefix sync")
@@ -1141,6 +1141,9 @@ def db_schema_apply(
         "-r",
         help="Re-apply idempotent schema operations and refresh existing objects.",
     ),
+    claim_template_prefix: Annotated[bool, typer.Option(
+        "--claim-template-prefix", help="Register the configured template prefix to this explicit owner",
+    )] = False,
 ):
     """Apply TAPDB schema to an existing database."""
     env = Environment.target
@@ -1167,6 +1170,11 @@ def db_schema_apply(
             f"database and schema ({type(exc).__name__})"
         )
         raise typer.Exit(1) from exc
+
+    if claim_template_prefix:
+        from daylily_tapdb.issuance import claim_configured_template_prefix
+
+        claim_configured_template_prefix(cfg)
 
     try:
         schema_file = _find_schema_file()

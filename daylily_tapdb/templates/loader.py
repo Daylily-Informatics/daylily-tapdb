@@ -963,7 +963,7 @@ def _validate_seed_ownership(
     _assert_prefix_claimed(
         domain_code=domain_code,
         prefix=issuance_profile.identity_prefix("generic_template"),
-        owner_repo_name=issuance_profile.core_prefix_owner(owner_repo_name),
+        owner_repo_name=issuance_profile.identity_prefix_owner("generic_template", owner_repo_name),
         prefix_registry=prefix_registry,
         source=str(prefix_registry_path),
     )

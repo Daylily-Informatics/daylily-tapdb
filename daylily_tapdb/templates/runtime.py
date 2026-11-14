@@ -133,7 +133,7 @@ def author_templates(
     """
     pack = RuntimeTemplatePack.model_validate(payload)
     template_prefix = issuance_profile.identity_prefix("generic_template")
-    if issuance_profile.mode != "canonical":
+    if issuance_profile.mode != "canonical" or issuance_profile.template_prefix is not None:
         governance.require_prefix(template_prefix)
     require_identity_prefix_sequence(session, "generic_template", template_prefix)
     core_coordinates = {

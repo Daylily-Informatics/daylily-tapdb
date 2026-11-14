@@ -102,6 +102,7 @@ be established before a second database starts issuing identities.
 `db-config init` requires `--issuance-profile-json`; `db-config update` accepts
 the same flag to replace the complete requested profile. The supported shapes
 are `{"version":1,"mode":"canonical"}`,
+`{"version":1,"mode":"canonical","template_prefix":"RGT"}`,
 `{"version":1,"mode":"single_prefix","prefix":"BG"}` and
 `{"version":1,"mode":"template_split","prefix":"BG","template_prefix":"BTX"}`.
 Every field shown is explicit; prefixes are exact registered values, and a
@@ -109,7 +110,12 @@ split requires distinct base and template prefixes. Changing a config
 does not rewrite a persisted database profile. Native schema bootstrap binds
 the profile to `(domain_code, issuer_app_code)` and rejects a conflicting
 existing binding. Upgrading a package/config alone does not install this schema
-contract on an existing database.
+contract on an existing database. Canonical issuance may override only the
+template allocator; each application's declared instance prefixes and all core
+instance/edge/audit allocations remain canonical. That explicit template prefix
+belongs to the deployment owner, while canonical core prefixes retain their
+native core owner. Existing profile changes use `db issuance-profile transition`
+with an exact old/new profile and its native plan/apply receipt.
 
 `db-config update --additional-tenant-ids-json` replaces the complete additional
 tenant allowlist using native UUID validation. Use an explicit JSON array,

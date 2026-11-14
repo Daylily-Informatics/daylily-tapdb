@@ -34,8 +34,13 @@ class IssuanceProfile:
         if not isinstance(self.mode, str) or self.mode not in {"canonical", "single_prefix", "template_split"}:
             raise ValueError("issuance_profile.mode must be canonical, single_prefix, or template_split")
         if self.mode == "canonical":
-            if self.prefix is not None or self.template_prefix is not None:
-                raise ValueError("canonical issuance_profile must not specify allocation prefixes")
+            if self.prefix is not None:
+                raise ValueError("canonical issuance_profile must not specify prefix")
+            if self.template_prefix is not None and (
+                not isinstance(self.template_prefix, str)
+                or normalize_prefix(self.template_prefix) != self.template_prefix
+            ):
+                raise ValueError("canonical template_prefix requires an exact Meridian prefix")
         elif not isinstance(self.prefix, str) or normalize_prefix(self.prefix) != self.prefix:
             raise ValueError("Noncanonical issuance_profile requires an exact Meridian prefix")
         if self.mode == "template_split":
@@ -45,8 +50,8 @@ class IssuanceProfile:
                 or self.template_prefix == self.prefix
             ):
                 raise ValueError("template_split requires a distinct exact template_prefix")
-        elif self.template_prefix is not None:
-            raise ValueError("Only template_split may specify template_prefix")
+        elif self.mode == "single_prefix" and self.template_prefix is not None:
+            raise ValueError("single_prefix cannot specify template_prefix; use template_split")
 
     @classmethod
     def from_mapping(cls, value: Any) -> IssuanceProfile:
@@ -55,7 +60,7 @@ class IssuanceProfile:
         required = {"version", "mode"}
         if value.get("mode") in {"single_prefix", "template_split"}:
             required.add("prefix")
-        if value.get("mode") == "template_split":
+        if value.get("mode") == "template_split" or "template_prefix" in value:
             required.add("template_prefix")
         if set(value) != required:
             raise ValueError(f"issuance_profile must contain exactly {sorted(required)}")
@@ -65,7 +70,7 @@ class IssuanceProfile:
         result: dict[str, Any] = {"version": self.version, "mode": self.mode}
         if self.mode != "canonical":
             result["prefix"] = self.prefix
-        if self.mode == "template_split":
+        if self.template_prefix is not None:
             result["template_prefix"] = self.template_prefix
         return result
 
@@ -91,7 +96,7 @@ class IssuanceProfile:
             canonical = EUIDConfig().CORE_PREFIXES[entity]
         except KeyError as exc:
             raise ValueError(f"Unknown native identity entity: {entity!r}") from exc
-        if entity == "generic_template" and self.mode == "template_split":
+        if entity == "generic_template" and self.template_prefix is not None:
             return cast(str, self.template_prefix)
         return self.instance_prefix(canonical)
 
@@ -100,6 +105,11 @@ class IssuanceProfile:
 
     def core_prefix_owner(self, owner_repo_name: str) -> str:
         return "daylily-tapdb" if self.mode == "canonical" else owner_repo_name
+
+    def identity_prefix_owner(self, entity: str, owner_repo_name: str) -> str:
+        if entity == "generic_template" and self.template_prefix is not None:
+            return owner_repo_name
+        return self.core_prefix_owner(owner_repo_name)
 
     def project_core_template(self, canonical: Mapping[str, Any]) -> dict[str, Any]:
         """Project an already authenticated bundled definition, preserving type."""
@@ -114,7 +124,7 @@ def profile_from_config(cfg: Mapping[str, Any]) -> IssuanceProfile:
 
 
 def issuance_profile_binding_sql(cfg: Mapping[str, Any]) -> str:
-    """Native operator bootstrap/adoption binding; never rewrite a prior profile.
+    """Native binding; existing profile changes use the receipt-bound lifecycle.
 
     This control table has no EUID allocation. The caller owns the authenticated
     operator transaction and schema lifecycle.
@@ -148,6 +158,53 @@ def issuance_profile_binding_sql(cfg: Mapping[str, Any]) -> str:
     VALUES ({domain}, {owner}, {profile.version}, {mode}, {prefix}, {template_prefix})
     ON CONFLICT (domain_code, issuer_app_code) DO NOTHING;
     """
+
+
+def claim_configured_template_prefix(cfg: Mapping[str, Any]) -> None:
+    """Register the explicitly selected canonical template prefix.
+
+    Registry first-assignment review remains an operator prerequisite. This
+    operation never discovers a replacement prefix or changes another claim.
+    """
+    import fcntl
+    import json
+    import os
+    from pathlib import Path
+    from tempfile import NamedTemporaryFile
+
+    from daylily_tapdb.governance import (
+        assert_registered_domain, load_prefix_ownership_registry, normalize_owner_repo_name,
+    )
+
+    profile = profile_from_config(cfg)
+    if profile.mode != "canonical" or not profile.template_prefix:
+        raise ValueError("An explicit canonical template_prefix is required for registration")
+    domain = assert_registered_domain(str(cfg["domain_code"]),
+        path=str(cfg["domain_registry_path"]), governance_authorization=cfg.get("governance_authorization"))
+    owner = normalize_owner_repo_name(str(cfg["owner_repo_name"]))
+    path = Path(cfg["prefix_ownership_registry_path"])
+    if not path.is_absolute():
+        raise ValueError("An absolute prefix ownership registry path is required")
+    with Path(str(path) + ".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        registered = load_prefix_ownership_registry(path).get((domain, profile.template_prefix))
+        if registered is not None:
+            if registered != owner:
+                raise ValueError("Configured template prefix is already owned by another repository")
+            return
+        value = json.loads(path.read_text())
+        claims = value["ownership"][domain]
+        if not isinstance(claims, dict):
+            raise ValueError("The selected domain requires an explicit ownership mapping")
+        claims[profile.template_prefix] = {"issuer_app_code": owner}
+        attributes = path.stat()
+        with NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(value, output, indent=2)
+            output.write("\n")
+            os.chmod(temporary, attributes.st_mode & 0o777)
+            os.chown(temporary, attributes.st_uid, attributes.st_gid)
+        temporary.replace(path)
 
 
 def install_engine_profile(engine: Any, profile: IssuanceProfile, *, owner_repo_name: str) -> None:

@@ -20,10 +20,10 @@ issuance_app = typer.Typer(help="Receipt-bound prospective native issuance profi
 @issuance_app.command("transition")
 def transition(
     expected_profile_json: str = typer.Option(
-        ..., "--expected-profile-json", help="Exact existing single_prefix profile JSON"
+        ..., "--expected-profile-json", help="Exact existing native issuance profile JSON"
     ),
     new_profile_json: str = typer.Option(
-        ..., "--new-profile-json", help="Exact template_split JSON preserving the base prefix"
+        ..., "--new-profile-json", help="Exact requested profile preserving instance allocation"
     ),
     receipt: Path = typer.Option(
         ..., "--receipt", help="Absolute plan receipt: create first, consume unchanged with --apply"

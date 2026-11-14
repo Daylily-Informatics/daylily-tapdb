@@ -17,7 +17,10 @@ BEGIN
     IF profile.version <> 1 THEN
         RAISE EXCEPTION 'Unsupported native issuance profile version %', profile.version;
     END IF;
-    IF profile.mode = 'canonical' AND profile.prefix IS NULL AND profile.template_prefix IS NULL THEN
+    IF profile.mode = 'canonical' AND profile.prefix IS NULL THEN
+        IF profile.template_prefix IS NOT NULL THEN
+            PERFORM tapdb_validate_meridian_prefix(profile.template_prefix);
+        END IF;
         RETURN tapdb_validate_meridian_prefix(declared_prefix);
     ELSIF profile.mode = 'single_prefix' AND profile.prefix IS NOT NULL AND profile.template_prefix IS NULL THEN
         RETURN tapdb_validate_meridian_prefix(profile.prefix);
@@ -77,7 +80,7 @@ BEGIN
         'SELECT mode, template_prefix FROM %I.tapdb_issuance_profile '
         'WHERE domain_code = $1 AND issuer_app_code = $2', pg_catalog.current_schema()
     ) INTO profile USING dc, owner_repo_name;
-    IF entity_name = 'generic_template' AND profile.mode = 'template_split' THEN
+    IF entity_name = 'generic_template' AND profile.template_prefix IS NOT NULL THEN
         expected := tapdb_validate_meridian_prefix(profile.template_prefix);
     END IF;
     prefix := tapdb_validate_meridian_prefix(prefix);
@@ -104,7 +107,7 @@ DECLARE
     dc TEXT;
     seq_val BIGINT;
     seq_name TEXT;
-    profile_mode TEXT;
+    template_allocator TEXT;
 BEGIN
     -- Populate domain_code and issuer_app_code from session context
     NEW.domain_code := tapdb_current_domain_code();
@@ -131,10 +134,10 @@ BEGIN
         seq_val := COALESCE(NEW.euid_seq, meridian_euid_seq_from_euid(NEW.euid));
         dc := meridian_euid_domain_code(NEW.euid);
         EXECUTE pg_catalog.format(
-            'SELECT mode FROM %I.tapdb_issuance_profile '
+            'SELECT template_prefix FROM %I.tapdb_issuance_profile '
             'WHERE domain_code = $1 AND issuer_app_code = $2', TG_TABLE_SCHEMA
-        ) INTO profile_mode USING NEW.domain_code, NEW.issuer_app_code;
-        IF profile_mode = 'template_split' THEN
+        ) INTO template_allocator USING NEW.domain_code, NEW.issuer_app_code;
+        IF template_allocator IS NOT NULL THEN
             prefix := tapdb_validate_meridian_prefix(prefix);
             IF prefix IS DISTINCT FROM tapdb_get_identity_prefix('generic_template') THEN
                 RAISE EXCEPTION 'Provided template EUID prefix conflicts with explicit template issuance prefix';

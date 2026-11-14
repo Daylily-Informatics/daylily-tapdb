@@ -1,7 +1,8 @@
 """Receipt-bound prospective template allocator transition for native operators.
 
-Only single_prefix -> template_split is supported. The existing base prefix,
-domain, owner, runtime scope, templates, object EUIDs and history are preserved.
+Supports canonical template-prefix changes and single_prefix -> template_split.
+The base instance policy, domain, owner, runtime scope, object EUIDs and history
+are preserved. A later template_split profile may change only template_prefix.
 """
 
 from __future__ import annotations
@@ -41,9 +42,12 @@ def _profiles(
     cfg: Mapping[str, Any], expected: Mapping[str, Any], requested: Mapping[str, Any],
 ) -> tuple[IssuanceProfile, IssuanceProfile]:
     before, after = IssuanceProfile.from_mapping(expected), IssuanceProfile.from_mapping(requested)
-    if before.mode != "single_prefix" or after.mode != "template_split" or before.prefix != after.prefix:
+    canonical_change = before.mode == after.mode == "canonical"
+    split_change = before.mode in {"single_prefix", "template_split"} and after.mode == "template_split"
+    if (not (canonical_change or split_change) or before.prefix != after.prefix
+            or after.template_prefix is None or before == after):
         raise IssuanceTransitionError(
-            "Only single_prefix -> template_split with an unchanged base prefix is supported"
+            "A prospective template-prefix change must preserve the instance allocation policy"
         )
     if profile_from_config(cfg) != before:
         raise IssuanceTransitionError("The explicit config must retain the expected old profile until apply succeeds")
@@ -51,16 +55,17 @@ def _profiles(
 
 
 def _governance(cfg: Mapping[str, Any], after: IssuanceProfile) -> list[dict[str, str]]:
-    governance = GovernanceContext.load(
-        domain_code=cfg["domain_code"], owner_repo_name=cfg["owner_repo_name"],
-        domain_registry_path=cfg["domain_registry_path"],
-        prefix_ownership_registry_path=cfg["prefix_ownership_registry_path"],
-        governance_authorization=cfg.get("governance_authorization"),
-    )
     claims = []
-    for prefix in sorted(set(after.identity_prefixes().values())):
+    for entity, prefix in sorted(after.identity_prefixes().items()):
+        governance = GovernanceContext.load(
+            domain_code=cfg["domain_code"],
+            owner_repo_name=after.identity_prefix_owner(entity, cfg["owner_repo_name"]),
+            domain_registry_path=cfg["domain_registry_path"],
+            prefix_ownership_registry_path=cfg["prefix_ownership_registry_path"],
+            governance_authorization=cfg.get("governance_authorization"),
+        )
         governance.require_prefix(prefix)
-        claims.append({"domain_code": governance.domain_code, "prefix": prefix,
+        claims.append({"entity": entity, "domain_code": governance.domain_code, "prefix": prefix,
                        "owner_repo_name": governance.owner_repo_name})
     return claims
 
@@ -97,7 +102,9 @@ def _plan(
         SELECT pg_catalog.to_jsonb(p) FROM {schema}.tapdb_issuance_profile p
         WHERE domain_code=:domain AND issuer_app_code=:owner
     """), {"domain": target["domain_code"], "owner": target["owner_repo_name"]}).scalar_one_or_none()
-    if profile is None or any(profile.get(key) != value for key, value in before.to_dict().items()) or profile.get("template_prefix") is not None:
+    expected_fields = {"version": before.version, "mode": before.mode,
+                       "prefix": before.prefix, "template_prefix": before.template_prefix}
+    if profile is None or any(profile.get(key) != value for key, value in expected_fields.items()):
         raise IssuanceTransitionError("Persisted issuance profile does not match the exact expected old profile")
     profile_oid = next(row["oid"] for row in controls if row["name"] == "tapdb_issuance_profile")
     has_template_prefix = connection.execute(text("""
@@ -136,7 +143,7 @@ def _plan(
                            "install_allocator_asset": "allocator_functions.sql"},
         "template_allocator": {"prefix": after.template_prefix,
                                "previous_catalog_entry": dict(sequence) if sequence is not None else None},
-        "changes": ["Install native template_split profile constraints and allocator routines",
+        "changes": ["Install native unified issuance profile constraints and allocator routines",
                     "Provision the separate template allocator through the native sequence service",
                     "Replace only the generic_template identity binding and its explicit issuance profile",
                     "Grant proven native allocator usage to the existing constrained runtime"],
@@ -153,10 +160,12 @@ def _upgrade_profile_schema(connection: Any, schema_name: str, *, add_column: bo
         ALTER TABLE {table}
           DROP CONSTRAINT tapdb_issuance_profile_mode_check,
           DROP CONSTRAINT tapdb_issuance_profile_check,
+          DROP CONSTRAINT IF EXISTS tapdb_issuance_profile_template_prefix_check,
           ADD CONSTRAINT tapdb_issuance_profile_mode_check
             CHECK (mode IN ('canonical', 'single_prefix', 'template_split')),
           ADD CONSTRAINT tapdb_issuance_profile_check CHECK (
-            (mode='canonical' AND prefix IS NULL AND template_prefix IS NULL)
+            (mode='canonical' AND prefix IS NULL
+                AND (template_prefix IS NULL OR template_prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{{1,4}}$'))
             OR (mode='single_prefix' AND prefix IS NOT NULL AND prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{{1,4}}$'
                 AND template_prefix IS NULL)
             OR (mode='template_split' AND prefix IS NOT NULL AND prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{{1,4}}$'
@@ -221,9 +230,9 @@ def transition_issuance_profile(
             WHERE entity='generic_template' AND domain_code=:domain AND issuer_app_code=:owner
         """), params)
         connection.execute(text(f"""
-            UPDATE {schema}.tapdb_issuance_profile SET mode='template_split', template_prefix=:prefix
+            UPDATE {schema}.tapdb_issuance_profile SET mode=:mode, template_prefix=:prefix
             WHERE domain_code=:domain AND issuer_app_code=:owner
-        """), params)
+        """), {**params, "mode": after.mode})
         grants = grant_proven_runtime_sequences(connection, {**cfg, "issuance_profile": after.to_dict()})
     result = _seal({
         "format": _FORMAT, "operation": "template-prefix-transition", "status": "applied",
