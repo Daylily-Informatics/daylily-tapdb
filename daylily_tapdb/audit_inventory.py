@@ -13,11 +13,12 @@ from typing import Any, Mapping
 
 from sqlalchemy import text
 
+from daylily_tapdb.identity_inventory import MAX_AUDIT_SOURCE_BYTES
+
 MODE = 'audit_log_ordered_digest/v1'
 VERSION = 'tapdb-identity-inventory/audit-digest-v1'
 TRANSFORMATION = 'audit_log.changed_by:pg_trim_empty_to_pre92_unattributed/v1'
 REPLACEMENT = 'migration:pre-9.2-unattributed'
-MAX_SOURCE_BYTES = 16 * 1024**3
 
 
 def fail(message: str) -> None:
@@ -66,7 +67,7 @@ class AuditDigest:
         self.expected.update(len(expected_frame).to_bytes(8, 'big') + expected_frame)
         self.transformed += replace
 
-    def finish(self) -> dict[str, Any]:
+    def finish(self, *, max_source_bytes: int = MAX_AUDIT_SOURCE_BYTES) -> dict[str, Any]:
         digests = []
         for digest in (self.raw, self.expected):
             final = digest.copy()
@@ -77,7 +78,7 @@ class AuditDigest:
                     row_count=self.count, transformed_rows=self.transformed,
                     source_bytes=self.source_bytes, largest_source_row_bytes=self.largest,
                     active_count=self.active, soft_deleted_count=self.deleted,
-                    invalid_scope_rows=self.invalid_scope, max_source_bytes=MAX_SOURCE_BYTES)
+                    invalid_scope_rows=self.invalid_scope, max_source_bytes=max_source_bytes)
 
 
 def capture(connection, *, schema: str, entry: dict, limits, processed_rows: int, receipt_bytes: int) -> dict:
@@ -99,7 +100,7 @@ def capture(connection, *, schema: str, entry: dict, limits, processed_rows: int
             for name, attempted, cap in (
                 ('max_rows', processed_rows + digest.count + 1, limits.max_rows),
                 ('max_row_bytes', size, limits.max_row_bytes),
-                ('max_audit_source_bytes', digest.source_bytes + size, MAX_SOURCE_BYTES),
+                ('max_audit_source_bytes', digest.source_bytes + size, limits.max_audit_source_bytes),
             ):
                 if attempted > cap:
                     raise InventoryLimitExceededError(table='audit_log', processed_rows=processed_rows + digest.count,
@@ -108,10 +109,10 @@ def capture(connection, *, schema: str, entry: dict, limits, processed_rows: int
             digest.add(raw, replace)
     finally:
         cursor.close()
-    return digest.finish()
+    return digest.finish(max_source_bytes=limits.max_audit_source_bytes)
 
 
-def validate_summary(table: Mapping[str, Any]) -> None:
+def validate_summary(table: Mapping[str, Any], *, max_source_bytes: int | None = None) -> None:
     summary = table.get('audit_digest')
     fields = {'mode', 'transformation', 'raw_sha256', 'expected_sha256', 'row_count',
               'transformed_rows', 'source_bytes', 'largest_source_row_bytes',
@@ -126,7 +127,9 @@ def validate_summary(table: Mapping[str, Any]) -> None:
     for key in ('raw_sha256', 'expected_sha256'):
         if not isinstance(summary[key], str) or not re.fullmatch('[a-f0-9]{64}', summary[key]):
             fail('Invalid compact audit digest')
-    if (summary['max_source_bytes'] != MAX_SOURCE_BYTES or summary['source_bytes'] > MAX_SOURCE_BYTES
+    if (summary['max_source_bytes'] < 1
+            or (max_source_bytes is not None and summary['max_source_bytes'] != max_source_bytes)
+            or summary['source_bytes'] > summary['max_source_bytes']
             or summary['row_count'] != table['row_count']
             or summary['active_count'] + summary['soft_deleted_count'] != summary['row_count']
             or summary['transformed_rows'] > summary['row_count']

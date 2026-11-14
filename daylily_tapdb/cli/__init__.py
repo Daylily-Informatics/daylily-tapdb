@@ -1522,6 +1522,14 @@ def build_app():
                 help="Maximum cumulative identity row-evidence bytes",
             ),
         ] = None,
+        inventory_max_audit_source_bytes: Annotated[
+            Optional[int],
+            typer.Option(
+                "--inventory-max-audit-source-bytes",
+                min=1,
+                help="Maximum cumulative source bytes in an ordered audit inventory",
+            ),
+        ] = None,
         engine_type: Optional[str] = typer.Option(
             None, "--engine-type", help="Database engine type for this target"
         ),
@@ -1854,18 +1862,15 @@ def build_app():
                 "max_rows": inventory_max_rows,
                 "max_row_bytes": inventory_max_row_bytes,
                 "max_receipt_bytes": inventory_max_receipt_bytes,
+                "max_audit_source_bytes": inventory_max_audit_source_bytes,
             }.items()
             if value is not None
         }
         if inventory_changes:
-            from dataclasses import asdict
-
             from daylily_tapdb.identity_inventory import InventoryLimits
 
-            current_limits = asdict(InventoryLimits.parse(root.get("inventory_limits")))
-            root["inventory_limits"] = asdict(
-                InventoryLimits.parse(current_limits | inventory_changes)
-            )
+            current_limits = InventoryLimits.parse(root.get("inventory_limits")).as_mapping()
+            root["inventory_limits"] = InventoryLimits.parse(current_limits | inventory_changes).as_mapping()
 
         if inventory_mode is not None:
             from daylily_tapdb.audit_inventory import validate_mode
