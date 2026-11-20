@@ -27,12 +27,19 @@ class IssuanceProfile:
     mode: Literal["canonical", "single_prefix", "template_split"]
     prefix: str | None = None
     template_prefix: str | None = None
+    external_reference_prefix: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.version) is not int or self.version != 1:
             raise ValueError("issuance_profile.version must be 1")
         if not isinstance(self.mode, str) or self.mode not in {"canonical", "single_prefix", "template_split"}:
             raise ValueError("issuance_profile.mode must be canonical, single_prefix, or template_split")
+        if self.external_reference_prefix is not None and (
+            self.mode != "canonical"
+            or not isinstance(self.external_reference_prefix, str)
+            or normalize_prefix(self.external_reference_prefix) != self.external_reference_prefix
+        ):
+            raise ValueError("external_reference_prefix requires canonical issuance and an exact Meridian prefix")
         if self.mode == "canonical":
             if self.prefix is not None:
                 raise ValueError("canonical issuance_profile must not specify prefix")
@@ -62,6 +69,10 @@ class IssuanceProfile:
             required.add("prefix")
         if value.get("mode") == "template_split" or "template_prefix" in value:
             required.add("template_prefix")
+        if "external_reference_prefix" in value:
+            required.add("external_reference_prefix")
+            if value["external_reference_prefix"] is None:
+                raise ValueError("An explicit external_reference_prefix must be an exact Meridian prefix")
         if set(value) != required:
             raise ValueError(f"issuance_profile must contain exactly {sorted(required)}")
         return cls(**dict(value))
@@ -72,6 +83,8 @@ class IssuanceProfile:
             result["prefix"] = self.prefix
         if self.template_prefix is not None:
             result["template_prefix"] = self.template_prefix
+        if self.external_reference_prefix is not None:
+            result["external_reference_prefix"] = self.external_reference_prefix
         return result
 
     def instance_prefix(self, declared_prefix: str) -> str:
@@ -140,6 +153,7 @@ def issuance_profile_binding_sql(cfg: Mapping[str, Any]) -> str:
     domain, owner = literal(cfg["domain_code"]), literal(cfg["owner_repo_name"])
     mode, prefix = literal(profile.mode), literal(profile.prefix)
     template_prefix = literal(profile.template_prefix)
+    reference_prefix = literal(profile.external_reference_prefix)
     return f"""
     DO $tapdb_issuance$
     BEGIN
@@ -148,14 +162,15 @@ def issuance_profile_binding_sql(cfg: Mapping[str, Any]) -> str:
         WHERE domain_code = {domain} AND issuer_app_code = {owner}
           AND (version <> {profile.version} OR mode <> {mode}
             OR prefix IS DISTINCT FROM {prefix}
-            OR template_prefix IS DISTINCT FROM {template_prefix})
+            OR template_prefix IS DISTINCT FROM {template_prefix}
+            OR external_reference_prefix IS DISTINCT FROM {reference_prefix})
       ) THEN
         RAISE EXCEPTION 'Existing native issuance profile conflicts with explicit configuration';
       END IF;
     END;
     $tapdb_issuance$;
-    INSERT INTO {table}(domain_code, issuer_app_code, version, mode, prefix, template_prefix)
-    VALUES ({domain}, {owner}, {profile.version}, {mode}, {prefix}, {template_prefix})
+    INSERT INTO {table}(domain_code, issuer_app_code, version, mode, prefix, template_prefix, external_reference_prefix)
+    VALUES ({domain}, {owner}, {profile.version}, {mode}, {prefix}, {template_prefix}, {reference_prefix})
     ON CONFLICT (domain_code, issuer_app_code) DO NOTHING;
     """
 
@@ -166,6 +181,14 @@ def claim_configured_template_prefix(cfg: Mapping[str, Any]) -> None:
     Registry first-assignment review remains an operator prerequisite. This
     operation never discovers a replacement prefix or changes another claim.
     """
+    profile = profile_from_config(cfg)
+    if profile.mode != "canonical" or not profile.template_prefix:
+        raise ValueError("An explicit canonical template_prefix is required for registration")
+    claim_issuer_prefix(cfg, profile.template_prefix)
+
+
+def claim_issuer_prefix(cfg: Mapping[str, Any], prefix: str) -> None:
+    """Record a domain-holder assignment in the explicitly selected writable registry."""
     import fcntl
     import json
     import os
@@ -176,9 +199,8 @@ def claim_configured_template_prefix(cfg: Mapping[str, Any]) -> None:
         assert_registered_domain, load_prefix_ownership_registry, normalize_owner_repo_name,
     )
 
-    profile = profile_from_config(cfg)
-    if profile.mode != "canonical" or not profile.template_prefix:
-        raise ValueError("An explicit canonical template_prefix is required for registration")
+    if not isinstance(prefix, str) or normalize_prefix(prefix) != prefix:
+        raise ValueError("An exact Meridian prefix is required for registration")
     domain = assert_registered_domain(str(cfg["domain_code"]),
         path=str(cfg["domain_registry_path"]), governance_authorization=cfg.get("governance_authorization"))
     owner = normalize_owner_repo_name(str(cfg["owner_repo_name"]))
@@ -187,16 +209,16 @@ def claim_configured_template_prefix(cfg: Mapping[str, Any]) -> None:
         raise ValueError("An absolute prefix ownership registry path is required")
     with Path(str(path) + ".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        registered = load_prefix_ownership_registry(path).get((domain, profile.template_prefix))
+        registered = load_prefix_ownership_registry(path).get((domain, prefix))
         if registered is not None:
             if registered != owner:
-                raise ValueError("Configured template prefix is already owned by another repository")
+                raise ValueError("Requested prefix is already owned by another repository")
             return
         value = json.loads(path.read_text())
         claims = value["ownership"][domain]
         if not isinstance(claims, dict):
             raise ValueError("The selected domain requires an explicit ownership mapping")
-        claims[profile.template_prefix] = {"issuer_app_code": owner}
+        claims[prefix] = {"issuer_app_code": owner}
         attributes = path.stat()
         with NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as output:
             temporary = Path(output.name)

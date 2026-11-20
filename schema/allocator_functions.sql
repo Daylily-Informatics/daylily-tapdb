@@ -164,6 +164,8 @@ DECLARE
     dc TEXT;
     seq_val BIGINT;
     seq_name TEXT;
+    is_reference BOOLEAN;
+    reference_prefix TEXT;
 BEGIN
     -- Populate domain_code and issuer_app_code from session context
     NEW.domain_code := tapdb_current_domain_code();
@@ -171,11 +173,13 @@ BEGIN
 
     IF NEW.euid IS NULL OR NEW.euid = '' THEN
         EXECUTE pg_catalog.format(
-            'SELECT t.instance_prefix FROM %I.generic_template t '
+            'SELECT t.instance_prefix, (t.instance_prefix = ''XRF'' AND t.category = ''reference'' '
+            'AND t.type = ''external_identifier'' AND (t.subtype, t.version) IN '
+            '((''tapdb_object'', ''2.0''), (''opaque'', ''1.0''))) FROM %I.generic_template t '
             'WHERE t.uid = $1 AND t.domain_code = $2 AND t.issuer_app_code = $3 '
             'AND t.is_deleted IS FALSE',
             TG_TABLE_SCHEMA
-        ) INTO prefix USING NEW.template_uid, NEW.domain_code, NEW.issuer_app_code;
+        ) INTO prefix, is_reference USING NEW.template_uid, NEW.domain_code, NEW.issuer_app_code;
 
         IF prefix IS NULL THEN
             RAISE EXCEPTION
@@ -184,6 +188,16 @@ BEGIN
         END IF;
 
         prefix := tapdb_require_instance_prefix(prefix);
+        IF is_reference THEN
+            EXECUTE pg_catalog.format(
+                'SELECT p.external_reference_prefix FROM %I.tapdb_issuance_profile p '
+                'WHERE p.mode = ''canonical'' AND p.domain_code = $1 AND p.issuer_app_code = $2',
+                TG_TABLE_SCHEMA
+            ) INTO reference_prefix USING NEW.domain_code, NEW.issuer_app_code;
+            IF reference_prefix IS NOT NULL THEN
+                prefix := tapdb_validate_meridian_prefix(reference_prefix);
+            END IF;
+        END IF;
         seq_name := pg_catalog.format(
             '%I.%I', TG_TABLE_SCHEMA, pg_catalog.lower(prefix) || '_instance_seq'
         );

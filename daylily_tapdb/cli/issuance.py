@@ -17,6 +17,29 @@ from daylily_tapdb.security_context import invocation_attribution
 issuance_app = typer.Typer(help="Receipt-bound prospective native issuance profile transitions")
 
 
+@issuance_app.command("claim-external-reference-prefix")
+def claim_external_reference_prefix(
+    prefix: str = typer.Option(..., "--prefix", help="Exact prefix granted by this domain holder"),
+) -> None:
+    """Register the exact issuer in the configured writable Meridian holder registry."""
+    from daylily_tapdb.issuance import IssuanceProfile, claim_issuer_prefix, profile_from_config
+
+    try:
+        actor = invocation_attribution()
+        if actor is None:
+            raise ValueError("Explicit root --attribution is required for this issuer claim")
+        cfg = get_db_config()
+        current = profile_from_config(cfg).to_dict()
+        IssuanceProfile.from_mapping({**current, "external_reference_prefix": prefix})
+        claim_issuer_prefix(cfg, prefix)
+        ccyo_out.emit_json({"status": "assigned", "domain": cfg["domain_code"], "prefix": prefix,
+                            "issuer_app_code": cfg["owner_repo_name"], "registry": cfg["prefix_ownership_registry_path"],
+                            "actor": actor.actor_subject})
+    except (ValueError, OSError) as exc:
+        ccyo_out.emit_error_json("issuance_claim_error", str(exc))
+        raise SystemExit(2) from None
+
+
 @issuance_app.command("transition")
 def transition(
     expected_profile_json: str = typer.Option(
@@ -28,9 +51,9 @@ def transition(
     receipt: Path = typer.Option(
         ..., "--receipt", help="Absolute plan receipt: create first, consume unchanged with --apply"
     ),
-    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed prospective template allocator transition"),
+    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed prospective allocator transition"),
 ) -> None:
-    """Separate future template allocation without changing persisted identities.
+    """Separate future template or external-reference allocation without changing persisted identities.
 
     Requires an explicit root --attribution envelope and configured native
     operator. The config retains the expected old profile until apply succeeds.

@@ -1,9 +1,4 @@
-"""Receipt-bound prospective template allocator transition for native operators.
-
-Supports canonical template-prefix changes and single_prefix -> template_split.
-The base instance policy, domain, owner, runtime scope, object EUIDs and history
-are preserved. A later template_split profile may change only template_prefix.
-"""
+"""Receipt-bound prospective native allocator transitions for existing issuers."""
 
 from __future__ import annotations
 
@@ -44,11 +39,16 @@ def _profiles(
     before, after = IssuanceProfile.from_mapping(expected), IssuanceProfile.from_mapping(requested)
     canonical_change = before.mode == after.mode == "canonical"
     split_change = before.mode in {"single_prefix", "template_split"} and after.mode == "template_split"
-    if (not (canonical_change or split_change) or before.prefix != after.prefix
-            or after.template_prefix is None or before == after):
-        raise IssuanceTransitionError(
-            "A prospective template-prefix change must preserve the instance allocation policy"
-        )
+    template_change = (canonical_change or split_change) and before.prefix == after.prefix and (
+        after.template_prefix is not None and before.template_prefix != after.template_prefix
+        and before.external_reference_prefix == after.external_reference_prefix
+    )
+    reference_change = canonical_change and before.template_prefix == after.template_prefix and (
+        after.external_reference_prefix is not None
+        and before.external_reference_prefix != after.external_reference_prefix
+    )
+    if not (template_change or reference_change):
+        raise IssuanceTransitionError("Change exactly one prospective template or canonical external-reference allocator")
     if profile_from_config(cfg) != before:
         raise IssuanceTransitionError("The explicit config must retain the expected old profile until apply succeeds")
     return before, after
@@ -56,10 +56,14 @@ def _profiles(
 
 def _governance(cfg: Mapping[str, Any], after: IssuanceProfile) -> list[dict[str, str]]:
     claims = []
-    for entity, prefix in sorted(after.identity_prefixes().items()):
+    owners = {entity: (prefix, after.identity_prefix_owner(entity, cfg["owner_repo_name"]))
+              for entity, prefix in after.identity_prefixes().items()}
+    if after.external_reference_prefix:
+        owners["external_reference"] = (after.external_reference_prefix, cfg["owner_repo_name"])
+    for entity, (prefix, owner) in sorted(owners.items()):
         governance = GovernanceContext.load(
             domain_code=cfg["domain_code"],
-            owner_repo_name=after.identity_prefix_owner(entity, cfg["owner_repo_name"]),
+            owner_repo_name=owner,
             domain_registry_path=cfg["domain_registry_path"],
             prefix_ownership_registry_path=cfg["prefix_ownership_registry_path"],
             governance_authorization=cfg.get("governance_authorization"),
@@ -103,7 +107,8 @@ def _plan(
         WHERE domain_code=:domain AND issuer_app_code=:owner
     """), {"domain": target["domain_code"], "owner": target["owner_repo_name"]}).scalar_one_or_none()
     expected_fields = {"version": before.version, "mode": before.mode,
-                       "prefix": before.prefix, "template_prefix": before.template_prefix}
+                       "prefix": before.prefix, "template_prefix": before.template_prefix,
+                       "external_reference_prefix": before.external_reference_prefix}
     if profile is None or any(profile.get(key) != value for key, value in expected_fields.items()):
         raise IssuanceTransitionError("Persisted issuance profile does not match the exact expected old profile")
     profile_oid = next(row["oid"] for row in controls if row["name"] == "tapdb_issuance_profile")
@@ -123,15 +128,18 @@ def _plan(
     """), {"domain": target["domain_code"], "owner": target["owner_repo_name"]}).mappings()]
     if {row["entity"]: row["prefix"] for row in bindings} != before.identity_prefixes():
         raise IssuanceTransitionError("Persisted native identity bindings do not match the exact old profile")
+    reference_change = before.external_reference_prefix != after.external_reference_prefix
+    allocator = after.external_reference_prefix if reference_change else after.template_prefix
     sequence = connection.execute(text("""
         SELECT c.oid::bigint AS oid, c.relname AS name, c.relkind AS kind,
                pg_catalog.pg_get_userbyid(c.relowner) AS owner,
                pg_catalog.obj_description(c.oid, 'pg_class') AS annotation
         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname=:schema AND c.relname=:name
-    """), {"schema": target["schema_name"], "name": after.template_prefix.lower() + "_instance_seq"}).mappings().one_or_none()
+    """), {"schema": target["schema_name"], "name": allocator.lower() + "_instance_seq"}).mappings().one_or_none()
     return _seal({
-        "format": _FORMAT, "operation": "template-prefix-transition", "status": "planned",
+        "format": _FORMAT, "operation": "external-reference-prefix-transition" if reference_change else "template-prefix-transition",
+        "status": "planned",
         "native_version": __version__,
         "target": target, "physical_target": physical_target(connection, target),
         "operator": target["operator_user"], "attribution": asdict(attribution),
@@ -139,21 +147,30 @@ def _plan(
         "governed_claims": _governance(cfg, after), "controls": controls,
         "profile_row": profile, "identity_bindings": bindings,
         "schema_upgrade": {"add_template_prefix_column": not has_template_prefix,
+                           "add_external_reference_prefix_column": "external_reference_prefix" not in profile,
                            "existing_constraints": constraints,
                            "install_allocator_asset": "allocator_functions.sql"},
-        "template_allocator": {"prefix": after.template_prefix,
+        ("external_reference_allocator" if reference_change else "template_allocator"): {"prefix": allocator,
                                "previous_catalog_entry": dict(sequence) if sequence is not None else None},
         "changes": ["Install native unified issuance profile constraints and allocator routines",
-                    "Provision the separate template allocator through the native sequence service",
-                    "Replace only the generic_template identity binding and its explicit issuance profile",
+                    f"Provision {allocator} through the native sequence service",
+                    ("Use the registered prefix for newly allocated canonical TapDB object and opaque references"
+                     if reference_change else "Replace the generic_template identity binding and its explicit issuance profile"),
                     "Grant proven native allocator usage to the existing constrained runtime"],
         "preserved": ["all persisted EUIDs", "all template definitions", "all object rows and history",
                       "base allocator and its sequence position", "domain and owner", "runtime scope and producer"],
     })
 
 
-def _upgrade_profile_schema(connection: Any, schema_name: str, *, add_column: bool) -> None:
+def _upgrade_profile_schema(connection: Any, schema_name: str, *, add_column: bool, add_reference_column: bool) -> None:
     table = f"{_ident(schema_name)}.tapdb_issuance_profile"
+    if add_reference_column:
+        connection.execute(text(f"""
+            ALTER TABLE {table} ADD COLUMN external_reference_prefix TEXT
+              CONSTRAINT tapdb_issuance_profile_reference_prefix_check CHECK (
+                external_reference_prefix IS NULL OR
+                (mode = 'canonical' AND external_reference_prefix ~ '^[0-9A-HJ-KMNP-TV-Z]{{1,4}}$'))
+        """))
     if add_column:
         connection.execute(text(f"ALTER TABLE {table} ADD COLUMN template_prefix TEXT"))
     connection.execute(text(f"""
@@ -219,23 +236,29 @@ def transition_issuance_profile(
         if reviewed != plan:
             raise IssuanceTransitionError("Issuance transition receipt is stale or does not match the exact request")
         _upgrade_profile_schema(connection, target["schema_name"],
-                                add_column=plan["schema_upgrade"]["add_template_prefix_column"])
+                                add_column=plan["schema_upgrade"]["add_template_prefix_column"],
+                                add_reference_column=plan["schema_upgrade"]["add_external_reference_prefix_column"])
         asset = find_schema_root(Path("allocator_functions.sql")) / "allocator_functions.sql"
         connection.execute(text(asset.read_text(encoding="utf-8")))
-        ensure_instance_prefix_sequence(connection, after.template_prefix)
         params = {"domain": target["domain_code"], "owner": target["owner_repo_name"],
-                  "prefix": after.template_prefix}
+                  "mode": after.mode, "template_prefix": after.template_prefix,
+                  "reference_prefix": after.external_reference_prefix}
+        if plan["operation"] == "external-reference-prefix-transition":
+            ensure_instance_prefix_sequence(connection, after.external_reference_prefix)
+        else:
+            ensure_instance_prefix_sequence(connection, after.template_prefix)
+            connection.execute(text(f"""
+                UPDATE {schema}.tapdb_identity_prefix_config SET prefix=:template_prefix, updated_dt=CURRENT_TIMESTAMP
+                WHERE entity='generic_template' AND domain_code=:domain AND issuer_app_code=:owner
+            """), params)
         connection.execute(text(f"""
-            UPDATE {schema}.tapdb_identity_prefix_config SET prefix=:prefix, updated_dt=CURRENT_TIMESTAMP
-            WHERE entity='generic_template' AND domain_code=:domain AND issuer_app_code=:owner
-        """), params)
-        connection.execute(text(f"""
-            UPDATE {schema}.tapdb_issuance_profile SET mode=:mode, template_prefix=:prefix
+            UPDATE {schema}.tapdb_issuance_profile
+              SET mode=:mode, template_prefix=:template_prefix, external_reference_prefix=:reference_prefix
             WHERE domain_code=:domain AND issuer_app_code=:owner
-        """), {**params, "mode": after.mode})
+        """), params)
         grants = grant_proven_runtime_sequences(connection, {**cfg, "issuance_profile": after.to_dict()})
     result = _seal({
-        "format": _FORMAT, "operation": "template-prefix-transition", "status": "applied",
+        "format": _FORMAT, "operation": plan["operation"], "status": "applied",
         "native_version": __version__,
         "plan_sha256": plan["sha256"], "target": target, "physical_target": plan["physical_target"],
         "operator": target["operator_user"], "attribution": asdict(attribution),

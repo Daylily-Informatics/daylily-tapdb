@@ -142,10 +142,14 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
     cfg = _get_db_config(env)
     profile = profile_from_config(cfg)
     prefixes = _required_identity_prefixes(env)
-    for entity, prefix in prefixes.items():
+    owner = str(cfg["owner_repo_name"])
+    claims = [(prefix, profile.identity_prefix_owner(entity, owner)) for entity, prefix in prefixes.items()]
+    if profile.external_reference_prefix:
+        claims.append((profile.external_reference_prefix, owner))
+    for prefix, claim_owner in claims:
         governance = GovernanceContext.load(
             domain_code=str(cfg["domain_code"]),
-            owner_repo_name=profile.identity_prefix_owner(entity, str(cfg["owner_repo_name"])),
+            owner_repo_name=claim_owner,
             domain_registry_path=str(cfg["domain_registry_path"]),
             prefix_ownership_registry_path=str(cfg["prefix_ownership_registry_path"]),
             governance_authorization=cfg.get("governance_authorization"),
@@ -199,6 +203,9 @@ def _sync_identity_prefix_config(env: "Environment") -> None:
             )
             connection.execute(text(issuance_profile_binding_sql(cfg)))
             connection.execute(text(sql))
+            if profile.external_reference_prefix:
+                from daylily_tapdb.sequences import ensure_instance_prefix_sequence
+                ensure_instance_prefix_sequence(connection, profile.external_reference_prefix)
             grant_proven_runtime_sequences(connection, cfg)
     except DBAPIError as exc:
         primary = getattr(getattr(exc.orig, "diag", None), "message_primary", None)

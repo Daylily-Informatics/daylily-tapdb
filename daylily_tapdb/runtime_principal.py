@@ -665,7 +665,7 @@ def _managed_sequence_bindings(
         elif mapping["kind"] == "prefix":
             allowed = any(
                 evidence["source"]
-                in {"stored_rows", "template_binding", "identity_binding"}
+                in {"stored_rows", "template_binding", "identity_binding", "external_reference_binding"}
                 and evidence.get("table") in _WRITABLE | _READABLE
                 and evidence.get("scope")
                 == {
