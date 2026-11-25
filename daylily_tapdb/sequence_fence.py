@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -802,7 +801,7 @@ def build_writer_fence_takeover_plan(
     if "inventory_limits" in target:
         target = dict(
             target,
-            inventory_limits=asdict(InventoryLimits.parse(target["inventory_limits"])),
+            inventory_limits=InventoryLimits.parse(target["inventory_limits"]).as_mapping(),
         )
     receipts, head = read_fence_history(receipts_dir)
     epoch = active_epoch(receipts, exact)
@@ -930,9 +929,7 @@ def apply_writer_fence_takeover(
 
         target["inventory_mode"] = validate_mode(plan["inventory_mode"])
     if "inventory_limits" in plan:
-        target["inventory_limits"] = asdict(
-            InventoryLimits.parse(plan["inventory_limits"])
-        )
+        target["inventory_limits"] = InventoryLimits.parse(plan["inventory_limits"]).as_mapping()
     expected = build_writer_fence_takeover_plan(
         control_connection,
         target=target,

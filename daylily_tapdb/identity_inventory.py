@@ -23,6 +23,7 @@ CONVERSION_VERSION = "tapdb-identity-conversion/v1"
 MAX_ROWS = 250_000
 MAX_ROW_BYTES = 8 * 1024 * 1024
 MAX_RECEIPT_BYTES = 128 * 1024 * 1024
+MAX_AUDIT_SOURCE_BYTES = 16 * 1024**3
 _TARGET_FIELDS = (
     "engine_type",
     "host",
@@ -93,6 +94,7 @@ class InventoryLimits:
     max_rows: int = MAX_ROWS
     max_row_bytes: int = MAX_ROW_BYTES
     max_receipt_bytes: int = MAX_RECEIPT_BYTES
+    max_audit_source_bytes: int = MAX_AUDIT_SOURCE_BYTES
 
     def __post_init__(self) -> None:
         for name, value in asdict(self).items():
@@ -109,14 +111,22 @@ class InventoryLimits:
             max_rows=MAX_ROWS,
             max_row_bytes=MAX_ROW_BYTES,
             max_receipt_bytes=MAX_RECEIPT_BYTES,
+            max_audit_source_bytes=MAX_AUDIT_SOURCE_BYTES,
         )
         if value is None:
             return cls(**defaults)
         if not isinstance(value, Mapping) or set(value) - set(defaults):
             raise IdentityInventoryError(
-                "inventory_limits requires only max_rows, max_row_bytes and max_receipt_bytes"
+                "inventory_limits allows max_rows, max_row_bytes, max_receipt_bytes and max_audit_source_bytes"
             )
         return cls(**(defaults | dict(value)))
+
+    def as_mapping(self) -> dict[str, int]:
+        """Keep the receipt shape stable when the audit cap uses its default."""
+        limits = asdict(self)
+        if self.max_audit_source_bytes == MAX_AUDIT_SOURCE_BYTES:
+            del limits["max_audit_source_bytes"]
+        return limits
 
 
 class InventoryLimitExceededError(IdentityInventoryError):
@@ -177,7 +187,7 @@ def with_inventory_limits(
         )
     if "limits" not in inventory and "inventory_limits" not in target:
         return dict(target)
-    return dict(target, inventory_limits=asdict(expected))
+    return dict(target, inventory_limits=expected.as_mapping())
 
 
 def quote_identifier(value: str) -> str:
@@ -629,7 +639,7 @@ def _capture_identity_inventory(
             "physical_target": physical,
             **(
                 {
-                    "limits": asdict(policy),
+                    "limits": policy.as_mapping(),
                     "usage": {
                         "rows": total_rows,
                         "evidence_bytes": receipt_bytes,
@@ -864,9 +874,10 @@ def verify_identity_inventory(
         for inventory in (before, after):
             if "limits" not in inventory or "audit_log" not in inventory["tables"]:
                 raise IdentityInventoryError("Compact inventory lacks limits/audit evidence")
+            audit_limit = InventoryLimits.parse(inventory["limits"]).max_audit_source_bytes
             for name, table in inventory["tables"].items():
                 if name == "audit_log":
-                    audit.validate_summary(table)
+                    audit.validate_summary(table, max_source_bytes=audit_limit)
                 elif "audit_digest" in table:
                     raise IdentityInventoryError("Only audit_log supports compact evidence")
     if InventoryLimits.parse(before.get("limits")) != InventoryLimits.parse(

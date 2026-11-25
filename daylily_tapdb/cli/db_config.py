@@ -415,15 +415,11 @@ def _build_db_config_from_section(
         from daylily_tapdb.audit_inventory import validate_mode
         cfg["inventory_mode"] = validate_mode(root["inventory_mode"])
     if "inventory_limits" in root:
-        from dataclasses import asdict
-
         from daylily_tapdb.identity_inventory import InventoryLimits
 
         if not isinstance(root["inventory_limits"], dict):
             raise RuntimeError("inventory_limits must be a mapping")
-        cfg["inventory_limits"] = asdict(
-            InventoryLimits.parse(root["inventory_limits"])
-        )
+        cfg["inventory_limits"] = InventoryLimits.parse(root["inventory_limits"]).as_mapping()
 
     tenant_id = (_file_str("tenant_id") or "").strip()
     if tenant_id:

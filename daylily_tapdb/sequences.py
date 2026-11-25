@@ -239,6 +239,17 @@ def _capture_sequence_inventory(
                     {"source": "identity_binding", "table": name, **scope}
                 )
 
+        if name == "tapdb_issuance_profile" and "external_reference_prefix" in columns:
+            condition = " AND " if predicate else " WHERE "
+            values = connection.execute(text(
+                f"SELECT DISTINCT external_reference_prefix FROM {qualified}{predicate}{condition}"
+                "mode='canonical' AND external_reference_prefix IS NOT NULL ORDER BY external_reference_prefix"
+            ), parameters)
+            for (value,) in values:
+                bindings.setdefault(_prefix(value), []).append(
+                    {"source": "external_reference_binding", "table": name, **scope}
+                )
+
     rows = (
         connection.execute(
             text(

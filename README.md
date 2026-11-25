@@ -66,6 +66,22 @@ but never becomes the relationship authority.
 
 ## Install
 
+TapDB 14.1.0 adds optional issuer-specific allocation for canonical external
+references. Set `meta.issuance_profile.external_reference_prefix` in canonical
+mode. The TapDB-object 2.0 and opaque-identifier 1.0 definitions retain their
+declared XRF prefix. Only new instance allocation uses the assigned prefix.
+Reusing a reference by its natural identity returns its original EUID.
+
+For an existing database, keep the current profile in the native operator
+configuration. Obtain the domain holder's assignment first. Operators of an
+explicitly selected writable Meridian holder registry can record that assignment
+with `db issuance-profile claim-external-reference-prefix --prefix PREFIX`.
+Use root `--config` and `--attribution` for the claim and transition. Run
+`db issuance-profile transition` with `--expected-profile-json`,
+`--new-profile-json` and an absolute `--receipt`. Review the plan and apply
+the same command with `--apply`. Update the selected operator and runtime
+configurations with `db-config update --issuance-profile-json` after it succeeds.
+
 TapDB **13.2.0** reconciles canonical template-prefix overrides and split
 template/instance issuance, retaining runtime GUI/API template authoring,
 typed lookup, external references, saved queries, revisions and history.

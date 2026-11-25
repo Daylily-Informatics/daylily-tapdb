@@ -1494,6 +1494,10 @@ def build_app():
                 help="Remove the complete target.operator mapping while preserving runtime identity and config path",
             ),
         ] = False,
+        inventory_mode: Annotated[
+            Optional[str],
+            typer.Option("--inventory-mode", help="Select full or audit_log_ordered_digest/v1 inventory"),
+        ] = None,
         inventory_max_rows: Annotated[
             Optional[int],
             typer.Option(
@@ -1516,6 +1520,14 @@ def build_app():
                 "--inventory-max-receipt-bytes",
                 min=1,
                 help="Maximum cumulative identity row-evidence bytes",
+            ),
+        ] = None,
+        inventory_max_audit_source_bytes: Annotated[
+            Optional[int],
+            typer.Option(
+                "--inventory-max-audit-source-bytes",
+                min=1,
+                help="Maximum cumulative source bytes in an ordered audit inventory",
             ),
         ] = None,
         engine_type: Optional[str] = typer.Option(
@@ -1675,12 +1687,12 @@ def build_app():
         admin_disabled_user_email: Optional[str] = typer.Option(
             None,
             "--admin-disabled-user-email",
-            help="Synthetic disabled-auth admin email",
+            help="Administrator email when admin authentication is disabled",
         ),
         admin_disabled_user_role: Optional[str] = typer.Option(
             None,
             "--admin-disabled-user-role",
-            help="Synthetic disabled-auth admin role",
+            help="Administrator role when admin authentication is disabled",
         ),
         admin_shared_host_session_secret: Optional[str] = typer.Option(
             None,
@@ -1850,18 +1862,23 @@ def build_app():
                 "max_rows": inventory_max_rows,
                 "max_row_bytes": inventory_max_row_bytes,
                 "max_receipt_bytes": inventory_max_receipt_bytes,
+                "max_audit_source_bytes": inventory_max_audit_source_bytes,
             }.items()
             if value is not None
         }
         if inventory_changes:
-            from dataclasses import asdict
-
             from daylily_tapdb.identity_inventory import InventoryLimits
 
-            current_limits = asdict(InventoryLimits.parse(root.get("inventory_limits")))
-            root["inventory_limits"] = asdict(
-                InventoryLimits.parse(current_limits | inventory_changes)
-            )
+            current_limits = InventoryLimits.parse(root.get("inventory_limits")).as_mapping()
+            root["inventory_limits"] = InventoryLimits.parse(current_limits | inventory_changes).as_mapping()
+
+        if inventory_mode is not None:
+            from daylily_tapdb.audit_inventory import validate_mode
+
+            if inventory_mode == "full":
+                root.pop("inventory_mode", None)
+            else:
+                root["inventory_mode"] = validate_mode(inventory_mode)
 
         updates = _explicit_aurora_config_fields(
             region=region,
@@ -2137,6 +2154,7 @@ def build_app():
             and not backup_changed
             and not operator_changed
             and not inventory_changes
+            and inventory_mode is None
             and not metadata_changed
         ):
             raise RuntimeError("No config changes requested.")

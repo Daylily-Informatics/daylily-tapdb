@@ -13,11 +13,12 @@ from typing import Any, Mapping
 
 from sqlalchemy import text
 
+from daylily_tapdb.identity_inventory import MAX_AUDIT_SOURCE_BYTES
+
 MODE = 'audit_log_ordered_digest/v1'
 VERSION = 'tapdb-identity-inventory/audit-digest-v1'
 TRANSFORMATION = 'audit_log.changed_by:pg_trim_empty_to_pre92_unattributed/v1'
 REPLACEMENT = 'migration:pre-9.2-unattributed'
-MAX_SOURCE_BYTES = 16 * 1024**3
 
 
 def fail(message: str) -> None:
@@ -42,7 +43,7 @@ class AuditDigest:
         self.active = self.deleted = self.invalid_scope = 0
 
     def add(self, raw: str, replace: bool) -> None:
-        from daylily_tapdb.identity_inventory import canonical_json, content_hash
+        from daylily_tapdb.identity_inventory import canonical_json
         values = json.loads(raw, parse_float=str)
         uid = values.get('uid')
         if type(uid) is not int or (self.previous_uid is not None and uid <= self.previous_uid):
@@ -57,13 +58,20 @@ class AuditDigest:
         self.active += values.get('is_deleted') is False
         self.deleted += values.get('is_deleted') is True
         self.invalid_scope += any(not str(values.get(k) or '').strip() for k in ('domain_code', 'issuer_app_code'))
-        for digest, row in ((self.raw, values), (self.expected, dict(values, changed_by=REPLACEMENT) if replace else values)):
-            framed = canonical_json([uid, content_hash(row)]).encode('utf-8')
-            digest.update(len(framed).to_bytes(8, 'big'))
-            digest.update(framed)
+        # An audit row is bounded by capture(). Encode it in one pass with the
+        # same canonical JSON options as content_hash; keep the v1 framing.
+        row_hash = hashlib.sha256(canonical_json(values).encode('utf-8')).hexdigest()
+        raw_frame = canonical_json([uid, row_hash]).encode('utf-8')
+        self.raw.update(len(raw_frame).to_bytes(8, 'big') + raw_frame)
+        expected_frame = raw_frame
+        if replace:
+            projected = dict(values, changed_by=REPLACEMENT)
+            projected_hash = hashlib.sha256(canonical_json(projected).encode('utf-8')).hexdigest()
+            expected_frame = canonical_json([uid, projected_hash]).encode('utf-8')
+        self.expected.update(len(expected_frame).to_bytes(8, 'big') + expected_frame)
         self.transformed += replace
 
-    def finish(self) -> dict[str, Any]:
+    def finish(self, *, max_source_bytes: int = MAX_AUDIT_SOURCE_BYTES) -> dict[str, Any]:
         digests = []
         for digest in (self.raw, self.expected):
             final = digest.copy()
@@ -74,7 +82,7 @@ class AuditDigest:
                     row_count=self.count, transformed_rows=self.transformed,
                     source_bytes=self.source_bytes, largest_source_row_bytes=self.largest,
                     active_count=self.active, soft_deleted_count=self.deleted,
-                    invalid_scope_rows=self.invalid_scope, max_source_bytes=MAX_SOURCE_BYTES)
+                    invalid_scope_rows=self.invalid_scope, max_source_bytes=max_source_bytes)
 
 
 def capture(connection, *, schema: str, entry: dict, limits, processed_rows: int, receipt_bytes: int) -> dict:
@@ -96,7 +104,7 @@ def capture(connection, *, schema: str, entry: dict, limits, processed_rows: int
             for name, attempted, cap in (
                 ('max_rows', processed_rows + digest.count + 1, limits.max_rows),
                 ('max_row_bytes', size, limits.max_row_bytes),
-                ('max_audit_source_bytes', digest.source_bytes + size, MAX_SOURCE_BYTES),
+                ('max_audit_source_bytes', digest.source_bytes + size, limits.max_audit_source_bytes),
             ):
                 if attempted > cap:
                     raise InventoryLimitExceededError(table='audit_log', processed_rows=processed_rows + digest.count,
@@ -105,10 +113,10 @@ def capture(connection, *, schema: str, entry: dict, limits, processed_rows: int
             digest.add(raw, replace)
     finally:
         cursor.close()
-    return digest.finish()
+    return digest.finish(max_source_bytes=limits.max_audit_source_bytes)
 
 
-def validate_summary(table: Mapping[str, Any]) -> None:
+def validate_summary(table: Mapping[str, Any], *, max_source_bytes: int | None = None) -> None:
     summary = table.get('audit_digest')
     fields = {'mode', 'transformation', 'raw_sha256', 'expected_sha256', 'row_count',
               'transformed_rows', 'source_bytes', 'largest_source_row_bytes',
@@ -123,7 +131,9 @@ def validate_summary(table: Mapping[str, Any]) -> None:
     for key in ('raw_sha256', 'expected_sha256'):
         if not isinstance(summary[key], str) or not re.fullmatch('[a-f0-9]{64}', summary[key]):
             fail('Invalid compact audit digest')
-    if (summary['max_source_bytes'] != MAX_SOURCE_BYTES or summary['source_bytes'] > MAX_SOURCE_BYTES
+    if (summary['max_source_bytes'] < 1
+            or (max_source_bytes is not None and summary['max_source_bytes'] != max_source_bytes)
+            or summary['source_bytes'] > summary['max_source_bytes']
             or summary['row_count'] != table['row_count']
             or summary['active_count'] + summary['soft_deleted_count'] != summary['row_count']
             or summary['transformed_rows'] > summary['row_count']
@@ -227,8 +237,25 @@ REVIEWED_ASSETS = {
 }
 
 
-# This exact migration replaces EUID functions and leaves every audit row intact.
+# The later four exact assets reapply the canonical audit catalog and have
+# no audit row transformation. Full audit summary and catalog equality apply.
+# The XRF wrapper includes the RLS source already bundled since TapDB 13.1.0.
+# Keep its current expansion separate from the older pre-10 closure above.
+AUDIT_UNCHANGED_RLS_CLOSURE = {
+    '20260911_210000_versioned_xrf_scope.sql':
+        '521f9219b5556334ab7084e07a18ef701a505aa8a21e01e0175e1d769318cd1e',
+    '20260913_082300_runtime_identity_authorization.sql':
+        REVIEWED_ASSETS['20260913_082300_runtime_identity_authorization.sql'],
+    '20260918_070400_system_user_authorization_contract.sql':
+        REVIEWED_ASSETS['20260918_070400_system_user_authorization_contract.sql'],
+    '20260926_220000_reviewed_scope_correction.sql':
+        REVIEWED_ASSETS['20260926_220000_reviewed_scope_correction.sql'],
+}
+
+# These exact migrations modify issuance-profile metadata or functions only.
 UNCHANGED_AUDIT_ASSETS = {
+    '20261114_150000_template_issuance_prefix.sql': '74fa76e3b5fc5a3eed8990858d42dd81545e0240a2c57e01077089c923325bcc',
+    '20261114_160000_reconcile_template_issuance.sql': '1b6fc52b3660eafb0d113c9fd912700e59d1b05de66aae653ee21831c2e7c49a',
     '20261114_180000_meridian_separated_checksum.sql': 'f432a71df4844eadadc6e5f31ae03d7129928413806e8f659033757ef24e2ebc',
 }
 
@@ -240,7 +267,7 @@ def validate_pending(pending: list[dict]) -> bool:
     for name, expected in UNCHANGED_AUDIT_ASSETS.items():
         if name in observed:
             if observed.pop(name) != expected:
-                fail("Function-only migration differs from its exact reviewed source")
-    if observed not in ({}, REVIEWED_ASSETS):
+                fail("Audit-preserving migration differs from its exact reviewed source")
+    if observed not in ({}, REVIEWED_ASSETS, AUDIT_UNCHANGED_RLS_CLOSURE):
         fail("Compact audit mode requires an exact reviewed migration closure")
-    return bool(observed)
+    return observed == REVIEWED_ASSETS

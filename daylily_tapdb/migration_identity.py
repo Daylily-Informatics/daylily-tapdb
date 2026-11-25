@@ -1287,6 +1287,8 @@ def apply_migration_preflight(
         actor=Actor(surface=SURFACE_CLI, username="migration:tapdb"),
         inventory=current["sequence_inventory"],
     )
+    # Release the baseline recapture before building the interim evidence.
+    del current
 
     sequence_result: dict[str, Any] | None = None
     try:
@@ -1335,6 +1337,7 @@ def apply_migration_preflight(
             receipts_dir=receipts_dir,
             retained_floors=recovery_intent["floors"],
         )
+        del interim
         postflight = build_migration_preflight(
             connection,
             migrations_dir=migrations_dir,
